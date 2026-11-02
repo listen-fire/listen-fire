@@ -28,11 +28,12 @@ import { RpcStoreBackend } from 'movement-engine/services/run_host/rpc_store';
 const LOCAL_TENANT = 'local';
 import { lfBinary } from './lf_bin';
 import { withStoreModule } from './store_module/project';
+import { RELEASE } from './release';
 
 /** A project whose store slot a store module fills, its state in `path`. */
 function storeModuleProject(path: string): string {
   const dir = mkdtempSync(join(tmpdir(), 'lf-contract-slot-'));
-  writeFileSync(join(dir, 'lf.yaml'), 'engine: 0.13.0\n');
+  writeFileSync(join(dir, 'lf.yaml'), `engine: ${RELEASE}\n`);
   withStoreModule(dir, path);
   return dir;
 }

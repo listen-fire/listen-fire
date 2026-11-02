@@ -85,8 +85,8 @@ test('listen-fire upgrade moves an older pin to the current release once the pro
 
   const { code, out } = lf(dir, 'upgrade');
   assert.equal(code, 0, out);
-  assert.match(out, /lf\.yaml: engine: 0\.13\.\d+(-[\w.]+)? \(was 0\.11\.0\)/);
-  assert.match(readFileSync(join(dir, 'lf.yaml'), 'utf8'), /^engine: 0\.13\.\d+(-[\w.]+)?$/m);
+  assert.match(out, new RegExp(String.raw`lf\.yaml: engine: ${RELEASE_RE} \(was 0\.11\.0\)`));
+  assert.match(readFileSync(join(dir, 'lf.yaml'), 'utf8'), new RegExp(String.raw`^engine: ${RELEASE_RE}$`, 'm'));
   assert.equal(lf(dir, 'check').code, 0);
 });
 
@@ -140,8 +140,8 @@ test('listen-fire upgrade lists a wait whose run value is now captured, and hold
   const moved = lf(dir, 'upgrade', '--all');
   assert.equal(moved.code, 0, moved.out);
   assert.match(moved.out, /warning MOV_AWAIT_VALUE_CAPTURED/);
-  assert.match(moved.out, /lf\.yaml: engine: 0\.13\.\d+(-[\w.]+)? \(was 0\.12\.13\)/);
-  assert.match(readFileSync(join(dir, 'lf.yaml'), 'utf8'), /^engine: 0\.13\.\d+(-[\w.]+)?$/m);
+  assert.match(moved.out, new RegExp(String.raw`lf\.yaml: engine: ${RELEASE_RE} \(was 0\.12\.13\)`));
+  assert.match(readFileSync(join(dir, 'lf.yaml'), 'utf8'), new RegExp(String.raw`^engine: ${RELEASE_RE}$`, 'm'));
 
   const checked = lf(dir, 'check');
   assert.equal(checked.code, 0, checked.out);

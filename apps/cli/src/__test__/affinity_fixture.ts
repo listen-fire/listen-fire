@@ -9,6 +9,7 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from '
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
+import { RELEASE } from './release';
 
 const AFFINITY = join(resolve(__dirname, '../../../..'), 'modules/affinity');
 
@@ -64,7 +65,7 @@ export const AFFINITY_SIGNING_KEY = 'affinity-signing-key';
 /** A project with one movement file connecting to the fake as `Affinity`. */
 export function affinityProject(fake: Fake, movement: string, lfYaml = ''): string {
   const dir = mkdtempSync(join(tmpdir(), 'lf-affinity-'));
-  writeFileSync(join(dir, 'lf.yaml'), `engine: 0.13.0\nmovements: movements\nexternals: externals\n${lfYaml}`);
+  writeFileSync(join(dir, 'lf.yaml'), `engine: ${RELEASE}\nmovements: movements\nexternals: externals\n${lfYaml}`);
   mkdirSync(join(dir, 'externals/affinity'), { recursive: true });
   writeFileSync(join(dir, 'externals/affinity/lf-external.yaml'), `name: affinity\nkind: adapter\nprotocol: 2\nmodule: ${AFFINITY}\n`);
   mkdirSync(join(dir, '.lf'));

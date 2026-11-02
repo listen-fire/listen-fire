@@ -12,13 +12,14 @@ import { z } from 'zod';
 import { RpcStoreBackend } from 'movement-engine/services/run_host/rpc_store';
 import { lfBinary } from './lf_bin';
 import { withStoreModule } from './store_module/project';
+import { RELEASE } from './release';
 
 const List = z.object({ processes: z.array(z.unknown()), version: z.number() });
 
 /** A project whose store slot the test store module fills, its state in `path`. */
 function storeModuleProject(path: string): string {
   const dir = mkdtempSync(join(tmpdir(), 'lf-processes-slot-'));
-  writeFileSync(join(dir, 'lf.yaml'), 'engine: 0.13.0\n');
+  writeFileSync(join(dir, 'lf.yaml'), `engine: ${RELEASE}\n`);
   withStoreModule(dir, path);
   return dir;
 }

@@ -31,6 +31,7 @@ import {
 import { browserContractCases, type ContractSite } from 'movement-engine/services/browser/contract';
 import { fakeBrowser, type FakeSite } from 'movement-engine/services/browser/fake_browser';
 import { lfBinary } from './lf_bin';
+import { RELEASE } from './release';
 
 /** A Messages API that streams one text answer to every request, spending
  *  50 output tokens or the request's `max_tokens`, whichever is fewer. */
@@ -59,7 +60,7 @@ async function fakeAnthropic(): Promise<{ url: string; server: Server }> {
 
 function emptyProject(): string {
   const dir = mkdtempSync(join(tmpdir(), 'lf-slot-secrets-'));
-  writeFileSync(join(dir, 'lf.yaml'), 'engine: 0.13.0\n');
+  writeFileSync(join(dir, 'lf.yaml'), `engine: ${RELEASE}\n`);
   return dir;
 }
 

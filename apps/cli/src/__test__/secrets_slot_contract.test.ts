@@ -19,6 +19,7 @@ import { SecretsSlotBackend, SlotClient, commonSlotCases, secretsReadOnlySlotCas
 import { secretsContractCases, type SecretsContractBackend } from 'movement-engine/public/secrets-testing';
 import { lfBinary } from './lf_bin';
 import { serveSecretsModule } from './secrets_module/serve';
+import { RELEASE } from './release';
 
 interface Reached {
   address: SlotAddress;
@@ -33,7 +34,7 @@ function project(vault: { url: string } | null): string {
   const dir = mkdtempSync(join(tmpdir(), 'lf-secrets-slot-'));
   mkdirSync(join(dir, '.lf'));
   if (vault === null) {
-    writeFileSync(join(dir, 'lf.yaml'), 'engine: 0.13.0\n');
+    writeFileSync(join(dir, 'lf.yaml'), `engine: ${RELEASE}\n`);
     writeFileSync(join(dir, '.lf/secrets.yaml'), stringify({ seed: { external: 'acme_crm', api_key: 'k' } }), { mode: 0o600 });
     return dir;
   }
@@ -42,7 +43,7 @@ function project(vault: { url: string } | null): string {
     join(dir, 'externals/acme_vault/lf-external.yaml'),
     `name: acme_vault\nkind: core\nslot: secrets\nurl: ${vault.url}\nsettings:\n  - { name: vault, label: the vault credentials are kept in }\n`,
   );
-  writeFileSync(join(dir, 'lf.yaml'), 'engine: 0.13.0\ncore:\n  secrets: acme_vault\n');
+  writeFileSync(join(dir, 'lf.yaml'), `engine: ${RELEASE}\ncore:\n  secrets: acme_vault\n`);
   return dir;
 }
 

@@ -16,6 +16,7 @@ import { join, resolve } from 'node:path';
 import { parse, stringify } from 'yaml';
 import { lfCommand } from './example';
 import { dealArrival, HUBSPOT_MODULE, startFakeHubSpot, type FakeHubSpot } from '@listen-fire/fake-channels/testing';
+import { RELEASE } from './release';
 
 const MODULE = HUBSPOT_MODULE;
 const SERVER_SECRET = 'install-server-secret';
@@ -46,7 +47,7 @@ listen to hs_alice-[:Deal]-> fire mirror
 
 function hubspotProject(fake: FakeHubSpot): string {
   const dir = mkdtempSync(join(tmpdir(), 'lf-alice-bob-'));
-  writeFileSync(join(dir, 'lf.yaml'), 'engine: 0.13.0\nmovements: movements\nexternals: externals\n');
+  writeFileSync(join(dir, 'lf.yaml'), `engine: ${RELEASE}\nmovements: movements\nexternals: externals\n`);
   mkdirSync(join(dir, 'externals/hubspot'), { recursive: true });
   writeFileSync(
     join(dir, 'externals/hubspot/lf-external.yaml'),

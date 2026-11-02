@@ -12,6 +12,7 @@ import { createServer, type Server } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { lf } from './interactive';
+import { RELEASE } from './release';
 
 interface Received {
   method: string;
@@ -66,7 +67,7 @@ async function beacon(key: string): Promise<{ url: string; received: Received[];
 
 function project(url: string): string {
   const dir = mkdtempSync(join(tmpdir(), 'lf-env-install-'));
-  writeFileSync(join(dir, 'lf.yaml'), 'engine: 0.13.0\nmovements: movements\nexternals: externals\n');
+  writeFileSync(join(dir, 'lf.yaml'), `engine: ${RELEASE}\nmovements: movements\nexternals: externals\n`);
   mkdirSync(join(dir, 'externals/beacon'), { recursive: true });
   writeFileSync(join(dir, 'externals/beacon/lf-external.yaml'), `name: beacon\nurl: ${url}\nauth: { kind: bearer, field: key }\n`);
   mkdirSync(join(dir, 'movements'));

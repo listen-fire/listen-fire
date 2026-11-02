@@ -16,6 +16,7 @@ import { WAKE_METHODS } from 'engine-contracts/slots';
 import { SlotClient, commonSlotCases, startModule, wakeSlotCases, type StartedModule } from 'movement-engine/public/module-wire';
 import { fakeCloudTasks, type FakeCloudTasks } from '../../../../modules/wake-cloud-tasks/fake_cloud_tasks';
 import { lfBinary } from './lf_bin';
+import { RELEASE } from './release';
 
 const MODULE = resolve(__dirname, '../../../../modules/wake-cloud-tasks');
 
@@ -39,7 +40,7 @@ function wakeCloudTasksProject(): string {
   mkdirSync(join(dir, 'externals/wake_cloud_tasks'), { recursive: true });
   const manifest = readFileSync(join(MODULE, 'lf-external.yaml'), 'utf8').replace(/^command: .*$/m, `command: [${WAKE_MODULE_COMMAND.map((part) => JSON.stringify(part)).join(', ')}]`);
   writeFileSync(join(dir, 'externals/wake_cloud_tasks/lf-external.yaml'), manifest);
-  writeFileSync(join(dir, 'lf.yaml'), 'engine: 0.13.0\ncore:\n  wake: wake_cloud_tasks\n');
+  writeFileSync(join(dir, 'lf.yaml'), `engine: ${RELEASE}\ncore:\n  wake: wake_cloud_tasks\n`);
   return dir;
 }
 

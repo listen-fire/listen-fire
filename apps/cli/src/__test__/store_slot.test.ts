@@ -18,6 +18,7 @@ import { storeWaitsCases } from 'movement-engine/services/run_host/store_waits';
 import { companies, lf, project, served } from './example';
 import { lfBinary } from './lf_bin';
 import { withStoreModule } from './store_module/project';
+import { RELEASE } from './release';
 
 function moduleProject(): { dir: string; statePath: string } {
   const dir = project();
@@ -105,7 +106,7 @@ for (const [over, make] of [
 for (const waitsCase of storeWaitsCases()) {
   test(`a store module keeps a run's waits: ${waitsCase.name}`, async () => {
     const dir = mkdtempSync(join(tmpdir(), 'lf-waits-slot-'));
-    writeFileSync(join(dir, 'lf.yaml'), 'engine: 0.13.0\n');
+    writeFileSync(join(dir, 'lf.yaml'), `engine: ${RELEASE}\n`);
     withStoreModule(dir, join(mkdtempSync(join(tmpdir(), 'lf-waits-state-')), 'kept.db'));
     const store = new RpcStoreBackend(lfBinary(), ['--contract-store-slot', '--dir', dir]);
     try {

@@ -677,7 +677,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("lf-secrets-boot-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(dir.join("externals/vault")).unwrap();
         std::fs::write(dir.join("externals/vault/lf-external.yaml"), "name: vault\nkind: core\nslot: secrets\nurl: http://127.0.0.1:9/\nsettings:\n  - { name: project }\n").unwrap();
-        std::fs::write(dir.join("lf.yaml"), "engine: 0.13.0\ncore:\n  secrets: vault\n").unwrap();
+        std::fs::write(dir.join("lf.yaml"), &format!("engine: {}\ncore:\n  secrets: vault\n", movement_parser::version::LANGUAGE_VERSION)).unwrap();
         let project = crate::project::load_project_with(&dir, &[]).unwrap_err();
         assert!(project.contains("the secrets module's own settings come from LF_SECRET__… or the secrets file, not from the module"), "{project}");
         let env = [("LF_SECRET__VAULT__EXTERNAL".to_string(), "vault".to_string()), ("LF_SECRET__VAULT__PROJECT".to_string(), "p".to_string())];

@@ -3,6 +3,7 @@
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { RELEASE } from '../release';
 
 const SERVE = resolve(__dirname, 'serve.ts');
 
@@ -14,6 +15,6 @@ export function limiterModuleProject(): string {
     join(dir, 'externals/acme_limits/lf-external.yaml'),
     ['name: acme_limits', 'kind: core', 'slot: limiter', `command: [${command.map((part) => JSON.stringify(part)).join(', ')}]`, ''].join('\n'),
   );
-  writeFileSync(join(dir, 'lf.yaml'), 'engine: 0.13.0\ncore:\n  limiter: acme_limits\n');
+  writeFileSync(join(dir, 'lf.yaml'), `engine: ${RELEASE}\ncore:\n  limiter: acme_limits\n`);
   return dir;
 }

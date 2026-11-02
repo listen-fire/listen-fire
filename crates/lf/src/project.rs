@@ -384,17 +384,35 @@ fn load_pinned(from: &Path, older_key_loads: bool) -> Result<Project, String> {
     })
 }
 
+/// Pins that stand against this release however many releases it has had:
+/// derived from `LANGUAGE_VERSION`, so a bump never leaves a test naming a
+/// key that has become the current one.
+#[cfg(test)]
+pub(crate) struct Pins {
+    pub same_key: String,
+    pub older_key: String,
+    pub newer: String,
+}
+
+#[cfg(test)]
+pub(crate) fn pins_against_this_release() -> Pins {
+    let key = movement_parser::version::compatibility_key(LANGUAGE_VERSION).unwrap();
+    let minor: u64 = key.strip_prefix("0.").expect("a 0.x release").parse().unwrap();
+    Pins { same_key: format!("{key}.0"), older_key: format!("0.{}.13", minor - 1), newer: format!("0.{}.0", minor + 1) }
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
     fn an_older_key_pin_loads_only_to_be_upgraded() {
         let root = std::env::temp_dir().join(format!("lf-pin-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&root).unwrap();
-        fs::write(root.join(PROJECT_FILE), "engine: 0.12.13\n").unwrap();
+        let pins = pins_against_this_release();
+        fs::write(root.join(PROJECT_FILE), format!("engine: {}\n", pins.older_key)).unwrap();
         assert!(load_project(&root).unwrap_err().contains("run `listen-fire upgrade`"));
         let project = load_project_to_upgrade(&root).unwrap();
-        assert_eq!((project.engine.as_str(), project.language_version.as_str()), ("0.12.13", LANGUAGE_VERSION));
-        fs::write(root.join(PROJECT_FILE), "engine: 0.14.0\n").unwrap();
+        assert_eq!((project.engine.as_str(), project.language_version.as_str()), (pins.older_key.as_str(), LANGUAGE_VERSION));
+        fs::write(root.join(PROJECT_FILE), format!("engine: {}\n", pins.newer)).unwrap();
         assert!(load_project_to_upgrade(&root).unwrap_err().contains("newer than this listen-fire"));
         fs::remove_dir_all(&root).ok();
     }
@@ -416,15 +434,16 @@ mod tests {
 
     #[test]
     fn an_engine_pin_is_read_by_its_standing_against_this_release() {
-        assert_eq!(language_version_of_engine("0.13.0"), Ok("0.13.0".to_string()));
+        let pins = pins_against_this_release();
+        assert_eq!(language_version_of_engine(&pins.same_key), Ok(pins.same_key.clone()));
         assert_eq!(language_version_of_engine(LANGUAGE_VERSION), Ok(LANGUAGE_VERSION.to_string()));
         assert_eq!(
-            language_version_of_engine("0.14.0"),
-            Err(format!("lf.yaml pins engine 0.14.0, newer than this listen-fire ({LANGUAGE_VERSION}); upgrade listen-fire"))
+            language_version_of_engine(&pins.newer),
+            Err(format!("lf.yaml pins engine {}, newer than this listen-fire ({LANGUAGE_VERSION}); upgrade listen-fire", pins.newer))
         );
         assert_eq!(
-            language_version_of_engine("0.12.13"),
-            Err(format!("lf.yaml pins engine 0.12.13, which this listen-fire ({LANGUAGE_VERSION}) does not read; run `listen-fire upgrade`"))
+            language_version_of_engine(&pins.older_key),
+            Err(format!("lf.yaml pins engine {}, which this listen-fire ({LANGUAGE_VERSION}) does not read; run `listen-fire upgrade`", pins.older_key))
         );
         let malformed = language_version_of_engine("5").unwrap_err();
         assert!(malformed.contains("pins language 5, which is not a version"), "{malformed}");
