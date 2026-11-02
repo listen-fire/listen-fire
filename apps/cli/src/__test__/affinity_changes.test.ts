@@ -177,6 +177,12 @@ test("an opportunity list's column is its entries' field: a listen on its change
     const dir = affinityProject(fake, STAGED, `publicUrl: http://127.0.0.1:${port}\n`);
     const checked = lf(dir, 'check');
     assert.equal(checked.code, 0, checked.out);
+    // Its Field is text within 0.13, as 0.13.0 typed it: a name that is no column still checks clean.
+    writeFileSync(join(dir, 'movements/deal_date.mvt'), STAGED.replace('c.Field == "Deal Stage"', 'c.Field == "Stage"'));
+    const unlisted = lf(dir, 'check');
+    assert.equal(unlisted.code, 0, unlisted.out);
+    assert.doesNotMatch(unlisted.out, /MOV_ENUM_UNKNOWN_VALUE/);
+    writeFileSync(join(dir, 'movements/deal_date.mvt'), STAGED);
     const [entry] = (await api(fake, '/lists/12/list-entries')) as Array<{ id: number; entity_id: number }>;
     const { server, urls } = await serving(dir, port, ['Changes']);
     try {

@@ -183,7 +183,9 @@ describe('@lf/affinity reports each event as the arrival on its record’s Chang
     const { adapter } = makeAdapter({ fieldValues: [{ id: 95, field_id: 300, list_entry_id: 9302, value: { id: 30, text: 'Sourced', rank: 0, color: 0 } }] });
     const entry = await adapter.describe('List Entry — Deals');
     expect(entry?.fields.find((f) => f.displayName === 'Deal Stage')).toMatchObject({ kind: 'enum', enumValues: ['Sourced'], writable: false });
-    expect((await adapter.describe('List Entry Change — Deals'))?.fields.find((f) => f.displayName === 'Field')?.enumValues).toEqual(['Deal Stage']);
+    // 0.13.0 typed this Field as text, and within 0.13 it stays so.
+    expect((await adapter.describe('List Entry Change — Deals'))?.fields.find((f) => f.displayName === 'Field')).toMatchObject({ kind: 'string' });
+    expect((await adapter.describe('List Entry Change — Hot Leads'))?.fields.find((f) => f.displayName === 'Field')).toMatchObject({ kind: 'enum' });
     const [moved] = (await adapter.preprocessInbound({ raw: fieldValue('field_value.updated', { id: 95, field_id: 300, entity_type: 8, entity_id: 700, list_entry_id: 9302, value: 30 }) })).arrivals;
     expect(moved).toMatchObject({
       landing: { recordType: 'List Entry Change — Deals', fields: { Field: 'Deal Stage', Current: { 'Deal Stage': 'Sourced' } } },
@@ -329,5 +331,7 @@ listen to crm-[:\`List Entry — Hot Leads\`]->-[c:Changes WHERE c.Field == "${f
   it("checks a listen on an opportunity list's column", async () => {
     const deals = program('List Score').replace(/Hot Leads/g, 'Deals').replace('e.`List Score`', 'e.`Deal Stage`').replace('c.Field == "List Score"', 'c.Field == "Deal Stage"');
     expect(await errors(deals)).toEqual([]);
+    // Its Field is text within 0.13: a name that is no column checks, as it did in 0.13.0.
+    expect(await errors(deals.replace('c.Field == "Deal Stage"', 'c.Field == "Stage"'))).toEqual([]);
   });
 });

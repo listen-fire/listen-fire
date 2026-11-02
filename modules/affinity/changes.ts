@@ -149,7 +149,13 @@ export function changeableFields(record: SchemaTypeDescriptor): Array<{ fieldId:
  *  fields, so a listen naming one it lacks is refused at check. `Current` and
  *  `Previous` are the record's own type, so a comparison of the value is
  *  checked against its field (`c.Current.Status == "Won"`). */
-export function describeChange(record: SchemaTypeDescriptor): SchemaTypeDescriptor {
+export function describeChange(
+  record: SchemaTypeDescriptor,
+  /** `Field` as text whatever the record's fields: an opportunity list's,
+   *  which 0.13.0 typed so (its columns were not on its record type then), so
+   *  a name that is no column checks within 0.13 as it did. */
+  options: { textField?: true } = {},
+): SchemaTypeDescriptor {
   const recordType = record.displayName;
   const noun = perListName(recordType) === undefined ? recordType.toLowerCase() : `entry on ${perListName(recordType)}`;
   const titles = [...new Set(changeableFields(record).map((f) => f.name))];
@@ -172,7 +178,7 @@ export function describeChange(record: SchemaTypeDescriptor): SchemaTypeDescript
     fields: [
       field('Id', 'string', { required: true, description: 'Names the change: the same on every redelivery of it.' }),
       field('Kind', 'enum', { required: true, enumValues: [...AFFINITY_CHANGE_KINDS], description: `What happened to the ${noun}: a field value set, changed or cleared is \`updated\`.` }),
-      titles.length > 0
+      titles.length > 0 && options.textField !== true
         ? field('Field', 'enum', { enumValues: titles, description: 'When a field value changed, the field, by its name (`Status`).' })
         : field('Field', 'string', { description: 'When a field value changed, the field, by its name.' }),
       field(AFFINITY_FIELD_CHANGE, 'enum', {

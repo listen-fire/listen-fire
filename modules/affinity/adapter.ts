@@ -453,7 +453,10 @@ export class AffinityAdapter extends BaseAdapter {
     const changed = recordTypeOfChange(name);
     if (changed !== undefined) {
       const record = await this.describe(changed);
-      return record === null ? null : describeChange(record);
+      if (record === null) return null;
+      const list = await this.structuredIdFor(changed);
+      const opportunityList = list?.entity === 'list-entry' && listEntityKind(list.listType) === 'opportunity';
+      return describeChange(record, opportunityList ? { textField: true } : {});
     }
     const decoded = await this.structuredIdFor(name);
     if (!decoded) return null;
