@@ -171,12 +171,14 @@ describe('@lf/whatsapp', () => {
         {
           edge: 'Messages',
           identity: 'wamid.T',
+          actor: { identifier: '447700900001', scheme: 'phone', adapterType: 'whatsapp', name: 'Ada', label: 'Ada' },
           landing: { recordId: 'wamid.T', recordType: 'Message', fields: expect.objectContaining({ 'Message Id': 'wamid.T', From: '447700900001', Body: 'hello', 'Profile Name': 'Ada', body: 'hello', from: '447700900001' }) },
           occurredAt: '2025-10-09T08:53:20.000Z',
         },
         {
           edge: 'Reactions',
           identity: 'wamid.R',
+          actor: { identifier: '447700900001', scheme: 'phone', adapterType: 'whatsapp', name: 'Ada', label: 'Ada' },
           landing: { recordId: 'wamid.R', recordType: 'Reaction', fields: expect.objectContaining({ Emoji: '👍', 'Reacted Message Id': 'wamid.T', From: '447700900001' }) },
           about: { recordType: 'Message', externalId: 'wamid.T' },
           occurredAt: '2025-10-09T08:54:10.000Z',
@@ -184,6 +186,7 @@ describe('@lf/whatsapp', () => {
         {
           edge: 'Locations',
           identity: 'wamid.L',
+          actor: { identifier: '447700900002', scheme: 'phone', adapterType: 'whatsapp', name: 'Ada', label: 'Ada' },
           landing: { recordId: 'wamid.L', recordType: 'Location', fields: expect.objectContaining({ Latitude: 51.5, Longitude: -0.12, Name: 'Home', From: '447700900002' }) },
           occurredAt: '2025-10-09T08:55:00.000Z',
         },
@@ -219,6 +222,8 @@ describe('@lf/whatsapp', () => {
       );
       const from = (phone: string) => ({ actor: { identifier: phone, scheme: 'phone', adapterType: 'whatsapp', name: 'Ada', label: 'Ada' }, candidates: [[phone, 'originator']] });
       expect(actors).toEqual([from('447700900001'), from('447700900001'), from('447700900002')]);
+      // The door names the sender on each arrival itself.
+      expect(arrivals.map((arrival) => ('gone' in arrival ? undefined : arrival.actor))).toEqual(actors.map((a) => a.actor));
     });
 
     it('a message that arrived is read by its display names and replied under', async () => {

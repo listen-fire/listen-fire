@@ -37,7 +37,7 @@ import type {
 import type { Arrival } from 'engine-contracts';
 import type { TriggerEvent } from 'movement-engine/public/inbound';
 import type { ModuleLog } from 'module-kit';
-import { firedRecordFields } from 'module-kit';
+import { firedActor } from 'module-kit';
 import type { WhatsappCloudClient } from './client';
 
 import { fileHandle, isFileValue, ownedFileSource, singleParentLink } from 'movement-engine/public/adapter';
@@ -47,7 +47,7 @@ import { FileOutsideTeamError } from 'movement-engine/public/files';
 import { META_RECORD_TYPE, makeUnstablePosition, positionData } from 'movement-engine/public/catalog';
 import { uniformWalk } from 'module-kit/adapter/hop';
 import { BaseAdapter } from 'module-kit/adapter/base';
-import { whatsappInboundArrivals } from './inbound';
+import { readProfileName, readString, whatsappInboundArrivals } from './inbound';
 import { WHATSAPP_MANIFEST } from './manifest';
 import { normalizeWhatsappPhone } from './phone';
 import {
@@ -551,32 +551,23 @@ export class WhatsappAdapter extends BaseAdapter implements Adapter {
   // WhatsApp has no forwarding / relay concept (no header chain), so there
   // are no `relay` candidates — a single originator only.
   async getActorCandidates(input: { event: TriggerEvent }): Promise<ActorCandidate[]> {
-    const phone = normalizeWhatsappPhone(readSender(firedRecordFields(input.event)));
-    if (!phone) return [];
+    const sender = firedActor(input.event);
+    if (!sender) return [];
     return [
       {
-        identity: { identifier: phone, scheme: 'phone', adapterType: this.adapterType },
+        identity: { identifier: sender.identifier, scheme: 'phone', adapterType: this.adapterType },
         source: 'originator',
       },
     ];
   }
 
   // ── 3b. Actor extraction (T5) ────────────────────────────────────────────
-  // Synchronous parse of the raw sender. Independent of auth — populates
-  // `@actor_*` so authors can see the raw sender even when auth went through
-  // a fallback. Surfaces the profile name as the friendly label when present.
+  // The raw sender, as the door named them on the arrival
+  // (`whatsappActorOf`). Independent of auth — populates `@actor_*` so
+  // authors can see the raw sender even when auth went through a fallback.
+  // Surfaces the profile name as the friendly label when present.
   async extractActor(input: { event: TriggerEvent }): Promise<ActorIdentity | null> {
-    const message = firedRecordFields(input.event);
-    const phone = normalizeWhatsappPhone(readSender(message));
-    if (!phone) return null;
-    const profileName = readProfileName(message);
-    return {
-      identifier: phone,
-      scheme: 'phone',
-      adapterType: this.adapterType,
-      name: profileName ?? undefined,
-      label: profileName ?? phone,
-    };
+    return firedActor(input.event);
   }
 
   // ── 3c. Byte resolution (owner-side) ─────────────────────────────────────
@@ -810,40 +801,6 @@ export class WhatsappAdapter extends BaseAdapter implements Adapter {
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────
-
-/**
- * Read the first non-empty string value across a set of candidate keys.
- * Underpins the dual-shape tolerance: every reader accepts both the TG-side
- * camelCase field (`from`, `body`, …) and the raw Twilio webhook key
- * (`From`, `Body`, …), since no producer reshapes the webhook before it
- * reaches the adapter — the adapter carries that burden (adapter
- * minimalism).
- */
-function readString(payload: Record<string, unknown>, ...keys: string[]): string | undefined {
-  for (const key of keys) {
-    const value = payload[key];
-    if (typeof value === 'string' && value.length > 0) return value;
-  }
-  return undefined;
-}
-
-/**
- * Read the raw sender value from the payload, tolerating both the TG-side
- * `from` field and the raw Twilio `From` key (which carries the
- * `whatsapp:` prefix).
- */
-function readSender(payload: Record<string, unknown>): string | undefined {
-  return readString(payload, 'from', 'From');
-}
-
-/**
- * Read the sender's WhatsApp profile display name, tolerating both the
- * TG-side `profileName` field and the raw Twilio `ProfileName` key.
- */
-function readProfileName(payload: Record<string, unknown>): string | null {
-  const name = readString(payload, 'profileName', 'ProfileName');
-  return name ? name.trim() : null;
-}
 
 /**
  * Project either payload shape — the TG-side `WhatsappPayload` or the raw

@@ -23,7 +23,7 @@ import {
   makeUnstablePosition,
   positionData,
 } from 'movement-engine/public/catalog';
-import { firedRecordFields } from 'module-kit';
+import { firedActor } from 'module-kit';
 import { BaseAdapter } from 'module-kit/adapter/base';
 import { uniformWalk } from 'module-kit/adapter/hop';
 import type { GranolaClient } from './api_client';
@@ -322,20 +322,12 @@ export class GranolaAdapter extends BaseAdapter implements Adapter {
   // ── 4. Actor — the note's owner is its originator ──────────────────────
 
   async getActorCandidates(input: { event: TriggerEvent }): Promise<ActorCandidate[]> {
-    const actor = await this.extractActor(input);
+    const actor = firedActor(input.event);
     return actor ? [{ identity: actor, source: 'originator' }] : [];
   }
 
   async extractActor(input: { event: TriggerEvent }): Promise<ActorIdentity | null> {
-    const { note_owner_email: email, note_owner_name: name } = firedRecordFields(input.event);
-    if (typeof email !== 'string' || email === '') return null;
-    return {
-      identifier: email,
-      scheme: 'email',
-      adapterType: GRANOLA_ADAPTER_TYPE,
-      email,
-      ...(typeof name === 'string' && name !== '' ? { name } : {}),
-    };
+    return firedActor(input.event);
   }
 
 }

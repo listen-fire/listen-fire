@@ -52,7 +52,7 @@ import type { Arrival, ArrivalsCapability, AwaitHead, AwaitKey } from 'engine-co
 import type { SchemaEntryPoint, SchemaTypeDescriptor, SourcePosition } from 'movement-engine/public/catalog';
 import type { TriggerEvent } from 'movement-engine/public/inbound';
 import type { ModuleLog } from 'module-kit';
-import { firedRecordFields } from 'module-kit';
+import { firedActor } from 'module-kit';
 import type { SlackAPIClient } from './api_client';
 import type { SlackWriteHost } from './write';
 
@@ -1866,8 +1866,7 @@ export class SlackAdapter extends BaseAdapter {
   private async resolveActorEmail(
     event: TriggerEvent,
   ): Promise<{ userId: string; email: string } | null> {
-    const actor = await this.extractActor({ event });
-    const slackUserId = actor?.identifier;
+    const slackUserId = firedActor(event)?.identifier;
     if (!slackUserId) return null;
 
     const client = await this.getSlackApiClient();
@@ -2042,27 +2041,15 @@ export class SlackAdapter extends BaseAdapter {
 
   // ── 4d. Actor extraction (T5) ────────────────────────────────────────────
   // Raw Slack actor — the member who posted the message, added the
-  // reaction or pressed the button that fired the run. Independent of auth;
+  // reaction or pressed the button that fired the run, as the door named them
+  // on the arrival (`slackActorOf`, inbound.ts). Independent of auth;
   // populates `@actor_id` so authors can attribute events to their raw
   // originator (the Slack member id) even when auth went through the creator
   // fallback. Email/name slots are left blank: what arrives doesn't carry
-  // them without a separate `users.info` round trip, which `extractActor`'s
+  // them without a separate `users.info` round trip, which the door's
   // pure-parse contract forbids.
   async extractActor(input: { event: TriggerEvent }): Promise<ActorIdentity | null> {
-    // A message's and a reaction's `user` is the member's id; a press's is
-    // the member.
-    const user = firedRecordFields(input.event).user;
-    const userId = typeof user === 'object' && user !== null ? Reflect.get(user, 'id') : user;
-    if (typeof userId !== 'string' || userId.length === 0) return null;
-    return {
-      identifier: userId,
-      // Pure parse — no email/phone resolved here, so this identity maps to
-      // no Listen-Fire user (`@actor_email` stays null until the candidate path's
-      // `users.info` resolution supplies one).
-      scheme: 'opaque',
-      adapterType: this.adapterType,
-      label: userId,
-    };
+    return firedActor(input.event);
   }
 
   // ── 5. Writes — target side (edge-anchored posts / replies) ───────────

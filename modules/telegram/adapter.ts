@@ -40,7 +40,7 @@ import type { SchemaEntryPoint, SchemaTypeDescriptor, SourcePosition } from 'mov
 import type { Arrival } from 'engine-contracts';
 import type { TriggerEvent } from 'movement-engine/public/inbound';
 import type { LinkedIdentity, ModuleIdentities, ModuleLog } from 'module-kit';
-import { firedRecordFields } from 'module-kit';
+import { firedActor } from 'module-kit';
 
 import { fileHandle, ownedFileSource, singleParentLink } from 'movement-engine/public/adapter';
 import { META_RECORD_TYPE, makeStablePosition, makeUnstablePosition, positionData } from 'movement-engine/public/catalog';
@@ -454,7 +454,14 @@ export class TelegramAdapter extends BaseAdapter implements Adapter {
     raw: unknown;
     checkpoint?: unknown;
   }): Promise<{ events: []; arrivals: Arrival[] }> {
-    return { events: [], arrivals: telegramInboundArrivals(input.raw) };
+    const arrivals = await Promise.all(
+      telegramInboundArrivals(input.raw).map(async (arrival) => {
+        if ('gone' in arrival) return arrival;
+        const actor = await this.actorOfMessage(arrival.landing.fields);
+        return actor === null ? arrival : { ...arrival, actor };
+      }),
+    );
+    return { events: [], arrivals };
   }
 
   // ── 6. Actor candidate parsing (acting-user split) ────────────────────
@@ -465,23 +472,28 @@ export class TelegramAdapter extends BaseAdapter implements Adapter {
   // `lookupTeamUserByEmail` turns that email into the run's ActingUser. An
   // unbound sender resolves to no email → no actor → the dispatch is ignored.
   async getActorCandidates(input: { event: TriggerEvent }): Promise<ActorCandidate[]> {
-    const actor = await this.extractActor(input);
+    const actor = firedActor(input.event);
     if (!actor) return [];
     return [{ identity: actor, source: 'originator' }];
   }
 
   // ── 6b. Actor extraction (@actor_*) ───────────────────────────────────
-  // Resolve the Telegram sender to an email-bearing identity via the adapter's
-  // OWN store, scoped to this adapter's team. The numeric user id stays the
-  // `identifier` (the source-system primary key) and the username/first name
-  // ride `name`/`label` so `@actor_*` still surfaces the raw Telegram sender;
-  // the resolved `email` + `scheme: 'email'` is the AUTHENTICATION key the
-  // framework matches against the team's users. An unbound sender (no row for
-  // this team) → `null` (no actor; downstream ignores it). The store read is
-  // team-scoped here, and the framework's `lookupTeamUserByEmail` is itself
-  // hard-clamped to the team — identification can never cross teams.
+  // The sender, as the door named them on the arrival (`actorOfMessage`).
   async extractActor(input: { event: TriggerEvent }): Promise<ActorIdentity | null> {
-    const message = firedRecordFields(input.event);
+    return firedActor(input.event);
+  }
+
+  // Resolve a message's Telegram sender to an email-bearing identity via the
+  // adapter's OWN store, scoped to this adapter's team. The numeric user id
+  // stays the `identifier` (the source-system primary key) and the
+  // username/first name ride `name`/`label` so `@actor_*` still surfaces the
+  // raw Telegram sender; the resolved `email` + `scheme: 'email'` is the
+  // AUTHENTICATION key the framework matches against the team's users. An
+  // unbound sender (no row for this team) → `null` (no actor; downstream
+  // ignores it). The store read is team-scoped here, and the framework's
+  // `lookupTeamUserByEmail` is itself hard-clamped to the team —
+  // identification can never cross teams.
+  private async actorOfMessage(message: Record<string, unknown>): Promise<ActorIdentity | null> {
     const senderId = message.sender_id;
     if (typeof senderId !== 'string' || senderId.length === 0) return null;
 
@@ -495,7 +507,7 @@ export class TelegramAdapter extends BaseAdapter implements Adapter {
       scheme: 'email',
       adapterType: this.adapterType,
       email,
-      name: firstName,
+      ...(firstName !== undefined ? { name: firstName } : {}),
       label: username ? `@${username}` : (firstName ?? senderId),
     };
   }

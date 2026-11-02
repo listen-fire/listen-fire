@@ -16,10 +16,11 @@ import { createHash } from 'node:crypto';
 
 import { z } from 'zod';
 
-import type { Arrival, AwaitLanding } from 'engine-contracts';
+import type { ActorIdentity, Arrival, AwaitLanding } from 'engine-contracts';
 import type { SchemaEntryPoint, SchemaFieldDescriptor, SchemaTypeDescriptor, SchemaReferenceDescriptor } from 'movement-engine/public/catalog';
 
 import { extractAttioValue, type AttioAttribute } from './attributes';
+import { ATTIO_ADAPTER_TYPE } from './types';
 
 /** The edge every object's records hang their changes off. */
 export const ATTIO_CHANGES_EDGE = 'Changes';
@@ -126,8 +127,21 @@ const attioActor = z.object({ id: z.string().nullable(), type: z.string() }).opt
 
 /** Where a change keeps who made it, as Attio's webhook names them
  *  (`{ type, id }`, `type` Attio's own: `workspace-member`, `api-token`,
- *  `system`): beside its named fields, for the actor of the run it fires. */
+ *  `system`): beside its named fields. The arrival's `actor` carries the id
+ *  alone; the type stays here, for the one reader that gates on it (whether
+ *  the actor is a workspace member whose email can be fetched). */
 export const ATTIO_CHANGE_ACTOR = 'actor';
+
+/** Who made a change, as the door names them on its arrival: the id of the
+ *  actor Attio's webhook names, whatever its type. Pure parse — a bare id
+ *  with no resolved email maps to no Listen-Fire user (`scheme: 'opaque'`);
+ *  the candidate path resolves a workspace member's email separately. None
+ *  when the webhook names no actor id. */
+function changeActorOf(actor: { id: string | null } | undefined): ActorIdentity | undefined {
+  const id = actor?.id;
+  if (id === undefined || id === null || id.length === 0) return undefined;
+  return { identifier: id, scheme: 'opaque', adapterType: ATTIO_ADAPTER_TYPE, label: id };
+}
 
 /** One of a change's fields, by name, from what its position holds. */
 export function changeFieldOf(change: unknown, name: string): unknown {
@@ -200,6 +214,7 @@ export async function changeArrivals(raw: unknown, sources: ChangeSources): Prom
       ...(attribute !== undefined ? { Field: attribute.name } : {}),
       ...(event.actor !== undefined ? { [ATTIO_CHANGE_ACTOR]: event.actor } : {}),
     };
+    const actor = changeActorOf(event.actor);
     arrivals.push({
       edge: ATTIO_CHANGES_EDGE,
       key: recordId,
@@ -207,6 +222,7 @@ export async function changeArrivals(raw: unknown, sources: ChangeSources): Prom
       landing: { recordId: identity, recordType: changeTypeName(object), fields },
       parents: [record === null ? null : recordLanding(object, recordId, record, attributes)],
       about: { recordType: object.name, externalId: recordId },
+      ...(actor !== undefined ? { actor } : {}),
       ...(occurredAt !== undefined ? { occurredAt } : {}),
     });
   }

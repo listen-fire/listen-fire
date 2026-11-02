@@ -33,7 +33,7 @@ import type {
 import type { TriggerEvent } from 'movement-engine/public/inbound';
 
 import { fileHandle, ownedFileSource } from 'movement-engine/public/adapter';
-import { firedRecordFields } from 'module-kit';
+import { firedActor, firedRecordFields } from 'module-kit';
 import { uniformWalk } from 'module-kit/adapter/hop';
 import { META_RECORD_TYPE, makeUnstablePosition, positionData } from 'movement-engine/public/catalog';
 import { BaseAdapter } from 'module-kit/adapter/base';
@@ -351,18 +351,12 @@ export class EmailAdapter extends BaseAdapter implements Adapter {
   // identity proof. The creator-override (T6) and the null-on-no-match
   // rejection both live in `resolveActingUser`, not here.
   async getActorCandidates(input: { event: TriggerEvent }): Promise<ActorCandidate[]> {
-    const email = firedRecordFields(input.event);
     const candidates: ActorCandidate[] = [];
 
-    const sender = parseEmailAddress(senderOf(email));
-    if (sender) {
-      candidates.push({
-        identity: { identifier: sender, scheme: 'email', adapterType: this.adapterType, email: sender },
-        source: 'originator',
-      });
-    }
+    const sender = firedActor(input.event);
+    if (sender) candidates.push({ identity: sender, source: 'originator' });
 
-    for (const recipient of parseIntermediateRecipients(email)) {
+    for (const recipient of parseIntermediateRecipients(firedRecordFields(input.event))) {
       candidates.push({
         identity: { identifier: recipient, scheme: 'email', adapterType: this.adapterType, email: recipient },
         source: 'relay',
@@ -373,22 +367,12 @@ export class EmailAdapter extends BaseAdapter implements Adapter {
   }
 
   // ── 3b. Actor extraction (T5) ────────────────────────────────────────────
-  // Synchronous parse of the raw `From:` address. Independent of auth —
-  // populates `@actor_email` / `@actor_name` so authors can see the raw
-  // sender even when auth went through a service-account fallback.
+  // The raw `From:` sender, as the door named them on the arrival
+  // (`emailActorOf`). Independent of auth — populates `@actor_email` /
+  // `@actor_name` so authors can see the raw sender even when auth went
+  // through a service-account fallback.
   async extractActor(input: { event: TriggerEvent }): Promise<ActorIdentity | null> {
-    const raw = senderOf(firedRecordFields(input.event));
-    const address = parseEmailAddress(raw);
-    if (!address) return null;
-    const displayName = parseDisplayName(raw);
-    return {
-      identifier: address,
-      scheme: 'email',
-      adapterType: this.adapterType,
-      email: address,
-      name: displayName ?? undefined,
-      label: displayName ?? address,
-    };
+    return firedActor(input.event);
   }
 
   // ── 3c. Byte resolution (owner-side) ─────────────────────────────────────
@@ -582,6 +566,24 @@ function parseDisplayName(raw: string | undefined | null): string | null {
  * The webhook body carries some headers as top-level keys and others
  * inside the `message-headers` stringified tuple list — we check both.
  */
+/** Who sent an email, as the door names them on its arrival: the bare
+ *  address of its sender (else its `From` header), with the display name when
+ *  there is one. None when the message names no address. */
+export function emailActorOf(email: Record<string, unknown>): ActorIdentity | undefined {
+  const raw = senderOf(email);
+  const address = parseEmailAddress(raw);
+  if (!address) return undefined;
+  const displayName = parseDisplayName(raw);
+  return {
+    identifier: address,
+    scheme: 'email',
+    adapterType: EMAIL_ADAPTER_TYPE,
+    email: address,
+    ...(displayName !== null ? { name: displayName } : {}),
+    label: displayName ?? address,
+  };
+}
+
 /** Who sent an email: its envelope sender, else its `From` header. */
 function senderOf(email: Record<string, unknown>): string | undefined {
   const sender = email['sender'];

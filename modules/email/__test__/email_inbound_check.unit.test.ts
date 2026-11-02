@@ -144,6 +144,9 @@ describe('@lf/email checks its own inbound', () => {
     const body = JSON.stringify({ type: 'email.received', data: { email_id: 'em_1', from: 'Ada <ada@example.com>', to: ['in+k@lf.test'] } });
     const sent = await fired(request({ body, headers: resendDelivery(body), secret: RESEND_SECRET }));
     expect(await adapter.extractActor!({ event: sent })).toMatchObject({ identifier: 'ada@example.com', name: 'Ada', label: 'Ada' });
+    // The door names the sender on the arrival itself, and a run reads that.
+    expect(sent.arrival?.actor).toEqual({ identifier: 'ada@example.com', scheme: 'email', adapterType: 'email', email: 'ada@example.com', name: 'Ada', label: 'Ada' });
+    expect(forwarded.arrival?.actor).toEqual({ identifier: 'ada@example.com', scheme: 'email', adapterType: 'email', email: 'ada@example.com', label: 'ada@example.com' });
   });
 
   it('refuses a Resend notification with a bad or missing signature', async () => {

@@ -192,6 +192,7 @@ describe('@lf/slack', () => {
             edge: 'Messages',
             key: 'C1',
             identity: 'C1:1700000000.000100',
+            actor: { identifier: 'U1', scheme: 'opaque', adapterType: 'slack', label: 'U1' },
             landing: {
               recordId: 'C1:1700000000.000100',
               recordType: 'Message',
@@ -315,6 +316,7 @@ describe('@lf/slack', () => {
             landing: { recordId: 'reaction:C1:1700.1:eyes', recordType: 'Reaction', fields: { ...event, Emoji: 'eyes', Channel: 'C1', Reactor: 'U2' } },
             parents: [{ recordId: 'C1', recordType: 'Channel', fields: { id: 'C1', name: 'deals', Id: 'C1', Name: 'deals' } }],
             about: { recordType: 'Message', externalId: 'C1:1700.1' },
+            actor: { identifier: 'U2', scheme: 'opaque', adapterType: 'slack', label: 'U2' },
             occurredAt: '2023-11-14T22:13:20.000Z',
           },
         ],
@@ -509,6 +511,7 @@ describe('@lf/slack', () => {
               },
             ],
             about: { recordType: 'Message', externalId: 'C1:1700000000.000100' },
+            actor: { identifier: 'U1', scheme: 'opaque', adapterType: 'slack', label: 'U1' },
             occurredAt: '2023-11-14T22:14:20.000Z',
           },
         ],
@@ -601,6 +604,29 @@ describe('@lf/slack', () => {
       ['Reactions', actor('U3')],
       ['Interactions', actor('U4')],
     ]);
+  });
+
+  it('a message that names no member (a bot post) arrives with no actor, and its run reads none', async () => {
+    const { adapter } = load({ credential: credential({}) });
+    const bot = { type: 'message', channel: 'C1', text: 'beep', ts: '1700.1' };
+    const [arrival] = (await adapter.preprocessInbound?.({ raw: { type: 'event_callback', event: bot } }))?.arrivals ?? [];
+    if (arrival === undefined || 'gone' in arrival) throw new Error('nothing arrived');
+    expect(arrival).not.toHaveProperty('actor');
+    const event = arrivalTriggerOf({ pipelineInputId: 'chat:answer', adapterType: 'slack', arrival, now: new Date() });
+    await expect(adapter.extractActor?.({ event })).resolves.toBeNull();
+  });
+
+  it('a run whose arrival names an actor reads it, whatever the landing holds', async () => {
+    const { adapter } = load({ credential: credential({}) });
+    const arrival = {
+      edge: 'Messages',
+      key: 'C1',
+      identity: 'C1:1.1',
+      landing: { recordId: 'C1:1.1', recordType: 'Message', fields: {} },
+      actor: { identifier: 'U9', scheme: 'opaque' as const, adapterType: 'slack', label: 'U9' },
+    };
+    const event = arrivalTriggerOf({ pipelineInputId: 'chat:answer', adapterType: 'slack', arrival, now: new Date() });
+    await expect(adapter.extractActor?.({ event })).resolves.toEqual(arrival.actor);
   });
 
   it('a message that mentions the app arrives as its message would, under the same identity', async () => {

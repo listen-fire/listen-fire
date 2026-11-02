@@ -27,7 +27,9 @@
 
 import { z } from 'zod';
 
-import type { Arrival, AwaitLanding } from 'engine-contracts';
+import type { ActorIdentity, Arrival, AwaitLanding } from 'engine-contracts';
+
+import { SLACK_ADAPTER_TYPE } from './types';
 
 /**
  * Slack file attachment subset. Only the fields the SlackAdapter's
@@ -145,6 +147,17 @@ export function parseSlackDeliveries(body: unknown): SlackDelivery[] {
 export const slackEnvelope = slackEnvelopeSchema;
 
 // ── Arrivals ─────────────────────────────────────────────────────────────
+
+/** Who acted on an arrival, as its delivery names them: the member's id,
+ *  from a message's, a reaction's or a press's `user`. Pure parse — no email
+ *  or name, which would take a `users.info` round trip, so the identity is
+ *  `opaque` and resolves to no Listen-Fire user until the candidate path
+ *  looks the member up. None when the delivery names no member (a bot's
+ *  post). */
+function slackActorOf(userId: string | undefined): { actor: ActorIdentity } | Record<string, never> {
+  if (userId === undefined || userId.length === 0) return {};
+  return { actor: { identifier: userId, scheme: 'opaque', adapterType: SLACK_ADAPTER_TYPE, label: userId } };
+}
 
 /** The key a message's listenable edges are waited on under, and its
  *  arrivals reported on: the message's channel and `ts`. A thread's `Replies`
@@ -396,6 +409,7 @@ async function interactionArrival(press: z.infer<typeof slackBlockActionsSchema>
     landing: { recordType: SLACK_INTERACTION_TYPE_NAME, fields: { ...fields, Id: press.trigger_id, At: occurredAt, [SLACK_PRESSED_AT_ID]: occurredAt } },
     parents: [slackChannelRecord(channel, await lookups.channelName(channel)), message],
     about: { recordType: SLACK_MESSAGE_TYPE_NAME, externalId: key },
+    ...slackActorOf(id),
     ...(occurredAt !== null ? { occurredAt } : {}),
   };
 }
@@ -423,6 +437,7 @@ async function reactionArrival(event: z.infer<typeof slackInnerEventSchema>, loo
       },
       parents: [slackChannelRecord(channel, await lookups.channelName(channel))],
       about: { recordType: SLACK_MESSAGE_TYPE_NAME, externalId: key },
+      ...slackActorOf(event.user),
       ...(occurredAt !== null ? { occurredAt } : {}),
     },
   ];
@@ -451,7 +466,7 @@ async function eventArrivals(event: z.infer<typeof slackInnerEventSchema>, looku
   if (event.hidden === true || event.ts === undefined) return [];
   const message = slackMessageRecord({ channel, message: { ...event }, botUserId: await lookups.botUserId() });
   const occurredAt = isoInstantFromSlackTs(event.ts);
-  const when = occurredAt !== null ? { occurredAt } : {};
+  const when = { ...slackActorOf(event.user), ...(occurredAt !== null ? { occurredAt } : {}) };
   // A root message carries no `thread_ts`, or its own `ts` there. Each is
   // named by its record id, `channel:ts`: the name the same message has
   // when its channel's history or its thread is listed, so a message both

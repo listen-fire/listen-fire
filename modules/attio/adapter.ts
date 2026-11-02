@@ -14,7 +14,7 @@ import { z } from 'zod';
 
 import type { ReadableStream as WebReadableStream } from 'node:stream/web';
 import type { EnsureEdgeSubscriptionInput, ModuleFiles, RemoveEdgeSubscriptionInput } from 'module-kit';
-import { firedRecordFields } from 'module-kit';
+import { firedActor, firedRecordFields } from 'module-kit';
 import type { ArrivalsCapability, AwaitHead, AwaitKey } from 'engine-contracts';
 import type { AttioRecord } from './api_client';
 import { extractAttioValue, optionTitle, type AttioAttribute } from './attributes';
@@ -709,13 +709,13 @@ export class AttioAdapter extends BaseAdapter {
   private async resolveActorEmail(
     event: TriggerEvent,
   ): Promise<{ memberId: string; email: string } | null> {
-    const actor = readAttioActor(event);
-    if (!actor || actor.type !== 'workspace-member' || !actor.id) return null;
+    const memberId = firedActor(event)?.identifier;
+    if (memberId === undefined || readAttioActor(event)?.type !== 'workspace-member') return null;
 
     try {
       const client = await this.getApiClient();
       const response = await client.fetch({
-        route: `/v2/workspace_members/${actor.id}`,
+        route: `/v2/workspace_members/${memberId}`,
         method: 'GET',
         responseValidator: z.object({
           data: z.object({
@@ -725,28 +725,23 @@ export class AttioAdapter extends BaseAdapter {
       });
       const email = response.data.email_address;
       const normalized = email ? email.trim().toLowerCase() : null;
-      return normalized ? { memberId: actor.id, email: normalized } : null;
+      return normalized ? { memberId, email: normalized } : null;
     } catch (err) {
       logger.warn('[AttioAdapter] workspace-member actor-email resolution failed', {
         teamId: this.teamId,
-        workspaceMemberId: actor.id,
+        workspaceMemberId: memberId,
         error: err instanceof Error ? err.message : String(err),
       });
       return null;
     }
   }
 
-  // Raw Attio actor — Attio webhook payloads carry an `actor` envelope
-  // with `id` (and sometimes `type`/`workspace_member_id`). Synchronous
-  // parse only; resolving Attio actor → workspace member display name
-  // would need a separate API call, which `extractActor` forbids.
+  // Raw Attio actor — the id of who made the change a run was fired on, as
+  // the door named them on the arrival (`changeArrivals`). Synchronous parse
+  // only; resolving Attio actor → workspace member display name would need a
+  // separate API call, which `extractActor` forbids.
   async extractActor(input: { event: TriggerEvent }): Promise<ActorIdentity | null> {
-    const id = readAttioActor(input.event)?.id;
-    if (id === undefined || id === null || id.length === 0) return null;
-    // Pure parse — a bare actor id with no resolved email maps to no
-    // Listen-Fire user (`scheme: 'opaque'`); the candidate path resolves the
-    // workspace-member email separately.
-    return { identifier: id, scheme: 'opaque', adapterType: this.adapterType, label: id };
+    return firedActor(input.event);
   }
 
   // ── 1. Schema introspection ────────────────────────────────────────────
@@ -4340,10 +4335,11 @@ function buildPerListTypeDescriptor(
 
 /**
  * The Attio actor `{ type, id }` that made the change a run was fired on, as
- * its webhook named it (`changeArrivals` keeps it on the change). `type` is
- * Attio's own: `'workspace-member' | 'api-token' | 'system'`, so the
- * email-resolution path can gate on member-ness. Null when the run was fired
- * by no change, or Attio named no actor.
+ * its webhook named it (`changeArrivals` keeps it on the change, beside the
+ * arrival's `actor`, which carries the id alone). `type` is Attio's own:
+ * `'workspace-member' | 'api-token' | 'system'`, so the email-resolution path
+ * can gate on member-ness. Null when the run was fired by no change, or Attio
+ * named no actor.
  */
 function readAttioActor(event: TriggerEvent): { type: string; id: string | null } | null {
   const actor = firedRecordFields(event)[ATTIO_CHANGE_ACTOR];

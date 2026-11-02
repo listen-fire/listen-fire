@@ -983,11 +983,32 @@ describe('AttioAdapter — a record’s Changes', () => {
     const [arrival] = arrivals;
     if (arrival === undefined) throw new Error('no change arrived');
     // The run's trigger, as the host hands it to a run its listen fired.
+    // The door names the actor on the arrival itself, by id.
+    expect(arrival.actor).toEqual({ identifier: 'm-1', scheme: 'opaque', adapterType: 'attio', label: 'm-1' });
     const event = arrivalTriggerOf({ pipelineInputId: 'crm:stage', adapterType: 'attio', arrival, now: new Date() });
     expect(await adapter.extractActor({ event })).toEqual({ identifier: 'm-1', scheme: 'opaque', adapterType: 'attio', label: 'm-1' });
     expect(await adapter.getActorCandidates({ event })).toEqual([
       { identity: { identifier: 'm-1', scheme: 'email', adapterType: 'attio', email: 'ada@fund.example' }, source: 'originator' },
     ]);
+  });
+
+  it('a change whose webhook names no actor id arrives with none, and one by an api token names its id but resolves no email', async () => {
+    const adapter = makeChangesAdapter('team-changes-no-actor', { 'deal-1': deal });
+    const named = (actor: unknown) => ({
+      webhook_id: 'wh-1',
+      events: [{ event_type: 'record.updated', id: { workspace_id: 'w', object_id: 'deals-uuid', record_id: 'deal-1', attribute_id: 'stage-attr' }, ...(actor !== undefined ? { actor } : {}) }],
+    });
+    const fired = async (actor: unknown) => {
+      const [arrival] = (await adapter.preprocessInbound({ raw: named(actor) })).arrivals;
+      if (arrival === undefined) throw new Error('no change arrived');
+      return { arrival, event: arrivalTriggerOf({ pipelineInputId: 'crm:stage', adapterType: 'attio', arrival, now: new Date() }) };
+    };
+    const none = await fired(undefined);
+    expect(none.arrival).not.toHaveProperty('actor');
+    expect(await adapter.extractActor({ event: none.event })).toBeNull();
+    const token = await fired({ type: 'api-token', id: 'm-1' });
+    expect(token.arrival.actor).toEqual({ identifier: 'm-1', scheme: 'opaque', adapterType: 'attio', label: 'm-1' });
+    expect(await adapter.getActorCandidates({ event: token.event })).toEqual([]);
   });
 
   it('a redelivered change names the same identity; the attribute’s next value is another change', async () => {

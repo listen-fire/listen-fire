@@ -11,10 +11,11 @@
 
 import { z } from 'zod';
 
-import type { Arrival } from 'engine-contracts';
+import type { ActorIdentity, Arrival } from 'engine-contracts';
 
 import { normalizeWhatsappPhone } from './phone';
 import {
+  WHATSAPP_ADAPTER_TYPE,
   WHATSAPP_ARRIVAL_EDGES,
   WHATSAPP_LOCATION_DISPLAY_NAME,
   WHATSAPP_MESSAGE_DISPLAY_NAME,
@@ -215,6 +216,56 @@ function schemaFields(kind: WhatsappEventKind, payload: Record<string, unknown>)
 }
 
 /**
+ * Read the first non-empty string value across a set of candidate keys.
+ * Underpins the dual-shape tolerance: every reader accepts both the TG-side
+ * camelCase field (`from`, `body`, …) and the raw Twilio webhook key
+ * (`From`, `Body`, …), since no producer reshapes the webhook before it
+ * reaches the adapter — the adapter carries that burden (adapter
+ * minimalism).
+ */
+export function readString(payload: Record<string, unknown>, ...keys: string[]): string | undefined {
+  for (const key of keys) {
+    const value = payload[key];
+    if (typeof value === 'string' && value.length > 0) return value;
+  }
+  return undefined;
+}
+
+/**
+ * Read the raw sender value from the payload, tolerating both the TG-side
+ * `from` field and the raw Twilio `From` key (which carries the
+ * `whatsapp:` prefix).
+ */
+function readSender(payload: Record<string, unknown>): string | undefined {
+  return readString(payload, 'from', 'From');
+}
+
+/**
+ * Read the sender's WhatsApp profile display name, tolerating both the
+ * TG-side `profileName` field and the raw Twilio `ProfileName` key.
+ */
+export function readProfileName(payload: Record<string, unknown>): string | null {
+  const name = readString(payload, 'profileName', 'ProfileName');
+  return name ? name.trim() : null;
+}
+
+/** Who sent a message, as the door names them on its arrival: the bare phone
+ *  number of its sender, with the profile name as `name` and `label` when
+ *  there is one. None when the message names no number. */
+function whatsappActorOf(message: Record<string, unknown>): ActorIdentity | undefined {
+  const phone = normalizeWhatsappPhone(readSender(message));
+  if (!phone) return undefined;
+  const profileName = readProfileName(message);
+  return {
+    identifier: phone,
+    scheme: 'phone',
+    adapterType: WHATSAPP_ADAPTER_TYPE,
+    ...(profileName !== null ? { name: profileName } : {}),
+    label: profileName ?? phone,
+  };
+}
+
+/**
  * One delivery's arrivals, each on the root edge of its kind: a message on
  * `Messages`, a reaction on `Reactions`, a location on `Locations`. A message
  * is named by its WhatsApp id, which Meta repeats when it resends a delivery
@@ -238,10 +289,13 @@ export function whatsappInboundArrivals(body: unknown): Arrival[] {
         if (classified === undefined) continue; // unsupported kind — never an empty-message firing
         const { kind, payload } = classified;
         const occurredAt = instantOf(message.timestamp);
+        const fields = { ...payload, ...schemaFields(kind, payload) };
+        const actor = whatsappActorOf(fields);
         arrivals.push({
           edge: WHATSAPP_ARRIVAL_EDGES[kind],
           identity: message.id,
-          landing: { recordId: message.id, recordType: LANDS_ON[kind], fields: { ...payload, ...schemaFields(kind, payload) } },
+          landing: { recordId: message.id, recordType: LANDS_ON[kind], fields },
+          ...(actor !== undefined ? { actor } : {}),
           ...(kind === 'reaction' && message.reaction !== undefined
             ? { about: { recordType: WHATSAPP_MESSAGE_DISPLAY_NAME, externalId: message.reaction.message_id } }
             : {}),
