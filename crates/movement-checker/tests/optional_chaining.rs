@@ -2,8 +2,9 @@
 //! (MOV_ABSENT_REQUIRED), whatever the value is: a graph record a walk may
 //! not find, a nested call's or an index's result, a held record. `x?.F`
 //! reads it, absent when `x` is; narrowing (`exists(x)`, `x != null`,
-//! `x?.F != null`) proves it there. The refusal's fix is `?.`, safe: the two
-//! read alike.
+//! `x?.F != null`) proves it there, and a test of `l[1]` proves every later
+//! `l[1]` (a name at a literal index), never a call's result. The refusal's
+//! fix is `?.`, safe: the two read alike.
 
 use movement_checker::CheckOptions;
 use movement_parser::catalog::types::CatalogSnapshot;
@@ -76,26 +77,65 @@ fn optional_chaining_reads_it_and_narrowing_proves_it_there() {
     }
 }
 
+const L: &str = "  l = [only(at-[:Tables]->), only(at-[:Tables]->)]\n";
+const D: &str = "  d = {a: only(at-[:Tables]->)}\n";
+
 #[test]
 fn a_nested_call_or_an_index_is_a_value_that_may_be_missing() {
-    for (refused, read) in [
-        ("  return only(at-[:Tables]->).Name", "  return only(at-[:Tables]->)?.Name"),
-        ("  l = [only(at-[:Tables]->), only(at-[:Tables]->)]\n  return l[1].Name", "  l = [only(at-[:Tables]->), only(at-[:Tables]->)]\n  return l[1]?.Name"),
+    let call = "  return only(at-[:Tables]->).Name";
+    assert_eq!(
+        check(call),
+        ["MOV_ABSENT_REQUIRED this value may be absent, and '.Name' reads through it. Read it with `?.Name` (absent when the value is), or name the value and test the name first: `x = …`, then `exists(x)`. (see handbook: front#maybe-absent)"]
+    );
+    assert_eq!(check("  return only(at-[:Tables]->)?.Name"), Vec::<String>::new());
+    assert_eq!(
+        check(&format!("{L}  return l[1].Name")),
+        ["MOV_ABSENT_REQUIRED 'l[1]' may be absent, and 'l[1].Name' reads through it. Read it with `l[1]?.Name` (absent when 'l[1]' is), or test it first: `l[1] != null && l[1].Name …`. (see handbook: front#maybe-absent)"]
+    );
+    assert_eq!(check(&format!("{L}  return l[1]?.Name")), Vec::<String>::new());
+}
+
+#[test]
+fn an_index_read_is_narrowed_by_what_it_reads() {
+    for clean in [
+        format!("{L}  if (l[1] != null) {{\n    return l[1].Name\n  }}\n  return \"none\""),
+        format!("{L}  return l[1] != null && l[1].Name == \"a\""),
+        format!("{L}  return l[1] == null || l[1].Name == \"a\""),
+        format!("{L}  return l[1] != null ? l[1].Name : \"none\""),
+        format!("{L}  if (l[1] == null) {{ fail(\"none\") }}\n  return l[1].Name"),
+        format!("{L}  return l[1]?.Name != null && l[1].Topic == \"a\""),
+        format!("{D}  return d[\"a\"] != null && d[\"a\"].Name == \"a\""),
+        format!("{D}  if (d[\"a\"] != null) {{\n    return d[\"a\"].Name\n  }}\n  return \"none\""),
     ] {
-        assert_eq!(
-            check(refused),
-            ["MOV_ABSENT_REQUIRED this value may be absent, and '.Name' reads through it. Read it with `?.Name` (absent when the value is), or test the value with `exists(…)` first. (see handbook: front#maybe-absent)"],
-            "{refused}"
-        );
-        assert_eq!(check(read), Vec::<String>::new(), "{read}");
+        assert_eq!(check(&clean), Vec::<String>::new(), "{clean}");
+    }
+}
+
+#[test]
+fn an_index_read_is_not_narrowed_by_another_value() {
+    for refused in [
+        // Read before the test.
+        format!("{L}  return l[1].Name == \"a\" && l[1] != null"),
+        // Another index.
+        format!("{L}  return l[0] != null && l[1].Name == \"a\""),
+        // The name rebound (refused itself, MOV_REBOUND_NAME): another list,
+        // as an assignment ends TypeScript's narrowing.
+        format!("{L}  if (l[1] == null) {{ fail(\"none\") }}\n{L}  return l[1].Name"),
+        // A call's result: each call answers anew.
+        "  return only(at-[:Tables]->) != null && only(at-[:Tables]->).Name == \"a\"".to_string(),
+    ] {
+        let found = check(&refused);
+        let absent = found.iter().filter(|d| d.starts_with("MOV_ABSENT_REQUIRED")).count();
+        let rebound = found.iter().filter(|d| d.starts_with("MOV_REBOUND_NAME")).count();
+        assert!(absent == 1 && absent + rebound == found.len(), "{refused}: {found:?}");
     }
 }
 
 #[test]
 fn the_fix_is_optional_chaining_and_checks_clean() {
-    let body = format!("{T}  u = only(at-[:Tables]->)\n  return [t.Name, u.Name, t.Topic, only(at-[:Tables]->).Name]");
+    let body = format!("{T}{L}  u = only(at-[:Tables]->)\n  return [t.Name, u.Name, t.Topic, only(at-[:Tables]->).Name, l[1].Name]");
     let after = fixed(&body);
-    assert!(after.contains("return [t?.Name, u?.Name, t?.Topic, only(at-[:Tables]->)?.Name]"), "{after}");
+    assert!(after.contains("return [t?.Name, u?.Name, t?.Topic, only(at-[:Tables]->)?.Name, l[1]?.Name]"), "{after}");
     let body = after.split("function go() {\n").nth(1).unwrap().trim_end_matches("\n}");
     assert_eq!(check(body), Vec::<String>::new());
 }

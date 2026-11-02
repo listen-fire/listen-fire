@@ -9,7 +9,7 @@ use super::field::{Ty, is_maybe_absent};
 /// `POSITION_SENTINEL`: the property a walk ending on its landing reads.
 pub const POSITION_SENTINEL: &str = "__movement_position__";
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum PresenceProof {
     /// `r.field` is present.
     Field { root: String, property: String },
@@ -17,14 +17,51 @@ pub enum PresenceProof {
     Binding { root: String },
     /// The text (or list) is not blank; proves no presence of its own.
     NonBlank { root: String, property: Option<String> },
+    /// `l[1]` is present: the entry, never the name it is read off.
+    Entry { root: String, index: StaticValue },
 }
 
 impl PresenceProof {
+    /// The name the proof is about; for an entry, the name it is read off.
     pub fn root(&self) -> &str {
         match self {
-            PresenceProof::Field { root, .. } | PresenceProof::Binding { root } | PresenceProof::NonBlank { root, .. } => root,
+            PresenceProof::Field { root, .. } | PresenceProof::Binding { root } | PresenceProof::NonBlank { root, .. } | PresenceProof::Entry { root, .. } => root,
         }
     }
+
+    /// The same proof about `name`, a hoisted read of the same entry.
+    pub fn about(&self, name: &str) -> PresenceProof {
+        let root = name.to_string();
+        match self {
+            PresenceProof::Field { property, .. } => PresenceProof::Field { root, property: property.clone() },
+            PresenceProof::Binding { .. } | PresenceProof::Entry { .. } => PresenceProof::Binding { root },
+            PresenceProof::NonBlank { property, .. } => PresenceProof::NonBlank { root, property: property.clone() },
+        }
+    }
+}
+
+/// An index read by its structure: the declaration its object names and the
+/// literal it reads at. Each `l[1]` read on with `.` is hoisted to a name of
+/// its own, so a proof about one reaches the others through this, as
+/// TypeScript narrows `l[1]` by a literal index. Rebinding the name is
+/// another declaration, so the narrowing does not survive it, as
+/// TypeScript's does not survive an assignment. A call's result has no
+/// structure: each call may answer differently.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EntryRead {
+    pub name: String,
+    pub declared: movement_parser::ast::Span,
+    pub index: StaticValue,
+}
+
+/// `l[1]`, `d["a"]`: a name read at a literal index.
+pub fn entry_read(expr: &Expression) -> Option<(&str, &StaticValue)> {
+    let Expression::At { expression, index } = expr else { return None };
+    let Expression::Static { value } = &**index else { return None };
+    if matches!(value, StaticValue::Null) {
+        return None;
+    }
+    Some((bare_name(expression)?, value))
 }
 
 /// `isPositionTerminal`.
@@ -82,6 +119,9 @@ fn where_field_read(expr: &Expression) -> Option<(String, String)> {
 fn presence_subject(expr: &Expression) -> Option<PresenceProof> {
     if let Some((root, property)) = direct_field_read(expr).or_else(|| where_field_read(expr)) {
         return Some(PresenceProof::Field { root, property });
+    }
+    if let Some((root, index)) = entry_read(expr) {
+        return Some(PresenceProof::Entry { root: root.to_string(), index: index.clone() });
     }
     let name = match expr {
         Expression::EdgeProperty { property_type_id, .. } => Some(property_type_id.as_str()),
@@ -167,8 +207,8 @@ fn blank_test<'e>(op: FilterOperator, left: &'e Expression, right: &'e Expressio
 fn non_blank_proof(subject: &Expression) -> Vec<PresenceProof> {
     match presence_subject(subject) {
         Some(PresenceProof::Field { root, property }) => vec![PresenceProof::NonBlank { root, property: Some(property) }],
+        Some(PresenceProof::Entry { .. }) | None => Vec::new(),
         Some(proof) => vec![PresenceProof::NonBlank { root: proof.root().to_string(), property: None }],
-        None => Vec::new(),
     }
 }
 

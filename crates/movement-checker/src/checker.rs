@@ -104,6 +104,13 @@ pub struct Checker<'c> {
     /// The name each call hoisted out of an expression is bound to, by where
     /// the call starts in the file (`nested_call_name`).
     pub nested_call_names: std::cell::RefCell<std::collections::HashMap<(usize, usize), String>>,
+    /// Each index read hoisted out of an expression, by the name it is bound
+    /// to: its structure, and its text as written.
+    pub entry_reads: std::collections::HashMap<String, (crate::types::narrowing::EntryRead, String)>,
+    /// What a condition or a guard proved about an entry (`l[1] != null`),
+    /// for the scope it holds in: a later hoisted read of the entry there is
+    /// narrowed as it is declared.
+    pub proven_entries: Vec<(ScopeId, crate::types::narrowing::EntryRead, crate::types::narrowing::PresenceProof)>,
     /// The file's statements' spans, and every name it declares or binds at
     /// its top (with the shapes the extraction keyword's rewrites generate):
     /// where a rewrite hoists a declaration, and the names it may not take.
@@ -275,6 +282,8 @@ impl<'c> Checker<'c> {
             named_orders: Default::default(),
             hoisted_texts: Default::default(),
             nested_call_names: Default::default(),
+            entry_reads: Default::default(),
+            proven_entries: Vec::new(),
             file_statement_spans: Vec::new(),
             file_names: Default::default(),
             packages: Default::default(),

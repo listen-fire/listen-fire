@@ -366,12 +366,25 @@ pub fn report_read_through_absent(typing: &mut Typing, subject: &str, field: &st
     // A nested call's or an index's staged value (`only(…)`, `r[0]`) has no
     // name to show.
     let staged = subject.chars().any(|c| crate::families::calls::is_nested_call_name(&c.to_string()));
+    let and = if typing.hop_where.is_some() { "AND" } else { "&&" };
+    // An index read is tested as written (`exists` takes only a name or a
+    // field read); a call's result is never narrowed, each call answering anew.
+    let entry = typing.env.entry_read_text(subject.trim_matches('`'));
     let message = match (staged, typing.hop_where.is_some()) {
-        (true, _) => format!(
-            "this value may be absent, and '.{}' reads through it. Read it with `?.{}` (absent when the value is), or test the value with `exists(…)` first.",
-            quote_name(field),
-            quote_name(field)
-        ),
+        (true, _) => match entry {
+            Some(entry) => {
+                let read = format!("{entry}.{}", quote_name(field));
+                format!(
+                    "'{entry}' may be absent, and '{read}' reads through it. Read it with `{entry}?.{}` (absent when '{entry}' is), or test it first: `{entry} != null {and} {read} …`.",
+                    quote_name(field)
+                )
+            }
+            None => format!(
+                "this value may be absent, and '.{}' reads through it. Read it with `?.{}` (absent when the value is), or name the value and test the name first: `x = …`, then `exists(x)`.",
+                quote_name(field),
+                quote_name(field)
+            ),
+        },
         (false, true) => format!(
             "'{subject}' may be absent, and '{read}' reads through it. Read it with `{optional}` (absent when '{subject}' is), or test it first: `exists({subject}) AND {read} …`."
         ),

@@ -80,6 +80,15 @@ pub trait TypeEnv {
     fn is_zone(&self, _zone: &str) -> Option<bool> {
         None
     }
+    /// What `proof` proves about the other hoisted reads of the entry it is
+    /// about (`EntryRead`).
+    fn same_entry(&self, _proof: &PresenceProof) -> Vec<PresenceProof> {
+        Vec::new()
+    }
+    /// The index read a hoisted name stands for, as written (`l[1]`).
+    fn entry_read_text(&self, _name: &str) -> Option<String> {
+        None
+    }
 }
 
 /// An environment with nothing in it.
@@ -612,7 +621,8 @@ impl<'a> Typing<'a> {
         let restore_scalars = self.narrowed_scalars.clone();
         let restore_roots = self.narrowed_roots.clone();
         let mut narrowed_position = position.cloned();
-        for proof in proofs {
+        let same_entry: Vec<PresenceProof> = proofs.iter().flat_map(|p| self.env.same_entry(p)).collect();
+        for proof in proofs.iter().chain(&same_entry) {
             match proof {
                 PresenceProof::Binding { root } => {
                     let field = narrowed_position.as_ref().and_then(|p| narrow_present(p, root));
@@ -640,7 +650,7 @@ impl<'a> Typing<'a> {
                         self.narrowed_roots.insert(root.clone(), present);
                     }
                 }
-                PresenceProof::NonBlank { .. } => {}
+                PresenceProof::NonBlank { .. } | PresenceProof::Entry { .. } => {}
             }
         }
         let answer = body(self, narrowed_position.as_ref());
