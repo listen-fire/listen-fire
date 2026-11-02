@@ -589,6 +589,7 @@ impl<'a> Evaluator<'a> {
                 alias_root: Some(root.to_string()),
                 steps: Vec::new(),
                 expression: Box::new(Expression::Property { property_type_id: field.to_string(), field_only: false }),
+                optional: false,
             };
             let held = Box::pin(self.traverse_from(&read, root)).await?;
             let value = crate::filter::read_on(held.value, &members);
@@ -675,6 +676,7 @@ impl<'a> Evaluator<'a> {
                     alias_root: Some(name.clone()),
                     steps: Vec::new(),
                     expression: Box::new(Expression::Exists { steps: Vec::new(), where_: None }),
+                    optional: false,
                 };
                 let present = self.eval(&exists).await?;
                 let value = if present.value.truthy() { Js::Bool(true) } else { Js::Null };
@@ -1089,7 +1091,7 @@ impl<'a> Evaluator<'a> {
 
 /// `<root>-[…]->` with the position terminal: the records a walk lands on.
 pub(crate) fn is_records_walk(expr: &Expression) -> bool {
-    matches!(expr, Expression::Traverse { alias_root: Some(_), steps, expression }
+    matches!(expr, Expression::Traverse { alias_root: Some(_), steps, expression, .. }
         if !steps.is_empty() && matches!(expression.as_ref(), Expression::Property { property_type_id, .. } if property_type_id == POSITION_SENTINEL))
 }
 

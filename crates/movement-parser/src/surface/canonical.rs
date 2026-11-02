@@ -42,6 +42,7 @@ fn canonical_callee(canonical: &str, at: At) -> MExpr {
         Some((ns, member)) => MExpr::Member {
             object: Box::new(name_expr(ns, at)),
             property: Name { text: member.to_string(), quoted: false, at },
+            optional: false,
             at,
         },
         None => name_expr(canonical, at),
@@ -79,7 +80,7 @@ fn through_alias(e: &mut MExpr, alias: &str) {
     {
         return;
     }
-    if let MExpr::Member { object, property, at } = e
+    if let MExpr::Member { object, property, at, .. } = e
         && matches!(object.as_ref(), MExpr::Name { name, .. } if name.text == alias && !name.quoted)
     {
         *e = MExpr::Name { name: Name { text: property.text.clone(), quoted: property.quoted, at: *at }, at: *at, field: true };
@@ -276,7 +277,7 @@ impl<'s> Canon<'s> {
 
     fn inside_walk(&mut self, e: &mut MExpr) {
         let MExpr::Call { callee, .. } = e else { return };
-        let MExpr::Member { object, property, at } = callee.as_ref() else { return };
+        let MExpr::Member { object, property, at, optional: false } = callee.as_ref() else { return };
         let MExpr::Name { name: ns, .. } = object.as_ref() else { return };
         let written = format!("{}.{}", ns.text, property.text);
         if let Some((caps, _)) = table::WALK_CAPS.iter().find(|(_, everyday)| *everyday == written) {

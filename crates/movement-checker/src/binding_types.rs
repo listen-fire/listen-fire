@@ -506,7 +506,7 @@ fn collected_types(returned: &ReturnShape, ordering: crate::types::field::Collec
 fn aggregated_bare_path(expr: &Expression) -> Option<(Option<&str>, &[movement_parser::lowering::expression::TraversalStep])> {
     use movement_parser::lowering::expression::AggregationFunction as F;
     let Expression::Aggregate { fn_: F::First | F::Last | F::Only, expression, .. } = expr else { return None };
-    let Expression::Traverse { alias_root, steps, expression: terminal } = &**expression else { return None };
+    let Expression::Traverse { alias_root, steps, expression: terminal, .. } = &**expression else { return None };
     if steps.is_empty() || !crate::types::narrowing::is_position_terminal(terminal) {
         return None;
     }

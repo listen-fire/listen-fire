@@ -149,7 +149,7 @@ fn member_names(steps: &[TraversalStep], expression: &Expression) -> Vec<String>
 fn collect(expr: &Expression, out: &mut CollectedNames, position: Position) {
     match expr {
         Expression::AliasRef { name } => out.refs.push(name.clone()),
-        Expression::Traverse { alias_root, steps, expression } => {
+        Expression::Traverse { alias_root, steps, expression, .. } => {
             if let Some(root) = alias_root
                 && position != Position::Member
             {

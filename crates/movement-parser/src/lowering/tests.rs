@@ -67,6 +67,26 @@ const SENTINEL: &str = POSITION_SENTINEL;
 // ── Values ──
 
 #[test]
+fn optional_chaining_reads_through_a_root_and_says_so_on_the_wire() {
+    assert_eq!(value("x?.Name"), json!({ "type": "traverse", "aliasRoot": "x", "steps": [], "expression": prop("Name"), "optional": true }));
+    // Only the read written `?.` is marked; a plain one keeps its old wire form.
+    assert_eq!(
+        value("c.Previous?.Stage"),
+        json!({ "type": "traverse", "aliasRoot": "c", "steps": [], "expression": {
+            "type": "traverse", "aliasRoot": "Previous", "steps": [], "expression": prop("Stage"), "optional": true
+        } })
+    );
+    assert_eq!(value("x.Name"), json!({ "type": "traverse", "aliasRoot": "x", "steps": [], "expression": prop("Name") }));
+    // `only(walk)?.F` folds as `only(walk).F` does.
+    assert_eq!(exact("ONLY(a-[:E]->)?.Name"), exact("ONLY(a-[:E]->).Name"));
+}
+
+#[test]
+fn optional_chaining_reads_a_field_and_nothing_else() {
+    assert_eq!(refused("a-[:E]->?.Name"), crate::expr::OPTIONAL_READS_A_FIELD);
+}
+
+#[test]
 fn literals_are_static() {
     assert_eq!(value("1.5"), stat(json!(1.5)));
     assert_eq!(value("true"), stat(json!(true)));
@@ -573,7 +593,7 @@ mod captures {
     fn spell(e: &Expression) -> String {
         match e {
             Expression::Property { property_type_id, .. } | Expression::EdgeProperty { property_type_id, .. } => property_type_id.clone(),
-            Expression::Traverse { alias_root: Some(root), steps, expression } if steps.is_empty() => format!("{root}.{}", spell(expression)),
+            Expression::Traverse { alias_root: Some(root), steps, expression, .. } if steps.is_empty() => format!("{root}.{}", spell(expression)),
             other => panic!("not a read: {}", serde_json::to_string(other).unwrap()),
         }
     }

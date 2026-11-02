@@ -135,7 +135,7 @@ fn sample(kind: Kind) -> Expression {
         Kind::Object => Expression::Object {
             entries: vec![ObjectMember::Entry { key: "k".into(), value: text("v") }, ObjectMember::Spread(ListSpread { expression: boxed(field("Extra")) })],
         },
-        Kind::Traverse => Expression::Traverse { alias_root: Some("m".into()), steps: steps(), expression: boxed(field("Topic")) },
+        Kind::Traverse => Expression::Traverse { alias_root: Some("m".into()), steps: steps(), expression: boxed(field("Topic")), optional: false },
         Kind::ResourceTraverse => Expression::ResourceTraverse { filter: Some(resource_filter()), expression_filter: Some(boxed(field("Name"))), expression: boxed(field("Name")) },
         Kind::Exists => Expression::Exists { steps: steps(), where_: Some(boxed(field("Name"))) },
         Kind::Arithmetic => Expression::Arithmetic { op: ArithmeticOp::Add, left: boxed(field("A")), right: boxed(field("B")) },

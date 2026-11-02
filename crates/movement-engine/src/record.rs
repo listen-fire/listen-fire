@@ -575,6 +575,7 @@ mod tests {
             alias_root: Some("v".into()),
             steps: Vec::new(),
             expression: Box::new(Expression::Exists { steps: Vec::new(), where_: Some(Box::new(Expression::stat(movement_parser::lowering::expression::StaticValue::Bool(true)))) }),
+            optional: false,
         };
         let starts = |value: Js| match held_records(&value, &walk) {
             Some(Binding::Positions(landings)) => landings.len(),
@@ -588,12 +589,12 @@ mod tests {
         assert_eq!(starts(Js::Undefined), 0);
         assert_eq!(starts(Js::object(JsObject::new())), 0);
         // A read that does not walk takes a list as the value it is.
-        let bare = Expression::Traverse { alias_root: Some("v".into()), steps: Vec::new(), expression: Box::new(Expression::Exists { steps: Vec::new(), where_: None }) };
+        let bare = Expression::Traverse { alias_root: Some("v".into()), steps: Vec::new(), expression: Box::new(Expression::Exists { steps: Vec::new(), where_: None }), optional: false };
         assert!(held_records(&Js::array(vec![record.clone()]), &bare).is_none());
         assert!(matches!(held_records(&record, &bare), Some(Binding::Event)));
         // A field read off a list of records reads each record's; off a list
         // holding anything else, the list's own (none).
-        let field = Expression::Traverse { alias_root: Some("v".into()), steps: Vec::new(), expression: Box::new(Expression::Property { property_type_id: "Name".into(), field_only: false }) };
+        let field = Expression::Traverse { alias_root: Some("v".into()), steps: Vec::new(), expression: Box::new(Expression::Property { property_type_id: "Name".into(), field_only: false }), optional: false };
         assert!(matches!(held_records(&Js::array(vec![record.clone(), record.clone()]), &field), Some(Binding::Positions(landings)) if landings.len() == 2));
         assert!(held_records(&Js::array(vec![record.clone(), Js::str("x")]), &field).is_none());
     }

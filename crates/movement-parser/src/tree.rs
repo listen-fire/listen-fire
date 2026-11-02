@@ -377,6 +377,9 @@ pub enum MExpr {
     Member {
         object: Box<MExpr>,
         property: Name,
+        /// `x?.F`: read through a value that may be missing, absent when it is.
+        #[serde(skip_serializing_if = "std::ops::Not::not")]
+        optional: bool,
         at: At,
     },
     Index {

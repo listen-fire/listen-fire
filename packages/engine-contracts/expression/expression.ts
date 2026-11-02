@@ -75,6 +75,9 @@ const _expressionSchema: z.ZodTypeAny = z.lazy(() =>
       aliasRoot: z.string().optional(),
       steps: z.array(traversalStepSchema),
       expression: _expressionSchema,
+      // `x?.F`: written knowing the root may be missing. It reads as `x.F`
+      // does (absent when the root is); only the checker tells them apart.
+      optional: z.boolean().optional(),
     }),
     // Quantifier — `exists` returns true iff the traversal yields at least
     // one position satisfying `where` (or any position when `where` is

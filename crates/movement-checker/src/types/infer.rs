@@ -114,7 +114,7 @@ fn field_read_name(expr: &Expression) -> Option<&str> {
         {
             Some(property_type_id)
         }
-        Expression::Traverse { alias_root: Some(head), steps, expression } if steps.is_empty() && !matches!(**expression, Expression::Exists { .. }) => Some(head),
+        Expression::Traverse { alias_root: Some(head), steps, expression, .. } if steps.is_empty() && !matches!(**expression, Expression::Exists { .. }) => Some(head),
         _ => None,
     }
 }
@@ -843,7 +843,7 @@ impl<'a> Typing<'a> {
     fn read_off_record(&mut self, root: Option<&str>, record: &Position, terminal: &Expression, held: Option<&HeldRead>) -> Option<Option<Ty>> {
         let (property, past) = match terminal {
             Expression::Property { property_type_id, .. } => (property_type_id.as_str(), None),
-            Expression::Traverse { alias_root: Some(head), steps: past_steps, expression: past } => (head.as_str(), Some((past_steps, &**past))),
+            Expression::Traverse { alias_root: Some(head), steps: past_steps, expression: past, .. } => (head.as_str(), Some((past_steps, &**past))),
             _ => return None,
         };
         let chain = dot_chain(terminal).unwrap_or_default();
@@ -964,7 +964,7 @@ impl<'a> Typing<'a> {
         let Ty::Dict { of, shape } = strip_absent(held) else { return None };
         let (key, member_steps, member_expression) = match member {
             Expression::Property { property_type_id, .. } => (property_type_id.clone(), None, None),
-            Expression::Traverse { alias_root: Some(root), steps, expression } => (root.clone(), Some(steps.as_slice()), Some(&**expression)),
+            Expression::Traverse { alias_root: Some(root), steps, expression, .. } => (root.clone(), Some(steps.as_slice()), Some(&**expression)),
             _ => return None,
         };
         if within && shape.as_ref().is_some_and(|s| !s.contains_key(&key)) {
@@ -1043,7 +1043,7 @@ impl<'a> Typing<'a> {
                 }
                 Some(_) => (self.read_property(position, property_type_id), Vec::new()),
             },
-            Expression::Traverse { alias_root, steps, expression } => {
+            Expression::Traverse { alias_root, steps, expression, .. } => {
                 if let Some(read) = self.dict_member_read(alias_root.as_deref(), steps, expression) {
                     return (read, Vec::new());
                 }
@@ -1837,7 +1837,7 @@ struct ScalarFieldRead {
 fn dot_chain(expr: &Expression) -> Option<Vec<&str>> {
     match expr {
         Expression::Property { property_type_id, .. } => Some(vec![property_type_id.as_str()]),
-        Expression::Traverse { alias_root: Some(head), steps, expression } if steps.is_empty() => {
+        Expression::Traverse { alias_root: Some(head), steps, expression, .. } if steps.is_empty() => {
             let mut chain = vec![head.as_str()];
             chain.extend(dot_chain(expression)?);
             Some(chain)

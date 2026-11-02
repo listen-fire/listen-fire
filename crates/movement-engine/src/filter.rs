@@ -325,8 +325,8 @@ fn leaf_reads<'e>(expr: &'e Expression, into: &mut Vec<&'e Expression>) -> bool 
 /// the name it starts at, the field, and the members read on through what
 /// the field holds, in order. `None` for any other read.
 pub fn held_read(expr: &Expression) -> Option<(Option<&str>, &str, Vec<&str>)> {
-    let Expression::Traverse { alias_root, steps, expression } = expr else { return None };
-    let Expression::Traverse { alias_root: Some(field), steps: inner, expression: rest } = expression.as_ref() else { return None };
+    let Expression::Traverse { alias_root, steps, expression, .. } = expr else { return None };
+    let Expression::Traverse { alias_root: Some(field), steps: inner, expression: rest, .. } = expression.as_ref() else { return None };
     if !steps.is_empty() || !inner.is_empty() {
         return None;
     }
@@ -338,7 +338,7 @@ pub fn held_read(expr: &Expression) -> Option<(Option<&str>, &str, Vec<&str>)> {
                 members.push(property_type_id.as_str());
                 return Some((alias_root.as_deref(), field.as_str(), members));
             }
-            Expression::Traverse { alias_root: Some(member), steps, expression } if steps.is_empty() => {
+            Expression::Traverse { alias_root: Some(member), steps, expression, .. } if steps.is_empty() => {
                 members.push(member.as_str());
                 at = expression;
             }

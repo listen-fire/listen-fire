@@ -279,7 +279,8 @@ fn plain_identifier(text: &str) -> bool {
 }
 
 enum Segment<'a> {
-    Member(&'a Name),
+    /// `.name`, or `?.name` (`true`).
+    Member(&'a Name, bool),
     Call(&'a [CallArg]),
     Hops(&'a [Hop]),
 }
@@ -416,7 +417,7 @@ fn kind_of(expr: &MExpr) -> &'static str {
 
 /// `member(object, property)`: a synthetic `.property` read.
 fn member(object: &MExpr, property: Name) -> MExpr {
-    MExpr::Member { object: Box::new(object.clone()), property, at: object.at() }
+    MExpr::Member { object: Box::new(object.clone()), property, optional: false, at: object.at() }
 }
 
 /// A walk with nothing read off its end, from a plain root, ending `]->`.
@@ -603,8 +604,8 @@ impl Lowering {
         let mut head: Option<&MExpr> = Some(expr);
         while let Some(h) = head {
             match h {
-                MExpr::Member { object, property, .. } => {
-                    segments.push(Segment::Member(property));
+                MExpr::Member { object, property, optional, .. } => {
+                    segments.push(Segment::Member(property, *optional));
                     head = Some(object);
                 }
                 MExpr::Call { callee, args, .. } => {
@@ -646,15 +647,21 @@ impl Lowering {
                 }
                 Ok(expression)
             }
-            Segment::Member(property) => {
+            Segment::Member(property, optional) => {
                 if name.text.to_lowercase() == "edge" {
-                    if !rest.is_empty() {
+                    if !rest.is_empty() || *optional {
                         return refuse("edge.<property> reads one property of the walked edge");
                     }
                     return Ok(Expression::EdgeProperty { property_type_id: property.text.clone(), field_only: false });
                 }
                 let expression = self.lower_name(property, rest, ctx, true)?;
-                self.fold_namespace(Some(name.text.clone()), Vec::new(), expression)
+                match self.fold_namespace(Some(name.text.clone()), Vec::new(), expression)? {
+                    Expression::Traverse { alias_root: Some(root), steps, expression, .. } if *optional && steps.is_empty() => {
+                        Ok(Expression::Traverse { alias_root: Some(root), steps, expression, optional: true })
+                    }
+                    _ if *optional => refuse(OPTIONAL_READS_A_FIELD),
+                    folded => Ok(folded),
+                }
             }
             Segment::Hops(hops) => self.traversal(Some(&name.text), hops, rest, ctx),
         }
@@ -700,7 +707,7 @@ impl Lowering {
                 return Ok(if steps.is_empty() {
                     inner
                 } else {
-                    Expression::Traverse { alias_root: None, steps, expression: Box::new(inner) }
+                    Expression::Traverse { alias_root: None, steps, expression: Box::new(inner), optional: false }
                 });
             }
             steps.push(TraversalStep::Edge(self.edge_step(hop, ctx)?));
@@ -714,10 +721,11 @@ impl Lowering {
                 }
                 self.leaf(&Name { text: POSITION_SENTINEL.into(), quoted: true, at: last.at }, Leaf { ctx, field_only: false })?
             }
-            Some((Segment::Member(terminal), after)) => self.lower_name(terminal, after, ctx, false)?,
+            Some((Segment::Member(_, true), _)) => return refuse(OPTIONAL_READS_A_FIELD),
+            Some((Segment::Member(terminal, false), after)) => self.lower_name(terminal, after, ctx, false)?,
             Some(_) => return refuse("Expected '.' after the walk"),
         };
-        Ok(Expression::Traverse { alias_root: alias_root.map(String::from), steps, expression: Box::new(expression) })
+        Ok(Expression::Traverse { alias_root: alias_root.map(String::from), steps, expression: Box::new(expression), optional: false })
     }
 
     fn edge_step(&self, hop: &Hop, ctx: Ctx) -> Lowered<EdgeStep> {
@@ -777,7 +785,7 @@ impl Lowering {
             (Some(s), Some(w)) => Some(Expression::Logical { op: LogicalOp::And, operands: vec![s, w] }),
             (s, w) => s.or(w),
         };
-        let Some((Segment::Member(terminal), after)) = rest.split_first() else {
+        let Some((Segment::Member(terminal, false), after)) = rest.split_first() else {
             return refuse("Expected '.' after the resource hop");
         };
         let expression = match RESOURCE_TERMINALS.iter().find(|f| **f == terminal.text) {
@@ -854,7 +862,7 @@ impl Lowering {
         };
         let adapter = linked_adapter(&where_text).map(|a| a.to_uppercase()).unwrap_or_default();
         match rest {
-            [Segment::Member(terminal)] => Ok(Expression::LinkedObject { adapter, field: terminal.text.clone() }),
+            [Segment::Member(terminal, false)] => Ok(Expression::LinkedObject { adapter, field: terminal.text.clone() }),
             _ => refuse("Expected field name after -[#linked...]->."),
         }
     }
@@ -958,7 +966,9 @@ impl Lowering {
         // the first).
         let mut values: Vec<Cow<MExpr>> = args.iter().map(|a| Cow::Borrowed(&a.value)).collect();
         let mut consumed = 0;
-        if let Some(Segment::Member(next)) = after.first()
+        // `only(…)?.prop` folds alike: the walk's one record's field, absent
+        // when there is none.
+        if let Some(Segment::Member(next, _)) = after.first()
             && !name.quoted
             && BARE_PATH_AGGREGATES.contains(&upper.as_str())
             && values.first().is_some_and(|v| is_bare_walk(v))
@@ -1130,7 +1140,7 @@ impl Lowering {
         let probe_name = Name { text: EXISTS_PROBE.into(), quoted: true, at: walk.at() };
         let probe = self.lower(&member(walk, probe_name), TOP)?;
         Ok(match probe {
-            Expression::Traverse { alias_root, steps, expression } if matches!(*expression, Expression::Property { .. }) => {
+            Expression::Traverse { alias_root, steps, expression, .. } if matches!(*expression, Expression::Property { .. }) => {
                 Some((alias_root, steps))
             }
             _ => None,
@@ -1144,7 +1154,7 @@ impl Lowering {
     /// refused. Takes a `traverse`'s parts.
     fn fold_namespace(&self, alias_root: Option<String>, steps: Vec<TraversalStep>, expression: Expression) -> Lowered<Expression> {
         let Some(root) = alias_root.as_deref().filter(|_| steps.is_empty()) else {
-            return Ok(Expression::Traverse { alias_root, steps, expression: Box::new(expression) });
+            return Ok(Expression::Traverse { alias_root, steps, expression: Box::new(expression), optional: false });
         };
         let call_name = call_terminal_name(&expression);
         let v = vocabulary();
@@ -1178,9 +1188,11 @@ impl Lowering {
                 v.namespaces().join(", ")
             ));
         }
-        Ok(Expression::Traverse { alias_root, steps, expression: Box::new(expression) })
+        Ok(Expression::Traverse { alias_root, steps, expression: Box::new(expression), optional: false })
     }
 }
+
+use crate::expr::OPTIONAL_READS_A_FIELD;
 
 fn refuse_retired(name: &Name) -> Lowered<()> {
     if !name.quoted && name.text == "EXTRACT_VALUE" {

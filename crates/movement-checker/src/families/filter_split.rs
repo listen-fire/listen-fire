@@ -411,7 +411,7 @@ pub fn spell(expr: &Expression, alias: Option<&str>) -> String {
             StaticValue::Null => "null".to_string(),
         },
         Expression::AliasRef { name } => spell_name(name),
-        Expression::Traverse { alias_root: Some(root), steps, expression } if steps.is_empty() => {
+        Expression::Traverse { alias_root: Some(root), steps, expression, .. } if steps.is_empty() => {
             format!("{}.{}", spell_name(root), spell(expression, None))
         }
         Expression::List { elements } => {
@@ -479,7 +479,7 @@ fn is_field_read(expr: &Expression) -> bool {
         Expression::Property { property_type_id, .. } | Expression::EdgeProperty { property_type_id, .. } => {
             property_type_id != crate::types::narrowing::POSITION_SENTINEL
         }
-        Expression::Traverse { alias_root: Some(_), steps, expression } if steps.is_empty() => is_field_read(expression),
+        Expression::Traverse { alias_root: Some(_), steps, expression, .. } if steps.is_empty() => is_field_read(expression),
         _ => false,
     }
 }

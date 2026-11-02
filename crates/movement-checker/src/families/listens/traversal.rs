@@ -754,7 +754,7 @@ fn walk_in(expr: &Expression) -> Option<String> {
         })
     };
     match expr {
-        Expression::Traverse { alias_root, steps, expression } => {
+        Expression::Traverse { alias_root, steps, expression, .. } => {
             spelled(alias_root.as_deref(), steps).or_else(|| match &**expression {
                 // `EXISTS(h-[:E]->)` lowers as EXISTS read off `h`.
                 Expression::Exists { steps, .. } => spelled(alias_root.as_deref(), steps),

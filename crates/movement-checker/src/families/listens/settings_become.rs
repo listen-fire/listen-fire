@@ -441,7 +441,9 @@ fn field_change(statement: &ListenDeclaration, change: &FieldChange, alias: &str
             alias_root: Some(row.to_string()),
             steps: Vec::new(),
             expression: Box::new(Expression::Property { property_type_id: field.clone(), field_only: true }),
+            optional: false,
         }),
+        optional: false,
     };
     let compare = |op, left, right| Expression::Compare { op, left: Box::new(left), right: Box::new(right) };
     let null = || Expression::Static { value: StaticValue::Null };

@@ -569,7 +569,7 @@ fn joined(items: impl Iterator<Item = String>) -> String {
 fn spell_read(read: &Expression) -> Option<String> {
     match read {
         Expression::Property { property_type_id, .. } | Expression::EdgeProperty { property_type_id, .. } => Some(spell_name(property_type_id)),
-        Expression::Traverse { alias_root: Some(root), steps, expression } if steps.is_empty() => {
+        Expression::Traverse { alias_root: Some(root), steps, expression, .. } if steps.is_empty() => {
             Some(format!("{}.{}", spell_name(root), spell_read(expression)?))
         }
         _ => None,

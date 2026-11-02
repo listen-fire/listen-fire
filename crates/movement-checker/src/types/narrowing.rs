@@ -49,7 +49,7 @@ pub fn is_null_literal(expr: &Expression) -> bool {
 
 /// `directFieldRead`: `r.field`.
 pub fn direct_field_read(expr: &Expression) -> Option<(String, String)> {
-    let Expression::Traverse { alias_root: Some(root), steps, expression } = expr else { return None };
+    let Expression::Traverse { alias_root: Some(root), steps, expression, .. } = expr else { return None };
     if !steps.is_empty() {
         return None;
     }
@@ -69,7 +69,7 @@ pub fn bare_name(expr: &Expression) -> Option<&str> {
 }
 
 fn where_field_read(expr: &Expression) -> Option<(String, String)> {
-    let Expression::Traverse { alias_root: Some(root), steps, expression } = expr else { return None };
+    let Expression::Traverse { alias_root: Some(root), steps, expression, .. } = expr else { return None };
     if !steps.is_empty() {
         return None;
     }
@@ -92,7 +92,7 @@ fn presence_subject(expr: &Expression) -> Option<PresenceProof> {
 
 /// `existsSubject`: `EXISTS(x)` on a bare name.
 pub fn exists_subject(expr: &Expression) -> Option<&str> {
-    let Expression::Traverse { alias_root: Some(root), steps, expression } = expr else { return None };
+    let Expression::Traverse { alias_root: Some(root), steps, expression, .. } = expr else { return None };
     if !steps.is_empty() {
         return None;
     }

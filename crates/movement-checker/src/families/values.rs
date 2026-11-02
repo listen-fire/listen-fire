@@ -366,7 +366,7 @@ fn operand_source(expr: &Expression) -> Option<String> {
         // A nested call's binding (`f(x).Score`) is a name the author never
         // wrote.
         Expression::AliasRef { name } if !is_nested_call_name(name) => Some(quote_name(name)),
-        Expression::Traverse { alias_root: Some(root), steps, expression } if steps.is_empty() && !is_nested_call_name(root) => match &**expression {
+        Expression::Traverse { alias_root: Some(root), steps, expression, .. } if steps.is_empty() && !is_nested_call_name(root) => match &**expression {
             Expression::Property { property_type_id, .. } => Some(format!("{}.{}", quote_name(root), quote_name(property_type_id))),
             _ => None,
         },
