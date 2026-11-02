@@ -56,6 +56,8 @@ named in [`RELEASING.md`](RELEASING.md).
   - `listen-fire upgrade` rewrites none of it, even with `--all`, and leaves the pin where it is until each is replaced. A closure's call reads differently from a kept walk where the name is bound whole to another name or passed to a function, so only the author knows which meaning was wanted.
   - The engine no longer runs a kept walk: a program that reaches it unchecked fails by name. A paused run's state moves to version 4, which holds no kept walk; a 0.13 run paused holding one (park state 3) is refused on resume, by name ("this run paused holding a `lazy` walk"). Let such runs finish, or cancel them, before upgrading. Any other 0.13 pause resumes.
 
+- **`triggerEventOf` leaves the engine package's `public/inbound`.** It built the 0.12 trigger, which no 0.13 host makes, and was deprecated in 0.13.1. Build a run's event with `arrivalTriggerOf`.
+
 ## [0.13.1] - 2026-11-02
 
 A patch release of the 0.13 line: it reads the same pins as 0.13.0 (every `0.13.x`) and changes the meaning of no program that checks under 0.13.0. It mainly fixes what 0.13.0 stopped passing from a module to a run: who acted (Slack, email, Telegram, WhatsApp, Granola and Attio reported nobody, so a host that runs only registered senders dropped their runs), the record a fired record links to (Dealroom, Evertrace), Affinity's changed values and Airtable's ids. It also makes schedules fire on time, lets `connect` name a module without importing it, and stops `listen-fire upgrade` moving a pin past a rewrite that may change behaviour. Adapter protocol 2.7 adds `pollAgainAt` and an arrival's `actor`; a host that ignores them behaves as 0.13.0.
