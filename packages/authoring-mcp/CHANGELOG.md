@@ -1,5 +1,12 @@
 # @listen-fire/authoring-mcp
 
+## 0.13.2
+
+### Patch Changes
+
+- Updated dependencies [d230f9c]
+  - @listen-fire/handbook@0.14.0
+
 ## 0.13.1
 
 ### Patch Changes

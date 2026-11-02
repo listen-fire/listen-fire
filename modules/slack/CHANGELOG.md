@@ -1,5 +1,11 @@
 # @listen-fire/slack
 
+## 0.13.2
+
+### Patch Changes
+
+- d230f9c: The handbook section and the `Buttons` description read a press's value with `only(press-[:Actions]->)?.Value`, as the 0.14 language requires: `only(…)` may find nothing, and a field is read through it with `?.`.
+
 ## 0.13.1
 
 ### Patch Changes

@@ -20,6 +20,10 @@ named in [`RELEASING.md`](RELEASING.md).
 
 <!-- add merged PRs here -->
 
+## [0.14.0] - 2026-11-02
+
+A new compatibility key. A field is never read through a value that may be missing: write `?.`, or test it with `exists` first. A walk off a union lands on one of its members, narrowed with `is`. `lazy` and the loop guard slot are retired. **Which pins it reads:** `0.14.x` only; a project or automation pinned to `0.13.x` is refused by name ("validate it under 0.14.0 and upgrade it"). **To upgrade:** run `listen-fire upgrade`; it rewrites the reads it can, holds the pin on anything you must change by hand (`lazy`, a configured loop guard) and lists each. Let runs paused under 0.13 holding a `lazy` walk finish first.
+
 ### Breaking (0.14.0)
 
 Guide: [`docs/language/migrating-to-0.14.md`](docs/language/migrating-to-0.14.md), with each change before and after, and what `listen-fire upgrade` rewrites or leaves to you.
@@ -2985,7 +2989,8 @@ Releases before v0.11 are kept one file per minor line, newest first:
 - [v0.2.x](docs/changelog/v0.2.md) (v0.2.0)
 - [v0.1.x](docs/changelog/v0.1.md) (v0.1.0 to v0.1.2)
 
-[Unreleased]: https://github.com/listen-fire/listen-fire/compare/v0.13.1...HEAD
+[Unreleased]: https://github.com/listen-fire/listen-fire/compare/v0.14.0...HEAD
+[0.14.0]: https://github.com/listen-fire/listen-fire/compare/v0.13.1...v0.14.0
 [0.13.1]: https://github.com/listen-fire/listen-fire/compare/v0.13.0...v0.13.1
 [0.13.0]: https://github.com/listen-fire/listen-fire/compare/v0.12.13...v0.13.0
 [0.12.13]: https://github.com/listen-fire/listen-fire/compare/v0.12.12...v0.12.13

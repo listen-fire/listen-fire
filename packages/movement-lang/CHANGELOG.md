@@ -1,5 +1,11 @@
 # @listen-fire/movement-lang
 
+## 0.14.0
+
+### Minor Changes
+
+- 0.14.0, a new compatibility key: a field is never read through a value that may be missing (`?.`), a walk off a union lands on one of its members (`is` narrows it), `lazy` and the loop guard slot are retired. See docs/language/migrating-to-0.14.md.
+
 ## 0.13.1
 
 ### Patch Changes

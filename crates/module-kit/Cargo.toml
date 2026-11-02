@@ -4,7 +4,7 @@
 # never links into `listen-fire`; listen-fire speaks to it as to any other module server.
 # Not part of the core: it carries its own version and publishes on its own.
 name = "listen-fire-module-kit"
-version = "0.13.0"
+version = "0.14.0"
 edition.workspace = true
 publish = true
 license.workspace = true

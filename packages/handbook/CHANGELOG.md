@@ -1,5 +1,11 @@
 # @listen-fire/handbook
 
+## 0.14.0
+
+### Minor Changes
+
+- d230f9c: The handbook teaches `x?.F`, a field read through a value that may be missing (absent when it is), and refuses `.` there as the 0.14 language does: through `only(…)`, `first(…)`, `extractOne(…)`, a named `match`, a call's result and an index read. A presence test of a record that may be missing is `exists(x)` or `x?.F != null`; `exists(xs[0])` proves every later `xs[0]`. Every example reads that way.
+
 ## 0.13.1
 
 ### Patch Changes

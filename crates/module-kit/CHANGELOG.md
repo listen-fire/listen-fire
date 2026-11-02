@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.14.0 - 2026-11-02
+
 - Breaking (listen-fire 0.14.0): the `LoopGuard` slot and `Host::loop_guard` are removed with the loop guard slot, which listen-fire 0.14 refuses by name: its loop breaker replaces it (docs/core-slots.md).
 
 ## 0.13.0 - 2026-11-02
