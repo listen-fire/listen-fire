@@ -399,6 +399,194 @@ impl Event {
     }
 }
 
+/// What fires a run: an arrival on a listen's last edge, or an event in the
+/// shape a 0.12 host delivered.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Trigger {
+    Arrival(Arrival),
+    Event(Event),
+}
+
+impl From<Arrival> for Trigger {
+    fn from(arrival: Arrival) -> Trigger {
+        Trigger::Arrival(arrival)
+    }
+}
+
+impl From<Event> for Trigger {
+    fn from(event: Event) -> Trigger {
+        Trigger::Event(event)
+    }
+}
+
+impl Trigger {
+    fn to_wire(&self, pipeline_input_id: &str, now: &str) -> Json {
+        match self {
+            Trigger::Arrival(arrival) => arrival.to_wire(pipeline_input_id, now),
+            Trigger::Event(event) => event.to_wire(pipeline_input_id),
+        }
+    }
+}
+
+/// A record as an arrival carries it: what landed, or a record it carries
+/// from an earlier hop.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Landing {
+    pub record_id: Option<String>,
+    pub record_type: Option<String>,
+    /// Its fields, by the names a program reads them by (and its raw ones).
+    pub fields: Data,
+}
+
+impl Landing {
+    pub fn new(record_type: impl Into<String>, fields: Data) -> Landing {
+        Landing { record_id: None, record_type: Some(record_type.into()), fields }
+    }
+    pub fn id(mut self, record_id: impl Into<String>) -> Landing {
+        self.record_id = Some(record_id.into());
+        self
+    }
+
+    fn to_data(&self) -> Data {
+        let mut out = Vec::new();
+        if let Some(id) = &self.record_id {
+            out.push(("recordId".to_string(), Data::text(id.clone())));
+        }
+        if let Some(record_type) = &self.record_type {
+            out.push(("recordType".into(), Data::text(record_type.clone())));
+        }
+        out.push(("fields".into(), self.fields.clone()));
+        Data::Map(out)
+    }
+}
+
+/// How who acted resolves to a user of the host: by email, by phone, or not
+/// at all (a provider's own id).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ActorScheme {
+    Email,
+    Phone,
+    Opaque,
+}
+
+/// Who acted on an arrival, as its module says at the door (adapter protocol
+/// 2.7): what `@actor_*` reads, and what a host resolves `@user_*` from
+/// ([`Adapters::acting_user`] is handed it on the event's `arrival.actor`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Actor {
+    /// The provider's id for them (an address, a phone number, a member id).
+    pub identifier: String,
+    pub scheme: ActorScheme,
+    pub email: Option<String>,
+    pub name: Option<String>,
+    pub label: Option<String>,
+}
+
+impl Actor {
+    pub fn new(identifier: impl Into<String>, scheme: ActorScheme) -> Actor {
+        Actor { identifier: identifier.into(), scheme, email: None, name: None, label: None }
+    }
+    pub fn email(mut self, email: impl Into<String>) -> Actor {
+        self.email = Some(email.into());
+        self
+    }
+    pub fn name(mut self, name: impl Into<String>) -> Actor {
+        self.name = Some(name.into());
+        self
+    }
+    pub fn label(mut self, label: impl Into<String>) -> Actor {
+        self.label = Some(label.into());
+        self
+    }
+
+    fn to_data(&self) -> Data {
+        let scheme = match self.scheme {
+            ActorScheme::Email => "email",
+            ActorScheme::Phone => "phone",
+            ActorScheme::Opaque => "opaque",
+        };
+        let mut out = vec![("identifier".to_string(), Data::text(self.identifier.clone())), ("scheme".into(), Data::text(scheme))];
+        for (key, value) in [("email", &self.email), ("name", &self.name), ("label", &self.label)] {
+            if let Some(value) = value {
+                out.push((key.into(), Data::text(value.clone())));
+            }
+        }
+        Data::Map(out)
+    }
+}
+
+/// What landed on a listen's last edge, as its module reports it (adapter
+/// protocol 2.6; who acted, 2.7): the run it fires binds the function's
+/// parameter to the landing, reads `@actor_*` from the actor, and stamps its
+/// writes with when it happened.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Arrival {
+    /// The adapter it arrived from (the listened instance's).
+    pub adapter_type: String,
+    /// The edge it landed on.
+    pub edge: String,
+    pub landing: Landing,
+    /// The records it carries from the earlier hops its edge declares, in
+    /// that order; None for one its module could not carry.
+    pub parents: Vec<Option<Landing>>,
+    /// The record it is about, when that is not its landing: its type and id.
+    pub about: Option<(String, String)>,
+    pub actor: Option<Actor>,
+    /// When it happened at its provider, ISO 8601; None: the run's `now`.
+    pub occurred_at: Option<String>,
+}
+
+impl Arrival {
+    pub fn new(adapter_type: impl Into<String>, edge: impl Into<String>, landing: Landing) -> Arrival {
+        Arrival { adapter_type: adapter_type.into(), edge: edge.into(), landing, parents: Vec::new(), about: None, actor: None, occurred_at: None }
+    }
+    pub fn parents(mut self, parents: Vec<Option<Landing>>) -> Arrival {
+        self.parents = parents;
+        self
+    }
+    /// The record it is about.
+    pub fn about(mut self, record_type: impl Into<String>, external_id: impl Into<String>) -> Arrival {
+        self.about = Some((record_type.into(), external_id.into()));
+        self
+    }
+    pub fn by(mut self, actor: Actor) -> Arrival {
+        self.actor = Some(actor);
+        self
+    }
+    pub fn occurred_at(mut self, at: impl Into<String>) -> Arrival {
+        self.occurred_at = Some(at.into());
+        self
+    }
+
+    /// The trigger event as the run reads it (listen-fire's
+    /// `arrival_trigger_of`, held to engine-contracts/conformance/arrival-triggers.json).
+    fn to_wire(&self, pipeline_input_id: &str, now: &str) -> Json {
+        let mut arrival = vec![
+            ("adapterType".to_string(), Data::text(self.adapter_type.clone())),
+            ("edge".into(), Data::text(self.edge.clone())),
+            ("landing".into(), self.landing.to_data()),
+        ];
+        if !self.parents.is_empty() {
+            arrival.push(("parents".into(), Data::List(self.parents.iter().map(|parent| parent.as_ref().map_or(Data::Null, Landing::to_data)).collect())));
+        }
+        if let Some((record_type, external_id)) = &self.about {
+            arrival.push(("about".into(), Data::map([("recordType", Data::text(record_type.clone())), ("externalId", Data::text(external_id.clone()))])));
+        }
+        if let Some(actor) = &self.actor {
+            arrival.push(("actor".into(), actor.to_data()));
+        }
+        let occurred = self.occurred_at.as_deref().and_then(crate::js_date::parse).map(crate::js_date::to_iso_string);
+        Data::Map(vec![
+            ("pipelineInputId".to_string(), Data::text(pipeline_input_id)),
+            ("adapterType".into(), Data::text(self.adapter_type.clone())),
+            ("triggerType".into(), Data::text("arrival")),
+            ("arrival".into(), Data::Map(arrival)),
+            ("occurredAt".into(), Data::text(occurred.unwrap_or_else(|| now.to_string()))),
+        ])
+        .to_wire()
+    }
+}
+
 /// One run: the movement's source, the function to fire, its event and the
 /// instant the run is pinned to.
 #[derive(Debug, Clone)]
@@ -410,7 +598,8 @@ pub struct RunInput {
     /// The function the event fires (a `listen … fire <function>`); `None`
     /// runs the file's one movement.
     pub function: Option<String>,
-    pub event: Event,
+    /// What fires it: an [`Arrival`], or a 0.12 [`Event`].
+    pub event: Trigger,
     /// The run's pinned instant (ISO 8601): what `NOW()` and `TODAY()` read.
     pub now: String,
     pub catalog: Catalog,
@@ -425,12 +614,12 @@ pub struct RunInput {
 }
 
 impl RunInput {
-    pub fn new(source: impl Into<String>, event: Event, now: impl Into<String>) -> RunInput {
+    pub fn new(source: impl Into<String>, event: impl Into<Trigger>, now: impl Into<String>) -> RunInput {
         RunInput {
             source: source.into(),
             language_version: LANGUAGE_VERSION.to_string(),
             function: None,
-            event,
+            event: event.into(),
             now: now.into(),
             catalog: Catalog::default(),
             dry_run: false,
@@ -615,7 +804,7 @@ fn input_text(serves: &[&str], input: &RunInput, entry: &Entry<'_>, credential_i
         "entry": "segment",
         "source": input.source,
         "languageVersion": input.language_version,
-        "event": input.event.to_wire(&format!("embed:{}", input.function.as_deref().unwrap_or(""))),
+        "event": input.event.to_wire(&format!("embed:{}", input.function.as_deref().unwrap_or("")), &input.now),
         "segmentId": segment_id,
         "credentialIds": credential_ids,
         "spend": spend,

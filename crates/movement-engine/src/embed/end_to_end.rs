@@ -1502,3 +1502,22 @@ fn the_arms_of_an_all_are_served_at_once() {
     assert_eq!(model.started_at, vec![0, 0], "both calls started before either answered");
     assert_eq!(time.now_ms(), 100);
 }
+
+/// A run built from an arrival, as an embedder hands one over: its
+/// parameter binds the landing, `@actor_*` reads who acted, and its writes
+/// are stamped with when the arrival happened at its provider.
+#[test]
+fn a_run_built_from_an_arrival_reads_its_landing_and_who_acted() {
+    let source = movement("", "  write game-[:notes]-> { Title: \"${monster.Name} by ${@actor_name} (${@actor_id})\" }\n");
+    assert_eq!(errors(&source), vec![]);
+    let arrival = Arrival::new("world", "Monster", Landing::new("Monster", Data::map([("Name", Data::text("Dragon"))])).id("m1"))
+        .by(Actor::new("U1", ActorScheme::Opaque).name("Ada"))
+        .occurred_at("2026-03-01T09:00:00+00:00");
+    let input = RunInput::new(source, arrival, NOW).function("m").catalog(Catalog::from_json(CATALOG).unwrap());
+    let mut world = World::default();
+    finished(block_on(run(&mut Hosts::new().adapters(&mut world), &input)));
+    assert_eq!(titles(&world), vec!["Dragon by Ada (U1)"]);
+    let created = world.calls.iter().find(|(method, _)| method == "createRecord").map(|(_, args)| args).expect("a note written");
+    let stamped = created.get("mutationContext").and_then(|context| context.get("occurredAt")).and_then(Data::as_text);
+    assert_eq!(stamped, Some("2026-03-01T09:00:00.000Z"), "stamped with when it happened, not the run's now");
+}
