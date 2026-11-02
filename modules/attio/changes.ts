@@ -124,6 +124,11 @@ export function describeChange(object: ChangedObject, attributes: readonly Attio
 
 const attioActor = z.object({ id: z.string().nullable(), type: z.string() }).optional();
 
+/** Where a change keeps who made it, as Attio's webhook names them
+ *  (`{ type, id }`, `type` Attio's own: `workspace-member`, `api-token`,
+ *  `system`): beside its named fields, for the actor of the run it fires. */
+export const ATTIO_CHANGE_ACTOR = 'actor';
+
 /** One of a change's fields, by name, from what its position holds. */
 export function changeFieldOf(change: unknown, name: string): unknown {
   if (typeof change !== 'object' || change === null) return null;
@@ -188,7 +193,13 @@ export async function changeArrivals(raw: unknown, sources: ChangeSources): Prom
     const values = attribute === undefined ? record?.values : record?.values[attribute.apiSlug ?? attribute.id];
     const identity = [object.id, recordId, kind, ...(kind === 'updated' ? [attributeId ?? '', digest(values ?? null)] : [])].join(':');
     const occurredAt = kind === 'updated' ? latestActiveFrom(values) : kind === 'created' ? record?.createdAt : undefined;
-    const fields: Record<string, unknown> = { Id: identity, Kind: kind, Record: recordId, ...(attribute !== undefined ? { Field: attribute.name } : {}) };
+    const fields: Record<string, unknown> = {
+      Id: identity,
+      Kind: kind,
+      Record: recordId,
+      ...(attribute !== undefined ? { Field: attribute.name } : {}),
+      ...(event.actor !== undefined ? { [ATTIO_CHANGE_ACTOR]: event.actor } : {}),
+    };
     arrivals.push({
       edge: ATTIO_CHANGES_EDGE,
       key: recordId,

@@ -28,14 +28,15 @@ import { henry_attio } from credentials
 crm = connect attio using henry_attio
 `;
 
-// Each Stage change notes the deal's stage on the company named after it.
+// Each Stage change notes the deal's stage on the company named after it, and
+// the workspace member who changed it.
 const STAGES = `${HEAD}
 function moved(c: <crm-[:DealChange]->>) {
   c-[d:Deal]-> {
     write crm-[:Companies]-> {
       unique by (Name)
       Name: d.Name
-      Description: "\${d.Name} is now \${d.Stage} (\${c.Kind} \${c.Field})"
+      Description: "\${d.Name} is now \${d.Stage} (\${c.Kind} \${c.Field} by \${@actor_id})"
     }
   }
 }
@@ -120,7 +121,7 @@ test('a Deals listen on Stage runs on each Stage change naming the new stage, an
       await updateRecord(fake, 'deals', osprey.id.record_id, { stage: 'Diligence' });
       assert.deepEqual((await deliver(fake, stageOf(osprey))).map((d) => d.status), [200]);
       await until(() => runs() === 1, serving.lines);
-      assert.equal(await description(fake, 'Osprey'), 'Osprey is now Diligence (updated Stage)');
+      assert.equal(await description(fake, 'Osprey'), 'Osprey is now Diligence (updated Stage by fake-member-1)');
 
       // The same change again, another attribute of the deal, a company's
       // change, the deal created: none of them is a Stage change of a deal.
@@ -135,7 +136,7 @@ test('a Deals listen on Stage runs on each Stage change naming the new stage, an
       await updateRecord(fake, 'deals', osprey.id.record_id, { stage: 'Passed' });
       await deliver(fake, stageOf(osprey));
       await until(() => runs() === 2, serving.lines);
-      assert.equal(await description(fake, 'Osprey'), 'Osprey is now Passed (updated Stage)');
+      assert.equal(await description(fake, 'Osprey'), 'Osprey is now Passed (updated Stage by fake-member-1)');
       await new Promise((done) => setTimeout(done, 500));
       assert.equal(runs(), 2, serving.lines.join('\n'));
       // The company's Name change above passed the Name listen's WHERE, and

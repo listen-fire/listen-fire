@@ -37,6 +37,7 @@ import type {
 import type { Arrival } from 'engine-contracts';
 import type { TriggerEvent } from 'movement-engine/public/inbound';
 import type { ModuleLog } from 'module-kit';
+import { firedRecordFields } from 'module-kit';
 import type { WhatsappCloudClient } from './client';
 
 import { fileHandle, isFileValue, ownedFileSource, singleParentLink } from 'movement-engine/public/adapter';
@@ -550,8 +551,7 @@ export class WhatsappAdapter extends BaseAdapter implements Adapter {
   // WhatsApp has no forwarding / relay concept (no header chain), so there
   // are no `relay` candidates — a single originator only.
   async getActorCandidates(input: { event: TriggerEvent }): Promise<ActorCandidate[]> {
-    const payload = (input.event.payload ?? {}) as Record<string, unknown>;
-    const phone = normalizeWhatsappPhone(readSender(payload));
+    const phone = normalizeWhatsappPhone(readSender(firedRecordFields(input.event)));
     if (!phone) return [];
     return [
       {
@@ -566,10 +566,10 @@ export class WhatsappAdapter extends BaseAdapter implements Adapter {
   // `@actor_*` so authors can see the raw sender even when auth went through
   // a fallback. Surfaces the profile name as the friendly label when present.
   async extractActor(input: { event: TriggerEvent }): Promise<ActorIdentity | null> {
-    const payload = (input.event.payload ?? {}) as Record<string, unknown>;
-    const phone = normalizeWhatsappPhone(readSender(payload));
+    const message = firedRecordFields(input.event);
+    const phone = normalizeWhatsappPhone(readSender(message));
     if (!phone) return null;
-    const profileName = readProfileName(payload);
+    const profileName = readProfileName(message);
     return {
       identifier: phone,
       scheme: 'phone',

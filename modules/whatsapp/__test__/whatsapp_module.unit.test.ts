@@ -10,6 +10,7 @@ import type { CredentialFields, ModuleCredential, ModuleFiles } from 'module-kit
 import { adapterInProcess, noCredential, refusingFiles, refusingKv } from 'module-kit';
 import { fileValue, ownedFileSource } from 'movement-engine/public/adapter';
 import { instanceSchemaFromDescriptors, makeMetaPosition, makeStablePosition } from 'movement-engine/public/catalog';
+import { arrivalTriggerOf } from 'movement-engine/public/inbound';
 
 import { whatsappModule, whatsappModuleWith, type WhatsappHost } from '../index';
 
@@ -202,6 +203,22 @@ describe('@lf/whatsapp', () => {
       expect(await arrived([{ from: '1', id: 'wamid.C', type: 'contacts' }])).toEqual([]);
       const [message] = await arrived([{ from: '1', id: 'wamid.N', type: 'text', text: { body: 'x' } }]);
       expect(message).not.toHaveProperty('occurredAt');
+    });
+
+    it('the run each arrival fires reads its sender as the actor, by phone, with the profile name', async () => {
+      const { adapter } = load({ credential: credential(OWN) });
+      const arrivals = await arrived([TEXT, REACTION, LOCATION]);
+      const actors = await Promise.all(
+        arrivals.map(async (arrival) => {
+          if ('gone' in arrival) throw new Error('no arrival');
+          // The run's trigger, as the host hands it to a run its listen fired.
+          const event = arrivalTriggerOf({ pipelineInputId: 'wa:answer', adapterType: 'whatsapp', arrival, now: new Date() });
+          const candidates = await adapter.getActorCandidates?.({ event });
+          return { actor: await adapter.extractActor?.({ event }), candidates: candidates?.map((c) => [c.identity.identifier, c.source]) };
+        }),
+      );
+      const from = (phone: string) => ({ actor: { identifier: phone, scheme: 'phone', adapterType: 'whatsapp', name: 'Ada', label: 'Ada' }, candidates: [[phone, 'originator']] });
+      expect(actors).toEqual([from('447700900001'), from('447700900001'), from('447700900002')]);
     });
 
     it('a message that arrived is read by its display names and replied under', async () => {

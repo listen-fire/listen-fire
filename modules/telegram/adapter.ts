@@ -40,6 +40,7 @@ import type { SchemaEntryPoint, SchemaTypeDescriptor, SourcePosition } from 'mov
 import type { Arrival } from 'engine-contracts';
 import type { TriggerEvent } from 'movement-engine/public/inbound';
 import type { LinkedIdentity, ModuleIdentities, ModuleLog } from 'module-kit';
+import { firedRecordFields } from 'module-kit';
 
 import { fileHandle, ownedFileSource, singleParentLink } from 'movement-engine/public/adapter';
 import { META_RECORD_TYPE, makeStablePosition, makeUnstablePosition, positionData } from 'movement-engine/public/catalog';
@@ -480,21 +481,21 @@ export class TelegramAdapter extends BaseAdapter implements Adapter {
   // team-scoped here, and the framework's `lookupTeamUserByEmail` is itself
   // hard-clamped to the team — identification can never cross teams.
   async extractActor(input: { event: TriggerEvent }): Promise<ActorIdentity | null> {
-    const payload = (input.event.payload ?? {}) as Partial<TelegramMessagePayload>;
-    const senderId = payload.sender_id;
+    const message = firedRecordFields(input.event);
+    const senderId = message.sender_id;
     if (typeof senderId !== 'string' || senderId.length === 0) return null;
 
     const email = await this.resolveActorEmail(senderId);
     if (!email) return null;
 
-    const username = payload.sender_username;
-    const firstName = payload.sender_first_name;
+    const username = typeof message.sender_username === 'string' ? message.sender_username : undefined;
+    const firstName = typeof message.sender_first_name === 'string' ? message.sender_first_name : undefined;
     return {
       identifier: senderId,
       scheme: 'email',
       adapterType: this.adapterType,
       email,
-      name: firstName ?? undefined,
+      name: firstName,
       label: username ? `@${username}` : (firstName ?? senderId),
     };
   }

@@ -11,6 +11,7 @@ import { createServer, type Server } from 'node:http';
 
 import { adapterInProcess, noCredential, refusingFiles, refusingKv } from 'module-kit';
 import { makeMetaPosition } from 'movement-engine/public/catalog';
+import { arrivalTriggerOf } from 'movement-engine/public/inbound';
 
 import { slackModule, slackModuleWith, type SlackHosted } from '../index';
 
@@ -572,6 +573,34 @@ describe('@lf/slack', () => {
     expect(answer?.events).toEqual([]);
     const root = { type: 'message', channel: 'C1', user: 'U2', text: 'hi', ts: '1700.1' };
     expect((await adapter.preprocessInbound?.({ raw: { type: 'event_callback', event: root } }))?.arrivals?.map((a) => a.edge)).toEqual(['Messages']);
+  });
+
+  it('the run each arrival fires reads who sent, reacted or pressed as its actor', async () => {
+    const { adapter } = load({ credential: credential({}) });
+    const message = { type: 'message', channel: 'C1', user: 'U2', text: 'hi', ts: '1700.1' };
+    const reaction = { type: 'reaction_added', user: 'U3', reaction: 'eyes', item: { type: 'message', channel: 'C1', ts: '1700.1' }, item_user: 'U2', event_ts: '1700.2' };
+    const press = {
+      type: 'block_actions',
+      trigger_id: 'trig-1',
+      user: { id: 'U4', username: 'ada' },
+      container: { type: 'message', message_ts: '1700.1', channel_id: 'C1' },
+      actions: [{ type: 'button', action_id: 'lf_button_0', value: 'in', action_ts: '1700.3' }],
+    };
+    const deliveries = [{ type: 'event_callback', event: message }, { type: 'event_callback', event: reaction }, { payload: JSON.stringify(press) }];
+    const actors: unknown[] = [];
+    for (const raw of deliveries) {
+      const [arrival] = (await adapter.preprocessInbound?.({ raw }))?.arrivals ?? [];
+      if (arrival === undefined || 'gone' in arrival) throw new Error('nothing arrived');
+      // The run's trigger, as the host hands it to a run its listen fired.
+      const event = arrivalTriggerOf({ pipelineInputId: 'chat:answer', adapterType: 'slack', arrival, now: new Date() });
+      actors.push([arrival.edge, await adapter.extractActor?.({ event })]);
+    }
+    const actor = (id: string) => ({ identifier: id, scheme: 'opaque', adapterType: 'slack', label: id });
+    expect(actors).toEqual([
+      ['Messages', actor('U2')],
+      ['Reactions', actor('U3')],
+      ['Interactions', actor('U4')],
+    ]);
   });
 
   it('a message that mentions the app arrives as its message would, under the same identity', async () => {

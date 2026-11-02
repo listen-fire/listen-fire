@@ -5,6 +5,7 @@ import { createHmac } from 'node:crypto';
 
 import type { CredentialFields, ModuleCredential } from 'module-kit';
 import type { InboundCheckInput } from 'movement-engine/public/adapter';
+import { arrivalTriggerOf } from 'movement-engine/public/inbound';
 
 import { adapterInProcess, refusingFiles, refusingKv } from 'module-kit';
 
@@ -48,11 +49,12 @@ function request(input: { body: string; headers?: Record<string, string>; secret
 
 const MAILGUN_KEY = 'mailgun-signing-key';
 
-function mailgunForm(key = MAILGUN_KEY): string {
+function mailgunForm(key = MAILGUN_KEY, headers: Record<string, string> = {}): string {
   const timestamp = '1760000000';
   const token = 'tok-1';
   const signature = createHmac('sha256', key).update(timestamp + token).digest('hex');
   return new URLSearchParams({
+    ...headers,
     sender: 'ada@example.com',
     recipient: 'in+k@lf.test',
     To: 'in+k@lf.test',
@@ -121,6 +123,27 @@ describe('@lf/email checks its own inbound', () => {
     if (answer.outcome !== 'accepted') return;
     expect(answer.arrivals?.[0]).toMatchObject({ edge: 'Emails', identity: '<m-1@example.com>', landing: { fields: { subject: 'Hello', bodyText: 'Hi' } } });
     expect(calls[0]).toBe('https://api.resend.com/emails/receiving/em_1');
+  });
+
+  it("the run an email fires reads its sender as the actor, and a forwarding inbox it came through as a relay", async () => {
+    const { adapter } = load({ resendApiKey: 're_1' });
+    /** The event the run the delivery's one arrival fires is handed, as the host hands it. */
+    const fired = async (input: InboundCheckInput) => {
+      const answer = await adapter.checkInbound!(input);
+      const arrival = answer.outcome === 'accepted' ? answer.arrivals?.[0] : undefined;
+      if (arrival === undefined || 'gone' in arrival) throw new Error('no email arrived');
+      return arrivalTriggerOf({ pipelineInputId: 'inbox:triage', adapterType: 'email', arrival, now: new Date() });
+    };
+    const forwarded = await fired(request({ body: mailgunForm(MAILGUN_KEY, { 'X-Forwarded-For': 'dealflow@fund.example' }), secret: MAILGUN_KEY }));
+    expect(await adapter.extractActor!({ event: forwarded })).toMatchObject({ identifier: 'ada@example.com', scheme: 'email', email: 'ada@example.com' });
+    expect((await adapter.getActorCandidates!({ event: forwarded })).map((c) => [c.identity.identifier, c.source])).toEqual([
+      ['ada@example.com', 'originator'],
+      ['dealflow@fund.example', 'relay'],
+      ['in+k@lf.test', 'relay'],
+    ]);
+    const body = JSON.stringify({ type: 'email.received', data: { email_id: 'em_1', from: 'Ada <ada@example.com>', to: ['in+k@lf.test'] } });
+    const sent = await fired(request({ body, headers: resendDelivery(body), secret: RESEND_SECRET }));
+    expect(await adapter.extractActor!({ event: sent })).toMatchObject({ identifier: 'ada@example.com', name: 'Ada', label: 'Ada' });
   });
 
   it('refuses a Resend notification with a bad or missing signature', async () => {

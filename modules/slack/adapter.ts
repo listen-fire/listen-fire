@@ -52,6 +52,7 @@ import type { Arrival, ArrivalsCapability, AwaitHead, AwaitKey } from 'engine-co
 import type { SchemaEntryPoint, SchemaTypeDescriptor, SourcePosition } from 'movement-engine/public/catalog';
 import type { TriggerEvent } from 'movement-engine/public/inbound';
 import type { ModuleLog } from 'module-kit';
+import { firedRecordFields } from 'module-kit';
 import type { SlackAPIClient } from './api_client';
 import type { SlackWriteHost } from './write';
 
@@ -2040,18 +2041,18 @@ export class SlackAdapter extends BaseAdapter {
   }
 
   // ── 4d. Actor extraction (T5) ────────────────────────────────────────────
-  // Raw Slack actor — the user id that posted the inbound message.
-  // Independent of auth; populates `@actor_id` so authors can attribute
-  // events to their raw originator (the Slack member id) even when auth
-  // went through the creator fallback. Email/name slots are left blank:
-  // Slack's inbound event_callback payload doesn't carry them without a
-  // separate `users.info` round trip, which `extractActor`'s pure-parse
-  // contract forbids.
+  // Raw Slack actor — the member who posted the message, added the
+  // reaction or pressed the button that fired the run. Independent of auth;
+  // populates `@actor_id` so authors can attribute events to their raw
+  // originator (the Slack member id) even when auth went through the creator
+  // fallback. Email/name slots are left blank: what arrives doesn't carry
+  // them without a separate `users.info` round trip, which `extractActor`'s
+  // pure-parse contract forbids.
   async extractActor(input: { event: TriggerEvent }): Promise<ActorIdentity | null> {
-    const payload = (input.event.payload ?? {}) as Record<string, unknown>;
-    // event_callback envelope: payload.event.user; raw event: payload.user.
-    const inner = (payload.event ?? payload) as Record<string, unknown>;
-    const userId = inner.user;
+    // A message's and a reaction's `user` is the member's id; a press's is
+    // the member.
+    const user = firedRecordFields(input.event).user;
+    const userId = typeof user === 'object' && user !== null ? Reflect.get(user, 'id') : user;
     if (typeof userId !== 'string' || userId.length === 0) return null;
     return {
       identifier: userId,

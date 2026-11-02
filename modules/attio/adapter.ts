@@ -14,10 +14,12 @@ import { z } from 'zod';
 
 import type { ReadableStream as WebReadableStream } from 'node:stream/web';
 import type { EnsureEdgeSubscriptionInput, ModuleFiles, RemoveEdgeSubscriptionInput } from 'module-kit';
+import { firedRecordFields } from 'module-kit';
 import type { ArrivalsCapability, AwaitHead, AwaitKey } from 'engine-contracts';
 import type { AttioRecord } from './api_client';
 import { extractAttioValue, optionTitle, type AttioAttribute } from './attributes';
 import {
+  ATTIO_CHANGE_ACTOR,
   ATTIO_CHANGES_EDGE,
   ATTIO_RECORD_EVENTS,
   changeArrivals,
@@ -739,31 +741,12 @@ export class AttioAdapter extends BaseAdapter {
   // parse only; resolving Attio actor → workspace member display name
   // would need a separate API call, which `extractActor` forbids.
   async extractActor(input: { event: TriggerEvent }): Promise<ActorIdentity | null> {
-    // First-class Attio actor surfaced by `webhook_sync/providers/attio.ts`
-    // lands on `event.actor.id`; the raw webhook payload also carries
-    // `payload.actor.id` for some event shapes. Tolerate both.
-    const eventActor = input.event.actor;
-    if (eventActor && typeof eventActor === 'object') {
-      const id = (eventActor as Record<string, unknown>).id;
-      if (typeof id === 'string' && id.length > 0) {
-        // Pure parse — a bare actor id with no resolved email maps to no
-        // Listen-Fire user (`scheme: 'opaque'`); the candidate path resolves the
-        // workspace-member email separately.
-        return { identifier: id, scheme: 'opaque', adapterType: this.adapterType, label: id };
-      }
-    }
-    const payload = (input.event.payload ?? {}) as Record<string, unknown>;
-    const payloadActor = payload.actor as Record<string, unknown> | undefined;
-    if (payloadActor && typeof payloadActor === 'object') {
-      const id = payloadActor.id;
-      if (typeof id === 'string' && id.length > 0) {
-        // Pure parse — a bare actor id with no resolved email maps to no
-        // Listen-Fire user (`scheme: 'opaque'`); the candidate path resolves the
-        // workspace-member email separately.
-        return { identifier: id, scheme: 'opaque', adapterType: this.adapterType, label: id };
-      }
-    }
-    return null;
+    const id = readAttioActor(input.event)?.id;
+    if (id === undefined || id === null || id.length === 0) return null;
+    // Pure parse — a bare actor id with no resolved email maps to no
+    // Listen-Fire user (`scheme: 'opaque'`); the candidate path resolves the
+    // workspace-member email separately.
+    return { identifier: id, scheme: 'opaque', adapterType: this.adapterType, label: id };
   }
 
   // ── 1. Schema introspection ────────────────────────────────────────────
@@ -4356,47 +4339,18 @@ function buildPerListTypeDescriptor(
 }
 
 /**
- * Read the raw Attio actor `{ type, id }` from a trigger event, tolerating
- * both shapes: the framework-normalized `event.actor` (where the webhook
- * provider maps `workspace-member` → `user`) and the raw webhook
- * `payload.actor` (which carries Attio's literal `workspace-member`).
- *
- * Returns a uniform `{ type, id }` where `type` is the literal Attio actor
- * type — `'workspace-member' | 'api-token' | 'system'` — so the
- * email-resolution path can gate on member-ness. The normalized `'user'`
- * is mapped back to `'workspace-member'`.
+ * The Attio actor `{ type, id }` that made the change a run was fired on, as
+ * its webhook named it (`changeArrivals` keeps it on the change). `type` is
+ * Attio's own: `'workspace-member' | 'api-token' | 'system'`, so the
+ * email-resolution path can gate on member-ness. Null when the run was fired
+ * by no change, or Attio named no actor.
  */
-function readAttioActor(
-  event: TriggerEvent,
-): { type: 'workspace-member' | 'api-token' | 'system'; id: string | null } | null {
-  const denormalize = (
-    type: unknown,
-  ): 'workspace-member' | 'api-token' | 'system' | null => {
-    if (type === 'workspace-member' || type === 'user') return 'workspace-member';
-    if (type === 'api-token') return 'api-token';
-    if (type === 'system') return 'system';
-    return null;
-  };
-
-  const eventActor = event.actor as Record<string, unknown> | undefined;
-  if (eventActor && typeof eventActor === 'object') {
-    const type = denormalize(eventActor.type);
-    const id = typeof eventActor.id === 'string' ? eventActor.id : null;
-    if (type) return { type, id };
-  }
-
-  const payload = (event.payload ?? {}) as Record<string, unknown>;
-  const payloadActor = payload.actor as Record<string, unknown> | undefined;
-  if (payloadActor && typeof payloadActor === 'object') {
-    const type = denormalize(payloadActor.type);
-    const id = typeof payloadActor.id === 'string' ? payloadActor.id : null;
-    // Raw payload actors without an explicit type are assumed to be
-    // workspace members (the only actor shape that carries a resolvable
-    // email); the resolution still gates on a non-null id.
-    return { type: type ?? 'workspace-member', id };
-  }
-
-  return null;
+function readAttioActor(event: TriggerEvent): { type: string; id: string | null } | null {
+  const actor = firedRecordFields(event)[ATTIO_CHANGE_ACTOR];
+  if (typeof actor !== 'object' || actor === null) return null;
+  const type: unknown = Reflect.get(actor, 'type');
+  const id: unknown = Reflect.get(actor, 'id');
+  return typeof type === 'string' ? { type, id: typeof id === 'string' ? id : null } : null;
 }
 
 function mapAttributeTypeToFieldKind(type: string): SchemaFieldKind {

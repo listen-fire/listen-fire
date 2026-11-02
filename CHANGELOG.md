@@ -87,6 +87,8 @@ named in [`RELEASING.md`](RELEASING.md).
 
 - **An email's record no longer carries Mailgun's signing fields.** `@lf/email` merged the whole inbound form into the email's fields, so Mailgun's `token`, `timestamp` and `signature` reached every run, every write made from the record, and the delivery's kept arrivals. The record now holds only the email's own fields, the module declares them in `inbound.redactFields` so a kept request drops them from its body too, and the other modules with inbound webhooks were checked for the same pattern (none copies signing material into a record).
 
+- **A run a listen fires reads who caused it as its actor again.** In 0.13.0, `@actor_email`, `@actor_name` and `@actor_id` were empty, and no acting user was resolved from the sender, for every run fired by a Granola meeting, an email, a Slack message, reaction or button press, a Telegram or WhatsApp message, or an Attio change. The modules read the actor from the 0.12 event's payload, which a 0.13 run is never handed; they read it from the record that arrived now. `module-kit`'s `firedRecordFields(event)` reads that record's fields for any module. An Attio change keeps Attio's `actor` beside its named fields for this.
+
 ## [0.13.0] - 2026-11-02
 
 A new compatibility key: waiting and listening become traversals, and callbacks retire.

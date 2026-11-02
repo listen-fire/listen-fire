@@ -34,6 +34,7 @@ import type { SourcePosition } from 'movement-engine/public/catalog';
 import type { FileRef, WriteInput } from 'movement-engine/public/adapter';
 
 import { ADAPTER_META_TYPE_ID, isStablePosition, makeMetaPosition, makeStablePosition, makeUnstablePosition, positionRecordId } from 'movement-engine/public/catalog';
+import { arrivalTriggerOf } from 'movement-engine/public/inbound';
 import {
   AttioAdapter,
   ATTIO_LIST_ENTRY_TYPE_ID,
@@ -914,6 +915,11 @@ describe('AttioAdapter — a record’s Changes', () => {
         if (record === undefined) throw Object.assign(new Error('Not found'), { status: 404 });
         return record;
       },
+      // The workspace member a change's actor names, for the run's acting user.
+      fetch: async ({ route }: { route: string }) => {
+        if (route === '/v2/workspace_members/m-1') return { data: { email_address: 'Ada@Fund.example' } };
+        throw Object.assign(new Error('Not found'), { status: 404 });
+      },
     } as unknown as Awaited<ReturnType<typeof import('../api_client').getAttioClient>>;
     (adapter as unknown as { getApiClient: () => Promise<typeof fakeClient> }).getApiClient = async () => fakeClient;
     return adapter;
@@ -969,6 +975,19 @@ describe('AttioAdapter — a record’s Changes', () => {
     });
     expect(arrival!.landing.recordId).toBe(arrival!.identity);
     expect(arrival!.landing.fields['Id']).toBe(arrival!.identity);
+  });
+
+  it('the run a change fires reads the workspace member who made it as its actor', async () => {
+    const adapter = makeChangesAdapter('team-changes-actor', { 'deal-1': deal });
+    const { arrivals } = await adapter.preprocessInbound({ raw: delivery({ event_type: 'record.updated', object_id: 'deals-uuid', record_id: 'deal-1', attribute_id: 'stage-attr' }) });
+    const [arrival] = arrivals;
+    if (arrival === undefined) throw new Error('no change arrived');
+    // The run's trigger, as the host hands it to a run its listen fired.
+    const event = arrivalTriggerOf({ pipelineInputId: 'crm:stage', adapterType: 'attio', arrival, now: new Date() });
+    expect(await adapter.extractActor({ event })).toEqual({ identifier: 'm-1', scheme: 'opaque', adapterType: 'attio', label: 'm-1' });
+    expect(await adapter.getActorCandidates({ event })).toEqual([
+      { identity: { identifier: 'm-1', scheme: 'email', adapterType: 'attio', email: 'ada@fund.example' }, source: 'originator' },
+    ]);
   });
 
   it('a redelivered change names the same identity; the attribute’s next value is another change', async () => {
