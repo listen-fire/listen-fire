@@ -751,7 +751,7 @@ fn check_null_comparison(typing: &mut Typing, op: FilterOperator, left: &Express
             Some(ty) => Some(is_maybe_absent(Some(ty))),
             None => typing.name_may_be_absent(bare_name(subject).unwrap_or("")),
         };
-        if absent != Some(false) {
+        if absent != Some(false) || refused_as_read_through_absent(typing, subject) {
             continue;
         }
         typing.report_with(
@@ -764,6 +764,22 @@ fn check_null_comparison(typing: &mut Typing, op: FilterOperator, left: &Express
             Severity::Info,
         );
     }
+}
+
+/// A field read here refused for reading through a value that may be absent
+/// (`only(…).Text != null`, `c.Text != null` with `c = only(…)`). The read is
+/// typed by the field once its record is there, so the field alone looks
+/// always present; but the test's subject is absent whenever the record is,
+/// so calling the test constant would be wrong, and the refusal already says
+/// what to write.
+fn refused_as_read_through_absent(typing: &Typing, subject: &Expression) -> bool {
+    let Some((root, property)) = direct_field_read(subject) else { return false };
+    let root = quote_name(&root);
+    typing.diagnostics.iter().any(|d| {
+        d.code == codes::ABSENT_REQUIRED
+            && d.span == typing.span
+            && d.read_through.as_ref().is_some_and(|(through, field)| *through == root && *field == property)
+    })
 }
 
 /// `subjectLabel`: a presence test's subject as the author spelled it.

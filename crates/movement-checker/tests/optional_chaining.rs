@@ -189,3 +189,28 @@ fn a_map_member_is_one_entry_however_it_is_spelled() {
         assert!(found.len() == 1 && found[0].starts_with("MOV_ABSENT_REQUIRED"), "{refused}: {found:?}");
     }
 }
+
+/// A presence test of a read refused for reading through a value that may be
+/// missing is not also called constant: the field is always set on a found
+/// record, but the read is absent whenever the record is. The refusal alone
+/// is said, and once the read is `?.` nothing is said.
+#[test]
+fn a_refused_read_is_never_called_an_always_present_test() {
+    let every_code = |body: &str| -> Vec<String> {
+        let source = format!("import {{ at as m }} from adapters\nat = connect m\nfunction go() {{\n{body}\n}}\n");
+        let catalog = CatalogSnapshot::load(CATALOG).unwrap();
+        let options = CheckOptions { upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
+        let found = movement_checker::check_source(&source, &catalog, options).unwrap_or_else(|e| panic!("{source}: {e:?}"));
+        found.into_iter().map(|d| d.code).collect()
+    };
+    for body in [
+        "  t = only(at-[:Tables]->)\n  if (t.Name != null) { return 1 }",
+        "  if (only(at-[:Tables]->).Name != null) { return 1 }",
+        "  if (only(at-[:Tables]->).Name == null) { return 1 }",
+    ] {
+        assert_eq!(every_code(body), ["MOV_ABSENT_REQUIRED"], "{body}");
+    }
+    for body in ["  t = only(at-[:Tables]->)\n  if (t?.Name != null) { return 1 }", "  if (only(at-[:Tables]->)?.Name != null) { return 1 }"] {
+        assert_eq!(every_code(body), Vec::<String>::new(), "{body}");
+    }
+}
