@@ -78,7 +78,7 @@ import { pricedModels } from '@listen-fire/engine/public/embed';
 import { slackModule } from '@listen-fire/slack';
 
 const host = createEmbeddedHost({
-  modules: [crm, slackModule],
+  modules: [crm, { module: slackModule, package: '@lf/slack' }],
   engine: { llm: pricedModels({ client: models }) },
   limits: { maxSteps: 100_000, costCapMicrodollars: 50_000 },
 });
@@ -91,7 +91,8 @@ await host.dispatch('acme', { adapterType: 'crm', arrivals }); // { runs: one ou
 await host.tick();                                          // one outcome per parked run it stepped on
 ```
 
-- **`connect(tenant, { name, module, credential })`.** `name` is what the customer's movement names after `using` (`chat = connect #slack using workspace`). The credential is kept in the host's secrets, under an id only that tenant's runs may name; the module is loaded once per connection, its context built for you.
+- **`modules`.** Your own module is registered bare, and a movement connects it as `#` and its adapter type (`app = connect #crm using workspace`). A ready-made module is registered with the package it comes from, and a movement connects it by that package's name (``team = connect `@lf/slack` using slack_workspace``), as on every host, so a movement written for `listen-fire` runs here unchanged.
+- **`connect(tenant, { name, module, credential })`.** `name` is what the customer's movement names after `using` (`app = connect #crm using workspace`). The credential is kept in the host's secrets, under an id only that tenant's runs may name; the module is loaded once per connection, its context built for you.
 - **`save(tenant, { name, source })`.** Checks the movement against the tenant's catalog and keeps it, pinned to this release (`ENGINE_VERSION`), with the check's plan of each listen (`listen to workspace-[c:Companies WHERE c.Stage == "Lead"]-> fire welcome`). It refuses, by name, a listen this host would not fire as written: one in the retired settings form (`listen to workspace { events: [...] }`); one whose earlier hop has a WHERE the module's arrivals do not carry the record for, which only listen-fire lists members to judge.
 - **`dispatch(tenant, { adapterType, connection?, id?, arrivals })`.** One delivery: what one of the tenant's modules says arrived (adapter protocol 2.6: `{ edge, identity, version?, landing: { recordId?, recordType?, fields }, key?, parents?, notFor?, takenApplied? }`, or `{ edge, key, gone: true }`). Hand each delivery to this one call, once; it is everything listen-fire does with one:
   - **The listens it fires.** Each arrival runs every listen of the tenant's saved movements on that module whose last edge it landed on, of the record type that edge lands on (a landing and each parent state their `recordType`; one that states none runs no listen), and whose WHERE the engine's judge says it meets, with the landing as the fired function's parameter, as listen-fire runs it. With `connection`, only the listens on that connection are judged; without, it is the module's own install's and every connection's are. An arrival whose `notFor` names a listen's pipeline (`listenPipeline`, the same name listen-fire gives it) skips that listen.

@@ -17,10 +17,7 @@ import { Embedding } from '../src/embedding';
 import { fakeModels } from '../src/models';
 import { saasServer } from '../src/server';
 
-const LEADS = `import { crm } from adapters
-import { workspace } from credentials
-
-app = connect crm using workspace
+const LEADS = `app = connect #crm using workspace
 
 function file_lead(run: <manual-[:Invocations]->>) {
   write app-[:Company]-> { Name: "\${run.Text}", Stage: "Prospect" }
@@ -127,10 +124,7 @@ test('an agent builds, fixes and runs a movement over MCP', async () => {
 
 test('a listen the embedded host does not fire as written, saved over MCP all the same, runs nothing when a company arrives, and the host says why', async () => {
   const agent = await connect('globex', 'globex-key');
-  const source = `import { crm } from adapters
-import { workspace } from credentials
-
-app = connect crm using workspace
+  const source = `app = connect #crm using workspace
 
 function greet(company: <app-[:Company]->>) {
   write app-[:Company]-> { Name: "Hello \${company.Name}" }

@@ -17,10 +17,7 @@ import { Embedding } from '../src/embedding';
 import { COMPANY, CompanyStore, companyArrived, crmModule } from '../src/crm';
 import { fakeModels } from '../src/models';
 
-const PRELUDE = `import { crm } from adapters
-import { workspace } from credentials
-
-app = connect crm using workspace
+const PRELUDE = `app = connect #crm using workspace
 `;
 
 /** A movement that files every new company under `stage`. */
@@ -115,10 +112,7 @@ async function messagesIn(fake: FakeChannels): Promise<string[]> {
 }
 
 const ANNOUNCE = `${PRELUDE}
-import { slack } from adapters
-import { slack_workspace } from credentials
-
-team = connect slack using slack_workspace
+team = connect \`@lf/slack\` using slack_workspace
 
 function announce(company: <app-[:Company]->>) {
   general = only(team-[ch:Channels WHERE ch.Name == "general"]->)
@@ -155,9 +149,9 @@ test("a post through the ready-made Slack module lands in that tenant's workspac
   assert.deepEqual(await messagesIn(globexSlack), before);
 });
 
-test('a customer that has not connected Slack cannot save a movement that imports it', async () => {
+test('a customer that has not connected Slack cannot save a movement that connects it', async () => {
   const saas = await embedding();
   const refused = await saas.save('globex', 'announce', ANNOUNCE);
   assert.equal(refused.saved, false);
-  assert.match(refused.saved ? '' : refused.problems.join('\n'), /MOV_IMPORT_UNKNOWN.*'slack'/);
+  assert.match(refused.saved ? '' : refused.problems.join('\n'), /MOV_NAME_UNRESOLVED.*'@lf\/slack' is no adapter here/);
 });

@@ -60,7 +60,7 @@ export class Embedding {
   constructor(options: { models?: ModelClient; limits?: EmbeddedRunLimits; now?: () => Date; log?: EmbeddedHostOptions['log'] } = {}) {
     this.kept = authoringStore(options.now ?? (() => new Date()));
     this.host = createEmbeddedHost({
-      modules: [this.crm, slackModule],
+      modules: [this.crm, { module: slackModule, package: '@lf/slack' }],
       store: this.kept.store,
       limits: options.limits ?? DEFAULT_LIMITS,
       ...(options.now !== undefined ? { now: options.now } : {}),

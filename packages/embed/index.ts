@@ -181,10 +181,22 @@ export interface EmbeddedRunLimits extends SegmentLimits {
   maxSegmentSeconds?: number;
 }
 
+/**
+ * A module the host installs from a package (`@lf/slack`): a program connects
+ * it by the package's name (``connect `@lf/slack` ``), as on every host, so a
+ * program written for listen-fire runs here unchanged. A module of the host's
+ * own, registered bare, is connected as `#` and its adapter type (`connect #crm`).
+ */
+export interface PackagedModule {
+  module: AdapterModuleDefinition;
+  package: string;
+}
+
 export interface EmbeddedHostOptions {
-  /** Every module a tenant may connect. A stored connection names its module
-   *  by adapter type, so the same list loads it again after a restart. */
-  modules: readonly AdapterModuleDefinition[];
+  /** Every module a tenant may connect: the host's own bare, a packaged one
+   *  with its package's name. A stored connection names its module by adapter
+   *  type, so the same list loads it again after a restart. */
+  modules: readonly (AdapterModuleDefinition | PackagedModule)[];
   /** Default: in memory, gone when the process exits. */
   store?: EmbeddedHostStore;
   /** Where each connection's credential is kept. Default: in memory. */
@@ -326,7 +338,9 @@ export function createEmbeddedHost(options: EmbeddedHostOptions): EmbeddedHost {
   const store = options.store ?? memoryEmbeddedHostStore({ now: () => now().getTime() });
   const vault = options.secrets ?? createMemoryVault();
   const secrets = createSecretsFamily({ backend: vault });
-  const modules = new Map(options.modules.map((module) => [module.manifest.adapterType, module]));
+  const registered = options.modules.map((entry) => ('package' in entry ? entry : { module: entry, package: undefined }));
+  const modules = new Map(registered.map(({ module }) => [module.manifest.adapterType, module]));
+  const packages = new Map(registered.flatMap(({ module, package: name }) => (name !== undefined ? [[module.manifest.adapterType, name] as const] : [])));
   const limits = options.limits ?? {};
   // The run host's `manual` unit, unless a module of that type replaces it.
   const manualUnit = modules.has(MANUAL) ? undefined : manualAdapter();
@@ -405,7 +419,8 @@ export function createEmbeddedHost(options: EmbeddedHostOptions): EmbeddedHost {
     for (const connection of connections) {
       const { module, instance } = load(tenant, connection);
       const { schema } = await introspectAdapter(instance.adapter, module.manifest);
-      const entry = adapters.get(connection.adapterType) ?? { manifest: module.manifest, schemas: {} };
+      const installedFrom = packages.get(connection.adapterType);
+      const entry = adapters.get(connection.adapterType) ?? { manifest: module.manifest, schemas: {}, ...(installedFrom !== undefined ? { package: installedFrom } : {}) };
       entry.schemas[connection.name] = schema;
       adapters.set(connection.adapterType, entry);
     }

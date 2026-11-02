@@ -12,10 +12,7 @@ import { FAKE_CALL_MICRODOLLARS, fakeModels } from '../src/models';
 import { saasServer } from '../src/server';
 import { companyArrived } from '../src/crm';
 
-const PRELUDE = `import { crm } from adapters
-import { workspace } from credentials
-
-app = connect crm using workspace
+const PRELUDE = `app = connect #crm using workspace
 `;
 
 const WELCOME = `${PRELUDE}
