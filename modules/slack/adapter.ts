@@ -565,7 +565,7 @@ export class SlackAdapter extends BaseAdapter {
             description:
               'Buttons under the Message text, each `{ Text: "Approve", Value: "approve" }`: ' +
               'Text is the label, Value what a press answers with. Wait for a press with ' +
-              '`await msg-[:Interactions]->`; `only(press-[:Actions]->).Value` is one of the ' +
+              '`await msg-[:Interactions]->`; `only(press-[:Actions]->)?.Value` is one of the ' +
               'Values written. Needs Message text; never with File or Blocks.',
           },
           {

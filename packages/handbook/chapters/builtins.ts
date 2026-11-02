@@ -69,7 +69,7 @@ function m(evt: <crm-[:CompanyChange]->>) {
     oldest = List.last(sort(names))
     head   = sort(names)[0]
     write co {
-      Description: "\${n} people, \${Text.join(sort(names), ", ")}, \${coalesce(owner.Name, "no CEO")}, \${coalesce(newest, "")}/\${coalesce(oldest, "")}/\${coalesce(head, "")}"
+      Description: "\${n} people, \${Text.join(sort(names), ", ")}, \${coalesce(owner?.Name, "no CEO")}, \${coalesce(newest, "")}/\${coalesce(oldest, "")}/\${coalesce(head, "")}"
     }
   }
 }

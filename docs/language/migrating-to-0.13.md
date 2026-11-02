@@ -114,7 +114,7 @@ function `Approve Or Reject`(go: <manual-[:Invocation]->>) {
   r = race(
     () => {
       press = await msg-[:Interactions]->
-      return only(press-[:Actions]->).Value
+      return only(press-[:Actions]->)?.Value
     },
     () => { await sleep(1d) },
   )
@@ -430,7 +430,7 @@ function ask_lunch(t: <cron-[:Ticks]->>) {
 function count_vote(press: <chat-[:Interaction]->>) {
   poll = only(press-[:Message]->)
   if (poll == null) { fail("a press with no message") }
-  answer = only(press-[:Actions]->).Value
+  answer = only(press-[:Actions]->)?.Value
   if (answer == null) { fail("a press with no answer") }
   person = only(press-[:By]->)
   if (person == null) { fail("a press by no one") }

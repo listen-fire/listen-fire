@@ -88,7 +88,7 @@ export const TS_EXCEPT: readonly FrontEntry[] = [
   {
     anchor: 'maybe-absent',
     title: 'Absent, not undefined',
-    text: 'No `undefined`, `??` or `?.`. What might not be there (`first`, `only`, `xs[i]`, `extractOne`, a named `match`) is `T | absent`, refused where a value is required (arithmetic included) until narrowed: `if (x == null) { fail("…") }`, `coalesce(x, fallback)`, or `Field ?: x` in a write.',
+    text: 'No `undefined` or `??`. What may be missing (`first`, `only`, `xs[i]`, `extractOne`, a named `match`) is `T | absent`. `x?.F` reads through it, absent when `x` is; `x.F` and arithmetic are refused until narrowed: `if (x == null) { fail("…") }`, `coalesce(x, fallback)`, `Field ?: x`.',
     example: {
       body: 'co = only(crm-[c:Companies WHERE c.Name == m.Subject]->)\nif (co == null) { fail("no company ${m.Subject}") }\nseen = match crm-[:People]-> { unique by (Email), Email: m.From }\nif (seen != null) { link seen -[:Company]-> co }',
     },

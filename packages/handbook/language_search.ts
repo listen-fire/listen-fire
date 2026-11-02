@@ -79,7 +79,7 @@ export const CONTROL_FORMS: readonly ControlForm[] = [
     signature: 'race(() => { … }, …) → receipt; r[i] is arm i\'s returned value, null unless it settled first',
     purpose: 'wait for whichever of several things happens first, such as an answer or a timeout',
     example: {
-      body: 'ops = only(chat-[c:Channels WHERE c.Name == "ops"]->)\nif (ops == null) { fail("no #ops channel") }\nmsg = write ops-[:Messages]-> {\n  Message: "Log ${m.Subject}?"\n  Buttons: [{ Text: "Log", Value: "log" }, { Text: "Skip", Value: "skip" }]\n}\nr = race(\n  () => {\n    press = await msg-[:Interactions]->\n    return only(press-[:Actions]->).Value\n  },\n  () => { await sleep(2d) },\n)\napproved = r[0] == "log"',
+      body: 'ops = only(chat-[c:Channels WHERE c.Name == "ops"]->)\nif (ops == null) { fail("no #ops channel") }\nmsg = write ops-[:Messages]-> {\n  Message: "Log ${m.Subject}?"\n  Buttons: [{ Text: "Log", Value: "log" }, { Text: "Skip", Value: "skip" }]\n}\nr = race(\n  () => {\n    press = await msg-[:Interactions]->\n    return only(press-[:Actions]->)?.Value\n  },\n  () => { await sleep(2d) },\n)\napproved = r[0] == "log"',
     },
     anchor: 'front#runs',
   },

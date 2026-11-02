@@ -20,7 +20,7 @@ msg = write deals-[:Messages]-> {
 r = race(
   () => {
     press = await msg-[:Interactions]->
-    return only(press-[:Actions]->).Value
+    return only(press-[:Actions]->)?.Value
   },
   () => { await sleep(2d) },
 )
@@ -81,7 +81,7 @@ msg = write approvals-[:Messages]-> {
 r = race(
   () => {
     press = await msg-[:Interactions]->
-    return only(press-[:Actions]->).Value
+    return only(press-[:Actions]->)?.Value
   },
   () => { await sleep(1d) },
 )
@@ -221,7 +221,7 @@ A deadline, a reminder and an escalation are all **composed** from \`race\` and 
 r = race(
   () => {
     press = await msg-[:Interactions]->
-    return only(press-[:Actions]->).Value
+    return only(press-[:Actions]->)?.Value
   },
   () => {
     await sleep(6h)
@@ -421,7 +421,7 @@ function \`Pursue Or Pass\`(go: <manual-[:Invocation]->>) {
   r = race(
     () => {
       press = await msg-[:Interactions]->
-      return only(press-[:Actions]->).Value
+      return only(press-[:Actions]->)?.Value
     },
     () => {
       await sleep(6h)

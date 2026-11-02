@@ -78,7 +78,7 @@ function \`Notify Company Change\`(evt: <crm-[:CompanyChange]->>) {
 ### Pitfalls
 
 - **A flag set inside a block to detect presence.** A binding means one thing everywhere it is visible, so re-using an outer name inside a block is refused when you save. Nothing needs the flag: the block already runs once per position and not at all when there are none, so the block itself *is* the "has one" branch; pair it with \`if (!exists(msg-[:Attachments]->)) { … }\` for "has none". \`count(…)\` for how many, \`exists(…)\` for whether-any.
-- **Binding a field just to test it.** Compare a field off a record directly — \`if (x.Field != null) { … }\`, \`if (x.Field == null) { fail("…") }\` — and that narrows that field, and the record it came off, for what follows.
+- **Binding a field just to test it.** Compare a field off a record directly — \`if (x?.Field != null) { … }\`, \`if (x?.Field == null) { fail("…") }\` — and that narrows that field, and the record it came off, for what follows. \`?.\` reads through a record that may be absent; on one that is present, \`x.Field\` tests the same.
 - **Using \`fail(…)\` for an ordinary skip.** A plain \`if\` with no \`else\` already does nothing; keep \`fail(…)\` for failures worth surfacing.`,
   engineClaims: [
     {
