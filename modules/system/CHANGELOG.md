@@ -1,5 +1,11 @@
 # @listen-fire/system
 
+## 0.14.2
+
+### Patch Changes
+
+- 134ef2f: The core peer floor is now `>=0.13.1`. The handbook section's examples connects a module with no import, which 0.13.0 does not read, so a 0.13.0 host installed it cleanly and then failed on its examples.
+
 ## 0.14.1
 
 ### Patch Changes
