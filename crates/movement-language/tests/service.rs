@@ -90,6 +90,46 @@ fn fields_follow_a_dot_and_a_backtick() {
 }
 
 #[test]
+fn fields_follow_optional_chaining_as_they_follow_a_dot() {
+    let (text, pos) = typed(PROGRAM, "  greeting = Text.upper(run.`Text`)\n", "  y = run?.");
+    let items = service().complete(&text, pos);
+    assert_eq!(labels(&items), ["Text", "Run by (name)"]);
+    assert_eq!(items[1].insert.as_deref(), Some("`Run by (name)`"));
+    let (text, pos) = typed(PROGRAM, "  greeting = Text.upper(run.`Text`)\n", "  y = run?.`Ru");
+    let items = service().complete(&text, pos);
+    assert!(labels(&items).contains(&"Run by (name)"));
+    // `?.` never precedes a call: a namespace offers nothing after it.
+    let (text, pos) = typed(PROGRAM, "  greeting = Text.upper(run.`Text`)\n", "  y = Text?.");
+    assert!(!labels(&service().complete(&text, pos)).contains(&"upper"));
+}
+
+/// A change's rows: `Previous` and `Current`, each a record that may be missing.
+const CHANGE_CATALOG: &str = r#"{"adapters":{"at":{"canFire":false,"constructionArgs":[],"schemas":{"":{"positions":{
+  "Table":{"properties":{"Name":"text"},"edges":{"Changes":{"target":"Change","readable":false,"listenable":true,"identity":"Id"}}},
+  "Change":{"properties":{"Id":"text",
+    "Current":{"kind":"maybeAbsent","of":{"kind":"record","position":{"kind":"position","position":"Row"}}},
+    "Previous":{"kind":"maybeAbsent","of":{"kind":"record","position":{"kind":"position","position":"Row"}}}},"edges":{}},
+  "Row":{"properties":{"Stage":"text","Score":"number"},"edges":{}}},
+  "collections":{"Tables":{"target":"Table"}},"writableRoots":{}}}}},"credentials":{},"plugins":{}}"#;
+
+#[test]
+fn a_held_record_offers_its_fields_after_optional_chaining() {
+    let change = Service::new(CatalogSnapshot::load(CHANGE_CATALOG).unwrap());
+    let head = "import { at as at_module } from adapters\nat = connect at_module\nfunction f(c: <at-[:Change]->>) {\n";
+    let fields = |written: &str| {
+        let text = format!("{head}  x = {written}");
+        let pos = Pos { line: 3, character: text.rsplit('\n').next().unwrap().encode_utf16().count() as u32 };
+        labels(&change.complete(&format!("{text}\n  return 1\n}}\n"), pos)).into_iter().map(String::from).collect::<Vec<_>>()
+    };
+    let whole = format!("{head}  x = c.Id\n  return 1\n}}\n");
+    assert!(change.diagnostics(&whole).iter().all(|d| d.severity != DiagSeverity::Error), "{:?}", change.diagnostics(&whole));
+    assert_eq!(fields("c."), ["Id", "Current", "Previous"]);
+    assert_eq!(fields("c?."), fields("c."));
+    assert_eq!(fields("c.Previous."), ["Stage", "Score"]);
+    assert_eq!(fields("c.Previous?."), fields("c.Previous."));
+}
+
+#[test]
 fn fields_follow_a_hop_alias() {
     let (text, pos) = typed(PROGRAM, "  ms = c-[m:Messages WHERE m.", "");
     let items = service().complete(&text, pos);

@@ -90,7 +90,7 @@ fn context_of(text: &Text<'_>, pos: Pos) -> (Context, Option<Range>) {
         let start = Pos { line: pos.line, character: utf16_len(&line[..open + 1]) as u32 };
         let replace = Some(Range { start, end: pos });
         let pre = &line[..open];
-        if let Some(receiver) = pre.strip_suffix('.') {
+        if let Some(receiver) = field_receiver(pre) {
             return (Context::Field { receiver: format!("{above}{receiver}"), backtick: true }, replace);
         }
         if let Some(receiver) = hop_receiver(pre) {
@@ -100,11 +100,13 @@ fn context_of(text: &Text<'_>, pos: Pos) -> (Context, Option<Range>) {
     }
     let partial = trailing_word(line);
     let pre = &line[..line.len() - partial.len()];
-    if let Some(receiver) = pre.strip_suffix('.') {
-        let name = walk::trailing_name(receiver).unwrap_or_default();
-        if builtins::namespaces().contains(&name.as_str()) {
-            return (Context::Member { namespace: name }, None);
-        }
+    // A namespace's member follows a plain dot: `?.` never precedes a call.
+    if let Some(name) = pre.strip_suffix('.').and_then(walk::trailing_name)
+        && builtins::namespaces().contains(&name.as_str())
+    {
+        return (Context::Member { namespace: name }, None);
+    }
+    if let Some(receiver) = field_receiver(pre) {
         return (Context::Field { receiver: format!("{above}{receiver}"), backtick: false }, None);
     }
     if let Some(receiver) = hop_receiver(pre) {
@@ -124,6 +126,13 @@ fn context_of(text: &Text<'_>, pos: Pos) -> (Context, Option<Range>) {
         return (Context::Credential { module: module.to_string() }, None);
     }
     (brace_context(&everything_before, &text.after(pos)).unwrap_or(Context::Name), None)
+}
+
+/// `pre` ends a field read's dot, `x.` or `x?.`: the receiver is the text
+/// before it. `x?.F` reads the fields `x.F` does.
+fn field_receiver(pre: &str) -> Option<&str> {
+    let receiver = pre.strip_suffix('.')?;
+    Some(receiver.strip_suffix('?').unwrap_or(receiver))
 }
 
 /// The line is a listen's: `listen to x-[…` or `listen as "…" to x-[…`.
