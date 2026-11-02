@@ -1,5 +1,37 @@
 # @listen-fire/airtable
 
+## 0.13.0
+
+### Minor Changes
+
+- c57641a: Airtable is listened to on a table's `Changes`, walked to by name (`listen to at-[b:Bases WHERE b.Name == "Finance"]->-[t:Tables WHERE t.Name == "Expenses"]->-[c:Changes WHERE c.Kind == "created"]-> fire review`). A change is one per row an edit touched (`Kind`, and the row before and after as `Previous` and `Current`, read through with `.` once tested present (`exists(c.Current) AND c.Current.Stage == …`; a created row has no `Previous`) and typed by the table's fields when the listen narrows to one table: `Candidates Change`), and its `Record` is the row as it is now, read from Airtable. One data webhook per base a listen's tables are in, over all its tables however many the listen watches (`Changes` declares `scopedBy: "Bases"`; at a connection positioned at its base it is delivered to the connection), and one schema webhook (`tableMetadata`) per base whose tables a listen narrows: 2 per base, the most Airtable lets one OAuth integration make, which the fake Airtable now enforces (a third live webhook on a base is refused); `Tables` declares `membersChange: "pushed"`, so a table renamed into the WHERE is watched from the rename. `Bases` is cheap to list and listed again hourly. A run can wait on a table's next change (`awaitKeys`). Adapter protocol 2.6. The root's `Base` collection is now `Bases`; `Record Change`, `listenConfig`, `subscribableEvents`, `subscriptionScopeKeys` and `listEventTypes` are gone, and a 0.12 settings listen is rewritten by `listen-fire upgrade`, keeping its meaning (`field` as `c.Current.F != c.Previous.F`, with `becomes` as `c.Current.F == v AND c.Previous.F != v`; the parameter retyped to the table's changes). A cell an update empties is absent from `Current`. Every cell of `Current` and `Previous` is the value its field declares (a collaborator by its email, a select by its name, a lookup as its values), so a listen compares them by value; attachments stay as Airtable sends them, and a `field` naming one is rewritten without `safe`. A registration with no webhook held first deletes any webhook left at its door, as Airtable keeps a lapsed one 7 days; a host must give each tenant connection a door URL of its own, or one tenant's registration deletes another's webhooks. A base's `Tables` and the root's `Bases` are read from Airtable each time they are listed, so a listen listed again sees a rename at once. A base holding a table named `Base`, `Table`, `Change`, `Row` or `Tables`, or one named as another table's changes (`Candidates Change`), or a table with a link field named `Changes`, is refused where it is described, naming what to rename. The module has a handbook section. The fake Airtable models schema webhooks, renames a table (`POST /airtable/control/rename-table`) or a base (`/rename-base`), and makes a table (`/create-table`).
+
+### Patch Changes
+
+- c4af6cc: `Bases` and a base's `Tables` declare how a listen learns their members changed in one member: `Bases` `membersChange: { relistEverySeconds: 3600 }`, `Tables` `membersChange: "pushed"` (where they declared `cheapToList` with `relistEverySeconds` or `parentChanges`).
+- 4c09d6a: Airtable refusing a credential fails the call at once, where before every failure was retried as if transient, for over two minutes, saying nothing (`listen-fire check` with a placeholder token hung). A 401 is refreshed once where the host can, then answered as `credential_refused`, naming what Airtable said. Any other status no retry can change (a 403, a 404, a 422) fails at once, naming the status. Only a 429, a 5xx or a network error is sent again, through module-kit's shared `retryingFetch`: at most 5 attempts within 45 s of waiting, a 429 waiting Airtable's documented 30 s penalty, and then a failure naming the status, the attempts and the wait.
+  
+  module-kit: `CredentialRefusedError`, thrown by a module served through the kit, answers the protocol's `credential_refused` (not retryable), on which the calling host refreshes the credential and retries the call once. `retryingFetch` takes `rateLimitWaitMs`, the wait before retrying a 429 that names no Retry-After.
+- Updated dependencies [4c09d6a]
+- Updated dependencies [faa7050]
+- Updated dependencies [acec0bd]
+- Updated dependencies [301dab3]
+- Updated dependencies [3c2774e]
+- Updated dependencies [dd81bed]
+- Updated dependencies [c4af6cc]
+- Updated dependencies [a942076]
+- Updated dependencies [46efd84]
+- Updated dependencies [9520af9]
+- Updated dependencies [9e9316c]
+- Updated dependencies [5bfc3f2]
+- Updated dependencies [66d32d5]
+- Updated dependencies [16e3776]
+- Updated dependencies [16e3776]
+- Updated dependencies [da1a05b]
+- Updated dependencies [abc777e]
+- Updated dependencies [ad23b9c]
+  - @listen-fire/module-kit@0.13.0
+
 ## 0.12.7
 
 ### Patch Changes

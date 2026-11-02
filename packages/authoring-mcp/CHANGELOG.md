@@ -1,5 +1,25 @@
 # @listen-fire/authoring-mcp
 
+## 0.13.0
+
+### Minor Changes
+
+- 522f9cf: A save hands its host `listens`, the plan of each listen as the engine's check answers it against the tenant's catalog, replacing `listeners`; a host routes arrivals by them (`plannedListensOf`, `listenFires`). `runnable` means a listen on the manual unit (`listen to manual-[:Invocations]-> fire f`), a save whose traversal listens do not all check warns how many will not fire, and the digest spells a run host unit's listen as a traversal.
+
+### Patch Changes
+
+- 66d32d5: The digest of a connected system names an owned scalar by its name (`Cron`), where a module declares a field of kind `owned`. A root that cannot be listed (a write-only or listen-only collection) is no longer marked readable.
+- Updated dependencies [c57641a]
+- Updated dependencies [cf98af4]
+- Updated dependencies [0801793]
+- Updated dependencies [75ea8a3]
+- Updated dependencies [28f6d44]
+- Updated dependencies [16e3776]
+- Updated dependencies [1e85960]
+- Updated dependencies [1a80e92]
+- Updated dependencies [37ad00c]
+  - @listen-fire/handbook@0.13.0
+
 ## 0.12.8
 
 ### Patch Changes

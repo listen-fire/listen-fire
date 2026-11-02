@@ -20,7 +20,7 @@ named in [`RELEASING.md`](RELEASING.md).
 
 <!-- add merged PRs here -->
 
-### 0.13.0
+## [0.13.0] - 2026-11-02
 
 A new compatibility key: waiting and listening become traversals, and callbacks retire.
 
@@ -33,7 +33,7 @@ A new compatibility key: waiting and listening become traversals, and callbacks 
 - **For lf-platform, store modules and embedders.** Adapter protocol 2.6, the store slot's new and reshaped methods, and the host and module changes are collected in one list: [docs/contracts/platform-adoption-0.13.md](docs/contracts/platform-adoption-0.13.md).
 - **Known gaps.** Two reads are not refused yet: a field read off a graph record that may be missing (`x = only(…)`, then `x.Name`), and an index read of a held value that may be missing (`l[1].Stage`). Optional chaining (`?.`) is not in 0.13; a later release adds it with both refusals. Deferred past 0.13 as well: retiring the loop guard slot (0.13 never asks it, see below); recognising an `Arrival Not Judged` by its landing's `Kind`, where 0.13 recognises the id the system module minted; letting a run's walk read an earlier hop's alias and a listen hop onto a union, which 0.13 refuses (`MOV_HOP_READS_EARLIER_HOP`, `MOV_LISTEN_UNION_HOP`).
 
-#### Changed
+### Changed
 
 - **Breaking: a field is never read through a value that may be absent**, as TypeScript's strict null checks refuse `x.F` where `x` may be undefined. A change's row before and after (`c.Previous` is absent on a created row, `c.Current` on a deleted one), a name bound to one (`r = c.Previous`) and a map member that may be absent (`d.a`) are refused where a field is read through them (`MOV_ABSENT_REQUIRED`), in a function and in a listen's or a hop's `WHERE`. In 0.12 the read answered absent and checked clean, so `c.Current.Stage == "Interview" AND c.Previous.Stage != "Interview"` read through an absent row unseen. The way around it is to test the value first:
   - `exists(c.Previous) AND c.Previous.Stage == "Applied"`: `exists(x)` proves `x` present in the right side of `AND` (`&&` in a function);
@@ -150,7 +150,7 @@ A new compatibility key: waiting and listening become traversals, and callbacks 
   - What the embedded host still does not do: there is no loop breaker (a listen whose run writes what it listens to fires on its own write), and a listen whose earlier hop only listen-fire lists members for is refused, not re-resolved.
   - `@listen-fire/authoring-mcp`: a save hands its host `listens` (the plans, against the tenant's catalog), replacing `listeners`; `runnable` is a listen on the manual unit; a save whose traversal listens do not all check warns how many will not fire.
 
-#### Added
+### Added
 
 - A module's field may hold a record (`kind: "record"`, `record: { typeId }`): a value, not a reference, like a change's row before and after (`Current`, `Previous`). It reaches the catalog as the `record` field type with its position named (`{ "kind": "record", "position": { "kind": "position", "position": "Candidates" } }`: the checker's position reference, its instance the schema's own), and a field any record may lack says `mayBeAbsent` (`{ "kind": "maybeAbsent", "of": … }`). A dot read goes on through it as the record it is: `c.Current.Stage` is checked against that record's fields (`c.Current.Stge` is `MOV_UNKNOWN_PROPERTY`, naming them) and typed as its field, maybe absent where the record may be. It reads the same in a listen's `WHERE`, judged on both hosts from what the arrival carries, and in a body. `MOV_READ_THROUGH_FIELD` still refuses reading on past any other field, and an edge stays an edge: reading through it would hide a fetch. What such a field holds has its own type, TypeScript's plain object type: its fields, typed, and nothing else. It reads the same bound to a name (`r = c.Current`, then `r.Stage`), and where it may be absent the name may be too (`r.Score + 1` asks for a guard). It has no edges and no identity, so it is never walked off (`c.Current-[:X]->`, `r-[:X]->` and a block headed `r-[:X]->` are `MOV_WALK_OFF_HELD_RECORD`, pointing at the live record: `c-[:Record]->-[:X]->`), never written (`write r { … }` is `MOV_WRITE_POSITION_NOT_RECORD`), and never passed where a record is asked for (`g(c.Current)` into `<at-[:Candidates]->>` is `MOV_CALL_ARG_TYPE`); an edge's name read off it (`c.Current.Role`) points at the live record too. Its live record is an edge the module declares. Why: a change carries its row as it was and as it is, and a listen compares them (`c.Current.Stage == "Interview" AND c.Previous.Stage != "Interview"`) without a fetch, which a listen's `WHERE` may not make. Describe refuses a `record` field naming no type, in the same words in `listen-fire` and an embedder's describe. `listen-arrivals.json` gains the cases.
 - A narrowed record is accepted where the type it narrows is asked for. Assignability follows the narrowing walk that made the record, not its fields one by one, so it is not TypeScript's structural assignability: a function typed by every table's changes (`<hiring-[:Change]->>`) takes what a listen narrowed to one table fires (`Candidates Change`), and a table a WHERE selected passes where a `Table` is asked for. The narrowing is the record's derivation, followed hop by hop: an edge off a narrowed record lands on what narrows the same edge's landing off the type it narrows (the changes of one table narrow every table's changes; the live row of one of them narrows any row). Never the other way: a change of any table is still refused where one table's is asked for (`MOV_LISTEN_PARAM_MISMATCH`, `MOV_CALL_ARG_TYPE`). A record typed by its narrowed name alone (`<hiring-[:`Candidates Change`]->>`) carries no derivation, so it passes only where that name is asked for. Why: the per-table name is the precise spelling, and a generic function over every table's changes should not have to be written once per table.
@@ -329,7 +329,7 @@ A new compatibility key: waiting and listening become traversals, and callbacks 
   - A configured loop guard (`core: { loopGuard }`) is still told of each write but never asked whether an arrival is an echo (`guard.isEcho`): an operator running one loses its echo suppression, and the loop breaker replaces it. The slot retires in a later release.
   - Why: `suppress_self` leaves the language; the host protects every listen from loops, guard or none, and a loop that would run forever stops loudly. An arrival seconds after a write is the write's; later, a person more likely acted.
 
-#### Removed
+### Removed
 
 - `cron`, `manual`, `@lf/email`, `@lf/webhook`, `@lf/github`, `@lf/gmail`, `@lf/granola`, `@lf/dealroom`, `@lf/evertrace`, `@lf/stripe`, `@lf/attio`, `@lf/affinity`, `@lf/airtable`, `@lf/telegram`, `@lf/whatsapp` and `@lf/slack` declare no `listenConfig`, `subscribableEvents`, `fires` or event types: each listens on its edge.
 - Embedders: the Rust embed's `Listen` (`embed::listens`) loses `events` for `path` and `edge`: the traversal as written (`world-[m:Monsters WHERE m.Level > 3]->`) and the edge it ends on, which an embedder routes an arrival by. A listen in the settings form is left out. `events` was read from a settings listen's `events:`, so it was always empty for a program that checks under 0.13.
@@ -389,7 +389,7 @@ A new compatibility key: waiting and listening become traversals, and callbacks 
 - The Telegram and WhatsApp handbook sections, and their `Reply Markup` and `Interactive` field descriptions, teach a url button that opens a form from `@lf/forms`, in place of a callback id on the button.
   - A `callback_data` or reply button's tap reaches no run until those modules report taps as `Interactions`, as Slack does.
 
-#### Checks
+### Checks
 
 - A stated landing type names a declared node (`MOV_UNKNOWN_TYPE_NAME`), types only a landing its module leaves untyped (`MOV_LISTEN_SHAPE_MISMATCH`), and the fired parameter must be assignable to it (`MOV_LISTEN_SHAPE_MISMATCH`, `MOV_LISTEN_PARAM_MISMATCH`). A function typed by a node on an untyped landing whose type the listen does not state is refused, naming the annotation to write (`MOV_LISTEN_PARAM_MISMATCH`).
 - `MOV_LISTEN_SETTINGS_RETIRED` rewrites a `type` key (`payload: <Payment>`) as the stated landing (`-[:Requests]-><Payment>`), and a listen with no settings (`listen to manual fire f`, `listen to x {}`) as the module's mapped edge. It offers no rewrite whose path would range over an unbounded edge with nothing on a field that bounds it (a keyless email listen).
@@ -432,7 +432,7 @@ A new compatibility key: waiting and listening become traversals, and callbacks 
   - It is an error under every pin. A file pinned to `0.13` that still holds one is rewritten by `listen-fire upgrade` as one pinned to `0.12` is.
 - A `race` or `all` slot holds the record its arm returns, typed as that record: a read of a field it lacks is refused (`MOV_UNKNOWN_PROPERTY`), and a comparison is held to the field's type. The slot was untyped, so `r[0].Missing` and `r[0].Note == 1` checked clean, and failed or misread at run.
 
-#### Fixed
+### Fixed
 
 - A polled listen first polled by `listen-fire run --poll` is polled by every drain and by `serve` after it. Before, `run --poll` kept the listen's checkpoint without queueing its poll, and the drains took the checkpoint to mean the poll was queued, so the listen was never polled again, silently. The same holds for a shared poll of a listenable edge, and on a Postgres store a poll whose listens left and came back is armed again. An edge that declares `cursor: false` fires only what is new on the poll after its arming poll, not everything it listed before (the arming poll keeps a receipt for each listen and record it saw; an edge with a cursor keeps none, as its cursor holds the backlog back).
 - A module with no install (no `module:`-only entry and no hand-written one) no longer takes the fields of a user's credential for it as its install's (the secret that signs its calls). `listen-fire` took the first entry naming the module when it had no install, which could be a person's own credential.
@@ -2850,7 +2850,8 @@ Releases before v0.11 are kept one file per minor line, newest first:
 - [v0.2.x](docs/changelog/v0.2.md) (v0.2.0)
 - [v0.1.x](docs/changelog/v0.1.md) (v0.1.0 to v0.1.2)
 
-[Unreleased]: https://github.com/listen-fire/listen-fire/compare/v0.12.13...HEAD
+[Unreleased]: https://github.com/listen-fire/listen-fire/compare/v0.13.0...HEAD
+[0.13.0]: https://github.com/listen-fire/listen-fire/compare/v0.12.13...v0.13.0
 [0.12.13]: https://github.com/listen-fire/listen-fire/compare/v0.12.12...v0.12.13
 [0.12.12]: https://github.com/listen-fire/listen-fire/compare/v0.12.11...v0.12.12
 [0.12.11]: https://github.com/listen-fire/listen-fire/compare/v0.12.10...v0.12.11

@@ -1,5 +1,34 @@
 # @listen-fire/webhook
 
+## 0.13.0
+
+### Minor Changes
+
+- acec0bd: A replayed request (`listen-fire listens replay`) reaches a module that checks its own requests with `replayed: true` (adapter protocol 2.6), read by module-kit's `inboundRequest` from the host's call alone, never from a header, the query or the body. `@lf/stripe`, `@lf/webhook`, `@lf/whatsapp` and `@lf/email` skip their signature and timestamp checks for it. A kept request holds only the headers a module names in `inbound.captureHeaders`, never a signature: `@lf/email` names `svix-id` (which tells a Resend notification from a Mailgun post), `@lf/forms` names `content-type`; the others need none (docs/contracts/adapter-protocol.md).
+- 1e85960: Each delivery arrives on the connection's `Requests` edge, its body untyped JSON, and the listen states the node it is: `listen to stripe-[:Requests]-><Payment> fire f`. The module declares how a 0.12 `listen to stripe { payload: <Payment> }` becomes it (`listenSettingsBecome`), and no longer declares `listenConfig`, a `fires` edge or event types. A delivery the sender names by an id (Stripe's `id`, the credential's `idField`) is that arrival's identity; one it names by nothing is its own. Adapter protocol 2.6.
+
+### Patch Changes
+
+- Updated dependencies [4c09d6a]
+- Updated dependencies [faa7050]
+- Updated dependencies [acec0bd]
+- Updated dependencies [301dab3]
+- Updated dependencies [3c2774e]
+- Updated dependencies [dd81bed]
+- Updated dependencies [c4af6cc]
+- Updated dependencies [a942076]
+- Updated dependencies [46efd84]
+- Updated dependencies [9520af9]
+- Updated dependencies [9e9316c]
+- Updated dependencies [5bfc3f2]
+- Updated dependencies [66d32d5]
+- Updated dependencies [16e3776]
+- Updated dependencies [16e3776]
+- Updated dependencies [da1a05b]
+- Updated dependencies [abc777e]
+- Updated dependencies [ad23b9c]
+  - @listen-fire/module-kit@0.13.0
+
 ## 0.12.9
 
 ### Patch Changes

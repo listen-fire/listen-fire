@@ -1,5 +1,44 @@
 # @listen-fire/slack
 
+## 0.13.0
+
+### Minor Changes
+
+- 1a80e92: A message write takes `Buttons` (`[{ Text, Value }]`), posted as the message text and one button per entry, and a run waits for a press with `await msg-[:Interactions]->`. A press is an `Interaction { Id, At }` with its `Actions` (`Action { Value, Text }`) and the member who pressed (`By`); the `Value` is typed by the Values the buttons were written with. `Replies` takes the first reply already in the thread or the next to arrive, and a deleted message ends either wait. The module speaks adapter protocol 2.5 (`awaitKeys`, and presses, thread replies and deletions reported as arrivals with the delivery) in place of `resolveAwait` and `wakeKeys`, and so needs a listen-fire that reads form-encoded deliveries: Slack posts a press as `payload=<json>`. A button without its `Text` or `Value`, or past Slack's limits (25 buttons, 75 characters on a label, 2000 in a value, 3000 of message text above them), is refused naming it. A thread reply that mentions the app arrives once on `Replies`, though Slack sends it as a message and a mention. The handbook section teaches buttons and waits; callback ids in Block Kit are no longer taught.
+- 64aae54: Slack is listened to on the edge each record arrives on, each landing on its own record type: a channel's `Messages`, a message's `Reactions` and its `Interactions` (``listen to chat-[ch:Channels WHERE ch.Name IN ["deals"]]->-[m:Messages WHERE m.`Mentions App` == true]-> fire f``). A message and a reaction arrive carrying their channel (named from the cached channel read), a press carrying its channel and the message pressed, so a listen's filter on them is judged on the arrival with nothing listed; a reaction does not carry its message. A message written with `Buttons` may carry a `Topic`, stored as the id of the block its buttons sit in (`lf:<topic>`) and read back from there, so ``listen to chat-[:Channels]->-[m:Messages WHERE m.Topic == "lunch-poll"]->-[:Interactions]-> fire f`` runs once per press on any message that has it; a `Topic` without `Buttons` is refused by name. A message gains `Id` (`channel:ts`), `Topic` and `Mentions App`; a press walks to its `Message`; a message a run writes is handed `channel:ts` as its id. A delivery's lookups (the channel's name, the app's bot user) are bounded and never hold the delivery (`SLACK_LOOKUP_TIMEOUT_MS`, `SLACK_LOOKUP_RETRIES`, `SLACK_LOOKUP_FAILURE_CACHE_MS`; README). Block ids starting `lf:` are reserved for a `Topic`. Adapter protocol 2.6. It declares how a 0.12 `listen to chat { channels, events }` becomes a traversal (`listenSettingsBecome`). `listEventTypes`, the `fires` edges, `subscribableEvents`, `listenConfig` and `slackInboundEvents` are gone: `preprocessInbound` answers `arrivals`, no events.
+- 28f6d44: `Replies` declares `listenable: true` (a reply named by its record id, its channel and `ts`) in place of the retired `awaitable` and `watchable`, as the 0.13 line requires. `await m-[:Replies]->` waits for a new reply as before. The core peers now start at 0.13.0: a 0.12 host does not know `listenable`, and would drop it, leaving `Replies` an edge nothing can wait on.
+- acec0bd: Slack names the fields it could not read on an arrival (`unknown`, adapter protocol 2.6), so a listen whose filter reads one is reported undecided rather than skipped: a message's `Mentions App` when it cannot read the app's bot user (`auth.test`), and a carried channel's `Name` when it cannot read the channel (`conversations.info`), instead of guessing or dropping the channel.
+
+### Patch Changes
+
+- cf98af4: Examples wait with `await x-[:E]->` in place of the retired `await first(x-[:E]->)`, which a 0.13 check respells. The handbook drops its common-mistakes entry against writing `await` before a bare walk, which is now the form.
+- 16e3776: A module's inbound declaration may name `redactFields`: the body and query fields that may carry a credential, dropped before a request is kept (a JSON body's own members, a form's fields and the members of a JSON object a form field holds, and the query's parameters). A body that names none is kept byte for byte. `@lf/slack` names its legacy verification `token`. A header whose name holds `token`, `key`, `auth`, `hmac` or `password` is never kept.
+- c4af6cc: `listen-fire upgrade` never applies a rewrite that hears otherwise than the 0.12 listen did, unasked. Affinity: a listen naming `organization.updated` (or a person's or an opportunity's) is told that `Kind == "updated"` also hears each field value set or cleared on the record, which 0.12 heard only as field_value events, with the remedy `AND c.Field == null`, and is rewritten only under `--all`. Slack: a `message` or `app_mention` listen heard thread replies too, which now arrive on their root message's `Replies`, so it has no rewrite and is told to write one listen for each edge; a `reaction_added` listen is still rewritten onto `Reactions`. GitHub: `participating: false` heard every thread in 0.12, so it now compares nothing (`participating: true` is still `n.Participating == true`). Gmail: a `label_added` listen is told that a label removed and added again now runs it again, and is rewritten only under `--all`; and a 0.12 program reading `Labels` is warned on the upgrade (`MOV_FIELD_MEANING_CHANGED`) that it holds label names where it held ids.
+- 75ea8a3: The Slack handbook section says a message deleted while a run waits on it leaves the wait waiting (listen-fire 0.13): nothing after the `await` runs, so race the wait with a `sleep`. It said the deletion ended the wait.
+- c67d9a6: A message's `Timestamp` and a press's `At` each have a field id of their own (`timestamp`, `pressed_at`), and an arrival carries the instant under it. A host reads an arrival's fields by id before judging a listen, and the ids were Slack's raw `ts` and `action_ts`, so `m.Timestamp WITHIN 3d` compared Slack's raw epoch text and a lunch poll's presses never fired `count_vote`.
+- 78d60a1: The handbook section says to point the Slack app's Interactivity and Event Subscriptions request URLs at the connection's door, which `listen-fire serve` prints for every Slack connection a run can wait on. It no longer says a `race`'s slot loses the type of a press's `Value`: the slot keeps it.
+- de5c171: A button press whose member fields (`username`, `name`, `team_id`) Slack sends as null still lands on its message's `Interactions`, the null fields left out. Before, the press failed to parse and was dropped without a word.
+- 6e58fbe: `Replies` and `Interactions` no longer declare `resolvesEmpty`, which 0.13 retires: a deleted message leaves the wait waiting on every edge, so there is nothing to declare, and a 0.13 `listen-fire` refuses a module that still declares it.
+- Updated dependencies [4c09d6a]
+- Updated dependencies [faa7050]
+- Updated dependencies [acec0bd]
+- Updated dependencies [301dab3]
+- Updated dependencies [3c2774e]
+- Updated dependencies [dd81bed]
+- Updated dependencies [c4af6cc]
+- Updated dependencies [a942076]
+- Updated dependencies [46efd84]
+- Updated dependencies [9520af9]
+- Updated dependencies [9e9316c]
+- Updated dependencies [5bfc3f2]
+- Updated dependencies [66d32d5]
+- Updated dependencies [16e3776]
+- Updated dependencies [16e3776]
+- Updated dependencies [da1a05b]
+- Updated dependencies [abc777e]
+- Updated dependencies [ad23b9c]
+  - @listen-fire/module-kit@0.13.0
+
 ## 0.12.7
 
 ### Patch Changes

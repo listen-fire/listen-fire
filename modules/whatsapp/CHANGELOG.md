@@ -1,5 +1,37 @@
 # @listen-fire/whatsapp
 
+## 0.13.0
+
+### Minor Changes
+
+- acec0bd: A replayed request (`listen-fire listens replay`) reaches a module that checks its own requests with `replayed: true` (adapter protocol 2.6), read by module-kit's `inboundRequest` from the host's call alone, never from a header, the query or the body. `@lf/stripe`, `@lf/webhook`, `@lf/whatsapp` and `@lf/email` skip their signature and timestamp checks for it. A kept request holds only the headers a module names in `inbound.captureHeaders`, never a signature: `@lf/email` names `svix-id` (which tells a Resend notification from a Mailgun post), `@lf/forms` names `content-type`; the others need none (docs/contracts/adapter-protocol.md).
+- 1c42d26: WhatsApp is listened to on the edge a record arrives on, each its own record type: `Messages` (`Message`), `Reactions` (`Reaction`, `about` the message it is on) and `Locations` (`Location`), root edges pushed to the connection's door (``listen to wa-[m:Messages WHERE m.From == "447700900001"]-> fire f``). A reaction runs only a listen on `Reactions`, never one on `Messages`. Each is named by its WhatsApp id (Meta's resend of a delivery is the same arrival) and at the time Meta stamped it. WhatsApp cannot list conversations, so a listen narrows to one by the sender's number, `From`. Adapter protocol 2.6. It declares how a 0.12 `listen to wa { events }` becomes a listen on the edge its events arrive on (`listenSettingsBecome`); one naming events of two kinds has no rewrite. `listEventTypes`, the `fires` edges, `subscribableEvents`, `defaultSubscribedEvents`, `triggerAcceptsWhatsappKind` and `whatsappInboundEvents` are gone: `checkInbound` and `preprocessInbound` answer `arrivals`, no events (`whatsappInboundArrivals` is the parse).
+
+### Patch Changes
+
+- cf98af4: Examples wait with `await x-[:E]->` in place of the retired `await first(x-[:E]->)`, which a 0.13 check respells. The handbook drops its common-mistakes entry against writing `await` before a bare walk, which is now the form.
+- 69fbb49: The handbook sections and the `Reply Markup` (Telegram) and `Interactive` (WhatsApp) field descriptions teach a url button that opens a form from `@lf/forms` (`form = write forms-[:Forms]-> { Title: …, Fields: … }`, its `form.Url` on the button, then `await form-[:Submissions]->`), in place of a callback id on the button: `callback(…)` retired at 0.13. A `callback_data` or reply button's tap reaches no run until these modules report taps as `Interactions`, as Slack does.
+- bd3b097: The handbook section's form example waits for the submission inside a `race` with a `sleep`, so a form nobody answers ends the wait after a day.
+- Updated dependencies [4c09d6a]
+- Updated dependencies [faa7050]
+- Updated dependencies [acec0bd]
+- Updated dependencies [301dab3]
+- Updated dependencies [3c2774e]
+- Updated dependencies [dd81bed]
+- Updated dependencies [c4af6cc]
+- Updated dependencies [a942076]
+- Updated dependencies [46efd84]
+- Updated dependencies [9520af9]
+- Updated dependencies [9e9316c]
+- Updated dependencies [5bfc3f2]
+- Updated dependencies [66d32d5]
+- Updated dependencies [16e3776]
+- Updated dependencies [16e3776]
+- Updated dependencies [da1a05b]
+- Updated dependencies [abc777e]
+- Updated dependencies [ad23b9c]
+  - @listen-fire/module-kit@0.13.0
+
 ## 0.12.8
 
 ### Patch Changes

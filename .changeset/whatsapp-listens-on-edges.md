@@ -1,5 +1,0 @@
----
-"@listen-fire/whatsapp": minor
----
-
-WhatsApp is listened to on the edge a record arrives on, each its own record type: `Messages` (`Message`), `Reactions` (`Reaction`, `about` the message it is on) and `Locations` (`Location`), root edges pushed to the connection's door (``listen to wa-[m:Messages WHERE m.From == "447700900001"]-> fire f``). A reaction runs only a listen on `Reactions`, never one on `Messages`. Each is named by its WhatsApp id (Meta's resend of a delivery is the same arrival) and at the time Meta stamped it. WhatsApp cannot list conversations, so a listen narrows to one by the sender's number, `From`. Adapter protocol 2.6. It declares how a 0.12 `listen to wa { events }` becomes a listen on the edge its events arrive on (`listenSettingsBecome`); one naming events of two kinds has no rewrite. `listEventTypes`, the `fires` edges, `subscribableEvents`, `defaultSubscribedEvents`, `triggerAcceptsWhatsappKind` and `whatsappInboundEvents` are gone: `checkInbound` and `preprocessInbound` answer `arrivals`, no events (`whatsappInboundArrivals` is the parse).

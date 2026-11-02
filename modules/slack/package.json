@@ -1,7 +1,7 @@
 {
   "name": "@listen-fire/slack",
   "license": "Apache-2.0",
-  "version": "0.12.7",
+  "version": "0.13.0",
   "description": "Slack (a workspace: channels, history, threads, users, files, reactions; posts with buttons, replies and reactions; a message's awaited presses and replies) as a module. Loaded in process by the platform, served by serve-module everywhere else.",
   "engines": {
     "node": ">=22.23.4 <23"

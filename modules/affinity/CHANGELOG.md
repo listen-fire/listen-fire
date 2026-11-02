@@ -1,5 +1,35 @@
 # @listen-fire/affinity
 
+## 0.13.0
+
+### Minor Changes
+
+- e89fed3: Affinity is listened to on a record's `Changes` (``listen to crm-[:`List Entry — Master Deals List`]->-[c:Changes WHERE c.Field == "Status"]-> fire f``, ``function f(c: <crm-[:`List Entry Change — Master Deals List`]->>)``): an organization's, a person's, an opportunity's and each list's entries', each their own record type (`OrganizationChange`, `PersonChange`, `OpportunityChange`, `List Entry Change — <list>`) with `Kind` (`created`, `updated`, `deleted`) and, when a field's value was set or cleared, `Field`, the field's name as its record shows it (an enum of the record's own fields). A webhook delivery is the arrival on the changed record's `Changes`, carrying the record as Affinity holds it now, `about` it and `occurredAt`; a redelivery of the same change runs nothing. One webhook per connection serves every listen on `Changes` (`ensureEventSubscription({ edge: "Changes" })`). A run can wait on a record's next change: `awaitKeys` keys it by the kind of record and its id (`organization:13`), as each arrival is keyed, since Affinity numbers organizations, persons, opportunities and list entries apart; it needs the head's `recordType`, which a 2.6 host names. It declares how a 0.12 `listen to crm { events: [...] }` naming an organization's, a person's or an opportunity's events becomes a listen on its `Changes` (`listenSettingsBecome`); one naming a list entry's, a field value's, a note's or a reminder's event, or none, has no rewrite. Adapter protocol 2.6. `subscribableEvents` is gone, and notes and reminders no longer run anything.
+
+### Patch Changes
+
+- c67d9a6: A root a listen can start at counts as backed by being `listenable`, where it read the retired `fires`, which the catalog no longer carries.
+- c4af6cc: `listen-fire upgrade` never applies a rewrite that hears otherwise than the 0.12 listen did, unasked. Affinity: a listen naming `organization.updated` (or a person's or an opportunity's) is told that `Kind == "updated"` also hears each field value set or cleared on the record, which 0.12 heard only as field_value events, with the remedy `AND c.Field == null`, and is rewritten only under `--all`. Slack: a `message` or `app_mention` listen heard thread replies too, which now arrive on their root message's `Replies`, so it has no rewrite and is told to write one listen for each edge; a `reaction_added` listen is still rewritten onto `Reactions`. GitHub: `participating: false` heard every thread in 0.12, so it now compares nothing (`participating: true` is still `n.Participating == true`). Gmail: a `label_added` listen is told that a label removed and added again now runs it again, and is rewritten only under `--all`; and a 0.12 program reading `Labels` is warned on the upgrade (`MOV_FIELD_MEANING_CHANGED`) that it holds label names where it held ids.
+- Updated dependencies [4c09d6a]
+- Updated dependencies [faa7050]
+- Updated dependencies [acec0bd]
+- Updated dependencies [301dab3]
+- Updated dependencies [3c2774e]
+- Updated dependencies [dd81bed]
+- Updated dependencies [c4af6cc]
+- Updated dependencies [a942076]
+- Updated dependencies [46efd84]
+- Updated dependencies [9520af9]
+- Updated dependencies [9e9316c]
+- Updated dependencies [5bfc3f2]
+- Updated dependencies [66d32d5]
+- Updated dependencies [16e3776]
+- Updated dependencies [16e3776]
+- Updated dependencies [da1a05b]
+- Updated dependencies [abc777e]
+- Updated dependencies [ad23b9c]
+  - @listen-fire/module-kit@0.13.0
+
 ## 0.12.7
 
 ### Patch Changes
