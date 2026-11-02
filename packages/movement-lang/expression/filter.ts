@@ -423,9 +423,10 @@ export function compareToNull(op: FilterOperator, value: unknown): boolean {
 }
 
 /**
- * Scalar comparison semantics — moved verbatim from the movement engine
- * (`movement_engine/expression.ts`) so the engine, this shared unit, and
- * adapters all decide a comparison identically. The engine re-imports this.
+ * Scalar comparison semantics, exactly as the engine's judge decides them
+ * (crates/movement-engine filter.rs `compare_values`, held to
+ * engine-contracts/conformance/taken-comparisons.json), so adapters filtering
+ * through this unit decide a comparison as the engine does.
  */
 export function compareValues(
   left: unknown,
@@ -498,13 +499,53 @@ function durationToMs(spec: unknown): number | null {
   return parseFloat(match[1]) * DURATION_UNIT_MS[match[2].toLowerCase()];
 }
 
-/** A field value → epoch milliseconds: a number is taken as-is, a string is
- *  parsed as a date (ISO timestamps included). Unparseable → null. */
+/** Days from 1970-01-01 to a proleptic Gregorian date. */
+function daysFromCivil(year: number, month: number, day: number): number {
+  const y = month <= 2 ? year - 1 : year;
+  const era = Math.floor(y / 400);
+  const yoe = y - era * 400;
+  const doy = Math.floor((153 * ((month + 9) % 12) + 2) / 5) + day - 1;
+  return era * 146_097 + yoe * 365 + Math.floor(yoe / 4) - Math.floor(yoe / 100) + doy - 719_468;
+}
+
+const ISO_INSTANT = /^(?:([+-])(\d{6})|(\d{4}))(?:-(\d{2})(?:-(\d{2}))?)?(?:[Tt ](\d{2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?([Zz]|[+-]\d{2}:?\d{2})?)?$/;
+
+/** An ISO 8601 / RFC 3339 text as an instant (epoch ms), a text with no
+ *  offset read as UTC; null for any other text, a day its month lacks, the
+ *  hour 24 (crates/movement-engine js_date.rs `parse`). `new Date` is not
+ *  this: it reads a text with no offset in the host's zone, and reads texts
+ *  like `Mar 5, 2024` the engine orders as text. */
+function isoInstant(text: string): number | null {
+  const m = ISO_INSTANT.exec(text);
+  if (m === null) return null;
+  const [, sign, signed, plain, mm, dd, hh, mi, ss, fraction, offset] = m;
+  if (sign === '-' && Number(signed) === 0) return null;
+  const year = plain !== undefined ? Number(plain) : (sign === '-' ? -1 : 1) * Number(signed);
+  const month = mm !== undefined ? Number(mm) : 1;
+  const day = dd !== undefined ? Number(dd) : 1;
+  const nextMonth = month === 12 ? daysFromCivil(year + 1, 1, 1) : daysFromCivil(year, month + 1, 1);
+  if (month < 1 || month > 12 || day < 1 || day > nextMonth - daysFromCivil(year, month, 1)) return null;
+  let ms = daysFromCivil(year, month, day) * 86_400_000;
+  if (hh !== undefined) {
+    const [hour, minute, second] = [Number(hh), Number(mi), ss !== undefined ? Number(ss) : 0];
+    if (hour > 23 || minute > 59 || second > 59) return null;
+    ms += hour * 3_600_000 + minute * 60_000 + second * 1000 + (fraction !== undefined ? Number(fraction.slice(0, 3).padEnd(3, '0')) : 0);
+    if (offset !== undefined && offset.toUpperCase() !== 'Z') {
+      const [hours, minutes] = [Number(offset.slice(1, 3)), Number(offset.slice(-2))];
+      if (hours > 23 || minutes > 59) return null;
+      ms += (offset.startsWith('+') ? -1 : 1) * (hours * 60 + minutes) * 60_000;
+    }
+  }
+  return Number.isFinite(ms) && Math.abs(ms) <= 8.64e15 ? Math.trunc(ms) + 0 : null;
+}
+
+/** A value as an instant (epoch ms): a finite number as itself, a boolean as
+ *  0 or 1, anything else by its text, as an ISO instant. */
 function toEpochMs(value: unknown): number | null {
   if (value === null || value === undefined) return null;
   if (typeof value === 'number') return Number.isFinite(value) ? value : null;
-  const ms = new Date(value as string | Date).getTime();
-  return Number.isNaN(ms) ? null : ms;
+  if (typeof value === 'boolean') return value ? 1 : 0;
+  return isoInstant(String(value));
 }
 
 /** A value as a finite number — a number as-is, a numeric string parsed.
