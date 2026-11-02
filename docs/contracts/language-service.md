@@ -24,7 +24,8 @@ Not a versioned contract: an editor speaks LSP, and LSP is the contract. This pa
 | what follows `a.` for a hop alias `a` | the fields where that hop lands | the walk's root type, stepped edge by edge with the checker's `edge_landing` |
 | what follows `<x-[:` in a type | the record types of instance `x` | the instance's schema |
 | a built-in | its current spelling and signature | the spelling table (crates/movement-parser/src/surface/table.rs) and the standard library's signatures |
-| inside `import { … } from adapters` / `plugins` | module tags (`` `@lf/<name>` ``) and plugin names | the catalog's adapters (host units left out), plugin packages and plugins |
+| after `connect` | adapter names | the catalog's adapters (host units left out) |
+| inside `import { … } from plugins` | plugin package tags (`` `@lf/<name>` ``) and plugin names | the catalog's plugin packages and plugins |
 | after `connect x using` | credential names serving that module | the catalog's credentials, built from listen-fire's secrets bindings (names only, never values) |
 
 ## The LSP methods
@@ -109,5 +110,5 @@ A binding takes the program's `languageVersion`. A pin this release does not rea
 
 Two fields reach a presentation surface that has no project on disk:
 
-- **Module definitions.** An imported adapter, credential or plugin name answers `{ module: { namespace, name } }`, which a surface maps to the page that manages that module.
+- **Module definitions.** An adapter, credential or plugin name answers `{ module: { namespace, name } }`, which a surface maps to the page that manages that module.
 - **Connect actions.** A completion entry may open a connection flow, as above.

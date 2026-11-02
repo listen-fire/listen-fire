@@ -10,9 +10,6 @@ export const SYSTEM_HANDBOOK_SECTION: HandbookSection = {
 \`@lf/system\` runs a program when something happens to your other programs: a run failed, or a wait lost its record. Post each failure to Slack:
 
 \`\`\`
-import { \`@lf/system\` as system, \`@lf/slack\` as slack } from adapters
-import { team_workspace } from credentials
-
 sys  = connect system
 team = connect slack using team_workspace
 

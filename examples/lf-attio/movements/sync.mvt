@@ -1,6 +1,3 @@
-import { `@lf/attio` as attio } from adapters
-import { henry_attio } from credentials
-
 crm = connect attio using henry_attio
 
 # A company created in Attio, or renamed, gets a description; the write finds

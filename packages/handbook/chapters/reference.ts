@@ -10,14 +10,12 @@ A terse lookup, not a lesson. The teaching chapters explain *why*; this one is f
 ### top-level
 
 \`\`\`
-import { \`@lf/email\` as email, \`@lf/attio\` as attio } from adapters         # adapter types
-import { acme_main } from credentials          # stored connections, by saved name
 import { fetchUrl } from plugins              # functions the platform ships, called by position, settings last
 import { \`Log Lead\`, Lead } from "lib/intake"  # exported declarations, by file path
 import { \`Files Out\` as send } from "lib/out"  # rename on import with: as
 
-inbox = connect email                                # no credential
-crm   = connect attio using acme_main          # with a credential
+inbox = connect email                          # a system by its name; no credential
+crm   = connect attio using acme_main          # with a stored connection, by its saved name
 crm   = connect attio using acme_main { dryRun: true }   # dryRun is universal
 
 prompt = "the company this email is about"     # file-scope binding
@@ -173,10 +171,10 @@ listen to inbox-[e:Emails WHERE e.Key == "intake"]-> fire intake
 listen as "Nightly digest" to cron-[t:Ticks WHERE t.Schedule == "0 9 * * 1" AND t.Zone == "Europe/London"]-> fire \`Weekly Digest\`
 listen to crm-[:Companies]->-[c:Changes WHERE c.Kind == "created"]-> fire \`On New\`
 listen to crm-[:Companies]->-[c:Changes WHERE c.Kind IN ["created", "updated"]]-> fire mirror
-listen to runs-[:Invocations]-> fire \`On Run\`        # manual / on-demand (runs = connect manual)
+listen to manual-[:Invocations]-> fire \`On Run\`      # manual / on-demand, always connected
 \`\`\`
 
-A listen is a traversal from a connection, ending on an edge its system announces arrivals on; the fired function's parameter is typed by what lands (\`<cron-[:Ticks]->>\`). An edge every team shares (\`Ticks\`, \`Emails\`) needs a \`WHERE\` naming its values. The \`as\` alias goes right after \`listen\`, before \`to\`. A manual run *is* the submit-text/files channel: the fired function's parameter (\`go: <runs-[:Invocation]->>\`) holds it, so read \`go.Text\` and traverse \`go-[:Files]->.File\` (both optional). Pausing = commenting the \`listen\` line out. There is no \`run\` statement.
+A listen is a traversal from a connection, ending on an edge its system announces arrivals on; the fired function's parameter is typed by what lands (\`<cron-[:Ticks]->>\`). An edge every team shares (\`Ticks\`, \`Emails\`) needs a \`WHERE\` naming its values. The \`as\` alias goes right after \`listen\`, before \`to\`. A manual run *is* the submit-text/files channel: the fired function's parameter (\`go: <manual-[:Invocation]->>\`) holds it, so read \`go.Text\` and traverse \`go-[:Files]->.File\` (both optional). Pausing = commenting the \`listen\` line out. There is no \`run\` statement.
 
 ### reviews
 

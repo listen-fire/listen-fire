@@ -16,9 +16,6 @@ const HANDBOOK = `## MCP servers
 - A refused call fails the run with the server's own text.
 
 \`\`\`
-import { acme_crm, mcp } from adapters
-import { acme, linear } from credentials
-
 crm = connect acme_crm using acme
 tracker = connect mcp using linear
 

@@ -21,9 +21,6 @@ The credential asks for:
 ## What a movement sees
 
 ```
-import { stripe, mcp, gmail, slack } from adapters
-import { stripe_account, crm, billing_mail, team_slack } from credentials
-
 pay = connect stripe using stripe_account
 cr = connect mcp using crm
 mail = connect gmail using billing_mail

@@ -10,7 +10,8 @@ import { LANGUAGE_VERSION, checkSourceInRust } from 'movement-lang';
 import { HANDBOOK_CATALOG } from '../testing';
 
 const readme = readFileSync(join(__dirname, '..', '..', '..', 'README.md'), 'utf8');
-const programs = [...readme.matchAll(/^```\n(import \{[\s\S]*?)^```$/gm)].map((m) => m[1]);
+// A program is a fenced block that connects a system.
+const programs = [...readme.matchAll(/^```\n([\s\S]*?)^```$/gm)].map((m) => m[1]).filter((block) => /^\w+ *= connect /m.test(block));
 
 describe('the programs the README shows', () => {
   it('are there to check', () => {

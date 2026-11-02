@@ -12,9 +12,6 @@ Each connection's types are its server's tools, read from the server (`tools/lis
 - A call the server refuses (`isError`) fails the run with the server's text.
 
 ```
-import { acme_crm, mcp } from adapters
-import { acme, linear } from credentials
-
 crm = connect acme_crm using acme
 tracker = connect mcp using linear
 

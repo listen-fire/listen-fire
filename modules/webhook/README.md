@@ -24,9 +24,6 @@ The credential asks for:
 ## What a movement sees
 
 ```
-import { webhook, acme_crm } from adapters
-import { StripeHook, acme } from credentials
-
 stripe = connect webhook using StripeHook
 crm = connect acme_crm using acme
 

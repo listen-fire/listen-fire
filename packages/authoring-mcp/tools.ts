@@ -184,7 +184,7 @@ export function registerAuthoringTools(server: McpServer, ctx: ToolContext): voi
     {
       title: 'Get started',
       description:
-        "START HERE, in one call: the automations handbook's front page and the connected systems — how to import and construct each, its record types with their fields (`!` required, `*` identifying), and what a listen on it may say. Enough to write a first automation: describeConnection goes deeper on one system, searchLanguage answers a lookup.",
+        "START HERE, in one call: the automations handbook's front page and the connected systems — how to connect each, its record types with their fields (`!` required, `*` identifying), and what a listen on it may say. Enough to write a first automation: describeConnection goes deeper on one system, searchLanguage answers a lookup.",
       annotations: { readOnlyHint: true },
       inputSchema: {},
     },
@@ -230,7 +230,7 @@ export function registerAuthoringTools(server: McpServer, ctx: ToolContext): voi
     {
       title: 'List connected systems',
       description:
-        "The connected systems list: the systems a program may import (with construction args), the connections by the names a program imports them by, and plugins. These are the ONLY names valid in automation imports and constructions — never invent one. A system marked `connected: false` needs a connection the user has not made yet. Where a system carries `triggerExpectation`, that is the plain-language truth about WHICH events a listener on it actually fires on — ground every trigger-surface claim you make to the user in it rather than guessing. Call describeConnection for a system's field schema before authoring against it.",
+        "The connected systems list: the systems a program may connect (with construction args), the connections by the names a program connects with (after `using`; neither is imported), and plugins. These are the ONLY names valid after `connect` and `using` and in plugin imports — never invent one. A system marked `connected: false` needs a connection the user has not made yet. Where a system carries `triggerExpectation`, that is the plain-language truth about WHICH events a listener on it actually fires on — ground every trigger-surface claim you make to the user in it rather than guessing. Call describeConnection for a system's field schema before authoring against it.",
       annotations: { readOnlyHint: true },
       inputSchema: {},
     },

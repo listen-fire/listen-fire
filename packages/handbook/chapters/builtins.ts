@@ -20,9 +20,6 @@ export const builtins: Chapter = {
       construct: 'text and number helpers (Text.trim/lower/upper/length/split/concat/from, Number.abs/round/floor/ceil/parse, List.compact, == null)',
       status: 'runs',
       probe: `
-import { \`@lf/email\` as email, \`@lf/attio\` as attio } from adapters
-import { acme } from credentials
-
 inbox = connect email
 crm   = connect attio using acme
 
@@ -44,9 +41,6 @@ function \`Intake\`(m: <inbox-[:Emails]->>) {
       construct: 'coalesce and exists (including a walk WHERE form)',
       status: 'runs',
       probe: `
-import { \`@lf/email\` as email, \`@lf/attio\` as attio } from adapters
-import { acme } from credentials
-
 inbox = connect email
 crm   = connect attio using acme
 
@@ -64,9 +58,6 @@ function \`Intake\`(m: <inbox-[:Emails]->>) {
       construct: 'the commutative aggregates (count, only) over a captured relationship, plus Text.join/first/List.last/xs[n] each ordered inline with sort',
       status: 'runs',
       probe: `
-import { \`@lf/attio\` as attio } from adapters
-import { acme } from credentials
-
 crm = connect attio using acme
 
 function m(evt: <crm-[:CompanyChange]->>) {
@@ -88,9 +79,6 @@ function m(evt: <crm-[:CompanyChange]->>) {
       construct: 'List.sum/avg/min/max over a list of numbers',
       status: 'runs',
       probe: `
-import { \`@lf/attio\` as attio } from adapters
-import { acme } from credentials
-
 crm = connect attio using acme
 
 function m(evt: <crm-[:CompanyChange]->>) {
@@ -112,13 +100,9 @@ function m(evt: <crm-[:CompanyChange]->>) {
       construct: 'map/filter/reduce/List.groupBy/List.keyBy, a bare no-return map statement, and indexing a dict literal vs a List.groupBy result',
       status: 'runs',
       probe: `
-import { \`@lf/manual\` as manual, \`@lf/attio\` as attio } from adapters
-import { acme } from credentials
-
-runs = connect manual
 crm  = connect attio using acme
 
-function \`Roster\`(go: <runs-[:Invocation]->>) {
+function \`Roster\`(go: <manual-[:Invocation]->>) {
   d = { bucket: "a", packed: 3 }
   lead = d.bucket
 
@@ -145,22 +129,18 @@ function \`Roster\`(go: <runs-[:Invocation]->>) {
   }
 }
 
-listen to runs-[:Invocations]-> fire \`Roster\`
+listen to manual-[:Invocations]-> fire \`Roster\`
 `,
     },
     {
       construct: 'members in declaration order, the c ? a : b conditional, and unary minus',
       status: 'runs',
       probe: `
-import { \`@lf/manual\` as manual, \`@lf/slack\` as slack } from adapters
-import { team_workspace } from credentials
-
-runs = connect manual
 chat = connect slack using team_workspace
 
 type Thesis = <"Consumer" | "Infra" | "Health">
 
-function \`Recap\`(go: <runs-[:Invocation]->>) {
+function \`Recap\`(go: <manual-[:Invocation]->>) {
   theses = members(<Thesis>)
   before = 10
   after  = 4
@@ -173,21 +153,17 @@ function \`Recap\`(go: <runs-[:Invocation]->>) {
   write ops-[:Messages]-> { Message: "\${Text.join(theses, ", ")} / \${line} / \${delta}" }
 }
 
-listen to runs-[:Invocations]-> fire \`Recap\`
+listen to manual-[:Invocations]-> fire \`Recap\`
 `,
     },
     {
       construct: 'File.from/File.read/Text.chunks/pdf.render and the coercers Date.from/DateTime.from/Number.parse',
       status: 'runs',
       probe: `
-import { \`@lf/manual\` as manual, \`@lf/attio\` as attio } from adapters
 import { \`@lf/pdf\` as pdf } from plugins
-import { acme } from credentials
-
-runs = connect manual
 crm  = connect attio using acme
 
-function \`Cut A Document\`(go: <runs-[:Invocation]->>) {
+function \`Cut A Document\`(go: <manual-[:Invocation]->>) {
   go-[f:Files]-> {
     text   = File.read(f.File)
     pieces = Text.chunks(coalesce(text, ""), { size: 40000, overlap: 2000 })
@@ -206,16 +182,13 @@ function \`Cut A Document\`(go: <runs-[:Invocation]->>) {
   }
 }
 
-listen to runs-[:Invocations]-> fire \`Cut A Document\`
+listen to manual-[:Invocations]-> fire \`Cut A Document\`
 `,
     },
     {
       construct: 'namespace members: Currency.*, Date.*, DateTime.at/toIso, Text.regexExtract/slug, Url.host, Number.format',
       status: 'runs',
       probe: `
-import { \`@lf/email\` as email, \`@lf/attio\` as attio } from adapters
-import { acme } from credentials
-
 inbox = connect email
 crm   = connect attio using acme
 

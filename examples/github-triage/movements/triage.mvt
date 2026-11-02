@@ -1,6 +1,3 @@
-import { `@lf/github` as github, `@lf/slack` as slack } from adapters
-import { my_github, my_slack } from credentials
-
 gh   = connect github using my_github
 chat = connect slack using my_slack
 

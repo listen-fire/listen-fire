@@ -193,7 +193,7 @@ The manifest file registers your server with a team:
 }
 ```
 
-- `adapterType` is the slug an automation imports (`import { acme_crm } from adapters`). One install per slug per team. Charset: `^[a-z][a-z0-9_]*$` (ASCII lower case).
+- `adapterType` is the slug an automation connects (`crm = connect acme_crm using acme`). One install per slug per team. Charset: `^[a-z][a-z0-9_]*$` (ASCII lower case).
   It may not be a name a built-in adapter answers to (`slack`, `gmail`,
   `inbound_email`, `kg_mutation`, …, in any casing), nor `callback` or `ask`:
   the install is refused.
@@ -1844,9 +1844,6 @@ from `apps/cli`.
    `movements/companies.mvt` with `movements/discuss.mvt`:
 
    ```
-   import { acme_crm } from adapters
-   import { acme } from credentials
-
    crm = connect acme_crm using acme
 
    function discuss(company: <crm-[:Company]->>) {

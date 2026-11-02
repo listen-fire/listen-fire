@@ -16,9 +16,7 @@ use listen_fire::engine::embed::{
 };
 
 /// The movement the game ships with, as a level designer would write it.
-pub const SCRIPT: &str = r#"import { world } from adapters
-
-game = connect world
+pub const SCRIPT: &str = r#"game = connect world
 
 # A monster slain: its slayer gets a trophy at once, and an hour of game
 # time later the herald announces the deed.

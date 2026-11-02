@@ -80,7 +80,7 @@ export interface ProgramStore {
 export interface TenantCatalog {
   /** What `buildCatalogSnapshot` returns (docs/embedding.md). */
   snapshot: CatalogSnapshot;
-  /** Each connection by the name a program imports it by, with the system
+  /** Each connection by the name a program connects with (`using`), with the system
    *  (adapter type) it serves. */
   connections: Array<{ name: string; system: string }>;
 }

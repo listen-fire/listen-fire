@@ -39,10 +39,7 @@ export function exampleText(example: FrontExample): string {
   return example.file;
 }
 
-const PRELUDE = `import { \`@lf/email\` as email, \`@lf/attio\` as attio, \`@lf/slack\` as slack } from adapters
-import { acme, team_chat } from credentials
-
-inbox = connect email
+const PRELUDE = `inbox = connect email
 crm   = connect attio using acme
 chat  = connect slack using team_chat
 `;
@@ -120,10 +117,10 @@ export const TS_EXCEPT: readonly FrontEntry[] = [
 export const CONCEPTS: readonly FrontEntry[] = [
   {
     anchor: 'systems',
-    title: 'Import, then connect',
-    text: 'Import a system by its package tag and its connection from `credentials`, then connect it once. An email listen needs a `key`, the address mail goes to.',
+    title: 'Connect each system once',
+    text: 'Connect a system once, naming its adapter and the stored connection it signs in with (`crm = connect attio using acme`); neither is imported. An email listen needs a `key`, the address mail goes to.',
     example: {
-      file: 'import { `@lf/email` as email, `@lf/attio` as attio } from adapters\nimport { acme } from credentials\n\ninbox = connect email\ncrm = connect attio using acme\n\nfunction `Log Sender`(m: <inbox-[:Emails]->>) {\n  write crm-[:People]-> { unique by (Email), Email: m.From, Name: m.From }\n}\n\nlisten to inbox-[e:Emails WHERE e.Key == "senders"]-> fire `Log Sender`',
+      file: 'inbox = connect email\ncrm = connect attio using acme\n\nfunction `Log Sender`(m: <inbox-[:Emails]->>) {\n  write crm-[:People]-> { unique by (Email), Email: m.From, Name: m.From }\n}\n\nlisten to inbox-[e:Emails WHERE e.Key == "senders"]-> fire `Log Sender`',
     },
   },
   {

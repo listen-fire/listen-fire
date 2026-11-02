@@ -76,9 +76,6 @@ Once the system answers again, \`listen-fire listens replay <file>:<movement> --
       construct: 'listen as "…" — two aliased lanes on one channel firing one movement',
       status: 'runs',
       probe: `
-import { \`@lf/email\` as email, \`@lf/attio\` as attio } from adapters
-import { acme } from credentials
-
 inbox = connect email
 crm   = connect attio using acme
 
@@ -97,9 +94,6 @@ listen as "Intro intake" to inbox-[e:Emails WHERE e.Key == "intros"]-> fire \`In
       construct: 'a two-way sync whose listen takes only the fields it reads, so its own write does not run it again',
       status: 'runs',
       probe: `
-import { \`@lf/attio\` as attio } from adapters
-import { acme } from credentials
-
 crm = connect attio using acme
 
 function \`Mirror Company\`(c: <crm-[:CompanyChange]->>) {

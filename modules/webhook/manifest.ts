@@ -16,9 +16,6 @@ const HANDBOOK = `## Incoming webhooks
 \`webhook\` takes a POST from any sender (Stripe, a form service, your own app). Each connection is one URL under \`listen-fire serve\`, \`/hooks/webhook/<credential>\`, which \`listen-fire serve\` prints when it starts. The connection's credential says how deliveries are signed. The program declares only what they carry. A sender with its own module types its events for you: for Stripe, use \`@lf/stripe\`.
 
 \`\`\`
-import { webhook, acme_crm } from adapters
-import { StripeHook, acme } from credentials
-
 stripe = connect webhook using StripeHook
 crm = connect acme_crm using acme
 

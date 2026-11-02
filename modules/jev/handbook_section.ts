@@ -7,10 +7,7 @@
 import type { HandbookSection } from 'engine-contracts';
 
 const INTAKE = `
-import { \`@lf/email\` as email, \`@lf/attio\` as attio } from adapters
 import { \`@lf/jev\` as jev } from plugins
-import { acme } from credentials
-
 inbox = connect email
 crm   = connect attio using acme
 

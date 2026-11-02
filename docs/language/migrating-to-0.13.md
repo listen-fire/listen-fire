@@ -56,13 +56,9 @@ Two waits 0.12 accepted are refused once respelled, and the pin holds until each
 | `reply = await first(ops-[:Messages]->-[:Replies]->)` | `msg = only(ops-[:Messages]->)`, then `if (msg == null) { fail("no message") }`, then `reply = await msg-[:Replies]->` |
 
 ```
-import { `@lf/slack` as slack, `@lf/manual` as manual } from adapters
-import { team_workspace } from credentials
-
 team = connect slack using team_workspace
-runs = connect manual
 
-function `Who Takes It`(go: <runs-[:Invocation]->>) {
+function `Who Takes It`(go: <manual-[:Invocation]->>) {
   ops = only(team-[ch:Channels WHERE ch.Name == "ops"]->)
   if (ops == null) { fail("no #ops channel") }
   msg = write ops-[:Messages]-> { Message: "Who can take ${go.Text}? Reply in the thread." }
@@ -80,7 +76,7 @@ function `Who Takes It`(go: <runs-[:Invocation]->>) {
   }
 }
 
-listen to runs-[:Invocations]-> fire `Who Takes It`
+listen to manual-[:Invocations]-> fire `Who Takes It`
 ```
 
 ## 3. `callback(…)` is retired
@@ -102,13 +98,9 @@ write approvals-[:Messages]-> { Message: "Approve this?", Blocks: [ … ] }   # 
 After, the buttons are a field of the message, and a press arrives on the message's `Interactions`. The `Value` of the action pressed is one of the values written, so comparing it with one no button offers is refused.
 
 ```
-import { `@lf/slack` as slack, `@lf/manual` as manual } from adapters
-import { team_workspace } from credentials
-
 team = connect slack using team_workspace
-runs = connect manual
 
-function `Approve Or Reject`(go: <runs-[:Invocation]->>) {
+function `Approve Or Reject`(go: <manual-[:Invocation]->>) {
   approvals = only(team-[ch:Channels WHERE ch.Name == "approvals"]->)
   if (approvals == null) { fail("no #approvals channel") }
   msg = write approvals-[:Messages]-> {
@@ -132,7 +124,7 @@ function `Approve Or Reject`(go: <runs-[:Invocation]->>) {
   }
 }
 
-listen to runs-[:Invocations]-> fire `Approve Or Reject`
+listen to manual-[:Invocations]-> fire `Approve Or Reject`
 ```
 
 Slack carries buttons from this release. Telegram and WhatsApp do not report taps as `Interactions` yet: send a form's link there instead (next).
@@ -149,18 +141,14 @@ write ops-[:Messages]-> { Message: "Pick a day: ${booked.url}" }
 After, the link is a form from `@lf/forms`. Its fields are a `node` you declare, and the answer arrives on the form's `Submissions`, typed by that node.
 
 ```
-import { `@lf/slack` as slack, `@lf/forms` as forms_module, `@lf/manual` as manual } from adapters
-import { team_workspace } from credentials
-
 team  = connect slack using team_workspace
-forms = connect forms_module
-runs  = connect manual
+forms = connect forms
 
 node Booking {
   Day: <date>
 }
 
-function `Book A Day`(go: <runs-[:Invocation]->>) {
+function `Book A Day`(go: <manual-[:Invocation]->>) {
   ops = only(team-[ch:Channels WHERE ch.Name == "ops"]->)
   if (ops == null) { fail("no #ops channel") }
   form = write forms-[:Forms]-> { Title: "Pick a day for ${go.Text}", Fields: Booking }
@@ -179,7 +167,7 @@ function `Book A Day`(go: <runs-[:Invocation]->>) {
   }
 }
 
-listen to runs-[:Invocations]-> fire `Book A Day`
+listen to manual-[:Invocations]-> fire `Book A Day`
 ```
 
 - `listen-fire serve` serves the form at the project's public address (`publicUrl` in `lf.yaml`). It takes no credential.
@@ -414,9 +402,6 @@ A listen sets no numbers. Each comes from the module's declaration, and `lf.yaml
 `callback(…, { once: false })` took many answers in one run. In 0.13 each answer is its own run of a standing listen, and the state lives in a table. The poll is a Slack message with `Buttons` and a `Topic`, and every press on a message with that `Topic` runs `count_vote`, one row per poll and person:
 
 ```
-import { `@lf/slack` as slack, `@lf/airtable` as airtable } from adapters
-import { team_slack, team_airtable } from credentials
-
 chat = connect slack using team_slack
 office = connect airtable using team_airtable { base: "Office" }
 

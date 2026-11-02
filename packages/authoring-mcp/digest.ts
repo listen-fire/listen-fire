@@ -152,17 +152,21 @@ function fieldList(fields: RecordField[], limit: number): string {
 
 type SpecLike = Pick<AdapterSnapshot, 'constructionArgs'>;
 
-/** `attio(credentials: acme)`; a second connection is named after it. A
- *  run host unit is in every program's scope, never constructed. */
+/** `connect attio using acme { list: … }`, the system and its connection
+ *  named there with no import; a second connection is named after it. A
+ *  run host unit is in every program's scope, never connected. */
 function constructionSpelling(system: string, spec: SpecLike, connections: string[]): string {
   // Its edges are listed below it: a listen names one (`manual-[:Invocations]->`).
   if (RUN_HOST_UNITS.includes(system)) return `\`listen to ${system}-[:…]->\` (in scope with no import or connect)`;
-  const args = spec.constructionArgs.flatMap((arg) => {
-    if (arg.kind === 'credential') return [`${arg.name}: ${connections[0] ?? '…'}`];
-    return arg.required ? [`${arg.name}: …`] : [];
-  });
+  const using = spec.constructionArgs.some((arg) => arg.kind === 'credential') ? ` using ${connections[0] ?? '…'}` : '';
+  const settings = spec.constructionArgs.filter((arg) => arg.kind !== 'credential' && arg.required).map((arg) => `${camelCase(arg.name)}: …`);
   const others = connections.slice(1);
-  return `\`${system}(${args.join(', ')})\`${others.length > 0 ? ` (other connections: ${others.join(', ')})` : ''}`;
+  return `\`connect ${system}${using}${settings.length > 0 ? ` { ${settings.join(', ')} }` : ''}\`${others.length > 0 ? ` (other connections: ${others.join(', ')})` : ''}`;
+}
+
+/** A setting as `connect` writes it (`base_id` → `baseId`). */
+function camelCase(name: string): string {
+  return name.replace(/_([a-z])/g, (_, letter: string) => letter.toUpperCase());
 }
 
 /** A system and how this tenant reaches it. */
@@ -414,7 +418,7 @@ export function describeFull(catalog: TenantCatalog, request: { system: string; 
   };
 }
 
-/** listConnections: the systems a program may import, how each is
+/** listConnections: the systems a program may connect, how each is
  *  constructed and listened to, and the tenant's connections. */
 export function connectionsView(catalog: TenantCatalog) {
   return {

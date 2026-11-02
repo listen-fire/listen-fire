@@ -70,7 +70,7 @@ write record-[:Files]-> { File: pdf.render(digest) }
 A schedule fires, a query gathers, a message goes out. The tick carries nothing you need — the query is the input.
 
 \`\`\`
-function \`Weekly Digest\`(t: <timer-[:Ticks]->>) {
+function \`Weekly Digest\`(t: <cron-[:Ticks]->>) {
   lines = crm-[c:Companies WHERE c.\`Created At\` WITHIN 7d ORDER BY c.\`Created At\` DESC LIMIT 20]-> {
     return "- \${c.Name}"
   }
@@ -80,7 +80,7 @@ function \`Weekly Digest\`(t: <timer-[:Ticks]->>) {
   write ops-[:Messages]-> { Message: "New this week:\\n\${Text.join(lines, "\\n")}" }
 }
 
-listen as "Weekly digest" to timer-[k:Ticks WHERE k.Schedule == "0 9 * * 1"]-> fire \`Weekly Digest\`
+listen as "Weekly digest" to cron-[k:Ticks WHERE k.Schedule == "0 9 * * 1"]-> fire \`Weekly Digest\`
 \`\`\`
 
 ### sections-from-a-type
@@ -95,7 +95,7 @@ node Finding: "each company mentioned" {
   thesis:   <Thesis> "which thesis it fits"
 }
 
-function \`Thesis Recap\`(go: <runs-[:Invocation]->>) {
+function \`Thesis Recap\`(go: <manual-[:Invocation]->>) {
   found    = extract([go.Text], Finding)
   rows     = map(found, (f) => { return { thesis: coalesce(f.thesis, "Consumer"), line: f.headline } })
   by       = List.groupBy(rows, (r) => r.thesis)
@@ -154,7 +154,7 @@ node Entry: "each company named in this text" {
   node person: "each person at the company" { Name: <text> "their full name" }
 }
 
-function \`Intake\`(go: <runs-[:Invocation]->>) {
+function \`Intake\`(go: <manual-[:Invocation]->>) {
   found = extract([go.Text], Entry, { tier: "careful" })
   map(found, (e: <Entry>) => {
     company = write crm-[:Companies]-> { unique by (FUZZY Name), ?...e }
@@ -203,10 +203,6 @@ Two things make it this shape rather than a thinner one:
       construct: 'declare-once (a described node declaration as the extract shape, `?...e` spread writes)',
       status: 'runs',
       probe: `
-import { \`@lf/manual\` as manual, \`@lf/attio\` as attio } from adapters
-import { acme } from credentials
-
-runs = connect manual
 crm  = connect attio using acme
 
 rules = "a company counts only if it is named as the subject"
@@ -217,7 +213,7 @@ node Entry: "each company named in this text" {
   node person: "each person at the company" { Name: <text> "their full name" }
 }
 
-function \`Intake\`(go: <runs-[:Invocation]->>) {
+function \`Intake\`(go: <manual-[:Invocation]->>) {
   found = extract([go.Text], Entry, { tier: "careful" })
   map(found, (e: <Entry>) => {
     company = write crm-[:Companies]-> { unique by (FUZZY Name), ?...e }
@@ -225,17 +221,13 @@ function \`Intake\`(go: <runs-[:Invocation]->>) {
   })
 }
 
-listen to runs-[:Invocations]-> fire \`Intake\`
+listen to manual-[:Invocations]-> fire \`Intake\`
 `,
     },
     {
       construct: 'sections from a type (List.groupBy over dict rows, members in declared order, an index per member)',
       status: 'runs',
       probe: `
-import { \`@lf/manual\` as manual, \`@lf/slack\` as slack } from adapters
-import { team_workspace } from credentials
-
-runs = connect manual
 chat = connect slack using team_workspace
 
 type Thesis = <"Consumer" | "Infra" | "Health">
@@ -245,7 +237,7 @@ node Finding: "each company mentioned" {
   thesis:   <Thesis> "which thesis it fits"
 }
 
-function \`Thesis Recap\`(go: <runs-[:Invocation]->>) {
+function \`Thesis Recap\`(go: <manual-[:Invocation]->>) {
   found    = extract([go.Text], Finding)
   rows     = map(found, (f) => { return { thesis: coalesce(f.thesis, "Consumer"), line: f.headline } })
   by       = List.groupBy(rows, (r) => r.thesis)
@@ -256,17 +248,14 @@ function \`Thesis Recap\`(go: <runs-[:Invocation]->>) {
   write ops-[:Messages]-> { Message: Text.join(sections, "\\n") }
 }
 
-listen to runs-[:Invocations]-> fire \`Thesis Recap\`
+listen to manual-[:Invocations]-> fire \`Thesis Recap\`
 `,
     },
     {
       construct: 'the compose-a-report shape (returned block lines → Text.join → pdf.render artifact)',
       status: 'runs',
       probe: `
-import { \`@lf/email\` as email, \`@lf/attio\` as attio } from adapters
 import { \`@lf/pdf\` as pdf } from plugins
-import { acme } from credentials
-
 inbox = connect email
 crm   = connect attio using acme
 
@@ -290,9 +279,6 @@ function \`Attachment Report\`(m: <inbox-[:Emails]->>) {
       construct: 'all over closures, run at once (independent writes, concurrent, no binding)',
       status: 'runs',
       probe: `
-import { \`@lf/email\` as email, \`@lf/attio\` as attio } from adapters
-import { acme } from credentials
-
 inbox = connect email
 crm   = connect attio using acme
 
@@ -319,10 +305,7 @@ function \`Intake\`(m: <inbox-[:Emails]->>) {
       construct: 'extract-and-connect (linked pages loaded by a plain plugin call into the content, a tree extracted, linked writes along the nested node, fuzzy identity)',
       status: 'runs',
       probe: `
-import { \`@lf/email\` as email, \`@lf/attio\` as attio } from adapters
 import { vcUrlRetrieval } from plugins
-import { acme } from credentials
-
 inbox = connect email
 crm   = connect attio using acme
 
@@ -353,10 +336,6 @@ function \`Extract And Connect\`(msg: <inbox-[:Emails]->>) {
       construct: 'human-reviewed-intake (manual text/files → extract → write a Check question, race its Response against a sleep, gate the linked writes on the approval)',
       status: 'runs',
       probe: `
-import { \`@lf/manual\` as manual, \`@lf/attio\` as attio, \`@lf/ask\` as ask } from adapters
-import { acme } from credentials
-
-runs = connect manual
 crm  = connect attio using acme
 asks = connect ask
 
@@ -369,7 +348,7 @@ node Company: "each company named in the supplied text or files" {
   }
 }
 
-function \`Review And Import\`(go: <runs-[:Invocation]->>) {
+function \`Review And Import\`(go: <manual-[:Invocation]->>) {
   found = extract([go.Text, ...go-[:Files]->.File], Company)
 
   q = write asks-[:Check]-> {
@@ -403,21 +382,17 @@ function \`Review And Import\`(go: <runs-[:Invocation]->>) {
   }
 }
 
-listen to runs-[:Invocations]-> fire \`Review And Import\`
+listen to manual-[:Invocations]-> fire \`Review And Import\`
 `,
     },
     {
       construct: 'scheduled-digest (a cron tick fires; a bounded query composes lines; one message goes out)',
       status: 'runs',
       probe: `
-import { \`@lf/cron\` as cron, \`@lf/attio\` as attio, \`@lf/slack\` as slack } from adapters
-import { acme, team_workspace } from credentials
-
-timer = connect cron
 crm   = connect attio using acme
 chat  = connect slack using team_workspace
 
-function \`Weekly Digest\`(t: <timer-[:Ticks]->>) {
+function \`Weekly Digest\`(t: <cron-[:Ticks]->>) {
   lines = crm-[c:Companies WHERE c.\`Created At\` WITHIN 7d ORDER BY c.\`Created At\` DESC LIMIT 20]-> {
     return "- \${c.Name}"
   }
@@ -429,7 +404,7 @@ function \`Weekly Digest\`(t: <timer-[:Ticks]->>) {
   }
 }
 
-listen as "Weekly digest" to timer-[k:Ticks WHERE k.Schedule == "0 9 * * 1"]-> fire \`Weekly Digest\`
+listen as "Weekly digest" to cron-[k:Ticks WHERE k.Schedule == "0 9 * * 1"]-> fire \`Weekly Digest\`
 `,
     },
   ],

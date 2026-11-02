@@ -85,9 +85,6 @@ function \`Notify Company Change\`(evt: <crm-[:CompanyChange]->>) {
       construct: 'is type tests (union narrowing through a branch)',
       status: 'runs',
       probe: `
-import { \`@lf/attio\` as attio } from adapters
-import { acme } from credentials
-
 crm = connect attio using acme
 
 function \`Route\`(ev: <crm-[:CompanyChange]->>) {
@@ -103,11 +100,8 @@ function \`Route\`(ev: <crm-[:CompanyChange]->>) {
       construct: 'is against a declared node (structural conformance as a test)',
       status: 'runs',
       probe: `
-import { \`@lf/attio\` as attio, \`@lf/slack\` as slack } from adapters
-import { acme as crmCred, team_workspace as slackCred } from credentials
-
-crm  = connect attio using crmCred
-chat = connect slack using slackCred
+crm  = connect attio using acme
+chat = connect slack using team_workspace
 
 node Postable {
   Name: <text>
@@ -129,9 +123,6 @@ function \`Announce\`(evt: <crm-[:CompanyChange]->>) {
       construct: 'standalone fail() statement (a guard that fails the run)',
       status: 'runs',
       probe: `
-import { \`@lf/email\` as email, \`@lf/attio\` as attio } from adapters
-import { acme } from credentials
-
 inbox = connect email
 crm   = connect attio using acme
 
@@ -147,9 +138,6 @@ function \`Intake\`(m: <inbox-[:Emails]->>) {
       construct: "'else if' chains",
       status: 'runs',
       probe: `
-import { \`@lf/email\` as email, \`@lf/attio\` as attio } from adapters
-import { acme } from credentials
-
 inbox = connect email
 crm   = connect attio using acme
 
@@ -174,11 +162,8 @@ function \`Intake\`(m: <inbox-[:Emails]->>) {
         'guard clause on an only-bound record (`if (x == null) { fail(…) }`) narrowing the write below it, plus a `? :` over an optional field',
       status: 'runs',
       probe: `
-import { \`@lf/attio\` as attio, \`@lf/slack\` as slack } from adapters
-import { acme as crmCred, team_workspace as slackCred } from credentials
-
-crm  = connect attio using crmCred
-chat = connect slack using slackCred
+crm  = connect attio using acme
+chat = connect slack using team_workspace
 
 function \`Notify Company Change\`(evt: <crm-[:CompanyChange]->>) {
   channel = only(chat-[ch:Channels WHERE ch.Name == "automation-alerts"]->)
@@ -203,11 +188,8 @@ listen to crm-[:Companies]->-[c:Changes WHERE c.Kind IN ["created", "updated"]]-
       construct: 'a chain of flat guard clauses, each narrowing a separate only-bound binding',
       status: 'runs',
       probe: `
-import { \`@lf/attio\` as attio, \`@lf/slack\` as slack } from adapters
-import { acme as crmCred, team_workspace as slackCred } from credentials
-
-crm  = connect attio using crmCred
-chat = connect slack using slackCred
+crm  = connect attio using acme
+chat = connect slack using team_workspace
 
 function m(evt: <crm-[:CompanyChange]->>) {
   channel = only(chat-[ch:Channels WHERE ch.Name == "alerts"]->)

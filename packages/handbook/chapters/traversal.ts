@@ -129,13 +129,9 @@ Message: "Logged \${count(orgs)} companies"
       construct: 'graph-rooted query traversals (WHERE / ORDER BY / LIMIT on a collection hop)',
       status: 'runs',
       probe: `
-import { \`@lf/manual\` as manual, \`@lf/attio\` as attio } from adapters
-import { acme } from credentials
-
-runs = connect manual
 crm  = connect attio using acme
 
-function \`Top Ten\`(go: <runs-[:Invocation]->>) {
+function \`Top Ten\`(go: <manual-[:Invocation]->>) {
   crm-[c:Companies WHERE c.Categories == "Customer" ORDER BY c.\`Created At\` DESC LIMIT 10]-> {
     write crm-[:Companies]-> {
       unique by (\`Name\`)
@@ -149,20 +145,16 @@ function \`Top Ten\`(go: <runs-[:Invocation]->>) {
   }
 }
 
-listen to runs-[:Invocations]-> fire \`Top Ten\`
+listen to manual-[:Invocations]-> fire \`Top Ten\`
 `,
     },
     {
       construct: 'an ORDER BY key that walks one hop off the record it ranks',
       status: 'runs',
       probe: `
-import { \`@lf/manual\` as manual, \`@lf/attio\` as attio } from adapters
-import { acme } from credentials
-
-runs = connect manual
 crm  = connect attio using acme
 
-function \`By Company\`(go: <runs-[:Invocation]->>) {
+function \`By Company\`(go: <manual-[:Invocation]->>) {
   crm-[p:People ORDER BY p-[:Company]->.Name LIMIT 5]-> {
     write crm-[:Companies]-> {
       unique by (\`Name\`)
@@ -171,20 +163,16 @@ function \`By Company\`(go: <runs-[:Invocation]->>) {
   }
 }
 
-listen to runs-[:Invocations]-> fire \`By Company\`
+listen to manual-[:Invocations]-> fire \`By Company\`
 `,
     },
     {
       construct: 'a walk wrapped in a closure, called only in the branch that needs it',
       status: 'runs',
       probe: `
-import { \`@lf/manual\` as manual, \`@lf/attio\` as attio } from adapters
-import { acme } from credentials
-
-runs = connect manual
 crm  = connect attio using acme
 
-function \`Recent\`(go: <runs-[:Invocation]->>) {
+function \`Recent\`(go: <manual-[:Invocation]->>) {
   customers = () => crm-[c:Companies WHERE c.Categories == "Customer" ORDER BY c.\`Created At\` DESC LIMIT 5]->
   if (go.Text == "report") {
     write crm-[:Companies]-> {
@@ -195,16 +183,13 @@ function \`Recent\`(go: <runs-[:Invocation]->>) {
   }
 }
 
-listen to runs-[:Invocations]-> fire \`Recent\`
+listen to manual-[:Invocations]-> fire \`Recent\`
 `,
     },
     {
       construct: 'a block returning a record — the returned handles counted and walked after it',
       status: 'runs',
       probe: `
-import { \`@lf/email\` as email, \`@lf/attio\` as attio, \`@lf/slack\` as slack } from adapters
-import { acme, team_workspace } from credentials
-
 inbox = connect email
 crm   = connect attio using acme
 team  = connect slack using team_workspace
@@ -231,9 +216,6 @@ function \`Intake\`(m: <inbox-[:Emails]->>) {
       construct: 'the record-order rules — only for a lookup, Text.join over an ordered relationship, LIMIT on a sequenced one',
       status: 'runs',
       probe: `
-import { \`@lf/email\` as email, \`@lf/attio\` as attio, \`@lf/slack\` as slack } from adapters
-import { acme, team_workspace } from credentials
-
 inbox = connect email
 crm   = connect attio using acme
 team  = connect slack using team_workspace
@@ -255,9 +237,6 @@ function \`Digest\`(m: <inbox-[:Emails]->>) {
       construct: 'a block returning a value — every iteration collected as a list',
       status: 'runs',
       probe: `
-import { \`@lf/email\` as email, \`@lf/slack\` as slack } from adapters
-import { team_workspace } from credentials
-
 inbox = connect email
 team  = connect slack using team_workspace
 

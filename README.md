@@ -12,9 +12,6 @@ With Listen-Fire you ask once. You tell your agent:
 It writes a program:
 
 ```
-import { `@lf/github` as github, `@lf/slack` as slack } from adapters
-import { my_github, my_slack } from credentials
-
 gh   = connect github using my_github
 chat = connect slack using my_slack
 
@@ -36,7 +33,7 @@ Its first draft used GitHub's JSON name for the link, and `listen-fire check` re
 
 ```
 $ listen-fire check
-movements/triage.mvt:9:11 error MOV_UNKNOWN_PROPERTY gh.Pull Request has no field 'html_url' — it has: Number, Title, … HTML URL, …
+movements/triage.mvt:6:11 error MOV_UNKNOWN_PROPERTY gh.Pull Request has no field 'html_url' — it has: Number, Title, … HTML URL, …
 ```
 
 The agent fixed it from that list. Now every weekday it posts this, with no model and no tokens:

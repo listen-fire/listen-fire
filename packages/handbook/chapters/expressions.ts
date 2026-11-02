@@ -330,9 +330,6 @@ pieces = Text.chunks(coalesce(text, ""), { size: 40000, overlap: 2000 })
       construct: 'a file-scope table of dict-literal rows, map + Text.join inside the function body, List.keyBy as a lookup',
       status: 'runs',
       probe: `
-import { \`@lf/email\` as email, \`@lf/attio\` as attio } from adapters
-import { acme } from credentials
-
 inbox = connect email
 crm   = connect attio using acme
 
@@ -363,13 +360,9 @@ function \`Match Mentions\`(m: <inbox-[:Emails]->>) {
       construct: 'sort over a collection in hand, then an order-sensitive fold',
       status: 'runs',
       probe: `
-import { \`@lf/manual\` as manual, \`@lf/attio\` as attio } from adapters
-import { acme } from credentials
-
-runs = connect manual
 crm  = connect attio using acme
 
-function \`Roster\`(go: <runs-[:Invocation]->>) {
+function \`Roster\`(go: <manual-[:Invocation]->>) {
   names  = crm-[p:People]-> { return p.Name }
   titles = crm-[p:People]-> { return { name: p.Name, title: p.\`Job Title\` } }
   ranked = sort(titles, (r) => r.title, { order: "desc" })
@@ -380,16 +373,13 @@ function \`Roster\`(go: <runs-[:Invocation]->>) {
   }
 }
 
-listen to runs-[:Invocations]-> fire \`Roster\`
+listen to manual-[:Invocations]-> fire \`Roster\`
 `,
     },
     {
       construct: 'ai() null returns gated with a != null test on the binding',
       status: 'runs',
       probe: `
-import { \`@lf/email\` as email, \`@lf/slack\` as slack } from adapters
-import { acme_slack } from credentials
-
 inbox = connect email
 team  = connect slack using acme_slack
 
@@ -407,9 +397,6 @@ function \`Follow Up\`(m: <inbox-[:Emails]->>) {
       construct: 'ai() values and file-scope prompt bindings (bare-name reads)',
       status: 'runs',
       probe: `
-import { \`@lf/email\` as email, \`@lf/attio\` as attio } from adapters
-import { acme } from credentials
-
 inbox = connect email
 crm   = connect attio using acme
 
@@ -427,9 +414,6 @@ function \`Intake\`(m: <inbox-[:Emails]->>) {
       construct: 'ai() tiers — how much thinking the answer is worth',
       status: 'runs',
       probe: `
-import { \`@lf/email\` as email, \`@lf/attio\` as attio } from adapters
-import { acme } from credentials
-
 inbox = connect email
 crm   = connect attio using acme
 
@@ -446,9 +430,6 @@ function \`Triage\`(m: <inbox-[:Emails]->>) {
       construct: 'exists() tests, including hop WHERE filters',
       status: 'runs',
       probe: `
-import { \`@lf/email\` as email, \`@lf/attio\` as attio } from adapters
-import { acme } from credentials
-
 inbox = connect email
 crm   = connect attio using acme
 
@@ -463,9 +444,6 @@ function \`Intake\`(m: <inbox-[:Emails]->>) {
       construct: 'coalesce and the built-in function helpers',
       status: 'runs',
       probe: `
-import { \`@lf/email\` as email, \`@lf/attio\` as attio } from adapters
-import { acme } from credentials
-
 inbox = connect email
 crm   = connect attio using acme
 
@@ -481,9 +459,6 @@ function \`Intake\`(m: <inbox-[:Emails]->>) {
       construct: 'integration-provided functions as write-field values',
       status: 'runs',
       probe: `
-import { \`@lf/email\` as email, \`@lf/attio\` as attio } from adapters
-import { acme } from credentials
-
 inbox = connect email
 crm   = connect attio using acme
 
@@ -499,9 +474,6 @@ function \`Intake\`(m: <inbox-[:Emails]->>) {
       status: 'pending',
       flag: "non-built-in function calls",
       probe: `
-import { \`@lf/email\` as email, \`@lf/attio\` as attio } from adapters
-import { acme } from credentials
-
 inbox = connect email
 crm   = connect attio using acme
 
@@ -516,9 +488,6 @@ function \`Intake\`(m: <inbox-[:Emails]->>) {
       construct: 'namespace functions (Currency, Date, Text, Number) and the coercers Date.from/DateTime.from/Number.parse',
       status: 'runs',
       probe: `
-import { \`@lf/email\` as email, \`@lf/attio\` as attio } from adapters
-import { acme } from credentials
-
 inbox = connect email
 crm   = connect attio using acme
 
@@ -545,9 +514,6 @@ function \`Intake\`(m: <inbox-[:Emails]->>) {
       construct: 'Date.today(zone) + DateTime.at(date, time, zone) — a zone-anchored window',
       status: 'runs',
       probe: `
-import { \`@lf/email\` as email, \`@lf/attio\` as attio } from adapters
-import { acme } from credentials
-
 inbox = connect email
 crm   = connect attio using acme
 
@@ -567,10 +533,7 @@ function \`Intake\`(m: <inbox-[:Emails]->>) {
       construct: 'pdf.render() artifacts as write-field values',
       status: 'runs',
       probe: `
-import { \`@lf/email\` as email, \`@lf/attio\` as attio } from adapters
 import { \`@lf/pdf\` as pdf } from plugins
-import { acme } from credentials
-
 inbox = connect email
 crm   = connect attio using acme
 
@@ -589,9 +552,6 @@ function \`Intake\`(m: <inbox-[:Emails]->>) {
       construct: 'ambient values (@user_email, @actor_*, @current_date)',
       status: 'runs',
       probe: `
-import { \`@lf/email\` as email, \`@lf/attio\` as attio } from adapters
-import { acme } from credentials
-
 inbox = connect email
 crm   = connect attio using acme
 
@@ -607,9 +567,6 @@ function \`Intake\`(m: <inbox-[:Emails]->>) {
       construct: "'== null' as a presence guard clause that narrows a maybe-absent first() scalar",
       status: 'runs',
       probe: `
-import { \`@lf/attio\` as attio } from adapters
-import { acme } from credentials
-
 crm = connect attio using acme
 
 function m(evt: <crm-[:CompanyChange]->>) {
@@ -625,13 +582,9 @@ function m(evt: <crm-[:CompanyChange]->>) {
       construct: 'File.read a file into text, Text.chunks the text into pieces, extract over the pieces',
       status: 'runs',
       probe: `
-import { \`@lf/manual\` as manual, \`@lf/attio\` as attio } from adapters
-import { acme } from credentials
-
-runs = connect manual
 crm  = connect attio using acme
 
-function \`Cut A Document\`(go: <runs-[:Invocation]->>) {
+function \`Cut A Document\`(go: <manual-[:Invocation]->>) {
   go-[f:Files]-> {
     text   = File.read(f.File)
     pieces = Text.chunks(coalesce(text, ""), { size: 40000, overlap: 2000 })
@@ -650,9 +603,6 @@ function \`Cut A Document\`(go: <runs-[:Invocation]->>) {
       construct: 'closures — expression bodies, a closure bound to a name and called, calls nested in expressions with short-circuiting',
       status: 'runs',
       probe: `
-import { \`@lf/email\` as email, \`@lf/attio\` as attio } from adapters
-import { acme } from credentials
-
 inbox = connect email
 crm   = connect attio using acme
 
@@ -678,9 +628,6 @@ function \`Summarise\`(m: <inbox-[:Emails]->>) {
       construct: 'map and filter with a settings record — onError, concurrency, initialConcurrency',
       status: 'runs',
       probe: `
-import { \`@lf/email\` as email, \`@lf/attio\` as attio } from adapters
-import { acme } from credentials
-
 inbox = connect email
 crm   = connect attio using acme
 
@@ -698,9 +645,6 @@ function \`Tidy\`(m: <inbox-[:Emails]->>) {
       construct: 'dict literals — spread of a dict and of a record, later keys winning, read with a dot',
       status: 'runs',
       probe: `
-import { \`@lf/email\` as email, \`@lf/attio\` as attio } from adapters
-import { acme } from credentials
-
 inbox = connect email
 crm   = connect attio using acme
 
@@ -736,9 +680,6 @@ function \`Merge\`(m: <inbox-[:Emails]->>) {
       construct: 'list literals — spread of a list, spread of a walk read for a field, tuple indexing and tuples read as a list of a union',
       status: 'runs',
       probe: `
-import { \`@lf/email\` as email, \`@lf/attio\` as attio } from adapters
-import { acme } from credentials
-
 inbox = connect email
 crm   = connect attio using acme
 

@@ -100,16 +100,14 @@ if (r[0] == "approve") { … }
 A link a person opens to answer is a form from \`@lf/forms\`. Reach for one when the person is outside every system the automation uses, or when the answer has several typed fields. Its fields are a \`node\` you declare, and the answer is typed by it.
 
 \`\`\`
-import { \`@lf/forms\` as forms_module } from adapters
-
-forms = connect forms_module
+forms = connect forms
 
 node Refund {
   Approve: <boolean>
   Note: <text | null>
 }
 
-function \`Refund Check\`(go: <runs-[:Invocation]->>) {
+function \`Refund Check\`(go: <manual-[:Invocation]->>) {
   form = write forms-[:Forms]-> { Title: "Approve the refund for \${go.Text}?", Fields: Refund }
   write ops-[:Messages]-> { Message: "Approve or decline: \${form.Url}" }
 
@@ -330,9 +328,6 @@ What a person can act on lives as long as its system keeps it: a message's butto
       construct: 'write an ask along a Check family edge, deliver its Url, and await its Response inside a race arm; the timeout is a null test on the slot',
       status: 'runs',
       probe: `
-import { \`@lf/email\` as email, \`@lf/slack\` as slack, \`@lf/attio\` as attio, \`@lf/ask\` as ask } from adapters
-import { team_workspace, acme_main } from credentials
-
 inbox = connect email
 team  = connect slack using team_workspace
 crm   = connect attio using acme_main
@@ -376,13 +371,9 @@ listen to inbox-[e:Emails WHERE e.Key == "intake"]-> fire \`Triage Inbound\`
       construct: 'buttons on a message, their press raced against a timeout, the press time read off slot 0',
       status: 'runs',
       probe: `
-import { \`@lf/slack\` as slack, \`@lf/manual\` as manual } from adapters
-import { team_workspace } from credentials
-
 team = connect slack using team_workspace
-runs = connect manual
 
-function \`First Approval Wins\`(go: <runs-[:Invocation]->>) {
+function \`First Approval Wins\`(go: <manual-[:Invocation]->>) {
   approvals = only(team-[ch:Channels WHERE ch.Topic == "approvals"]->)
   if (approvals == null) { fail("no #approvals channel") }
   msg = write approvals-[:Messages]-> {
@@ -409,21 +400,17 @@ function \`First Approval Wins\`(go: <runs-[:Invocation]->>) {
   }
 }
 
-listen to runs-[:Invocations]-> fire \`First Approval Wins\`
+listen to manual-[:Invocations]-> fire \`First Approval Wins\`
 `,
     },
     {
       construct: 'buttons whose press carries the Value it was written with, narrowed to those values and compared after the race',
       status: 'runs',
       probe: `
-import { \`@lf/slack\` as slack, \`@lf/attio\` as attio, \`@lf/manual\` as manual } from adapters
-import { team_workspace, acme_main } from credentials
-
 team = connect slack using team_workspace
 crm  = connect attio using acme_main
-runs = connect manual
 
-function \`Pursue Or Pass\`(go: <runs-[:Invocation]->>) {
+function \`Pursue Or Pass\`(go: <manual-[:Invocation]->>) {
   dealflow = only(team-[ch:Channels WHERE ch.Name == "dealflow"]->)
   if (dealflow == null) { fail("no #dealflow channel") }
   msg = write dealflow-[:Messages]-> {
@@ -451,20 +438,16 @@ function \`Pursue Or Pass\`(go: <runs-[:Invocation]->>) {
   }
 }
 
-listen to runs-[:Invocations]-> fire \`Pursue Or Pass\`
+listen to manual-[:Invocations]-> fire \`Pursue Or Pass\`
 `,
     },
     {
       construct: 'await on an edge that is also listed (a thread\'s Replies): the first reply already there, or the next, raced against a sleep',
       status: 'runs',
       probe: `
-import { \`@lf/slack\` as slack, \`@lf/manual\` as manual } from adapters
-import { team_workspace } from credentials
-
 team = connect slack using team_workspace
-runs = connect manual
 
-function \`Who Takes It\`(go: <runs-[:Invocation]->>) {
+function \`Who Takes It\`(go: <manual-[:Invocation]->>) {
   dealflow = only(team-[ch:Channels WHERE ch.Name == "dealflow"]->)
   if (dealflow == null) { fail("no #dealflow channel") }
   msg = write dealflow-[:Messages]-> { Message: "Who can take \${go.Text}? Reply in the thread." }
@@ -482,20 +465,16 @@ function \`Who Takes It\`(go: <runs-[:Invocation]->>) {
   }
 }
 
-listen to runs-[:Invocations]-> fire \`Who Takes It\`
+listen to manual-[:Invocations]-> fire \`Who Takes It\`
 `,
     },
     {
       construct: 'await new on a thread\'s Replies, its WHERE reading a record the run holds — only an answer from the author, after the run read the message',
       status: 'runs',
       probe: `
-import { \`@lf/slack\` as slack, \`@lf/manual\` as manual } from adapters
-import { team_workspace } from credentials
-
 team = connect slack using team_workspace
-runs = connect manual
 
-function \`Chase The Author\`(go: <runs-[:Invocation]->>) {
+function \`Chase The Author\`(go: <manual-[:Invocation]->>) {
   dealflow = only(team-[ch:Channels WHERE ch.Name == "dealflow"]->)
   if (dealflow == null) { fail("no #dealflow channel") }
   thread = only(dealflow-[m:Messages WHERE m.Message == go.Text]->)
@@ -515,20 +494,16 @@ function \`Chase The Author\`(go: <runs-[:Invocation]->>) {
   }
 }
 
-listen to runs-[:Invocations]-> fire \`Chase The Author\`
+listen to manual-[:Invocations]-> fire \`Chase The Author\`
 `,
     },
     {
       construct: 'a race arm handing back WHICH place answered — a dict built in the arm that knows it, the first answered slot taken with coalesce',
       status: 'runs',
       probe: `
-import { \`@lf/slack\` as slack, \`@lf/manual\` as manual } from adapters
-import { team_workspace } from credentials
-
 team = connect slack using team_workspace
-runs = connect manual
 
-function \`Which Place Answered\`(go: <runs-[:Invocation]->>) {
+function \`Which Place Answered\`(go: <manual-[:Invocation]->>) {
   \`Dealflow Channel\` = only(team-[ch:Channels WHERE ch.Name == "dealflow"]->)
   if (\`Dealflow Channel\` == null) { fail("no #dealflow channel") }
   \`Portfolio Channel\` = only(team-[p:Channels WHERE p.Name == "portfolio"]->)
@@ -565,21 +540,17 @@ function \`Which Place Answered\`(go: <runs-[:Invocation]->>) {
   }
 }
 
-listen to runs-[:Invocations]-> fire \`Which Place Answered\`
+listen to manual-[:Invocations]-> fire \`Which Place Answered\`
 `,
     },
     {
       construct: 'all over two awaiting closures, run at once inside a race with a sleep — both answers combined',
       status: 'runs',
       probe: `
-import { \`@lf/slack\` as slack, \`@lf/ask\` as ask, \`@lf/manual\` as manual } from adapters
-import { team_workspace } from credentials
-
 team = connect slack using team_workspace
 asks = connect ask
-runs = connect manual
 
-function \`Both Must Agree\`(go: <runs-[:Invocation]->>) {
+function \`Both Must Agree\`(go: <manual-[:Invocation]->>) {
   budget = write asks-[:Check]-> { Prompt: "Budget approved?" }
   legal  = write asks-[:Check]-> { Prompt: "Legal approved?" }
 
@@ -613,21 +584,17 @@ function \`Both Must Agree\`(go: <runs-[:Invocation]->>) {
   }
 }
 
-listen to runs-[:Invocations]-> fire \`Both Must Agree\`
+listen to manual-[:Invocations]-> fire \`Both Must Agree\`
 `,
     },
     {
       construct: 'await until — a closure condition refreshing a written handle, on a named cadence',
       status: 'runs',
       probe: `
-import { \`@lf/attio\` as attio, \`@lf/slack\` as slack, \`@lf/manual\` as manual } from adapters
-import { acme_main, team_workspace } from credentials
-
 crm  = connect attio using acme_main
 team = connect slack using team_workspace
-runs = connect manual
 
-function \`Wait For The Name\`(go: <runs-[:Invocation]->>) {
+function \`Wait For The Name\`(go: <manual-[:Invocation]->>) {
   co = write crm-[:Companies]-> {
     unique by (FUZZY Name)
     Name: go.Text
@@ -643,22 +610,18 @@ function \`Wait For The Name\`(go: <runs-[:Invocation]->>) {
   write dealflow-[:Messages]-> { Message: "Renamed at last." }
 }
 
-listen to runs-[:Invocations]-> fire \`Wait For The Name\`
+listen to manual-[:Invocations]-> fire \`Wait For The Name\`
 `,
     },
     {
       construct: 'a Provide question with a literal Answer Type, its typed answer filled into a record with ?:',
       status: 'runs',
       probe: `
-import { \`@lf/slack\` as slack, \`@lf/attio\` as attio, \`@lf/ask\` as ask, \`@lf/manual\` as manual } from adapters
-import { team_workspace, acme_main } from credentials
-
 team = connect slack using team_workspace
 crm  = connect attio using acme_main
 asks = connect ask
-runs = connect manual
 
-function \`Record Headcount\`(go: <runs-[:Invocation]->>) {
+function \`Record Headcount\`(go: <manual-[:Invocation]->>) {
   q = write asks-[:Provide]-> {
     Prompt: "How many people work there?"
     \`Answer Type\`: "number"
@@ -675,22 +638,18 @@ function \`Record Headcount\`(go: <runs-[:Invocation]->>) {
   }
 }
 
-listen to runs-[:Invocations]-> fire \`Record Headcount\`
+listen to manual-[:Invocations]-> fire \`Record Headcount\`
 `,
     },
     {
       construct: 'a Choose question over literal options, its answer compared against one of them',
       status: 'runs',
       probe: `
-import { \`@lf/slack\` as slack, \`@lf/attio\` as attio, \`@lf/ask\` as ask, \`@lf/manual\` as manual } from adapters
-import { team_workspace, acme_main } from credentials
-
 team = connect slack using team_workspace
 crm  = connect attio using acme_main
 asks = connect ask
-runs = connect manual
 
-function \`Decide Next Step\`(go: <runs-[:Invocation]->>) {
+function \`Decide Next Step\`(go: <manual-[:Invocation]->>) {
   q = write asks-[:Choose]-> {
     Prompt: "What next?"
     Options: ["pursue", "hold", "pass"]
@@ -708,21 +667,17 @@ function \`Decide Next Step\`(go: <runs-[:Invocation]->>) {
   }
 }
 
-listen to runs-[:Invocations]-> fire \`Decide Next Step\`
+listen to manual-[:Invocations]-> fire \`Decide Next Step\`
 `,
     },
     {
       construct: 'a Select question over literal options, its chosen subset joined into a message',
       status: 'runs',
       probe: `
-import { \`@lf/slack\` as slack, \`@lf/ask\` as ask, \`@lf/manual\` as manual } from adapters
-import { team_workspace } from credentials
-
 team = connect slack using team_workspace
 asks = connect ask
-runs = connect manual
 
-function \`Pick Channels\`(go: <runs-[:Invocation]->>) {
+function \`Pick Channels\`(go: <manual-[:Invocation]->>) {
   q = write asks-[:Select]-> {
     Prompt: "Which teams should hear about this?"
     Options: ["sales", "support", "finance"]
@@ -735,22 +690,18 @@ function \`Pick Channels\`(go: <runs-[:Invocation]->>) {
   write dealflow-[:Messages]-> { Message ?: "Telling: \${Text.join(a.Answer, ", ")}" }
 }
 
-listen to runs-[:Invocations]-> fire \`Pick Channels\`
+listen to manual-[:Invocations]-> fire \`Pick Channels\`
 `,
     },
     {
       construct: 'a Review question — an acknowledgement awaited before the work carries on',
       status: 'runs',
       probe: `
-import { \`@lf/slack\` as slack, \`@lf/attio\` as attio, \`@lf/ask\` as ask, \`@lf/manual\` as manual } from adapters
-import { team_workspace, acme_main } from credentials
-
 team = connect slack using team_workspace
 crm  = connect attio using acme_main
 asks = connect ask
-runs = connect manual
 
-function \`Acknowledge First\`(go: <runs-[:Invocation]->>) {
+function \`Acknowledge First\`(go: <manual-[:Invocation]->>) {
   q = write asks-[:Review]-> {
     Prompt: "Read this before it goes out"
     Detail: go.Text
@@ -766,21 +717,17 @@ function \`Acknowledge First\`(go: <runs-[:Invocation]->>) {
   }
 }
 
-listen to runs-[:Invocations]-> fire \`Acknowledge First\`
+listen to manual-[:Invocations]-> fire \`Acknowledge First\`
 `,
     },
     {
       construct: 'a Draft question — a structured artifact composed by a person, awaited',
       status: 'runs',
       probe: `
-import { \`@lf/slack\` as slack, \`@lf/ask\` as ask, \`@lf/manual\` as manual } from adapters
-import { team_workspace } from credentials
-
 team = connect slack using team_workspace
 asks = connect ask
-runs = connect manual
 
-function \`Draft The Reply\`(go: <runs-[:Invocation]->>) {
+function \`Draft The Reply\`(go: <manual-[:Invocation]->>) {
   q = write asks-[:Draft]-> {
     Prompt: "Draft the reply"
     Detail: go.Text
@@ -793,21 +740,17 @@ function \`Draft The Reply\`(go: <runs-[:Invocation]->>) {
   write dealflow-[:Messages]-> { Message: "The draft is in." }
 }
 
-listen to runs-[:Invocations]-> fire \`Draft The Reply\`
+listen to manual-[:Invocations]-> fire \`Draft The Reply\`
 `,
     },
     {
       construct: 'a Correct question whose Rows are written as literal objects',
       status: 'runs',
       probe: `
-import { \`@lf/slack\` as slack, \`@lf/ask\` as ask, \`@lf/manual\` as manual } from adapters
-import { team_workspace } from credentials
-
 team = connect slack using team_workspace
 asks = connect ask
-runs = connect manual
 
-function \`Fix The Rows\`(go: <runs-[:Invocation]->>) {
+function \`Fix The Rows\`(go: <manual-[:Invocation]->>) {
   q = write asks-[:Correct]-> {
     Prompt: "Fix anything that's wrong, drop anything that isn't real"
     Rows: [
@@ -823,21 +766,17 @@ function \`Fix The Rows\`(go: <runs-[:Invocation]->>) {
   write dealflow-[:Messages]-> { Message: "Corrections in." }
 }
 
-listen to runs-[:Invocations]-> fire \`Fix The Rows\`
+listen to manual-[:Invocations]-> fire \`Fix The Rows\`
 `,
     },
     {
       construct: 'a Form question collecting several named fields at once, one of them read back by name',
       status: 'runs',
       probe: `
-import { \`@lf/slack\` as slack, \`@lf/ask\` as ask, \`@lf/manual\` as manual } from adapters
-import { team_workspace } from credentials
-
 team = connect slack using team_workspace
 asks = connect ask
-runs = connect manual
 
-function \`Collect The Details\`(go: <runs-[:Invocation]->>) {
+function \`Collect The Details\`(go: <manual-[:Invocation]->>) {
   q = write asks-[:Form]-> {
     Prompt: "Fill in the missing details"
     Fields: ["Company", "Contact", "Budget"]
@@ -850,22 +789,18 @@ function \`Collect The Details\`(go: <runs-[:Invocation]->>) {
   write dealflow-[:Messages]-> { Message: "Details in — budget \${a.Budget}." }
 }
 
-listen to runs-[:Invocations]-> fire \`Collect The Details\`
+listen to manual-[:Invocations]-> fire \`Collect The Details\`
 `,
     },
     {
       construct: 'the pick idiom — Choose over options gathered at run time, the answer filtering the graph back to the record',
       status: 'runs',
       probe: `
-import { \`@lf/manual\` as manual, \`@lf/attio\` as attio, \`@lf/slack\` as slack, \`@lf/ask\` as ask } from adapters
-import { acme_main, team_workspace } from credentials
-
-runs = connect manual
 crm  = connect attio using acme_main
 team = connect slack using team_workspace
 asks = connect ask
 
-function \`Pick The Company\`(go: <runs-[:Invocation]->>) {
+function \`Pick The Company\`(go: <manual-[:Invocation]->>) {
   found = crm-[c:Companies WHERE c.Categories == "Lead"]-> {
     return c.Name
   }
@@ -896,26 +831,22 @@ function \`Pick The Company\`(go: <runs-[:Invocation]->>) {
   }
 }
 
-listen to runs-[:Invocations]-> fire \`Pick The Company\`
+listen to manual-[:Invocations]-> fire \`Pick The Company\`
 `,
     },
     {
       construct: 'a host link: a form from @lf/forms, its Url sent, its typed submission raced against a sleep',
       status: 'runs',
       probe: `
-import { \`@lf/slack\` as slack, \`@lf/forms\` as forms_module, \`@lf/manual\` as manual } from adapters
-import { team_workspace } from credentials
-
 team  = connect slack using team_workspace
-forms = connect forms_module
-runs  = connect manual
+forms = connect forms
 
 node Decision {
   Pursue: <boolean>
   Note: <text | null>
 }
 
-function \`Decide By Link\`(go: <runs-[:Invocation]->>) {
+function \`Decide By Link\`(go: <manual-[:Invocation]->>) {
   dealflow = only(team-[ch:Channels WHERE ch.Name == "dealflow"]->)
   if (dealflow == null) { fail("no #dealflow channel") }
 
@@ -935,26 +866,22 @@ function \`Decide By Link\`(go: <runs-[:Invocation]->>) {
   if (r[0] == null) { fail("nobody answered the form in two days") }
 }
 
-listen to runs-[:Invocations]-> fire \`Decide By Link\`
+listen to manual-[:Invocations]-> fire \`Decide By Link\`
 `,
     },
     {
       construct: 'a form whose answer is typed by a node, its fields read after the await',
       status: 'runs',
       probe: `
-import { \`@lf/slack\` as slack, \`@lf/attio\` as attio, \`@lf/forms\` as forms_module, \`@lf/manual\` as manual } from adapters
-import { team_workspace, acme_main } from credentials
-
 team  = connect slack using team_workspace
 crm   = connect attio using acme_main
-forms = connect forms_module
-runs  = connect manual
+forms = connect forms
 
 node Booking {
   Day: <date>
 }
 
-function \`Book The Follow Up\`(go: <runs-[:Invocation]->>) {
+function \`Book The Follow Up\`(go: <manual-[:Invocation]->>) {
   company = write crm-[:Companies]-> {
     unique by (FUZZY Name)
     Name: go.Text
@@ -972,19 +899,15 @@ function \`Book The Follow Up\`(go: <runs-[:Invocation]->>) {
   }
 }
 
-listen to runs-[:Invocations]-> fire \`Book The Follow Up\`
+listen to manual-[:Invocations]-> fire \`Book The Follow Up\`
 `,
     },
     {
       construct: 'a named function called with the answer a form returned',
       status: 'runs',
       probe: `
-import { \`@lf/attio\` as attio, \`@lf/forms\` as forms_module, \`@lf/manual\` as manual } from adapters
-import { acme_main } from credentials
-
 crm   = connect attio using acme_main
-forms = connect forms_module
-runs  = connect manual
+forms = connect forms
 
 node Booking {
   Day: <date>
@@ -994,7 +917,7 @@ function \`Book\`(c: <crm-[:Companies]->>, day: <date>) {
   write c-[:Notes]-> { Title: "Booked", Content: "Booked for \${day}." }
 }
 
-function \`Offer\`(go: <runs-[:Invocation]->>) {
+function \`Offer\`(go: <manual-[:Invocation]->>) {
   company = write crm-[:Companies]-> { unique by (FUZZY Name), Name: go.Text }
   form = write forms-[:Forms]-> { Title: "Pick a day for \${company.Name}", Fields: Booking }
   write company-[:Notes]-> { Title: "Pick a day", Content: "\${form.Url}" }
@@ -1002,7 +925,7 @@ function \`Offer\`(go: <runs-[:Invocation]->>) {
   \`Book\`(company, booking.Day)
 }
 
-listen to runs-[:Invocations]-> fire \`Offer\`
+listen to manual-[:Invocations]-> fire \`Offer\`
 `,
     },
   ],

@@ -182,9 +182,6 @@ A document a plugin downloaded comes back on its result (\`vcUrlRetrieval\`'s \`
       construct: 'the extraction call — extract(content, Shape, settings), then a per-record extractOne in map',
       status: 'runs',
       probe: `
-import { \`@lf/email\` as email, \`@lf/attio\` as attio } from adapters
-import { acme } from credentials
-
 inbox = connect email
 crm   = connect attio using acme
 
@@ -223,9 +220,6 @@ function \`Intake\`(m: <inbox-[:Emails]->>) {
       construct: 'merging an extracted record with its detail — { ...c, ...details } and graph<Shape> { ...c, ...details }',
       status: 'runs',
       probe: `
-import { \`@lf/email\` as email, \`@lf/attio\` as attio } from adapters
-import { acme } from credentials
-
 inbox = connect email
 crm   = connect attio using acme
 
@@ -279,9 +273,6 @@ function \`Intake\`(m: <inbox-[:Emails]->>) {
       construct: 'a <boolean> extraction field on extractOne, guarded then branched on directly with if',
       status: 'runs',
       probe: `
-import { \`@lf/email\` as email, \`@lf/attio\` as attio } from adapters
-import { acme } from credentials
-
 inbox = connect email
 crm   = connect attio using acme
 
@@ -303,9 +294,6 @@ function \`Triage\`(m: <inbox-[:Emails]->>) {
       construct: 'the extraction call over a body and its files — a borrowed option type, a written set of values, a nested node written along its parent, and the source files attached',
       status: 'runs',
       probe: `
-import { \`@lf/email\` as email, \`@lf/attio\` as attio } from adapters
-import { acme } from credentials
-
 inbox = connect email
 crm   = connect attio using acme
 
@@ -343,8 +331,6 @@ function \`Intake\`(m: <inbox-[:Emails]->>) {
       construct: 'enrichment by composition — plugin calls inside map, extractOne over shared content plus what they returned, merged into graph<Shape> and written along its nested node',
       status: 'runs',
       probe: `
-import { \`@lf/email\` as email, \`@lf/attio\` as attio } from adapters
-import { acme } from credentials
 import { fetchUrl, research } from plugins
 
 inbox = connect email
@@ -391,10 +377,6 @@ function \`Enrich\`(m: <inbox-[:Emails]->>) {
       construct: 'a long document read with File.read, cut with Text.chunks, extracted per piece in map, merged into a typed empty graph by unique by, then written',
       status: 'runs',
       probe: `
-import { \`@lf/manual\` as manual, \`@lf/attio\` as attio } from adapters
-import { acme } from credentials
-
-runs = connect manual
 crm  = connect attio using acme
 
 node Company: "each company named" {
@@ -409,7 +391,7 @@ node Found {
   }
 }
 
-function \`Intake Documents\`(go: <runs-[:Invocation]->>) {
+function \`Intake Documents\`(go: <manual-[:Invocation]->>) {
   docs    = go-[:Files]->.File
   pieces  = Text.chunks(coalesce(File.read(first(docs)), ""), { size: 40000, overlap: 2000 })
   deduped = graph<Found> {}
@@ -425,15 +407,13 @@ function \`Intake Documents\`(go: <runs-[:Invocation]->>) {
   }
 }
 
-listen to runs-[:Invocations]-> fire \`Intake Documents\`
+listen to manual-[:Invocations]-> fire \`Intake Documents\`
 `,
     },
     {
       construct: 'plugins called plainly, outside any extraction',
       status: 'runs',
       probe: `
-import { \`@lf/email\` as email, \`@lf/attio\` as attio } from adapters
-import { acme } from credentials
 import { fetchUrl, research, vcUrlRetrieval } from plugins
 
 inbox = connect email
@@ -457,9 +437,6 @@ function \`Enrich\`(m: <inbox-[:Emails]->>) {
       construct: 'extraction call — an inline shape, only around a nested call, a walk spread into the content, and enrichment in map with a plugin call',
       status: 'runs',
       probe: `
-import { \`@lf/email\` as email, \`@lf/attio\` as attio } from adapters
-import { acme } from credentials
-
 inbox = connect email
 crm   = connect attio using acme
 
@@ -494,9 +471,6 @@ function \`Intake\`(m: <inbox-[:Emails]->>) {
       construct: 'extractOne(content, Shape, settings) — the single record or absent, handled, nested, and enriching each record in map',
       status: 'runs',
       probe: `
-import { \`@lf/email\` as email, \`@lf/attio\` as attio } from adapters
-import { acme } from credentials
-
 inbox = connect email
 crm   = connect attio using acme
 

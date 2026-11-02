@@ -1,7 +1,4 @@
-import { acme_crm } from adapters
 import { `@acme/words` as words } from plugins
-import { acme } from credentials
-
 crm = connect acme_crm using acme
 
 function tag(company: <crm-[:Company]->>) {

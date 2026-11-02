@@ -8,9 +8,6 @@ export const anatomy: Chapter = {
 Write a file (extension \`.mvt\`) in four passes, top to bottom: imports, constructions, declarations, entry points.
 
 \`\`\`
-import { \`@lf/email\` as email, \`@lf/attio\` as attio } from adapters
-import { acme_main } from credentials
-
 inbox = connect email
 crm   = connect attio using acme_main
 
@@ -24,21 +21,17 @@ function \`Inbound Intake\`(msg: <inbox-[:Emails]->>) {
 listen to inbox-[e:Emails WHERE e.Key == "intake"]-> fire \`Inbound Intake\`
 \`\`\`
 
-Imports name every external thing the file touches; constructions turn adapter types into the concrete systems ("instances") you read and write; declarations hold the automations, record structures, and file-scope values; \`listen\` lines wire an automation to what fires it (see the listeners chapter). Comments start with \`#\`.
+Imports name the plugins and the other files' declarations the file uses; \`connect\` turns a system, named by its adapter, into the concrete graph ("instance") you read and write; declarations hold the automations, record structures, and file-scope values; \`listen\` lines wire an automation to what fires it (see the listeners chapter). Comments start with \`#\`.
 
 ### imports
 
-Import from four sources, one mechanism:
+Import from two sources, one mechanism:
 
 \`\`\`
-import { \`@lf/attio\` as attio, \`@lf/email\` as email } from adapters
-import { acme_main } from credentials
 import { fetchUrl } from plugins
 import { \`Log Lead\`, Lead as \`Inbound Lead\` } from "lib/intake-routines"
 \`\`\`
 
-- \`adapters\` — adapter *types*, the kinds of system you can construct.
-- \`credentials\` — your workspace's stored connections, by name, named only after \`using\` in a \`connect\`.
 - \`plugins\` — functions the platform ships, called as a function is, by position, with any other inputs in one settings record last: \`page = fetchUrl(c.website)\`, \`deck = fetchUrl(o.deck_url, { email: @user_email })\`.
 - A quoted path — automations and record structures from another saved file. Only declarations it marks \`export\` are importable, and \`as\` renames locally.
 
@@ -46,7 +39,7 @@ The quoted path is the other file's saved name, matched exactly — no folders, 
 
 ### constructions
 
-\`connect\` an adapter type to get an instance — the graph you actually read and write:
+\`connect\` an adapter to get an instance — the graph you actually read and write. Name the adapter and your workspace's stored connection (its credential) right there; neither is imported:
 
 \`\`\`
 crm   = connect attio using acme_main
@@ -334,9 +327,6 @@ function team_size(name: <text>, people: <{ name: text, manager: text }[]>): <nu
       construct: 'recursion: a function calling itself from inside a map, with a declared return type',
       status: 'runs',
       probe: `
-import { \`@lf/email\` as email, \`@lf/attio\` as attio } from adapters
-import { acme } from credentials
-
 inbox = connect email
 crm   = connect attio using acme
 
@@ -364,9 +354,6 @@ function \`Intake\`(m: <inbox-[:Emails]->>) {
       construct: 'function calls (composition) with a graph<Shape> argument built in place',
       status: 'runs',
       probe: `
-import { \`@lf/email\` as email, \`@lf/attio\` as attio } from adapters
-import { acme } from credentials
-
 inbox = connect email
 crm   = connect attio using acme
 
@@ -390,9 +377,6 @@ function \`Intake\`(m: <inbox-[:Emails]->>) {
       construct: "everything a run wrote, collected by returning each write's handle from map, then acted on member by member",
       status: 'runs',
       probe: `
-import { \`@lf/email\` as email, \`@lf/slack\` as slack } from adapters
-import { team_workspace } from credentials
-
 inbox = connect email
 chat  = connect slack using team_workspace
 
@@ -415,9 +399,6 @@ listen to inbox-[e:Emails WHERE e.Key == "intake"]-> fire \`Post And Confirm\`
       construct: "a call's value — what the callee returned, bound and passed on",
       status: 'runs',
       probe: `
-import { \`@lf/email\` as email, \`@lf/attio\` as attio } from adapters
-import { acme } from credentials
-
 inbox = connect email
 crm   = connect attio using acme
 
@@ -447,9 +428,6 @@ function \`Intake\`(m: <inbox-[:Emails]->>) {
       construct: 'a returned graph carrying several results — one entry read by dot, one walked as an edge',
       status: 'runs',
       probe: `
-import { \`@lf/email\` as email, \`@lf/attio\` as attio } from adapters
-import { acme } from credentials
-
 inbox = connect email
 crm   = connect attio using acme
 
@@ -481,9 +459,6 @@ function \`Intake\`(msg: <inbox-[:Emails]->>) {
       construct: 'multi-parameter library functions (any arity by call; entries stay arity-1)',
       status: 'runs',
       probe: `
-import { \`@lf/email\` as email, \`@lf/attio\` as attio } from adapters
-import { acme } from credentials
-
 inbox = connect email
 crm   = connect attio using acme
 
@@ -512,9 +487,6 @@ function \`Intake\`(m: <inbox-[:Emails]->>) {
       construct: 'a graph literal TREE — a single synthesised edge, traversed by the callee',
       status: 'runs',
       probe: `
-import { \`@lf/email\` as email, \`@lf/attio\` as attio } from adapters
-import { acme } from credentials
-
 inbox = connect email
 crm   = connect attio using acme
 
@@ -544,9 +516,6 @@ function \`Intake\`(m: <inbox-[:Emails]->>) {
       construct: 'a graph literal child built per record on a path (renamed landings)',
       status: 'runs',
       probe: `
-import { \`@lf/email\` as email, \`@lf/attio\` as attio } from adapters
-import { acme } from credentials
-
 inbox = connect email
 crm   = connect attio using acme
 
@@ -576,9 +545,6 @@ function \`Intake\`(m: <inbox-[:Emails]->>) {
       construct: 'a write into a nested node of a typed empty graph the run built',
       status: 'runs',
       probe: `
-import { \`@lf/manual\` as manual } from adapters
-
-runs = connect manual
 
 node Company: "each company named in the supplied text" {
   name:    <text> "the company's name"
@@ -592,7 +558,7 @@ node Found {
   }
 }
 
-function \`Dedupe\`(go: <runs-[:Invocation]->>) {
+function \`Dedupe\`(go: <manual-[:Invocation]->>) {
   deduped = graph<Found> {}
 
   map(extract([go.Text], Company), (c) => {
@@ -613,7 +579,6 @@ function \`Dedupe\`(go: <runs-[:Invocation]->>) {
       construct: 'file imports (shared movement libraries)',
       status: 'runs',
       probe: `
-import { \`@lf/email\` as email } from adapters
 import { \`Log Lead\` } from "lib/intake-routines"
 
 inbox = connect email
@@ -627,9 +592,6 @@ function \`Intake\`(m: <inbox-[:Emails]->>) {
       construct: 'graph literals — graph<Shape> with path-with-field-body children, a bare-path reference, and a spread of a map',
       status: 'runs',
       probe: `
-import { \`@lf/email\` as email, \`@lf/attio\` as attio } from adapters
-import { acme } from credentials
-
 inbox = connect email
 crm   = connect attio using acme
 
@@ -673,9 +635,6 @@ function \`Snapshot\`(m: <inbox-[:Emails]->>) {
       construct: 'function convention — positional calls, value and record parameters, exact-case names',
       status: 'runs',
       probe: `
-import { \`@lf/email\` as email, \`@lf/attio\` as attio } from adapters
-import { acme } from credentials
-
 inbox = connect email
 crm   = connect attio using acme
 

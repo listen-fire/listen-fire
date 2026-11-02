@@ -14,7 +14,8 @@ const whole = readFileSync(join(__dirname, '..', '..', '..', 'docs', 'language',
 // modules they name (apps/cli's upgrade test), most of which this catalog lacks.
 const listens = whole.indexOf('## 8. Listens are traversals');
 const guide = whole.slice(0, listens) + whole.slice(whole.indexOf('## 9. ', listens));
-const programs = [...guide.matchAll(/^```\n(import \{[\s\S]*?)^```$/gm)].map((m) => m[1]);
+// A program is a fenced block that connects a system.
+const programs = [...guide.matchAll(/^```\n([\s\S]*?)^```$/gm)].map((m) => m[1]).filter((block) => /^\w+ *= connect /m.test(block));
 
 describe('the programs the 0.13 migration guide shows', () => {
   it('show a replacement for each retired form', () => {

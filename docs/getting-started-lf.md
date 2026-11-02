@@ -33,9 +33,6 @@ listen to cron-[t:Ticks WHERE t.Schedule == "0 9 * * 1"]-> fire digest          
 A system's events need its external. Put a `.mvt` file in `movements/`:
 
 ```
-import { acme_crm } from adapters
-import { acme } from credentials
-
 crm = connect acme_crm using acme
 
 function welcome(company: <crm-[:Company]->>) {
@@ -117,7 +114,7 @@ A movement imports only modules installed in `externals/`; installing is always 
 listen-fire credential add --module <module> my_credential
 ```
 
-This signs you in at the provider (OAuth) or asks for the module's fields, and stores the result in `.lf/secrets.yaml`. A movement names it with `import { my_credential } from credentials`. `listen-fire credential list|update|delete` manage the rest. In containers and CI, set `LF_SECRET__<NAME>__<FIELD>` instead of keeping a file. Like ssh with a private key, listen-fire refuses a secrets file that other users can read; fix it with `chmod 600 <path>` (listen-fire itself always writes it that way).
+This signs you in at the provider (OAuth) or asks for the module's fields, and stores the result in `.lf/secrets.yaml`. A movement names it after `using`: `crm = connect acme_crm using my_credential`. `listen-fire credential list|update|delete` manage the rest. In containers and CI, set `LF_SECRET__<NAME>__<FIELD>` instead of keeping a file. Like ssh with a private key, listen-fire refuses a secrets file that other users can read; fix it with `chmod 600 <path>` (listen-fire itself always writes it that way).
 
 ## 5. Run
 

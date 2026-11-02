@@ -19,9 +19,6 @@ The credential asks for:
 ## What a movement sees
 
 ```
-import { `@lf/github` as github, `@lf/slack` as slack } from adapters
-import { henry_github, team_slack } from credentials
-
 gh   = connect github using henry_github
 chat = connect slack using team_slack
 

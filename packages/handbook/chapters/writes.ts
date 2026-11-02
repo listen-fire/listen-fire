@@ -236,9 +236,6 @@ delete stale                           # remove the record itself
       construct: 'bare-handle link statements between written handles',
       status: 'runs',
       probe: `
-import { \`@lf/email\` as email, \`@lf/attio\` as attio } from adapters
-import { acme } from credentials
-
 inbox = connect email
 crm   = connect attio using acme
 
@@ -253,9 +250,6 @@ function \`Intake\`(m: <inbox-[:Emails]->>) {
       construct: 'match statements (find by identity, guarded), then link',
       status: 'runs',
       probe: `
-import { \`@lf/email\` as email, \`@lf/attio\` as attio } from adapters
-import { acme } from credentials
-
 inbox = connect email
 crm   = connect attio using acme
 
@@ -273,9 +267,6 @@ function \`Intake\`(m: <inbox-[:Emails]->>) {
       construct: 'match then guarded link, with unique by',
       status: 'runs',
       probe: `
-import { \`@lf/email\` as email, \`@lf/attio\` as attio } from adapters
-import { acme } from credentials
-
 inbox = connect email
 crm   = connect attio using acme
 
@@ -293,9 +284,6 @@ function \`Intake\`(m: <inbox-[:Emails]->>) {
       construct: "a WHERE on a match target's hop, narrowing which existing records may be matched",
       status: 'runs',
       probe: `
-import { \`@lf/email\` as email, \`@lf/attio\` as attio } from adapters
-import { acme } from credentials
-
 inbox = connect email
 crm   = connect attio using acme
 
@@ -314,9 +302,6 @@ function \`Intake\`(m: <inbox-[:Emails]->>) {
       construct: 'named match with a guard, FUZZY and two OR-ed identity clauses',
       status: 'runs',
       probe: `
-import { \`@lf/email\` as email, \`@lf/attio\` as attio } from adapters
-import { acme } from credentials
-
 inbox = connect email
 crm   = connect attio using acme
 
@@ -337,9 +322,6 @@ function \`Intake\`(m: <inbox-[:Emails]->>) {
       construct: 'tuple-path multi-parent writes',
       status: 'runs',
       probe: `
-import { \`@lf/email\` as email, \`@lf/attio\` as attio } from adapters
-import { acme } from credentials
-
 inbox = connect email
 crm   = connect attio using acme
 
@@ -357,9 +339,6 @@ function \`Intake\`(m: <inbox-[:Emails]->>) {
       construct: "the '?:' set-if-empty field marker",
       status: 'runs',
       probe: `
-import { \`@lf/email\` as email, \`@lf/attio\` as attio } from adapters
-import { acme } from credentials
-
 inbox = connect email
 crm   = connect attio using acme
 
@@ -376,9 +355,6 @@ function \`Intake\`(m: <inbox-[:Emails]->>) {
       construct: "the '+:' / '+?:' append field markers (multi-value merge)",
       status: 'runs',
       probe: `
-import { \`@lf/email\` as email, \`@lf/attio\` as attio } from adapters
-import { acme } from credentials
-
 inbox = connect email
 crm   = connect attio using acme
 
@@ -397,47 +373,36 @@ function \`Intake\`(m: <inbox-[:Emails]->>) {
       construct: 'in-place update of a traversed record (`write <alias> { … }`)',
       status: 'runs',
       probe: `
-import { \`@lf/manual\` as manual, \`@lf/attio\` as attio } from adapters
-import { acme } from credentials
-
-runs = connect manual
 crm  = connect attio using acme
 
-function \`Reactivate\`(go: <runs-[:Invocation]->>) {
+function \`Reactivate\`(go: <manual-[:Invocation]->>) {
   crm-[record:Companies WHERE record.Categories == "Lead"]-> {
     write record { Categories: "Customer" }
   }
 }
 
-listen to runs-[:Invocations]-> fire \`Reactivate\`
+listen to manual-[:Invocations]-> fire \`Reactivate\`
 `,
     },
     {
       construct: 'a WHERE-filtered lookup over the source graph, bound with only and guarded (the exact-lookup idiom)',
       status: 'runs',
       probe: `
-import { \`@lf/manual\` as manual, \`@lf/attio\` as attio } from adapters
-import { acme } from credentials
-
-runs = connect manual
 crm  = connect attio using acme
 
-function \`Enrich\`(go: <runs-[:Invocation]->>) {
+function \`Enrich\`(go: <manual-[:Invocation]->>) {
   company = only(crm-[c:Companies WHERE c.Domains CONTAINS "acme.com"]->)
   if (company == null) { fail("no company at acme.com") }
   write company-[:Notes]-> { Title: "Enriched", Content: "found \${company.Name}" }
 }
 
-listen to runs-[:Invocations]-> fire \`Enrich\`
+listen to manual-[:Invocations]-> fire \`Enrich\`
 `,
     },
     {
       construct: 'unlink statements between written handles',
       status: 'runs',
       probe: `
-import { \`@lf/email\` as email, \`@lf/attio\` as attio } from adapters
-import { acme } from credentials
-
 inbox = connect email
 crm   = connect attio using acme
 
@@ -452,9 +417,6 @@ function \`Intake\`(m: <inbox-[:Emails]->>) {
       construct: 'delete statements over written handles',
       status: 'runs',
       probe: `
-import { \`@lf/email\` as email, \`@lf/attio\` as attio } from adapters
-import { acme } from credentials
-
 inbox = connect email
 crm   = connect attio using acme
 
@@ -468,9 +430,6 @@ function \`Intake\`(m: <inbox-[:Emails]->>) {
       construct: "'?:' discharging a first()-bound value that may be absent, no guard needed",
       status: 'runs',
       probe: `
-import { \`@lf/attio\` as attio } from adapters
-import { acme } from credentials
-
 crm = connect attio using acme
 
 function m(evt: <crm-[:CompanyChange]->>) {
@@ -484,11 +443,8 @@ function m(evt: <crm-[:CompanyChange]->>) {
     {
       construct: 'traversing edges onward from a write handle (block head and expression form)',
       status: 'runs',
-      probe: `import { \`@lf/manual\` as manual, \`@lf/attio\` as attio } from adapters
-import { acme_main } from credentials
-runs = connect manual
-crm  = connect attio using acme_main
-function m(go: <runs-[:Invocation]->>) {
+      probe: `crm  = connect attio using acme_main
+function m(go: <manual-[:Invocation]->>) {
   co = write crm-[:Companies]-> {
     unique by (FUZZY Name)
     Name: "Acme"
@@ -498,7 +454,7 @@ function m(go: <runs-[:Invocation]->>) {
   }
   write co-[:Notes]-> { Title: "Team", Content: "\${co-[:Team]->.Name}" }
 }
-listen to runs-[:Invocations]-> fire m
+listen to manual-[:Invocations]-> fire m
 `,
     },
   ],

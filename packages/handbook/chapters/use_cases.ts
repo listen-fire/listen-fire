@@ -70,10 +70,7 @@ Everything after the extraction is the ordinary shape: each founder written alon
       construct: 'dealflow extraction (body, attachments and retrieved deck links as content → a nested tree → linked fuzzy writes, plus the sender by extractOne)',
       status: 'runs',
       probe: `
-import { \`@lf/email\` as email, \`@lf/attio\` as attio } from adapters
 import { vcUrlRetrieval } from plugins
-import { acme } from credentials
-
 inbox = connect email
 crm   = connect attio using acme
 

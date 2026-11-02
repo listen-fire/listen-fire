@@ -64,7 +64,7 @@ Separate from the bounds above: what keeps a host's calls to modules and models 
 Reviewed for this release:
 
 - **The engine makes no request of its own.** It has no network code: everything it needs it asks its host for, by family (adapters, llm, files, park, trace, clock, ids, check, log, lookup, locks, control).
-- **No family takes a URL from the movement.** Adapter calls go to the module the movement imported. Model calls go to the host's configured provider. Plugins go to the plugin's module.
+- **No family takes a URL from the movement.** Adapter calls go to the module the movement connected. Model calls go to the host's configured provider. Plugins go to the plugin's module.
 - **A file's bytes are fetched only from a URL a module gave.** A file value names its owner module and handle; listen-fire asks that module to resolve it, and fetches the URL the module answered. A movement can forge a file value, but only the named module decides what is fetched.
 - **A stored document is read only inside the project's own folder.** A handle with `..` or an empty part is refused, and a handle outside the team's folder is not this project's.
 - **listen-fire's other outbound requests are the host's, not the movement's:** a credential's token refresh, a provider's OAuth exchange, the model provider.

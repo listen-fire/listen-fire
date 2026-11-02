@@ -13,9 +13,6 @@ All the output below is real. You can reproduce it from a clone with no accounts
 `movements/triage.mvt`:
 
 ```
-import { `@lf/github` as github, `@lf/slack` as slack } from adapters
-import { my_github, my_slack } from credentials
-
 gh   = connect github using my_github
 chat = connect slack using my_slack
 
@@ -49,8 +46,8 @@ The agent's first draft used GitHub's JSON name for the link, `html_url` (`mista
 
 ```
 $ listen-fire check
-…/github-triage/movements/triage.mvt:9:11 error MOV_UNKNOWN_PROPERTY gh.Pull Request has no field 'html_url' — it has: Number, Title, Body, State, Author, HTML URL, Created At, Updated At, Closed At, Assignees, Label Names, Id, Draft, Merged, Merged At, Requested Reviewers, Head Ref, Base Ref
-…/github-triage/movements/triage.mvt:9:11 error MOV_UNKNOWN_PROPERTY gh.Issue has no field 'html_url' — it has: Number, Title, Body, State, Author, HTML URL, Created At, Updated At, Closed At, Assignees, Label Names, Id, State Reason, Comment Count
+…/github-triage/movements/triage.mvt:6:11 error MOV_UNKNOWN_PROPERTY gh.Pull Request has no field 'html_url' — it has: Number, Title, Body, State, Author, HTML URL, Created At, Updated At, Closed At, Assignees, Label Names, Id, Draft, Merged, Merged At, Requested Reviewers, Head Ref, Base Ref
+…/github-triage/movements/triage.mvt:6:11 error MOV_UNKNOWN_PROPERTY gh.Issue has no field 'html_url' — it has: Number, Title, Body, State, Author, HTML URL, Created At, Updated At, Closed At, Assignees, Label Names, Id, State Reason, Comment Count
 1 file(s), 2 error(s)
 ```
 
