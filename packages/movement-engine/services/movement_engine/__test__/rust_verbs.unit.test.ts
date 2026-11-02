@@ -386,7 +386,7 @@ const calls = (o: Outcome) => JSON.parse(o.crm) as Array<[string, Record<string,
 const methods = (o: Outcome) => calls(o).map(([m]) => m);
 const TWO = { candidates: { company: [QUIET, ACTIVE] } };
 const NOTE_OF = (name: string) =>
-  `  write crm-[:notes]-> { body: "${'${'}${name}.\`summary\`} ${'${'}${name}.\`region\`}" }`;
+  `  write crm-[:notes]-> { body: "${'${'}${name}?.\`summary\`} ${'${'}${name}?.\`region\`}" }`;
 
 describe('match in the Rust engine', () => {
   it('finds through the judge, reads the record whole, and binds it', async () => {
@@ -447,7 +447,7 @@ describe('match in the Rust engine', () => {
       body: [
         '  crm-[c:companies]-> {',
         '    found = match crm-[:funds]-> { unique by (`name`), name: c.`name` }',
-        '    write crm-[:notes]-> { body: "${c.`name`} -> ${found.`vintage`}" }',
+        '    write crm-[:notes]-> { body: "${c.`name`} -> ${found?.`vintage`}" }',
         '  }',
       ].join('\n'),
       crm: {

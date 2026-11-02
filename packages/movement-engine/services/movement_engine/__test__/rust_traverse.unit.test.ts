@@ -953,7 +953,7 @@ describe('the expression tail, on both engines', () => {
         `  n = COUNT(kg-[c:${bracket}]->)`,
         `  top = FIRST(kg-[c:${bracket}]->)`,
         `  names = JOIN(kg-[c:${bracket}]->.\`name\`, ", ")`,
-        '  write kg-[:note]-> { text: "${n} ${top.`name`} ${names}" }',
+        '  write kg-[:note]-> { text: "${n} ${top?.`name`} ${names}" }',
       ].join('\n');
 
     it('answers the same whether the adapter honours the pushed WHERE or not, asking it the same', async () => {
@@ -989,7 +989,7 @@ describe('the expression tail, on both engines', () => {
 
     it('picks the last and the only record, binds null when there is none, and fails ONLY over two', async () => {
       const last = await onRust({
-        body: '  top = LAST(kg-[c:company WHERE `stage` == "Seed" ORDER BY `name`]->)\n  write kg-[:note]-> { text: COALESCE(top.`name`, "none") }',
+        body: '  top = LAST(kg-[c:company WHERE `stage` == "Seed" ORDER BY `name`]->)\n  write kg-[:note]-> { text: COALESCE(top?.`name`, "none") }',
       });
       expect(written(last.rust)).toEqual(['Umbrella']);
       const none = await onRust({
@@ -1170,7 +1170,7 @@ describe('the expression tail, on both engines', () => {
       '  top = FIRST(kg-[c:company WHERE `stage` == "Seed" ORDER BY `name`]->)',
       '  m2 = msg',
       '  await sleep(1h)',
-      '  write kg-[:note]-> { text: COALESCE(top.`name`, m2.`subject`) }',
+      '  write kg-[:note]-> { text: COALESCE(top?.`name`, m2.`subject`) }',
     ].join('\n');
     resetRustRunStats();
     const park = makeFakeParkSink();

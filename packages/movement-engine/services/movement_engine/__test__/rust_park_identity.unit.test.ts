@@ -364,7 +364,7 @@ describe('one write handle two names hold, across a park (B7)', () => {
         '  o = FIRST(a-[:@old]->)',
         '  p = FIRST(a-[:@old]->)',
         '  await sleep(1h)',
-        '  write crm-[:notes]-> { body: CONCAT(o.name, "/", p.name, "/", a.name) }',
+        '  write crm-[:notes]-> { body: CONCAT(o?.name, "/", p?.name, "/", a.name) }',
       ),
     });
     expect(state).toContain('"kind":"handleRef"');
@@ -755,7 +755,7 @@ describe('a reference read before its descriptor, and names like a descriptor me
         ...closure,
         '  y = f("q")',
         '  o = FIRST(a-[:@old]->)',
-        '  write crm-[:notes]-> { body: CONCAT(y, "/", o.name, "/", a.name) }',
+        '  write crm-[:notes]-> { body: CONCAT(y, "/", o?.name, "/", a.name) }',
       ),
     });
     expect(JSON.stringify(resumed.calls)).toContain('{"body":"q/one/two"}');
