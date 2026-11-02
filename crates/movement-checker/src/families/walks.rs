@@ -1570,8 +1570,33 @@ fn narrowing_example(u: &crate::types::position::UnionPosition, carrying: &[&Str
 // ── IS-test narrowing (`checkCondition`'s isTest case, `checkIf`'s
 // elimination down the arms) ──
 
-/// What the failed `IS` tests above an arm ruled out, per subject name.
+/// What the failed `IS` tests above an arm ruled out, per subject name: a
+/// union's variants, or, for one of several records, each test's instance
+/// and record type (`one_of_test`).
 pub type RuledOut = indexmap::IndexMap<String, Vec<String>>;
+
+/// The records a value may be one of, and whether it may be none.
+struct OneOf {
+    members: Vec<Position>,
+    may_be_empty: bool,
+}
+
+impl OneOf {
+    /// The members `<instance-[:position]->>` names, and the rest.
+    fn split(&self, instance: &crate::types::position::InstanceRef, position: &str) -> (Vec<Position>, Vec<Position>) {
+        self.members.iter().cloned().partition(|member| is_member_named(member, &instance.name, position))
+    }
+}
+
+/// A failed test of one of several records, as `RuledOut` keeps it.
+fn one_of_test(instance: &crate::types::position::InstanceRef, position: &str) -> String {
+    format!("{}\u{0}{position}", instance.name)
+}
+
+/// The member is a record of `position` in `instance`, or a narrowing of one.
+fn is_member_named(member: &Position, instance: &str, position: &str) -> bool {
+    matches!(member, Position::Position(record) if record.instance.name == instance && (record.position == position || record.narrows.as_deref() == Some(position)))
+}
 
 /// `residualUnion`: a union with only `remaining` left; one left is that position.
 fn residual_union(union: &crate::types::position::UnionPosition, remaining: &[String]) -> Position {
@@ -1633,6 +1658,39 @@ impl crate::checker::Checker<'_> {
             Position::Union(u) => Some(u.clone()),
             _ => None,
         }
+    }
+
+    /// The records `name` may be one of (`Memo | Remark`): its position, or
+    /// the record its value holds.
+    fn one_of(&self, name: &str, scope: ScopeId) -> Option<OneOf> {
+        let types = self.symbol_types(name, scope)?;
+        let typed = types.pos.clone().or_else(|| match types.field.as_ref().map(crate::types::field::strip_absent) {
+            Some(Ty::Record(Some(position))) => Some((**position).clone()),
+            _ => None,
+        })?;
+        let (of, may_be_empty) = match typed {
+            Position::MaybeEmpty(of) => (*of, true),
+            other => (other, crate::types::field::is_maybe_absent(types.field.as_ref())),
+        };
+        let Position::OneOf(members) = of else { return None };
+        Some(OneOf { members, may_be_empty })
+    }
+
+    /// Re-declares `name` (resolved from `scope`) into `into` as `position`,
+    /// its value's record with it.
+    fn declare_one_of(&mut self, name: &str, scope: ScopeId, into: ScopeId, position: Position) {
+        let Resolution::Found(id) = self.scopes.resolve(scope, name) else { return };
+        let mut symbol = self.scopes.symbol(id).clone();
+        if symbol.types.field.is_some() {
+            let record = match &position {
+                Position::MaybeEmpty(of) => crate::types::field::maybe_absent(Ty::record(Some((**of).clone()))),
+                other => Ty::record(Some(other.clone())),
+            };
+            symbol.types.field = Some(record);
+        }
+        symbol.types.pos = Some(position);
+        let narrowed = self.scopes.add_symbol(symbol);
+        self.scopes.declare(into, narrowed);
     }
 
     /// Re-declares `name` (resolved from `scope`) into `into` with a sharper position.
@@ -1702,6 +1760,17 @@ impl crate::checker::Checker<'_> {
             self.check_address_pins(&type_.graph, hops, span, scope);
         }
         let (Some(into), Some(instance), true) = (narrow_into, instance, bare) else { return };
+        // One of several records (`Memo | Remark`): inside the arm it IS the
+        // member the test names, as TypeScript narrows a union.
+        if let (Some(position), None) = (&type_.position, &type_.hops_raw)
+            && let Some(one_of) = self.one_of(subject, scope)
+        {
+            let (named, _) = one_of.split(&instance, position);
+            if let Some(narrowed) = crate::types::unions::join_positions(&named.iter().collect::<Vec<_>>()) {
+                self.declare_one_of(subject, scope, into, narrowed.position);
+            }
+            return;
+        }
         let subject_pos = self.symbol_types(subject, scope).and_then(|t| t.pos.clone());
         if let (Some(Position::Union(union)), Some(position)) = (&subject_pos, &type_.position)
             && crate::types::position::same_instance(&union.instance, &instance)
@@ -1768,6 +1837,17 @@ impl crate::checker::Checker<'_> {
         if !crate::slots::is_bare_ident(subject) {
             return;
         }
+        if let (Some(position), None) = (&type_.position, &type_.hops_raw)
+            && self.one_of(subject, scope).is_some()
+            && let Some(instance) = self.graph_instance(&type_.graph, scope)
+        {
+            let eliminated = ruled_out.entry(subject.to_string()).or_default();
+            let test = one_of_test(&instance, position);
+            if !eliminated.contains(&test) {
+                eliminated.push(test);
+            }
+            return;
+        }
         let Some(union) = self.union_of(subject, scope) else { return };
         let Resolution::Found(graph) = self.scopes.resolve(scope, &type_.graph) else { return };
         if self.scopes.symbol(graph).kind == crate::scope::SymbolKind::Shape {
@@ -1799,6 +1879,20 @@ impl crate::checker::Checker<'_> {
     /// `declareEliminated`: each subject, its union minus what was ruled out.
     pub fn declare_eliminated(&mut self, ruled_out: &RuledOut, scope: ScopeId, into: ScopeId) {
         for (name, eliminated) in ruled_out {
+            if let Some(one_of) = self.one_of(name, scope) {
+                let mut rest = one_of.members.clone();
+                for test in eliminated {
+                    let Some((instance, position)) = test.split_once('\u{0}') else { continue };
+                    rest.retain(|member| !is_member_named(member, instance, position));
+                }
+                if rest.len() < one_of.members.len()
+                    && let Some(joined) = crate::types::unions::join_positions(&rest.iter().collect::<Vec<_>>())
+                {
+                    let position = if one_of.may_be_empty { Position::MaybeEmpty(Box::new(joined.position)) } else { joined.position };
+                    self.declare_one_of(name, scope, into, position);
+                }
+                continue;
+            }
             let Some(union) = self.union_of(name, scope) else { continue };
             let remaining: Vec<String> = union.variants.iter().filter(|v| !eliminated.contains(v)).cloned().collect();
             if remaining.len() == union.variants.len() {

@@ -27,7 +27,7 @@ use super::field::*;
 use super::narrowing::{PresenceProof, exists_subject, is_position_terminal, negative_presence_proofs, presence_proofs};
 use super::unions::{join_field_types, join_positions, joined_under, one_record_of};
 use super::pinned_member::pinned_member;
-use super::union_walk::{MemberOnly, member_only};
+use super::union_walk::{MemberOnly, Subject, member_only};
 use super::position::{EdgeLanding, Position, describe_position, edge_landing, position_ref_in, refine_selected, unselected_members, instance_of_ref, lookup_property_type, narrow_present, narrow_present_node};
 use super::stdlib::{bare_coercer_returns, movement_meta_key_type, stdlib_function_by_id};
 
@@ -175,6 +175,7 @@ pub struct Typing<'a> {
     pub address: bool,
     /// The name a walk starts at, while its first edge is stepped (`msg` in
     /// `msg-[:Interactions]->`): set by whoever knows it, before `walk_steps`.
+    /// Likewise the name a read is taken off (`msg` in `msg.Subject`).
     pub step_root: Option<String>,
     pub last_edge_schema: Option<EdgeSchema>,
     pub last_landings: Vec<Option<Position>>,
@@ -298,6 +299,12 @@ impl<'a> Typing<'a> {
         joined_under(one_record_of(types), old)
     }
 
+    /// The name the step being typed is taken off, when the author wrote one
+    /// (not a nested call's).
+    fn named_root(&self) -> Option<String> {
+        self.step_root.clone().filter(|root| !crate::families::calls::is_nested_call_name(root.trim_matches('`')))
+    }
+
     /// `probeEach`: one step (a field read, an edge hop) off every record a
     /// `OneOf` may be — what every member offers, or a refusal naming the
     /// member that does not offer it. The first refusal among a member's
@@ -388,12 +395,13 @@ impl<'a> Typing<'a> {
     fn step_every_member(&mut self, members: &[Position], edge: &EdgeStep) -> Option<Position> {
         let union = describe_position(&Position::OneOf(members.to_vec()));
         let name = edge.edge_type_id.clone();
-        let past_union = member_only(members, |member| !matches!(edge_landing(member, &name), EdgeLanding::Unknown { .. }));
+        let subject = self.named_root().map(|root| Subject { step: format!("{root}-[:{}]->", crate::families::names::spell_name(&name)), name: root });
+        let past_union = member_only(members, |member| !matches!(edge_landing(member, &name), EdgeLanding::Unknown { .. }), subject.as_ref());
         let landings = self.probe_each(members, |t, member| t.step_edge(Some(member), edge).0, |member, refused| match &past_union {
             Some(MemberOnly { since, narrowing }) => (
                 Some(codes::UNION_MEMBER_ONLY),
                 format!(
-                    "'-[:{name}]->' can't be walked here: {since}, and it walks only what every one of them has — {} refuses it ({refused}). Narrow the record you walk from first ({narrowing}), or walk what every one of them has",
+                    "'-[:{name}]->' can't be walked here: {since}, and it walks only what every one of them has — {} refuses it ({refused}). {narrowing}, or walk what every one of them has",
                     describe_position(member)
                 ),
             ),
@@ -413,12 +421,13 @@ impl<'a> Typing<'a> {
     /// member's field, joined.
     fn read_every_member(&mut self, members: &[Position], property: &str) -> Option<Ty> {
         let union = describe_position(&Position::OneOf(members.to_vec()));
-        let past_union = member_only(members, |member| lookup_property_type(Some(member), property).is_some());
+        let subject = self.named_root().map(|root| Subject { step: format!("{root}.{}", crate::families::names::spell_name(property)), name: root });
+        let past_union = member_only(members, |member| lookup_property_type(Some(member), property).is_some(), subject.as_ref());
         let types = self.probe_each(members, |t, member| t.read_property(Some(member), property), |member, refused| match &past_union {
             Some(MemberOnly { since, narrowing }) => (
                 Some(codes::UNION_MEMBER_ONLY),
                 format!(
-                    "'{property}' can't be read here: {since}, and it reads only what every one of them has — {} refuses it ({refused}). Narrow the record you walk from first ({narrowing}), or read what every one of them has",
+                    "'{property}' can't be read here: {since}, and it reads only what every one of them has — {} refuses it ({refused}). {narrowing}, or read what every one of them has",
                     describe_position(member)
                 ),
             ),
@@ -1161,8 +1170,8 @@ impl<'a> Typing<'a> {
                 if !steps.is_empty() && is_position_terminal(expression) {
                     return (Some(list_of(Ty::record(destination), self.last_ordering)), Vec::new());
                 }
-                // `exists(a-[:E]->)`: the walk is the exists', off the name.
-                if steps.is_empty() && matches!(**expression, Expression::Exists { .. }) {
+                // `exists(a-[:E]->)`, `a.F`: the walk or the read is off the name.
+                if steps.is_empty() {
                     self.step_root = alias_root.as_deref().map(crate::families::names::spell_name);
                 }
                 let typed = self.infer_at(expression, destination.as_ref());

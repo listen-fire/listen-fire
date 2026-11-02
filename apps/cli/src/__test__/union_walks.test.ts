@@ -3,8 +3,9 @@
 // Person's `Notes` land on a Memo (Text, Mood) and a Company's on a Remark
 // (Text, Tone). Off `c-[:Spaces]->-[:Subjects]->-[:Notes]->` a run reads
 // `Text`, which both have; reading `Mood` is refused by `listen-fire check`
-// (0.13 checked it clean) until the walk narrows the Subject to a Person, and
-// the narrowed program runs, reading the Person's Memo's Mood.
+// (0.13 checked it clean) until it is narrowed: the Subject to a Person, or
+// the note itself to a Memo with `is` (a landing, a union parameter, a
+// conditional's value). Each narrowed program runs, reading the Memo's Mood.
 
 import assert from 'node:assert/strict';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
@@ -71,8 +72,8 @@ module.exports = defineModule({
 });
 `;
 
-/** `notes`'s body as `body`, run by hand. */
-function crmProject(body: string): string {
+/** `notes`'s body as `body`, run by hand, after `functions`. */
+function crmProject(body: string, functions = ''): string {
   const dir = project();
   rmSync(join(dir, 'movements'), { recursive: true });
   mkdirSync(join(dir, 'movements'));
@@ -81,7 +82,7 @@ function crmProject(body: string): string {
   writeFileSync(join(dir, 'externals/crm/crm.ts'), CRM_MODULE);
   writeFileSync(
     join(dir, 'movements/notes.mvt'),
-    `import { crm } from adapters\n\nc = connect crm\n\nfunction notes(run: <manual-[:Invocations]->>) {\n${body}\n}\n\nlisten to manual-[:Invocations]-> fire notes\n`,
+    `import { crm } from adapters\n\nc = connect crm\n\n${functions}function notes(run: <manual-[:Invocations]->>) {\n${body}\n}\n\nlisten to manual-[:Invocations]-> fire notes\n`,
   );
   return dir;
 }
@@ -91,7 +92,7 @@ test('a field only one landing of a walk off a union has is refused where it is 
   assert.notEqual(checked.code, 0, checked.out);
   assert.match(
     checked.out,
-    /MOV_UNION_MEMBER_ONLY 'Mood' can't be read here: since 0\.14, what '-\[:Notes\]->' off c\.Company \| Person lands is c\.Remark or c\.Memo \(0\.13 checked nothing there\).* Narrow the record you walk from first \(`if \(x is <c-\[:Person\]->>\) \{ x-\[:Notes\]-> … \}`\)/,
+    /MOV_UNION_MEMBER_ONLY 'Mood' can't be read here: since 0\.14, what '-\[:Notes\]->' off c\.Company \| Person lands is c\.Remark or c\.Memo \(0\.13 checked nothing there\).* Narrow it first \(`if \(n is <c-\[:Memo\]->>\) \{ … n\.Mood … \}`\)/,
     checked.out,
   );
   assert.match(checked.out, /1 file\(s\), 1 error\(s\)/, checked.out);
@@ -119,4 +120,57 @@ test('narrowed to a Person first, the read checks clean and runs, and a field bo
   const { run } = JSON.parse(shown.out) as { run: { status: string; returned: { value: unknown } } };
   assert.equal(run.status, 'completed', shown.out);
   assert.deepEqual(run.returned.value, { texts: ['hi', 'yo'], moods: ['glad', '-'] }, shown.out);
+});
+
+/** The run of `dir`'s `notes`, completed: what it returned. */
+function returned(dir: string): unknown {
+  const ran = lf(dir, 'run', 'notes');
+  assert.equal(ran.code, 0, ran.out);
+  const runId = /^run (\S+) /m.exec(ran.out)?.[1] ?? '';
+  assert.notEqual(runId, '', ran.out);
+  const shown = lf(dir, 'runs', 'show', runId, '--json');
+  assert.equal(shown.code, 0, shown.out);
+  const { run } = JSON.parse(shown.out) as { run: { status: string; returned: { value: unknown } } };
+  assert.equal(run.status, 'completed', shown.out);
+  return run.returned.value;
+}
+
+test('a note narrowed with is reads its own fields: a landing, a union parameter, a conditional value', () => {
+  const functions = `function mood(n: <c-[:Memo]-> | c-[:Remark]->>) {
+  if (n is <c-[:Memo]->>) {
+    return n.Mood
+  } else {
+    return n.Tone
+  }
+}
+
+`;
+  const dir = crmProject(
+    `  inBlock = c-[:Spaces]->-[:Subjects]->-[n:Notes]-> {
+    if (n is <c-[:Memo]->>) {
+      return n.Mood
+    } else {
+      return n.Tone
+    }
+  }
+  viaParam = map(c-[:Spaces]->-[:Subjects]->-[:Notes]->, (n) => { return mood(n) })
+  ofPerson = only(c-[:Spaces]->-[s:Subjects WHERE s.Id == "p1"]->-[:Notes]->)
+  ofCompany = only(c-[:Spaces]->-[s:Subjects WHERE s.Id == "c1"]->-[:Notes]->)
+  picked = count(inBlock) > 5 ? ofPerson : ofCompany
+  if (picked is <c-[:Memo]->>) {
+    return { inBlock: inBlock, viaParam: viaParam, picked: picked.Mood }
+  } else {
+    return { inBlock: inBlock, viaParam: viaParam, picked: picked.Tone }
+  }`,
+    functions,
+  );
+  const checked = lf(dir, 'check');
+  assert.equal(checked.code, 0, checked.out);
+  assert.match(checked.out, /1 file\(s\), 0 error\(s\)/, checked.out);
+  assert.deepEqual(returned(dir), { inBlock: ['glad', 'dry'], viaParam: ['glad', 'dry'], picked: 'dry' });
+
+  const misread = lf(crmProject('  return c-[:Spaces]->-[:Subjects]->-[n:Notes]-> {\n    if (n is <c-[:Memo]->>) {\n      return n.Tone\n    }\n    return n.Mood\n  }'), 'check');
+  assert.equal(misread.code, 1, misread.out);
+  assert.match(misread.out, /error MOV_UNKNOWN_PROPERTY .*'Tone'/, misread.out);
+  assert.match(misread.out, /error MOV_UNION_MEMBER_ONLY 'Mood' can't be read here/, misread.out);
 });

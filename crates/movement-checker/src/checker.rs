@@ -139,6 +139,8 @@ pub struct Supplied<'a> {
 
 /// A write's scopes, one per record its root may be (`scopesByMember`).
 struct ByMember {
+    /// The name written to.
+    name: String,
     members: Vec<Position>,
     scopes: Vec<ScopeId>,
 }
@@ -1140,7 +1142,7 @@ impl<'c> Checker<'c> {
                 own
             })
             .collect();
-        Some(ByMember { members, scopes })
+        Some(ByMember { name: crate::families::names::spell_name(&name), members, scopes })
     }
 
     /// `everyMember`: a check run once per member of a union. What every
@@ -1170,10 +1172,11 @@ impl<'c> Checker<'c> {
                         by_member.members.iter().zip(&each).any(|(m, said)| std::ptr::eq(m, member) && !said.iter().any(|other| key(other) == key(&d)))
                     };
                     let said = d.message.strip_suffix('.').unwrap_or(&d.message).to_string();
-                    d.message = match crate::types::union_walk::member_only(&by_member.members, offering) {
+                    let subject = crate::types::union_walk::Subject { name: by_member.name.clone(), step: format!("write {} {{ … }}", by_member.name) };
+                    d.message = match crate::types::union_walk::member_only(&by_member.members, offering, Some(&subject)) {
                         Some(crate::types::union_walk::MemberOnly { since, narrowing }) => {
                             d.code = crate::codes::UNION_MEMBER_ONLY.to_string();
-                            format!("{said} ({since}, and a write to it is held to every one of them. Narrow the record you walk from first: {narrowing})")
+                            format!("{said} ({since}, and a write to it is held to every one of them. {narrowing})")
                         }
                         None => format!("{said} (this may be {union}, and a write to it is held to every one of them)"),
                     };
