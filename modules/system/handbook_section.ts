@@ -29,5 +29,5 @@ listen to sys-[e:Events WHERE e.Kind == "Run Failed"]-> fire report
 - Events are polled, every minute by default: one arrives a minute or so after it happened. Going live never replays earlier events.
 - A handler that fails on another program's failures, which fails in turn, is a chain the host pauses at its loop depth (\`loopDepth\` in lf.yaml).
 - A wait whose record was deleted never ends: race it with a \`sleep\`, and listen for \`Wait Lost Its Record\` to hear of the ones that were not.
-- listen-fire reports \`Run Failed\`, \`Wait Lost Its Record\`, \`Arrival Not Judged\` and \`Release Applied\`. It fails a run at its cost cap rather than pausing it, and refuses a program that does not check, so it never reports the other three.`,
+- listen-fire reports \`Run Failed\`, \`Wait Lost Its Record\`, \`Arrival Not Judged\` and \`Release Applied\`. It fails a run at its cost cap rather than pausing it, so it never reports \`Run Paused\`. \`Validation Issue\` and \`Deprecated Version\` (a saved program that does not validate under the running release, or is pinned to a deprecated language version) come only from a host that checks saved programs it keeps; listen-fire refuses a program that does not check, so it never reports them.`,
 };

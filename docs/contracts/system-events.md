@@ -44,8 +44,8 @@ Every event carries the same fields:
 | `Wait Lost Its Record` | a wait parked on a deleted record ([stranded-waits.md](stranded-waits.md)) | yes |
 | `Arrival Not Judged` | a listen that could not tell whether an arrival fires it (below) | yes |
 | `Release Applied` | a release the host first runs under | yes: once per store, when `serve` or `drain` first opens it under a new release |
-| `Validation Issue` | a saved program that does not validate under the running release | never: it refuses to serve a project that does not check |
-| `Deprecated Version` | a saved program pinned to a deprecated language version | never, for the same reason |
+| `Validation Issue` | a saved program that does not validate under the running release | only a host that checks saved programs it did not refuse (lf-platform's deploy check); never listen-fire, which refuses to serve a project that does not check |
+| `Deprecated Version` | a saved program pinned to a deprecated language version | likewise: lf-platform's deploy check; never listen-fire, for the same reason |
 
 ## Arrival Not Judged
 
@@ -95,6 +95,8 @@ A handler that fails on another listen's failures, which fails in turn, is a cha
 - So a fact within the settle lag before the first poll is reported by the next one. A fresh project's first `serve` or `drain` notes its release as it opens the store, usually seconds before that first poll, so its `Release Applied` is reported once; an older release is not.
 - A kind a listen asks for that its cursor has no mark for (the module learned it after the cursor was made) is armed at now less the settle lag on that poll, and reports nothing from before.
 - Marks are kept per kind as `(at, id)`, so two facts at one instant are neither skipped nor reported twice.
+- A host reports `Validation Issue` and `Deprecated Version` only by supplying their readers (below, Adopting it elsewhere). Without a reader a kind is never armed and reports nothing, whatever a listen asks for.
+- A `Validation Issue` or `Deprecated Version` is about one program and no run: `Automation` and `Automation Id` name the program, `Run Id` is empty, `Version` is the release involved (the running release a program fails to validate under; the deprecated version it is pinned to), `Reason` says what to repair or which version to move to, and the event is neither `about` a run nor `notFor` any listen. Its `Event Id` is `<kind>:<Automation Id>:<Version>:<At>`, so a program the host finds failing again later is reported again.
 
 ## The records door
 
@@ -127,7 +129,7 @@ A host that keeps its facts in its own tables hands them in with `systemModuleWi
 - keeps an unjudged arrival wherever its host judges an arrival undecided (`listenFires` answers `{ undecided }`), once per listen, arrival and attempt, with the listen's pipeline, the delivery, the arrival's receipt key, edge, the module it came from, record, what landed (as its module reported it), reason, the run whose write caused it, the time and the attempt, as listen-fire's host does;
 - keeps each delivery's request as received (its body and query string without the fields its module names in `inbound.redactFields`, and only the headers its module names in `inbound.captureHeaders`, beside the content type and the delivery id header under a declared scheme; never a signature header; the body is otherwise as received, and may hold what the provider puts in it) with the ids of the arrivals it brought, for as long as it keeps the delivery, and shows it only to a person who asks;
 - offers a replay of one listen through a kept delivery, as `listen-fire listens replay` does: its module's inbound handling run again on the kept request without verifying it, keeping only the arrivals the delivery brought (a module that checks its own requests is told it is a replay: `checkInbound`'s `replayed`), or, for a poll's delivery, the arrivals the poll read judged again with the module asked nothing; the arrivals judged by that listen alone through its one write (waits registered with the run, its trigger noted on them), its receipt honoured unless forced, and a listen that still cannot judge it kept as the next attempt;
-- gives its deploy check's `Validation Issue` and `Deprecated Version` a member of `SystemRecords` (the module reads none today: listen-fire has none to give);
+- gives its deploy check's `Validation Issue` and `Deprecated Version` the optional members `validationIssues` and `deprecatedVersions` of `SystemRecords`, each `({ after: { at, automationId }, limit }) => ProgramNotice[]`, oldest first: `{ automation: { id, name }, version, reason, at, url? }`. A host without them reports neither kind; listen-fire supplies none;
 - marks each event `notFor` the failed run's own automation;
 - keeps each failure, pause and stranding in its loop breaker's ledger, as listen-fire's records door does, so a chain of failure handlers is capped.
 
@@ -138,3 +140,4 @@ A host that keeps its facts in its own tables hands them in with `systemModuleWi
 - 0.13.0 (2026-11-01, later): a kept delivery keeps its request, and `listen-fire listens replay` puts it through one listen again; each replay that still cannot judge the arrival is an attempt of its own, and the `Event Id` names the attempt (`…:<attempt>`, 0 for the first judging). Why: an event a listen could not judge needs a way back through that listen once the provider recovers.
 - 0.13.x (2026-11-02): an unjudged arrival keeps the module it came from (`adapter`) and what landed (`landing`), and the module knows its own `Arrival Not Judged` events by their landing's `Kind` on its own `Events`, not by a prefix of the record id it minted. Why: a record id is compared, never parsed. The `Event` record programs read is unchanged.
 - 0.13.0 (2026-11-01, latest): a replay tells a module that checks its own requests it is one (`checkInbound`'s `replayed`, adapter protocol 2.6), so it skips its signature and timestamp checks; a poll's delivery keeps the page it read, and a replay judges those arrivals again, asking the module nothing. Why: a Stripe delivery replayed days later was refused by its five minute window, and a polled listen could not be replayed at all.
+- Unreleased (2026-11-02): `Validation Issue` and `Deprecated Version` have a reader: `SystemRecords` gains the optional `validationIssues` and `deprecatedVersions`, each with a mark of its own in the poll's cursor. Why: lf-platform's deploy check finds both, and without a reader a listen on `Events` could never hear of them. A host without the readers reports none, as before; listen-fire supplies none.
