@@ -188,6 +188,51 @@ fn the_live_record_is_walked_in_the_function() {
     assert_eq!(candidates("x = only(c-[:Record]->).Stage"), Vec::<(String, String)>::new());
 }
 
+/// The source's MOV_ABSENT_REQUIRED refusals, and the source with each
+/// one's fix applied (a safe `?` inserted before the `.`).
+fn absent_fixed(source: &str) -> (usize, String) {
+    let source = format!("import {{ at as at_module }} from adapters\nat = connect at_module\n{source}");
+    let options = CheckOptions { upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
+    let found: Vec<_> = check_source(&source, &catalog(), options).unwrap().into_iter().filter(|d| d.code == "MOV_ABSENT_REQUIRED").collect();
+    let mut lines: Vec<String> = source.lines().map(String::from).collect();
+    let mut edits: Vec<(usize, usize)> = found
+        .iter()
+        .map(|d| {
+            let fix = d.fix.as_ref().unwrap_or_else(|| panic!("no fix: {}", d.message));
+            assert_eq!(fix["safe"], true, "{}", d.message);
+            let edit = &fix["edits"][0];
+            assert_eq!(edit["text"], "?");
+            let at = &edit["span"]["start"];
+            (at["line"].as_u64().unwrap() as usize, at["col"].as_u64().unwrap() as usize)
+        })
+        .collect();
+    edits.sort();
+    for (line, col) in edits.into_iter().rev() {
+        lines[line - 1].insert(col - 1, '?');
+    }
+    (found.len(), lines.join("\n"))
+}
+
+/// A listen's WHERE and a write's field read `?.` as a function body does,
+/// and the refusal of `.` carries the same safe fix.
+#[test]
+fn optional_chaining_reads_a_row_in_a_listens_where_and_a_writes_field() {
+    let listen = |where_: &str| format!("function f(c: <at-[:`Candidates Change`]->>) {{\n  return c.Kind\n}}\nlisten to at{NARROWED}-[c:Changes WHERE {where_}]-> fire f\n");
+    assert_eq!(errors_of(&listen("c.Previous?.Stage != \"Interview\"")), Vec::<(String, String)>::new());
+    let (refused, after) = absent_fixed(&listen("c.Previous.Stage != \"Interview\" AND c.Current.Stage == \"Interview\""));
+    assert_eq!(refused, 2);
+    assert!(after.contains("WHERE c.Previous?.Stage != \"Interview\" AND c.Current?.Stage == \"Interview\"]->"), "{after}");
+    assert_eq!(absent_fixed(after.split_once("at = connect at_module\n").unwrap().1).0, 0);
+
+    // The catalog's table has no edge a write could create a row through
+    // (MOV_LINKED_UNKNOWN_EDGE); the field's value is judged all the same.
+    let write = |value: &str| format!("function g(c: <at-[:`Candidates Change`]->>) {{\n  r = write at-[:Candidates]-> {{ Name: {value} }}\n  return r\n}}\n");
+    let (refused, after) = absent_fixed(&write("c.Previous.Name"));
+    assert_eq!(refused, 1);
+    assert!(after.contains("{ Name: c.Previous?.Name }"), "{after}");
+    assert_eq!(absent_fixed(&write("c.Previous?.Name")).0, 0);
+}
+
 #[test]
 fn a_listen_judges_the_rows_it_carries_and_never_walks_to_the_live_one() {
     let listen = |where_: &str| errors_of(&format!("function f(c: <at-[:`Candidates Change`]->>) {{\n  return c.Kind\n}}\nlisten to at{NARROWED}-[c:Changes WHERE {where_}]-> fire f\n"));

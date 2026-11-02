@@ -427,6 +427,20 @@ pub fn absent_read_fixes(slot: &movement_parser::ast::ExprSlot, diagnostics: &mu
     }
 }
 
+/// `absent_read_fixes` for a head's hops (a listen's WHERE), read as a walk
+/// off a stand-in root one column before them. The hops end where the head
+/// does; over several lines they have no exact place (`head_hops_extent`).
+pub fn absent_head_read_fixes(head: &PathHead, diagnostics: &mut [crate::diagnostic::Diagnostic]) {
+    if head.hops_raw.contains('\n') {
+        return;
+    }
+    let end = head.span.end;
+    let Some(col) = end.col.checked_sub(head.hops_raw.encode_utf16().count() + 1).filter(|col| *col >= 1) else { return };
+    let start = movement_parser::ast::Loc { line: end.line, col };
+    let slot = movement_parser::ast::ExprSlot::plain(format!("x{}", head.hops_raw), movement_parser::ast::Span { start, end });
+    absent_read_fixes(&slot, diagnostics);
+}
+
 /// `MOV_WALK_OFF_HELD_RECORD`: a walk off what a `record` field holds. It
 /// holds the record's fields as they were when the value was made, with no
 /// identity to fetch an edge by.
@@ -1438,6 +1452,8 @@ impl crate::checker::Checker<'_> {
         }
         self.record_observed(head.span, scope, observed);
         self.effects.note_watchable_reads(&watchable);
+        let mut diagnostics = diagnostics;
+        absent_head_read_fixes(head, &mut diagnostics);
         for diagnostic in diagnostics {
             self.push(diagnostic);
         }
