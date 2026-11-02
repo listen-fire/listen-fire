@@ -23,10 +23,21 @@ function edit(dir: string, change: (source: string) => string): void {
 
 test('listen-fire catalog: the snapshot of the example\'s external, as one JSON document', () => {
   const dir = project();
-  const run = spawnSync(lfBinary(), ['catalog'], { cwd: dir, encoding: 'utf8' });
+  const run = spawnSync(lfBinary(), ['catalog', '--json'], { cwd: dir, encoding: 'utf8' });
   assert.equal(run.status, 0, run.stderr);
   const catalog: unknown = JSON.parse(run.stdout);
   assert.ok(typeof catalog === 'object' && catalog !== null && JSON.stringify(catalog).includes('Company'), run.stdout.slice(0, 300));
+});
+
+test('listen-fire catalog: each connection as text, in the notation of modules show, with a line saying how to connect it', () => {
+  const dir = project();
+  const run = spawnSync(lfBinary(), ['catalog'], { cwd: dir, encoding: 'utf8' });
+  assert.equal(run.status, 0, run.stderr);
+  assert.match(run.stdout, /^connection acme: #acme_crm$/m);
+  assert.match(run.stdout, /^use: c = connect #acme_crm using acme$/m);
+  assert.match(run.stdout, /^ {2}Company\b.*\n {4}fields: .*\bName text\b/m);
+  assert.match(run.stdout, /^manual: always connected; a program names it with no connect$/m);
+  assert.doesNotMatch(run.stdout, /listenSettingsBecome|"adapters"/, 'no JSON, and no retired 0.12 mapping');
 });
 
 const CHECKED: Array<{ name: string; change?: (source: string) => string; noSecrets?: true; refused?: RegExp }> = [
@@ -114,7 +125,7 @@ test('listen-fire check and catalog: what a module declares about listening reac
   );
   const check = spawnSync(lfBinary(), ['check'], { cwd: dir, encoding: 'utf8' });
   assert.equal(check.status, 0, check.stdout + check.stderr);
-  const run = spawnSync(lfBinary(), ['catalog'], { cwd: dir, encoding: 'utf8' });
+  const run = spawnSync(lfBinary(), ['catalog', '--json'], { cwd: dir, encoding: 'utf8' });
   assert.equal(run.status, 0, run.stderr);
   const Catalog = z.object({
     adapters: z.record(

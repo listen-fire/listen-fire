@@ -118,7 +118,7 @@ test('listen-fire run asks Jev both questions, writes the answers, and records w
 
     const runs = await lfAsync(dir, 'runs');
     const id = runs.out.trim().split('\n')[0]?.split(' ')[0] ?? '';
-    const shown = await lfAsync(dir, 'runs', 'show', id);
+    const shown = await lfAsync(dir, 'runs', 'show', id, '--json');
     assert.equal(shown.code, 0, shown.out);
     const record = JSON.parse(shown.out) as { run?: { costMicrodollars?: number; trace?: Array<{ plugin?: string }> } };
     // Jev's count of each request's input tokens (the fake's: a token per four

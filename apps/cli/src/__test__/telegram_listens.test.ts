@@ -92,7 +92,7 @@ test('a listen on Messages narrowed by Chat Id runs on that chat\'s messages onc
     await serving.stop();
   }
   const listed = JSON.parse(lf(dir, 'runs', '--json').out) as { runs: Array<{ runId: string }> };
-  const returned = listed.runs.map((r) => lf(dir, 'runs', 'show', r.runId).out);
+  const returned = listed.runs.map((r) => lf(dir, 'runs', 'show', r.runId, '--json').out);
   assert.ok(returned.some((out) => out.includes('hello from Ada in chat 42')), returned.join('\n'));
   assert.ok(returned.some((out) => out.includes('again from Ada in chat 42')), returned.join('\n'));
   assert.ok(!returned.some((out) => out.includes('psst')), returned.join('\n'));

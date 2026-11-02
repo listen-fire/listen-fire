@@ -168,11 +168,7 @@ pub fn catalog_of(running: &[Rc<RunningExternal>], schemas: &IndexMap<String, Co
 /// A unit's entry: credential-free, its schema projected from its own
 /// introspection as an external's is.
 fn unit_snapshot(unit: &str) -> Js {
-    let entries = crate::units::entry_points(unit);
-    let descriptors: IndexMap<String, Js> =
-        crate::units::descriptors(unit).into_iter().map(|d| (d.get("typeId").and_then(Js::as_str).unwrap_or_default().to_string(), d)).collect();
-    let schema = crate::schema::describe_external_schema(unit, &entries, &descriptors);
-    let schemas: Obj = [(instance_schema_key(None), schema)].into_iter().collect();
+    let schemas: Obj = [(instance_schema_key(None), unit_schema(unit))].into_iter().collect();
     adapter_snapshot_of(AdapterDeclarations {
         package: None,
         supported_triggers: &["webhook".to_string()],
@@ -184,6 +180,14 @@ fn unit_snapshot(unit: &str) -> Js {
         schemas,
         construction_arg_options: Obj::new(),
     })
+}
+
+/// A unit's schema, projected from its own introspection.
+pub fn unit_schema(unit: &str) -> Js {
+    let entries = crate::units::entry_points(unit);
+    let descriptors: IndexMap<String, Js> =
+        crate::units::descriptors(unit).into_iter().map(|d| (d.get("typeId").and_then(Js::as_str).unwrap_or_default().to_string(), d)).collect();
+    crate::schema::describe_external_schema(unit, &entries, &descriptors)
 }
 
 /// A static credential every field of which may be left out. An OAuth 2
@@ -254,6 +258,97 @@ fn adapter_snapshot_of(adapter: AdapterDeclarations) -> Js {
     Js::from(snapshot)
 }
 
+// ── The catalog as text ──────────────────────────────────────────────────────
+
+/// `listen-fire catalog` without `--json`: each connection the project holds
+/// (a program connecting it or not), as a program reads, writes and listens to
+/// it, in the notation `listen-fire modules show` prints a module in
+/// (crate::modules::SchemaView), from the schema the catalog holds for it, so
+/// its live types (an MCP server's tools, a CRM's fields) are there. Then the
+/// plugins the files import, the units every program has, and the credentials
+/// no installed module describes.
+pub fn catalog_text(catalog: &Js) -> String {
+    let adapters = match catalog.get("adapters") {
+        Some(Js::Obj(adapters)) => adapters.clone(),
+        _ => Obj::new(),
+    };
+    let credentials = match catalog.get("credentials") {
+        Some(Js::Obj(credentials)) => credentials.clone(),
+        _ => Obj::new(),
+    };
+    let mut out = vec![
+        "each connection the project holds, as a program reads, writes and listens to it (listen-fire catalog --json: the whole snapshot)".to_string(),
+        "a record type is named one hop off its connection: a parameter holding a Message of connection c is typed <c-[:Message]->>".to_string(),
+    ];
+    let is_unit = |name: &str| movement_parser::version::RUN_HOST_UNITS.contains(&name);
+    for (name, adapter) in adapters.iter().filter(|(name, _)| !is_unit(name)) {
+        let spelled = match adapter.get("package").and_then(Js::as_str) {
+            Some(package) => format!("`{package}`"),
+            None => format!("#{name}"),
+        };
+        let schemas = match adapter.get("schemas") {
+            Some(Js::Obj(schemas)) if !schemas.is_empty() => schemas.clone(),
+            _ => {
+                out.push(String::new());
+                out.push(format!("module {spelled}: no connection described"));
+                continue;
+            }
+        };
+        for (key, schema) in &schemas {
+            out.push(String::new());
+            let (header, using) = match key.as_str() {
+                "" => (format!("connection {name} (no credential): {spelled}"), String::new()),
+                credential if credentials.contains_key(credential) => (format!("connection {credential}: {spelled}"), format!(" using {credential}")),
+                // A connection in a position (an Airtable base) is the program's own construction.
+                positioned => (format!("connection {positioned}: {spelled}, in the position its program's connect names"), " using <credential> as the program's connect says".to_string()),
+            };
+            out.push(header);
+            if let Some(description) = adapter.get("description").and_then(Js::as_str) {
+                out.push(description.to_string());
+            }
+            out.push(format!("use: c = connect {spelled}{using}"));
+            crate::modules::SchemaView::of(schema).lines(&mut out);
+        }
+    }
+
+    if let Some(Js::Obj(plugins)) = catalog.get("plugins")
+        && !plugins.is_empty()
+    {
+        out.push(String::new());
+        out.push("plugins (use: import { <name> } from plugins, then call it by position, settings last):".into());
+        for (key, spec) in plugins {
+            let name = spec.get("name").and_then(Js::as_str).unwrap_or(key);
+            let description = spec.get("description").and_then(Js::as_str).map(|d| format!(": {d}")).unwrap_or_default();
+            let priced = if Js::is_true(spec.get("priced")) { " (priced per call)" } else { "" };
+            out.push(format!("  {}{priced}{description}", crate::modules::plugin_call(name, spec)));
+        }
+    }
+
+    for (name, adapter) in adapters.iter().filter(|(name, _)| is_unit(name)) {
+        let Some(schema) = adapter.get("schemas").and_then(|s| s.get("")) else { continue };
+        out.push(String::new());
+        out.push(format!("{name}: always connected; a program names it with no connect"));
+        crate::modules::SchemaView::of(schema).lines(&mut out);
+    }
+
+    let unconnected: Vec<String> = credentials
+        .iter()
+        .filter(|(credential, spec)| {
+            let adapter = spec.get("adapters").and_then(Js::as_array).and_then(|a| a.first()).and_then(Js::as_str).unwrap_or_default();
+            !adapters.get(adapter).and_then(|a| a.get("schemas")).is_some_and(|s| s.get(credential).is_some())
+        })
+        .map(|(credential, spec)| {
+            let modules: Vec<&str> = spec.get("adapters").and_then(Js::as_array).unwrap_or_default().iter().filter_map(Js::as_str).collect();
+            format!("{credential} ({})", modules.join(", "))
+        })
+        .collect();
+    if !unconnected.is_empty() {
+        out.push(String::new());
+        out.push(format!("credentials no installed module describes (its module is not installed here, or does not declare that credential): {}", unconnected.join(", ")));
+    }
+    out.join("\n")
+}
+
 /// `pluginsOf`: each plugin external's package, keyed by module and name, each
 /// spec tagged with the package it is imported from and the name a program
 /// spells it.
@@ -312,5 +407,88 @@ mod tests {
         let become_ = catalog.adapter("at").and_then(|spec| spec.listen_settings_become.clone()).unwrap();
         assert_eq!(become_.path, ["Bases", "Tables", "Changes"]);
         assert_eq!(become_.keys["table"].hop, 1);
+    }
+}
+
+#[cfg(test)]
+mod text_tests {
+    use super::*;
+
+    #[test]
+    fn the_text_is_each_connection_as_modules_show_spells_a_module_with_its_live_types_the_units_and_what_no_module_describes() {
+        let catalog = Js::parse(
+            br#"{"contractVersion":3,
+            "adapters":{
+              "manual":{"constructionArgs":[],"canFire":true,"schemaShape":"introspected","schemas":{"":{"positions":{"Invocation":{"properties":{"Text":"text"},"edges":{}}},"collections":{"Invocations":{"target":"Invocation","readable":false,"listenable":true}},"writableRoots":{}}}},
+              "mcp":{"constructionArgs":[{"name":"credentials","kind":"credential","required":true}],"package":"@lf/mcp","description":"Any remote MCP server.","schemaShape":"introspected",
+                "schemas":{"crm":{"positions":{"find_customer":{"properties":{"email":"text","plan":{"kind":"enum","options":["monthly","yearly"]}},"edges":{},"pinnedProperties":["email"],"description":"The customer with this email. More words."}},
+                  "collections":{"find_customer":{"target":"find_customer"},"add_note":{"target":"add_note","readable":false}},
+                  "writableRoots":{"add_note":{"fields":{"customer":"text","body":"text"},"requiredFields":["customer"],"resultShape":{}}}}}},
+              "stripe":{"constructionArgs":[],"package":"@lf/stripe","listenSettingsBecome":{"path":["Invoices","Changes"]},"schemaShape":"introspected",
+                "schemas":{"stripe_account":{"positions":{"Invoice":{"properties":{"Id":"text"},"edges":{"Changes":{"target":"InvoiceChange","readable":false,"listenable":true},"Customer":{"target":"Customer"}}}},"collections":{"Invoices":{"target":"Invoice"}},"writableRoots":{}}}},
+              "acme_crm":{"constructionArgs":[],"schemaShape":"introspected","schemas":{"":{"positions":{"Company":{"properties":{"Name":"text"},"edges":{}}},"collections":{"Company":{"target":"Company","listenable":true}},"writableRoots":{}}}}},
+            "credentials":{"crm":{"adapters":["mcp"],"credential":"mcp_token"},"stripe_account":{"adapters":["stripe"],"credential":"stripe"},"crm_two":{"adapters":["mcp"],"credential":"mcp_token"}},
+            "plugins":{"@lf/pdf/render":{"package":"@lf/pdf","name":"render","args":["text","pageSize"],"requiredArgs":["text"],"description":"A PDF of the text."}},
+            "files":{}}"#,
+        )
+        .unwrap();
+        let text = catalog_text(&catalog);
+        let expected = [
+            "each connection the project holds, as a program reads, writes and listens to it (listen-fire catalog --json: the whole snapshot)",
+            "a record type is named one hop off its connection: a parameter holding a Message of connection c is typed <c-[:Message]->>",
+            "",
+            "connection crm: `@lf/mcp`",
+            "Any remote MCP server.",
+            "use: c = connect `@lf/mcp` using crm",
+            "",
+            "reads: start a walk (or a listen, where marked) from the connection with",
+            "  find_customer -> find_customer",
+            "  add_note -> add_note (write only)",
+            "",
+            "record types (a name with a space is written in backticks; pinned: the fields a read's WHERE must set with ==):",
+            "  find_customer: The customer with this email",
+            "    fields: email text, plan enum(monthly|yearly)",
+            "    pinned: email",
+            "",
+            "writes (a * is required):",
+            "  a add_note along the connection's add_note: customer*, body",
+            "",
+            "connection stripe_account: `@lf/stripe`",
+            "use: c = connect `@lf/stripe` using stripe_account",
+            "",
+            "reads: start a walk (or a listen, where marked) from the connection with",
+            "  Invoices -> Invoice",
+            "",
+            "record types (a name with a space is written in backticks):",
+            "  Invoice",
+            "    fields: Id text",
+            "    edges: Changes -> InvoiceChange (listen only), Customer -> Customer",
+            "",
+            "connection acme_crm (no credential): #acme_crm",
+            "use: c = connect #acme_crm",
+            "",
+            "reads: start a walk (or a listen, where marked) from the connection with",
+            "  Company -> Company (listenable)",
+            "",
+            "record types (a name with a space is written in backticks):",
+            "  Company",
+            "    fields: Name text",
+            "",
+            "plugins (use: import { <name> } from plugins, then call it by position, settings last):",
+            "  render(text, pageSize?): A PDF of the text.",
+            "",
+            "manual: always connected; a program names it with no connect",
+            "",
+            "reads: start a walk (or a listen, where marked) from the connection with",
+            "  Invocations -> Invocation (listen only)",
+            "",
+            "record types (a name with a space is written in backticks):",
+            "  Invocation",
+            "    fields: Text text",
+            "",
+            "credentials no installed module describes (its module is not installed here, or does not declare that credential): crm_two (mcp)",
+        ];
+        assert_eq!(text, expected.join("\n"));
+        assert!(!text.contains("listenSettingsBecome") && !text.contains("Bases"), "no retired 0.12 mapping in the text");
     }
 }

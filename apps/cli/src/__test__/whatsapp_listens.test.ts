@@ -118,7 +118,7 @@ test('a reaction runs a listen on Reactions and never one on Messages; a message
     await serving.stop();
   }
   const listed = JSON.parse(lf(dir, 'runs', '--json').out) as { runs: Array<{ runId: string }> };
-  const returned = listed.runs.map((r) => lf(dir, 'runs', 'show', r.runId).out).join('\n');
+  const returned = listed.runs.map((r) => lf(dir, 'runs', 'show', r.runId, '--json').out).join('\n');
   assert.match(returned, /message hello from 447700900001/);
   assert.match(returned, /reaction 👍 to wamid\.T1/);
   assert.match(returned, /location Home/);

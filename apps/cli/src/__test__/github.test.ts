@@ -172,7 +172,7 @@ test('listen-fire run --poll arms, fires once per new notification the listen se
     const ids = runs.out.trim().split('\n').filter((l) => l.includes('triage:triage')).map((l) => l.split(' ')[0] ?? '');
     assert.equal(ids.length, 2, runs.out);
     for (const id of ids) {
-      const shown = await run(dir, 'runs', 'show', id);
+      const shown = await run(dir, 'runs', 'show', id, '--json');
       assert.equal(shown.code, 0, shown.out);
       const record = JSON.parse(shown.out) as { run?: { status?: string; writeRecords?: Array<{ adapter: string; recordType: string }> } };
       assert.equal(record.run?.status, 'completed', shown.out);

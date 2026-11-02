@@ -149,7 +149,7 @@ test("a listen on the Deals list's entries runs on each Status change, naming th
       await serving.stop();
     }
     const listed = JSON.parse(lf(dir, 'runs', '--json').out) as { runs: Array<{ runId: string }> };
-    const returned = listed.runs.map((r) => lf(dir, 'runs', 'show', r.runId).out);
+    const returned = listed.runs.map((r) => lf(dir, 'runs', 'show', r.runId, '--json').out);
     assert.ok(returned.some((out) => out.includes('updated Status: Diligence')), returned.join('\n'));
     assert.ok(returned.some((out) => out.includes('updated Status: Passed')), returned.join('\n'));
   } finally {
@@ -244,7 +244,7 @@ test('a wait on an organization’s Changes is not answered by a person’s chan
     }
     const listed = JSON.parse(lf(dir, 'runs', '--json').out) as { runs: Array<{ runId: string }> };
     assert.equal(listed.runs.length, 1, JSON.stringify(listed));
-    assert.match(lf(dir, 'runs', 'show', listed.runs[0]!.runId).out, /Veltha: created, then updated/);
+    assert.match(lf(dir, 'runs', 'show', listed.runs[0]!.runId, '--json').out, /Veltha: created, then updated/);
   } finally {
     await fake.stop();
   }

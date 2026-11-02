@@ -78,7 +78,8 @@ test('listen-fire modules show @lf/stripe says what it reads, that it is read-on
   assert.match(shown.out, /^ {2}Subscriptions -> Subscription$/m);
   assert.match(shown.out, /^ {2}Invoice: .*\n {4}fields: .*\bStatus enum\(draft\|open\|paid\|uncollectible\|void\).*\bAmount Due number\b/m);
   assert.match(shown.out, /^ {2}Charges -> Charge$/m);
-  assert.match(shown.out, /^ {4}edges: Customer -> Customer, Subscription -> Subscription\b/m);
+  // An invoice's Changes are listened to, never read: shown, and marked so.
+  assert.match(shown.out, /^ {4}edges: Changes -> InvoiceChange \(listen only\), Customer -> Customer, Subscription -> Subscription\b/m);
   assert.match(shown.out, /^listens: webhook$/m);
   // A listen names a change by its `Kind`: an event's type without its object's prefix.
   assert.match(shown.out, /^ {2}InvoiceChange: .*\n {4}fields: .*\bKind enum\([^)]*\bpayment_failed\b/m);
@@ -110,6 +111,7 @@ test('listen-fire modules show says what a module writes, and that a module with
   assert.match(slack.out, /^access: reads and writes$/m);
   assert.match(slack.out, /^ {2}a Message along Channel\.Messages: Message, File, Blocks, Buttons, Topic$/m);
   assert.match(slack.out, /^ {2}a Reaction along Message\.Reactions, write only: Emoji\*$/m);
+  assert.match(slack.out, /^ {4}edges: Messages -> Message \(listenable\), Members -> User$/m);
 
   const airtable = lfSync(dir, 'modules', 'show', '@lf/airtable');
   assert.equal(airtable.code, 0, airtable.out);

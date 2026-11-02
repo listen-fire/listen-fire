@@ -46,8 +46,8 @@ test('listen-fire serve takes a signed webhook twice, runs it once, and its list
     firstId = original.id;
     assert.equal(original.externalId, 'd-1');
     assert.deepEqual(original.runs.map((r) => r.id), [runs[0]!.runId]);
-    const shown = lf(dir, 'runs', 'show', runs[0]!.runId);
-    assert.match(shown.out, new RegExp(`"deliveryId": "${firstId}"`));
+    const shown = lf(dir, 'runs', 'show', runs[0]!.runId, '--json');
+    assert.match(shown.out, new RegExp(`"deliveryId":"${firstId}"`));
   } finally {
     await serving.stop();
   }

@@ -49,7 +49,7 @@ function runsLine(dir: string, runId: string): string {
 
 /** What `listen-fire runs show` says of the run's stranded waits. */
 function strandedSays(dir: string, runId: string): string[] {
-  const shown = lfSync(dir, 'runs', 'show', runId);
+  const shown = lfSync(dir, 'runs', 'show', runId, '--json');
   assert.equal(shown.code, 0, shown.out);
   return (JSON.parse(shown.out) as { run: { stranded: Array<{ says: string }> } }).run.stranded.map((s) => s.says);
 }

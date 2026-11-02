@@ -45,7 +45,7 @@ const unjudged = (server: Served, fn: string) => server.lines.filter((l) => l.in
 
 function returned(dir: string): string[] {
   const listed = JSON.parse(lf(dir, 'runs', '--json').out) as { runs: Array<{ runId: string }> };
-  return listed.runs.map((r) => lf(dir, 'runs', 'show', r.runId).out);
+  return listed.runs.map((r) => lf(dir, 'runs', 'show', r.runId, '--json').out);
 }
 
 const VALUES = `${HEAD}

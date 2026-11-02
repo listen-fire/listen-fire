@@ -250,7 +250,7 @@ test('a message in #deals fires a channel-filtered listen, attributed to its sen
       await serving.stop();
     }
     const listed = JSON.parse(lfSync(world.dir, 'runs', '--json').out) as { runs: Array<{ runId: string }> };
-    const returned = listed.runs.map((r) => lfSync(world.dir, 'runs', 'show', r.runId).out).join('\n');
+    const returned = listed.runs.map((r) => lfSync(world.dir, 'runs', 'show', r.runId, '--json').out).join('\n');
     assert.match(returned, /heard Acme wants a term sheet in C0DEALS from U001/);
     assert.doesNotMatch(returned, /lunch\?|in the thread/);
   } finally {
@@ -286,7 +286,7 @@ listen to chat-[ch:Channels WHERE ch.Name == "deals"]->-[:Messages]->-[:Reaction
       await serving.stop();
     }
     const listed = JSON.parse(lfSync(world.dir, 'runs', '--json').out) as { runs: Array<{ runId: string }> };
-    const returned = listed.runs.map((r) => lfSync(world.dir, 'runs', 'show', r.runId).out).join('\n');
+    const returned = listed.runs.map((r) => lfSync(world.dir, 'runs', 'show', r.runId, '--json').out).join('\n');
     assert.match(returned, /seen eyes by U002 in C0DEALS/);
   } finally {
     await world.close();
@@ -475,7 +475,7 @@ test('a reply in a #deals thread fires a channel-filtered Replies listen; one in
       await serving.stop();
     }
     const listed = JSON.parse(lfSync(world.dir, 'runs', '--json').out) as { runs: Array<{ runId: string }> };
-    const returned = listed.runs.map((r) => lfSync(world.dir, 'runs', 'show', r.runId).out).join('\n');
+    const returned = listed.runs.map((r) => lfSync(world.dir, 'runs', 'show', r.runId, '--json').out).join('\n');
     assert.match(returned, /answered deals thread reply in C0DEALS/);
     assert.doesNotMatch(returned, /random thread reply|a new thread/);
   } finally {
