@@ -317,7 +317,7 @@ test('listen-fire upgrade holds the pin on a settings listen it cannot rewrite, 
   assert.equal(code, 1, out);
   assert.match(
     out,
-    /^movements\/companies\.mvt:13:1 error MOV_LISTEN_SETTINGS_RETIRED `listen to crm \{ … \}` is retired in 0\.13: a listen is a traversal ending on the edge its events arrive on\. Write `listen to crm-\[:…\]-> fire welcome`$/m,
+    /^movements\/companies\.mvt:10:1 error MOV_LISTEN_SETTINGS_RETIRED `listen to crm \{ … \}` is retired in 0\.13: a listen is a traversal ending on the edge its events arrive on\. Write `listen to crm-\[:…\]-> fire welcome`$/m,
   );
   assert.match(out, /engine: left at 0\.12\.13 until the 1 remaining diagnostic\(s\) are fixed/);
 });
@@ -542,7 +542,9 @@ const REPO = resolve(__dirname, '../../../..');
 const GUIDE = readFileSync(join(REPO, 'docs/language/migrating-to-0.13.md'), 'utf8');
 const LISTENS_SECTION = GUIDE.slice(GUIDE.indexOf('## 8. Listens are traversals'), GUIDE.indexOf('## 9. '));
 const LUNCH_POLL = readFileSync(join(__dirname, 'movements/lunch_poll/lunch_poll.mvt'), 'utf8');
-const PROGRAM_FENCE = /^```\n(import \{[\s\S]*?)^```$/gm;
+// A whole program opens with its imports or its first connection; a snippet
+// that elides lines (`…`) is not one.
+const PROGRAM_FENCE = /^```\n((?:import \{|\w+ = connect )[\s\S]*?)^```$/gm;
 
 /** Each connection the guide's listens start at, by the module heading it is
  *  under: the lines that import and construct it in the probe's project. */
@@ -605,7 +607,7 @@ function shownPrograms(): Example[] {
   const probes = Array.isArray(claims) ? claims.map((claim: unknown) => String(Reflect.get(claim as object, 'probe'))) : [];
   return [
     ...[...LISTENS_SECTION.matchAll(PROGRAM_FENCE)].map((m, i) => ({ where: `guide program ${i + 1}`, source: m[1] })),
-    ...[...content.matchAll(PROGRAM_FENCE)].map((m, i) => ({ where: `listeners chapter program ${i + 1}`, source: m[1] })),
+    ...[...content.matchAll(PROGRAM_FENCE)].filter((m) => !m[1].includes('…')).map((m, i) => ({ where: `listeners chapter program ${i + 1}`, source: m[1] })),
     ...probes.map((probe, i) => ({ where: `listeners chapter probe ${i + 1}`, source: probe.replace(/\bacme\b/g, 'crm_attio') })),
   ];
 }

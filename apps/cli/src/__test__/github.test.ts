@@ -53,7 +53,7 @@ async function triageProject(github: FakeGithub, channels: Fake): Promise<string
   assert.equal(lfSync(join(dir, '..'), 'init', 'triage').code, 0);
   console.log((await ok(lf(dir, ['connect', '@lf/github', '--yes'], { answers: [] }))).trim());
   const added = await ok(lf(dir, ['credential', 'add', '--module', '@lf/github', 'henry_github'], { answers: [TOKEN, github.url] }));
-  assert.match(added, /x = connect github using henry_github/);
+  assert.match(added, /x = connect `@lf\/github` using henry_github/);
   await ok(lf(dir, ['connect', '@lf/slack', '--yes']));
   await ok(lf(dir, ['credential', 'add', '--module', '@lf/slack', 'team_slack'], { answers: ['xoxb-test', '', '', `${channels.url}/slack/`] }));
   writeFileSync(join(dir, 'movements/triage.mvt'), TRIAGE);

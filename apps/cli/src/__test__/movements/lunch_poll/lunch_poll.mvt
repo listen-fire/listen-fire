@@ -1,8 +1,5 @@
-import { `@lf/slack` as slack, `@lf/airtable` as airtable } from adapters
-import { team_slack, team_airtable } from credentials
-
-chat = connect slack using team_slack
-office = connect airtable using team_airtable { base: "Office" }
+chat = connect `@lf/slack` using team_slack
+office = connect `@lf/airtable` using team_airtable { base: "Office" }
 
 function ask_lunch(t: <cron-[:Ticks]->>) {
   channel = only(chat-[ch:Channels WHERE ch.Name == "office"]->)

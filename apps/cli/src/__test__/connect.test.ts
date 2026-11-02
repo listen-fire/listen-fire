@@ -192,7 +192,7 @@ test('listen-fire credential add signs in through the loopback redirect and bind
     assert.match(await page.text(), /Signed in for "alice_acme"/);
     const out = await ok(adding);
     assert.match(out, /added alice_acme \(acme_crm, credential acme\)/);
-    assert.match(out, /connect acme_crm using alice_acme/);
+    assert.match(out, /connect #acme_crm using alice_acme/);
 
     const { alice_acme: alice, acme_crm: install } = secretsFile(dir);
     assert.ok(alice !== undefined && install !== undefined);

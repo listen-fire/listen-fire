@@ -197,13 +197,13 @@ test('a credential the program imports but nothing configures is named, with the
   const run = await lf(dir, ['run', '--event', EVENT], { HOME: home });
   assert.equal(run.code, 1);
   assert.match(run.out, /credential "acme"/);
-  assert.match(run.out, /companies\.mvt:2/);
+  assert.match(run.out, /companies\.mvt:1/);
   assert.match(run.out, /\.lf\/secrets\.yaml/);
   assert.match(run.out, /LF_SECRET__ACME__EXTERNAL/);
 
   const check = await lf(dir, ['check'], { HOME: home });
   assert.equal(check.code, 1);
-  assert.match(check.out, /companies\.mvt:2:\d+ error MISSING_CREDENTIAL credential "acme"/);
+  assert.match(check.out, /companies\.mvt:1:\d+ error MISSING_CREDENTIAL credential "acme"/);
 });
 
 test('listen-fire init writes the user field commented, and the file still loads', () => {

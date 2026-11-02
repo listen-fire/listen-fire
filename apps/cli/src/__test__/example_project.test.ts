@@ -26,7 +26,7 @@ test('listen-fire check: reports what the Rust checker refuses, by file, line an
   writeFileSync(file, readFileSync(file, 'utf8').replace('Name: "Welcome ${company.Name}"', 'Nme: "Welcome ${nobody}"'));
   const { code, out } = lf(dir, 'check');
   assert.equal(code, 1, out);
-  assert.match(out, /companies\.mvt:8:\d+ .*MOV_NAME_UNRESOLVED/);
+  assert.match(out, /companies\.mvt:5:\d+ .*MOV_NAME_UNRESOLVED/);
   assert.match(out, /1 file\(s\), [1-9]\d* error\(s\)/);
 });
 

@@ -101,7 +101,7 @@ test('an entry named by LF_SECRET__<ENTRY>__EXTERNAL is still a credential a con
     const dir = project(adapter.url);
     const checked = await lf(dir, ['check'], { env: { LF_SECRET__BEACON__EXTERNAL: 'beacon', LF_SECRET__BEACON__KEY: 'k-env' } }).done;
     assert.notEqual(checked.code, 0, checked.out);
-    assert.match(checked.out, /MOV_CONSTRUCT_MISSING_CRED 'beacon' requires a 'credentials' argument/);
+    assert.match(checked.out, /MOV_CONSTRUCT_MISSING_CRED 'beacon' needs a credential to connect with/);
   } finally {
     adapter.server.close();
   }
