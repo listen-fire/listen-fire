@@ -229,7 +229,6 @@ For module authors only.
 - Why: a listen says which records it wants as a read or a wait does, so it is checked as they are, a filter is judged one way on every host, and listens on one edge share one poll or webhook. The settings form was a second vocabulary per module, unchecked against what arrives.
 - The handbook's listeners chapter teaches the form in full: where each filter is judged, unbounded edges, loops, and an arrival a listen could not judge.
 - A listen that could never fire is refused where it is written, never checked clean:
-  - a hop that lands on one of several record types (a union), through it or onto it (`MOV_LISTEN_UNION_HOP`): what arrives is told apart by the one record type each hop lands on;
   - a filter judged on each arrival that reads an earlier hop the arrival does not carry (`MOV_LISTEN_UNWATCHABLE`): the judge has only what arrives;
   - a window measured from now (`WITHIN`) on a hop the host lists to find what to watch (`MOV_LISTEN_UNWATCHABLE`): that hop is judged again only when it is listed again, so put the window on what arrives.
 
@@ -464,7 +463,7 @@ listen to chat-[:Channels]->-[m:Messages WHERE m.Topic == "lunch-poll" AND m.Tim
 | `MOV_ABSENT_REQUIRED` (a field read through a value that may be missing) | error, by hand: test the value with `exists` | [9](#9-a-field-is-never-read-through-a-value-that-may-be-missing) |
 | `MOV_FIELD_MEANING_CHANGED` | warning on an upgrade from 0.12: the field holds something else now (gmail's `Labels`: names, not ids) | [8](#8-listens-are-traversals) |
 | `MOV_ABSENT_REQUIRED` (a wait off a record that may be missing) | error, by hand: guard the wait with `!= null` | [5](#5-what-a-wait-binds-is-always-there) |
-| `MOV_LISTEN_EDGE_NOT_LISTENABLE`, `MOV_LISTEN_HOP_NOT_ITERABLE`, `MOV_LISTEN_UNWATCHABLE`, `MOV_LISTEN_IMPURE_WHERE`, `MOV_LISTEN_UNION_HOP` | error, by hand, on a listen written or rewritten as a traversal | [8](#8-listens-are-traversals) |
+| `MOV_LISTEN_EDGE_NOT_LISTENABLE`, `MOV_LISTEN_HOP_NOT_ITERABLE`, `MOV_LISTEN_UNWATCHABLE`, `MOV_LISTEN_IMPURE_WHERE` | error, by hand, on a listen written or rewritten as a traversal | [8](#8-listens-are-traversals) |
 | `MOV_HOP_ALIAS_REPEATED` | error, by hand: give each hop of a walk its own alias | [8](#one-name-for-one-hop) |
 | `MOV_HOP_READS_EARLIER_HOP` | error, by hand: open a block on the earlier hop and walk on from it inside | [8](#one-name-for-one-hop) |
 | `MOV_UNBOUNDED_EDGE` | error, by hand: narrow the hop by a field its module takes, with literals (`-[t:Ticks WHERE t.Schedule == "…"]->`) | [changelog](../../CHANGELOG.md#0130) |

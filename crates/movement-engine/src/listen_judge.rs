@@ -455,6 +455,46 @@ mod tests {
         }
     }
 
+    /// A listen through or onto a union is one plan per member, and an
+    /// arrival states one record type: exactly one member's plan fires, and
+    /// the other skips by type, whatever the record's fields.
+    #[test]
+    fn an_arrival_fires_one_member_plan_of_a_listen_over_a_union() {
+        let catalog = CatalogSnapshot::load(
+            r#"{"adapters":{"crm":{"canFire":false,"constructionArgs":[],"schemas":{"":{"positions":{
+                "Person":{"properties":{"Name":"text"},"edges":{"Notes":{"target":"Note","listenable":true,"delivery":"connection","carries":["Subjects"]}}},
+                "Company":{"properties":{"Name":"text"},"edges":{"Notes":{"target":"Note","listenable":true,"delivery":"connection","carries":["Subjects"]}}},
+                "Note":{"properties":{"Text":"text"},"edges":{}}},
+                "unions":{"Subject":["Person","Company"]},
+                "collections":{"Subjects":{"target":"Subject"},"Things":{"target":"Subject","listenable":true,"delivery":"connection"}},
+                "writableRoots":{}}}}},"credentials":{},"plugins":{}}"#,
+        )
+        .unwrap();
+        let plans = |source: &str| {
+            let source = format!("import {{ crm as m }} from adapters; crm = connect m\nfunction f(n: <crm-[:Note]->>) {{ return n.Text }}\nfunction g(n: <crm-[:Things]->>) {{ return n.Name }}\n{source}");
+            let program = movement_parser::stmt::parse_program(&source, false).unwrap();
+            let answer = movement_checker::answer::check_answer(&program, &catalog, CheckOptions { upgrading_from: None, zones: &crate::env_services::EnvZones });
+            assert_eq!(answer.diagnostics.iter().filter(|d| d.severity.is_none()).count(), 0, "{source}");
+            answer.listens
+        };
+        let record = |record_type: &str, fields: Json| ArrivedRecord { record_type: Some(record_type.into()), fields, unknown: Vec::new() };
+        let verdicts = |plans: &[ListenPlan], arrival: &PlanArrival| plans.iter().map(|plan| serde_json::to_value(judge_arrival(plan, arrival, 0.0)).unwrap()).collect::<Vec<_>>();
+
+        // Onto a union: the landing's own type.
+        let onto = plans("listen to crm-[t:Things WHERE t.Name == \"Ann\"]-> fire g\n");
+        assert_eq!(onto.iter().map(|p| p.hops[0].to.as_str()).collect::<Vec<_>>(), ["Person", "Company"]);
+        let person = PlanArrival { edge: "Things".into(), key: None, landing: record("Person", json!({"Name": "Ann"})), parents: Vec::new(), taken_applied: false };
+        assert_eq!(verdicts(&onto, &person), [json!({"fires": true}), json!({"skips": 0, "reason": "it has record type Person, not Company, which this listen's Things lands on"})]);
+
+        // Through a union: the parent the arrival carries.
+        let through = plans("listen to crm-[:Subjects]->-[:Notes]-> fire f\n");
+        let note = |parent: &str| PlanArrival { edge: "Notes".into(), key: None, landing: record("Note", json!({"Text": "hi"})), parents: vec![Some(record(parent, json!({"Name": "Acme"})))], taken_applied: false };
+        assert_eq!(
+            verdicts(&through, &note("Company")),
+            [json!({"skips": 0, "reason": "the Subjects record it carries has record type Company, not Person, which this listen's Subjects lands on"}), json!({"fires": true})]
+        );
+    }
+
     #[test]
     fn judge_arrival_matches_the_shared_table_of_cases() {
         let table = table();

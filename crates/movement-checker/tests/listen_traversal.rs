@@ -406,8 +406,15 @@ fn a_window_from_now_is_judged_on_arrival_never_on_a_listed_hop() {
 }
 
 const UNIONS: &str = r#"{"adapters":{"crm":{"canFire":false,"constructionArgs":[],"schemas":{"":{"positions":{
-    "Person":{"properties":{"Name":"text"},"edges":{"Notes":{"target":"Note","listenable":true,"delivery":"connection","carries":["Subjects"]}}},
-    "Company":{"properties":{"Name":"text"},"edges":{"Notes":{"target":"Note","listenable":true,"delivery":"connection","carries":["Subjects"]}}},
+    "Person":{"properties":{"Name":"text"},"edges":{
+      "Notes":{"target":"Note","listenable":true,"delivery":"connection","carries":["Subjects"]},
+      "Calls":{"target":"Note","listenable":true,"delivery":"connection"},
+      "Tasks":{"target":"Note","listenable":true,"delivery":"connection"},
+      "Links":{"target":"Subject"}}},
+    "Company":{"properties":{"Name":"text"},"edges":{
+      "Notes":{"target":"Note","listenable":true,"delivery":"connection","carries":["Subjects"]},
+      "Calls":{"target":"Note"},
+      "Links":{"target":"Subject"}}},
     "Note":{"properties":{"Text":"text"},"edges":{}}},
     "unions":{"Subject":["Person","Company"]},
     "collections":{"Subjects":{"target":"Subject","membersChange":{"relistEverySeconds":300},"capability":{"filter":"native","supportsLimit":false}},
@@ -415,30 +422,89 @@ const UNIONS: &str = r#"{"adapters":{"crm":{"canFire":false,"constructionArgs":[
                    "People":{"target":"Person","membersChange":{"relistEverySeconds":300},"listenable":true,"delivery":"connection"}},
     "writableRoots":{}}}}},"credentials":{},"plugins":{}}"#;
 
-fn check_unions(source: &str) -> (usize, Vec<String>) {
+/// The plans a check of `source` against the union catalog answers, and its
+/// errors.
+fn answer_unions(source: &str) -> (Vec<ListenPlan>, Vec<String>) {
     let source = format!("import {{ crm as m }} from adapters; crm = connect m;\nfunction f(n: <crm-[:Note]->>) {{ return n.Text }}\nfunction g(n: <crm-[:Things]->>) {{ return n.Name }}\nfunction p(n: <crm-[:Person]->>) {{ return n.Name }}\n{source}");
     let catalog = CatalogSnapshot::load(UNIONS).unwrap();
     let program = movement_parser::stmt::parse_program(&source, false).unwrap_or_else(|e| panic!("{source}: {}", e.message));
     let answer = movement_checker::answer::check_answer(&program, &catalog, options());
-    (answer.listens.len(), answer.diagnostics.into_iter().filter(|d| d.severity.is_none()).map(|d| format!("{} {}", d.code, d.message)).collect())
+    (answer.listens, answer.diagnostics.into_iter().filter(|d| d.severity.is_none()).map(|d| format!("{} {}", d.code, d.message)).collect())
 }
 
-/// The judge tells an arrival's records apart by the record type each hop
-/// lands on, and an arrival is only ever one member of a union: a listen
-/// through or onto one would check clean and never fire.
+fn check_unions(source: &str) -> (usize, Vec<String>) {
+    let (plans, errors) = answer_unions(source);
+    (plans.len(), errors)
+}
+
+/// Each plan's hops, spelled `from-[:edge]->to`, with `(of Union)` where a
+/// hop's edge lands on a union and the plan watches one member of it.
+fn spelled_hops(plans: &[ListenPlan]) -> Vec<String> {
+    plans
+        .iter()
+        .map(|plan| plan.hops.iter().map(|h| format!("{}-[:{}]->{}{}", h.from, h.edge, h.to, h.member_of.as_ref().map(|u| format!(" (of {u})")).unwrap_or_default())).collect::<Vec<_>>().join(" "))
+        .collect()
+}
+
+/// A listen through or onto a union is one listen per member, as TypeScript
+/// distributes over a union: each member's plan watches that member alone,
+/// so an arrival, of one member, fires one of them.
 #[test]
-fn a_listen_through_or_onto_a_union_is_refused() {
+fn a_listen_through_or_onto_a_union_is_one_listen_per_member() {
+    let (plans, errors) = answer_unions("listen to crm-[:Subjects]->-[:Notes]-> fire f\n");
+    assert_eq!(errors, Vec::<String>::new());
+    assert_eq!(spelled_hops(&plans), ["-[:Subjects]->Person (of Subject) Person-[:Notes]->Note", "-[:Subjects]->Company (of Subject) Company-[:Notes]->Note"]);
+    assert_eq!(serde_json::to_value(&plans[0].hops[0]).unwrap(), json!({ "edge": "Subjects", "from": "", "to": "Person", "memberOf": "Subject", "judged": "none" }));
+    // Onto a union: each member's WHERE is split against that member.
+    let (plans, errors) = answer_unions("listen to crm-[t:Things WHERE t.Name == \"x\"]-> fire g\n");
+    assert_eq!(errors, Vec::<String>::new());
+    assert_eq!(spelled_hops(&plans), ["-[:Things]->Person (of Subject)", "-[:Things]->Company (of Subject)"]);
+    assert_eq!(spell(plans[1].hops[0].checked.as_ref().unwrap(), Some("t")), "t.Name == \"x\"");
+    // Two unions on one path multiply.
+    let (plans, errors) = answer_unions("listen to crm-[:Subjects]->-[:Links]->-[:Notes]-> fire f\n");
+    assert_eq!(errors, Vec::<String>::new());
     assert_eq!(
-        check_unions("listen to crm-[:Subjects]->-[:Notes]-> fire f\n"),
-        (0, vec!["MOV_LISTEN_UNION_HOP '-[:Subjects]->' on crm lands on Subject, which is one of Person or Company, and every hop of a listen lands on one record type: the host tells what arrives apart by it, so this listen would never fire — listen through an edge that lands on Person or Company alone, or wait in a run on one record".to_string()])
+        spelled_hops(&plans),
+        [
+            "-[:Subjects]->Person (of Subject) Person-[:Links]->Person (of Subject) Person-[:Notes]->Note",
+            "-[:Subjects]->Person (of Subject) Person-[:Links]->Company (of Subject) Company-[:Notes]->Note",
+            "-[:Subjects]->Company (of Subject) Company-[:Links]->Person (of Subject) Person-[:Notes]->Note",
+            "-[:Subjects]->Company (of Subject) Company-[:Links]->Company (of Subject) Company-[:Notes]->Note",
+        ]
     );
-    assert_eq!(
-        check_unions("listen to crm-[t:Things WHERE t.Name == \"x\"]-> fire g\n"),
-        (0, vec!["MOV_LISTEN_UNION_HOP '-[:Things]->' on crm lands on Subject, which is one of Person or Company, and every hop of a listen lands on one record type: the host tells what arrives apart by it, so this listen would never fire — listen through an edge that lands on Person or Company alone, or wait in a run on one record".to_string()])
-    );
-    // One member's edge is watched.
-    assert_eq!(check_unions("listen to crm-[:People]->-[:Notes]-> fire f\n"), (1, Vec::<String>::new()));
+    // One member's edge is watched, and plans no member.
+    let (plans, errors) = answer_unions("listen to crm-[:People]->-[:Notes]-> fire f\n");
+    assert_eq!((spelled_hops(&plans), errors), (vec!["-[:People]->Person Person-[:Notes]->Note".to_string()], Vec::<String>::new()));
     assert_eq!(check_unions("listen to crm-[w:People WHERE w.Name == \"x\"]-> fire p\n"), (1, Vec::<String>::new()));
+}
+
+/// Each member's plan is checked against that member's own edge, and a
+/// member whose edge a listen cannot take is refused by name: the listen as
+/// written is then not watched for any member.
+#[test]
+fn a_member_whose_edge_announces_nothing_is_refused_by_name() {
+    assert_eq!(
+        check_unions("listen to crm-[:Subjects]->-[:Calls]-> fire f\n"),
+        (0, vec!["MOV_LISTEN_EDGE_NOT_LISTENABLE '-[:Calls]->' on crm's Company announces nothing, so a listen on it would never fire — a listen ends on an edge its module announces arrivals on, such as '-[:Notes]->'".to_string()])
+    );
+}
+
+/// The listen as written is a duplicate of another when its member plans
+/// are, said once; its own member plans are distinct listens.
+#[test]
+fn a_listen_over_a_union_written_twice_is_one_duplicate() {
+    let (count, errors) = check_unions("listen to crm-[:Subjects]->-[:Notes]-> fire f\nlisten to crm-[:Subjects]->-[:Notes]-> fire f\n");
+    assert_eq!((count, errors.iter().map(|e| e.split(' ').next().unwrap()).collect::<Vec<_>>()), (2, vec!["MOV_LISTEN_DUPLICATE"]));
+}
+
+/// An edge only some members declare is refused as TypeScript refuses a
+/// member only some of a union's types have: narrow first.
+#[test]
+fn an_edge_only_one_member_declares_is_refused_by_the_walk() {
+    assert_eq!(
+        check_unions("listen to crm-[:Subjects]->-[:Tasks]-> fire f\n"),
+        (0, vec!["MOV_NARROWING 'Tasks' is an edge of crm's Person only — narrow with an 'is' test (e.g. `x is <crm-[:`…` WHERE …]->>`) before traversing it".to_string()])
+    );
 }
 
 /// A listen that checks clean is watched: one on a system the catalog does

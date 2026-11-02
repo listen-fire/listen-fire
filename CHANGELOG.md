@@ -35,6 +35,10 @@ named in [`RELEASING.md`](RELEASING.md).
   - The editor completes an adapter after `connect `, by its package name where it has one, and hover and go-to-definition answer for `connect`'s adapter and credential.
   - The handbook, the docs, the examples and the authoring MCP's guidance show only the form with no import. Their programs that connected the `manual` or `cron` unit now listen to the unit by name.
 
+- **A listen through or onto a union is watched, one listen per member.** `listen to crm-[:Subjects]->-[:Notes]-> fire f`, where `Subjects` lands on a Person or a Company, is watched as two listens: one through each Person's `Notes`, one through each Company's. Each member's listen is checked against that member's own edges, so a member whose edge announces nothing is refused by name. Two unions on one path multiply. An arrival is of one member, so it fires the function once. 0.13.0 refused these listens (`MOV_LISTEN_UNION_HOP`); that code is retired, and its name is not reused.
+  - Why: TypeScript distributes over a union the same way, and every host rule ("each hop lands on one record type") stays true.
+  - For hosts: a hop planned for one member of a union says so on the listen plan (`memberOf`, the union's name), and the host keeps only that member's records when it lists the hop ([platform-adoption-0.13.md](docs/contracts/platform-adoption-0.13.md#after-0130)).
+
 ### Deprecated
 
 - **The loop guard slot is retired.** A project whose `lf.yaml` names one (`core: { loopGuard: … }`) runs as before, but listen-fire starts no guard: it prints one notice naming it as it starts, and never calls `guard.open` or `guard.recordWrite`. It also no longer reads each record back after a write to hand it to the guard, which saves one `readRecord` call per write. listen-fire's loop breaker (`loopWindow`, `loopDepth`) already caps every chain of writes and arrivals, and nothing read what a guard remembered. Remove `core.loopGuard` from `lf.yaml`; 0.14.0 refuses it ([loop-guard-slot.md](docs/contracts/loop-guard-slot.md)).

@@ -119,7 +119,8 @@ pub const LISTEN_HOP_NOT_ITERABLE: &str = "MOV_LISTEN_HOP_NOT_ITERABLE";
 /// A filter on an earlier hop that is neither carried by an arrival nor
 /// cheap to re-check by listing.
 pub const LISTEN_UNWATCHABLE: &str = "MOV_LISTEN_UNWATCHABLE";
-/// A listen hop landing on a union of record types.
+/// Raised by nothing after 0.13.0: a listen through or onto a union is
+/// planned once per member. The name is never reused.
 pub const LISTEN_UNION_HOP: &str = "MOV_LISTEN_UNION_HOP";
 /// A listen's WHERE reading something other than its hops and literals.
 pub const LISTEN_IMPURE_WHERE: &str = "MOV_LISTEN_IMPURE_WHERE";

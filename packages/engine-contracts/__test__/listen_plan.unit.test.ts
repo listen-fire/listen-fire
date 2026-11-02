@@ -66,6 +66,46 @@ describe('a listen plan on the check answer', () => {
     expect(plan?.hops[2]?.checked).toMatchObject({ type: 'compare', op: 'neq' });
   });
 
+  it('is one plan per member of a union a hop lands on, each naming the union', () => {
+    const catalog = {
+      adapters: {
+        crm: {
+          canFire: false,
+          constructionArgs: [],
+          schemas: {
+            '': {
+              positions: {
+                Person: { properties: { Name: 'text' }, edges: { Notes: { target: 'Note', listenable: true, delivery: 'connection', carries: ['Subjects'] } } },
+                Company: { properties: { Name: 'text' }, edges: { Notes: { target: 'Note', listenable: true, delivery: 'connection', carries: ['Subjects'] } } },
+                Note: { properties: { Text: 'text' }, edges: {} },
+              },
+              unions: { Subject: ['Person', 'Company'] },
+              collections: { Subjects: { target: 'Subject' } },
+              writableRoots: {},
+            },
+          },
+        },
+      },
+      credentials: {},
+      plugins: {},
+    };
+    const source = 'import { crm as m } from adapters; crm = connect m\nfunction f(n: <crm-[:Note]->>) { return n.Text }\nlisten to crm-[:Subjects]->-[:Notes]-> fire f\n';
+    const reply = callCheckAnswer(source, JSON.stringify(catalog), {});
+    if (!reply.ok || !isRecord(reply.json)) throw new Error(`no check answer: ${JSON.stringify(reply.json)}`);
+    expect(reply.json.diagnostics).toEqual([]);
+    const plans = listenPlanSchema.array().parse(reply.json.listens);
+    expect(plans.map((plan) => plan.hops.map((h) => [h.edge, h.from, h.to, h.memberOf]))).toEqual([
+      [
+        ['Subjects', '', 'Person', 'Subject'],
+        ['Notes', 'Person', 'Note', undefined],
+      ],
+      [
+        ['Subjects', '', 'Company', 'Subject'],
+        ['Notes', 'Company', 'Note', undefined],
+      ],
+    ]);
+  });
+
   it('is absent from an answer with no listen on a traversal', () => {
     expect(answerOf('import { chat as chat_module } from adapters; chat = connect chat_module\n')).not.toHaveProperty('listens');
   });

@@ -101,3 +101,7 @@ Each bundled module's 0.13 shape; a host that read their events reads `arrivals`
 - **Upgrade warnings.** `MOV_FIELD_MEANING_CHANGED` warns where a program reads a field its module's `changedIn` names, on a check for the upgrade from before that release; it does not hold the pin. An owned literal is validated by its scalar's `format`, never its name.
 - **Engine 0.13.** It carries main's fix to the `writtenType` stamp.
 - **Story analysis version 2.** An awaited traversal says `listenable`; a listen node carries `path` and loses `events`, `narrowing` and `eventTypes` ([story-analysis.md](story-analysis.md#versions)).
+
+## After 0.13.0
+
+- **A listen over a union is one plan per member.** A plan hop may carry `memberOf`, the union its edge lands on, when the plan watches one member of it (`to`). The platform's checker plans such a listen once per member, as `listen-fire` does, and its hosts read `memberOf`: listing that hop keeps only records of the member's type ([listen_plan.ts](../../packages/engine-contracts/listen_plan.ts)). `MOV_LISTEN_UNION_HOP` is no longer raised.

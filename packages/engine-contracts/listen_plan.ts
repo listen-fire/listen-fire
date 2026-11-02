@@ -20,6 +20,11 @@ export interface PlanHop {
   from: string;
   /** The record type it lands on. */
   to: string;
+  /** The union the hop's edge lands on, when this plan watches one member
+   *  of it (`to`): a listen over a union is one plan per member, and a host
+   *  keeps a listed hop's records only when they are of that member.
+   *  Absent when the edge lands on one record type. */
+  memberOf?: string;
   alias?: string;
   /** The part of its WHERE the edge's module takes, joined by AND. */
   taken?: Expression;
@@ -56,6 +61,7 @@ export const planHopSchema: z.ZodType<PlanHop> = z
     edge: z.string(),
     from: z.string(),
     to: z.string(),
+    memberOf: z.string().optional(),
     alias: z.string().optional(),
     taken: expressionSchema.optional(),
     checked: expressionSchema.optional(),

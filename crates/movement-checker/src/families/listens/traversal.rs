@@ -4,8 +4,13 @@
 //! which the host checks, and how the host honours a filter on a hop before
 //! the last (judged on each arrival, or by listing the hop's members).
 //!
+//! A listen through or onto a union is planned once per member, as
+//! TypeScript distributes over a union: each member's plan is an ordinary
+//! one, checked against that member's own edges, and two unions on one path
+//! multiply.
+//!
 //! Codes: MOV_LISTEN_EDGE_NOT_LISTENABLE, MOV_LISTEN_HOP_NOT_ITERABLE,
-//! MOV_LISTEN_UNWATCHABLE, MOV_LISTEN_IMPURE_WHERE, MOV_LISTEN_UNION_HOP, and
+//! MOV_LISTEN_UNWATCHABLE, MOV_LISTEN_IMPURE_WHERE, and
 //! for the path form
 //! MOV_LISTEN_NOT_INSTANCE, MOV_LISTEN_PARAM_MISMATCH,
 //! MOV_LISTEN_DUPLICATE, MOV_LISTEN_ALIAS_DUPLICATE.
@@ -24,20 +29,21 @@ use crate::families::walks::{alias_reads, is_pure_predicate};
 use crate::scope::{Resolution, ScopeId, SymbolId, SymbolKind};
 use crate::types::position::{Instance, Position, positions_match};
 
-/// A landing the schema declares no record type for (a union's name): its
-/// WHERE splits as one over no known field.
-static NO_LANDING: std::sync::LazyLock<PositionSchema> = std::sync::LazyLock::new(crate::types::position::empty_position_schema);
-
 /// One hop of the traversal, as its module declares it.
+#[derive(Clone, Copy)]
 struct Hop<'a> {
     step: &'a EdgeStep,
     /// The record type it leaves; `None` off the connection itself.
     from: Option<&'a str>,
-    /// The record type it lands on.
+    /// The record type it lands on: one member, where its edge lands on a
+    /// union.
     to: &'a str,
+    /// The union its edge lands on, when `to` is one member of it.
+    member_of: Option<&'a str>,
     edge: Declared<'a>,
 }
 
+#[derive(Clone, Copy)]
 enum Declared<'a> {
     Collection(&'a CollectionSchema),
     Edge(&'a EdgeSchema),
@@ -116,10 +122,12 @@ impl Checker<'_> {
         // A hop judged on each arrival is fetched by nothing, so what its
         // module can filter costs nothing either.
         let edge_places: Vec<usize> = lowered.iter().enumerate().filter(|(_, step)| matches!(step, TraversalStep::Edge(_))).map(|(place, _)| place).collect();
+        // Under a union, a hop is fetched by nothing only when no member's
+        // plan fetches it.
         let unfetched: Vec<usize> = instance
             .as_ref()
-            .and_then(|instance| declared_hops(&instance.schema, &steps).ok())
-            .map(|hops| (0..hops.len()).filter(|i| judging(&hops, *i) == Judging::Arrival).filter_map(|i| edge_places.get(i).copied()).collect())
+            .and_then(|instance| declared_hops(&instance.schema, &steps))
+            .map(|members| (0..steps.len()).filter(|i| members.iter().all(|hops| judging(hops, *i) == Judging::Arrival)).filter_map(|i| edge_places.get(i).copied()).collect())
             .unwrap_or_default();
         let walk = instance.as_ref().and_then(|_| self.walk_listen_steps(path, &without_walks, scope, unfetched));
         // The walk is a wait's, and a listen's WHERE is refused by its own
@@ -127,10 +135,11 @@ impl Checker<'_> {
         let walked = self.diagnostics.split_off(before.min(self.diagnostics.len()));
         self.diagnostics.extend(walked.into_iter().filter(|d| d.code != codes::AWAIT_IMPURE_WHERE));
         let landing = statement.landing.as_ref().and_then(|stated| self.landing_node(stated, scope));
-        let plan = instance
+        let stated = landing.and(statement.landing.as_ref()).map(|stated| stated.graph.clone());
+        let plans: Option<Vec<ListenPlan>> = instance
             .as_ref()
             .and_then(|instance| self.plan_listen(statement, path, instance, &steps, scope))
-            .map(|plan| ListenPlan { landing: landing.and(statement.landing.as_ref()).map(|stated| stated.graph.clone()), ..plan });
+            .map(|plans| plans.into_iter().map(|plan| ListenPlan { landing: stated.clone(), ..plan }).collect());
         if let Some(walk) = &walk {
             let landed = walk.landed.as_ref().map(present);
             if let (Some(stated), Some(landed)) = (&statement.landing, landed)
@@ -146,11 +155,14 @@ impl Checker<'_> {
             }
             self.check_listen_fires(statement, path, &steps, landed, landing, scope);
         }
-        let identity = match &plan {
-            Some(plan) => plan.identity(),
-            None => format!("{}::{}", spell_path_head(path), statement.movement),
+        // Each member's plan is its own listen; the listen as written is a
+        // duplicate when any of them is another listen's.
+        let identities: std::collections::BTreeSet<String> = match &plans {
+            Some(plans) => plans.iter().map(ListenPlan::identity).collect(),
+            None => std::iter::once(format!("{}::{}", spell_path_head(path), statement.movement)).collect(),
         };
-        if !self.listens.identities.insert(format!("path::{identity}")) {
+        let fresh: Vec<bool> = identities.into_iter().map(|identity| self.listens.identities.insert(format!("path::{identity}"))).collect();
+        if fresh.contains(&false) {
             self.report(
                 codes::LISTEN_DUPLICATE,
                 format!("Duplicate listener — an identical 'listen to {}' already fires '{}'", spell_path_head(path), statement.movement),
@@ -181,7 +193,7 @@ impl Checker<'_> {
         // checks clean is watched: one with no plan says why where it is
         // written, never checks clean and then never fires.
         let clean = self.diagnostics[before.min(self.diagnostics.len())..].iter().all(|d| d.severity.is_some());
-        if clean && plan.is_none() {
+        if clean && plans.is_none() {
             match &instance {
                 Some(described) if !described.schema.collections.is_empty() => {
                     let message = format!("listen-fire can't plan how to watch 'listen to {}' — this is a gap in the checker, so please report it with this program", spell_path_head(path));
@@ -196,8 +208,8 @@ impl Checker<'_> {
                 }
             }
         }
-        match plan.filter(|_| clean) {
-            Some(plan) => self.listens.plans.push((statement.span, plan)),
+        match plans.filter(|_| clean) {
+            Some(plans) => self.listens.plans.extend(plans.into_iter().map(|plan| (statement.span, plan))),
             None => self.listens.unwatched.push(statement.span),
         }
     }
@@ -223,21 +235,53 @@ impl Checker<'_> {
         }
     }
 
-    /// The hops as the connection's module declares them, each refused where
-    /// a listen cannot take it, and the plan when every hop can be watched.
-    fn plan_listen(&mut self, statement: &ListenDeclaration, path: &PathHead, instance: &Instance, steps: &[EdgeStep], scope: ScopeId) -> Option<ListenPlan> {
-        let schema: &InstanceSchema = &instance.schema;
-        let module = instance.adapter.as_deref().unwrap_or(&instance.name);
-        let hops = match declared_hops(schema, steps) {
-            Ok(hops) => hops,
-            Err(Undeclared::Union { hop, members }) => {
-                self.report_union_hop(instance, &hop, members, path);
-                return None;
+    /// The hops as the connection's module declares them, once per member
+    /// of each union they land on, each refused where a listen cannot take
+    /// it, and a plan per member when every hop of every member can be
+    /// watched.
+    fn plan_listen(&mut self, statement: &ListenDeclaration, path: &PathHead, instance: &Instance, steps: &[EdgeStep], scope: ScopeId) -> Option<Vec<ListenPlan>> {
+        // The walk reported the edge it does not know.
+        let members = declared_hops(&instance.schema, steps)?;
+        let before = self.diagnostics.len();
+        let mut watchable = true;
+        for hops in &members {
+            watchable &= self.listenable_hops(instance, hops, path);
+        }
+        // A WHERE is written once for every member.
+        let mut aliases: Vec<&str> = Vec::new();
+        for step in steps {
+            aliases.extend(step.alias.as_deref());
+            let Some(filter) = step.expression_filter.as_deref() else { continue };
+            if let Some(name) = self.foreign_read(filter, &aliases, scope) {
+                self.report(codes::LISTEN_IMPURE_WHERE, format!("a listen's WHERE reads only its hops and literals — '{name}' is neither"), path.span);
+                watchable = false;
             }
-            // The walk reported the edge it does not know.
-            Err(Undeclared::Unknown) => return None,
+        }
+        let planned: Option<Vec<ListenPlan>> = match watchable {
+            true => {
+                let plans: Vec<Option<ListenPlan>> = members.iter().map(|hops| self.plan_member(statement, path, instance, hops)).collect();
+                plans.into_iter().collect()
+            }
+            false => None,
         };
-        let (last, earlier) = hops.split_last()?;
+        // Members share the hops above their union, and say one refusal of
+        // one of those once.
+        let said = self.diagnostics.split_off(before.min(self.diagnostics.len()));
+        let mut kept: Vec<crate::diagnostic::Diagnostic> = Vec::new();
+        for diagnostic in said {
+            if !kept.contains(&diagnostic) {
+                kept.push(diagnostic);
+            }
+        }
+        self.diagnostics.extend(kept);
+        planned
+    }
+
+    /// Whether every hop of one member's traversal is one a listen can take:
+    /// each before the last listed, the last announced. Each that is not is
+    /// refused, named by the record type it hangs off.
+    fn listenable_hops(&mut self, instance: &Instance, hops: &[Hop], path: &PathHead) -> bool {
+        let Some((last, earlier)) = hops.split_last() else { return false };
         let mut watchable = true;
         for hop in earlier {
             if !hop.edge.readable() {
@@ -251,7 +295,7 @@ impl Checker<'_> {
             }
         }
         if !last.edge.listenable() {
-            let such_as = first_listenable(schema, last.from).map(|e| format!(", such as '-[:{e}]->'")).unwrap_or_default();
+            let such_as = first_listenable(&instance.schema, last.from).map(|e| format!(", such as '-[:{e}]->'")).unwrap_or_default();
             let message = format!(
                 "'-[:{}]->' on {} announces nothing, so a listen on it would never fire — a listen ends on an edge its module announces arrivals on{such_as}",
                 last.step.edge_type_id,
@@ -260,26 +304,24 @@ impl Checker<'_> {
             self.report(codes::LISTEN_EDGE_NOT_LISTENABLE, message, path.span);
             watchable = false;
         }
-        let mut aliases: Vec<&str> = Vec::new();
-        for hop in &hops {
-            aliases.extend(hop.step.alias.as_deref());
-            let Some(filter) = hop.step.expression_filter.as_deref() else { continue };
-            if let Some(name) = self.foreign_read(filter, &aliases, scope) {
-                self.report(codes::LISTEN_IMPURE_WHERE, format!("a listen's WHERE reads only its hops and literals — '{name}' is neither"), path.span);
-                watchable = false;
-            }
-        }
-        if !watchable {
-            return None;
-        }
+        watchable
+    }
+
+    /// The plan of one member's traversal, every hop of which a listen can
+    /// take: how the host honours each hop's filter, or a refusal where it
+    /// can't.
+    fn plan_member(&mut self, statement: &ListenDeclaration, path: &PathHead, instance: &Instance, hops: &[Hop]) -> Option<ListenPlan> {
+        let schema: &InstanceSchema = &instance.schema;
+        let module = instance.adapter.as_deref().unwrap_or(&instance.name);
+        let last = hops.last()?;
         let carries = last.edge.carries();
         let mut planned = Vec::new();
         let mut unwatchable = false;
         for (i, hop) in hops.iter().enumerate() {
             let edge = hop.step.edge_type_id.as_str();
-            let target = schema.positions.get(hop.to).unwrap_or(&NO_LANDING);
+            let target = schema.positions.get(hop.to)?;
             let split = split_hop(hop.step.expression_filter.as_deref(), hop.step.alias.as_deref(), &hop.edge.view(edge, module), target).ok()?;
-            let judged = match judging(&hops, i) {
+            let judged = match judging(hops, i) {
                 Judging::Arrival => HopJudged::Arrival,
                 Judging::Resolved => HopJudged::Resolved,
                 Judging::None => HopJudged::None,
@@ -293,21 +335,22 @@ impl Checker<'_> {
             // The judge reads only the records an arrival carries, so a hop
             // judged on it can read no earlier hop the arrival leaves behind.
             if judged == HopJudged::Arrival
-                && let Some(read) = filter.and_then(|f| alias_reads(f).into_iter().find_map(|name| hops[..i].iter().position(|h| h.step.alias.as_deref() == Some(name)))).filter(|j| !carried(&hops, carries, *j))
+                && let Some(read) = filter.and_then(|f| alias_reads(f).into_iter().find_map(|name| hops[..i].iter().position(|h| h.step.alias.as_deref() == Some(name)))).filter(|j| !carried(hops, carries, *j))
             {
-                self.report_uncarried_read(module, hop, &hops[read], hops.last().unwrap_or(hop), instance, path);
+                self.report_uncarried_read(module, hop, &hops[read], last, instance, path);
                 unwatchable = true;
             }
             // A listed hop is judged only when it is listed again, so a
             // window measured from now would hold a record that has aged out.
             if judged == HopJudged::Resolved && filter.is_some_and(reads_now) {
-                self.report_window_listed(hop, hops.last().unwrap_or(hop), path);
+                self.report_window_listed(hop, last, path);
                 unwatchable = true;
             }
             planned.push(PlanHop {
                 edge: edge.to_string(),
                 from: hop.from.unwrap_or_default().to_string(),
                 to: hop.to.to_string(),
+                member_of: hop.member_of.map(str::to_string),
                 alias: hop.step.alias.clone(),
                 owned: owned_fields(&split.taken, target),
                 taken: joined(split.taken),
@@ -327,26 +370,6 @@ impl Checker<'_> {
             carries: carries.to_vec(),
             landing: None,
         })
-    }
-
-    /// MOV_LISTEN_UNION_HOP: `hop` lands on one of several record types. The
-    /// judge tells an arrival's records apart by the record type each hop
-    /// lands on, and an arrival is only ever one of the union's members, so
-    /// the listen would check clean and never fire.
-    fn report_union_hop(&mut self, instance: &Instance, hop: &Hop, members: &[String], path: &PathHead) {
-        let named: Vec<String> = members.iter().map(|m| crate::types::position::display_name_of(instance, m)).collect();
-        let one_of = match named.split_last() {
-            Some((last, [])) => last.clone(),
-            Some((last, rest)) => format!("{} or {last}", rest.join(", ")),
-            None => String::new(),
-        };
-        let message = format!(
-            "'-[:{}]->' on {} lands on {}, which is one of {one_of}, and every hop of a listen lands on one record type: the host tells what arrives apart by it, so this listen would never fire — listen through an edge that lands on {one_of} alone, or wait in a run on one record",
-            hop.step.edge_type_id,
-            owner(instance, hop.from),
-            hop.to
-        );
-        self.report(codes::LISTEN_UNION_HOP, message, path.span);
     }
 
     /// MOV_LISTEN_UNWATCHABLE: `hop`'s filter is neither carried by what
@@ -506,37 +529,34 @@ impl Checker<'_> {
     }
 }
 
-/// Why a listen's hops are not each one edge between two record types.
-enum Undeclared<'a> {
-    /// A hop names nothing the schema declares (the walk said so), or there
-    /// are no hops.
-    Unknown,
-    /// A hop lands on a union of record types.
-    Union { hop: Hop<'a>, members: &'a [String] },
-}
-
-/// Each hop's edge as the schema declares it, from the connection down.
-fn declared_hops<'a>(schema: &'a InstanceSchema, steps: &'a [EdgeStep]) -> Result<Vec<Hop<'a>>, Undeclared<'a>> {
-    let mut hops = Vec::new();
-    let mut from: Option<&str> = None;
+/// Each hop's edge as the schema declares it, from the connection down: one
+/// traversal per member of each union a hop lands on, the next hop then
+/// declared off that member. None when a hop names nothing the schema
+/// declares (the walk said so), or there are no hops.
+fn declared_hops<'a>(schema: &'a InstanceSchema, steps: &'a [EdgeStep]) -> Option<Vec<Vec<Hop<'a>>>> {
+    let mut members: Vec<Vec<Hop<'a>>> = vec![Vec::new()];
     for step in steps {
         let edge = step.edge_type_id.as_str();
-        let declared = match from {
-            None => schema.collections.get(edge).map(|c| (Declared::Collection(c), c.target.as_str())),
-            Some(position) => schema.positions.get(position).and_then(|p| p.edges.get(edge)).map(|e| (Declared::Edge(e), e.target.as_str())),
-        };
-        let (declared, to) = declared.ok_or(Undeclared::Unknown)?;
-        let hop = Hop { step, from, to, edge: declared };
-        if let Some(members) = schema.unions.as_ref().and_then(|unions| unions.get(to)) {
-            return Err(Undeclared::Union { hop, members });
+        let mut next = Vec::new();
+        for hops in members {
+            let from = hops.last().map(|hop| hop.to);
+            let (declared, target) = match from {
+                None => schema.collections.get(edge).map(|c| (Declared::Collection(c), c.target.as_str())),
+                Some(position) => schema.positions.get(position).and_then(|p| p.edges.get(edge)).map(|e| (Declared::Edge(e), e.target.as_str())),
+            }?;
+            let landings: Vec<(&str, Option<&str>)> = match schema.unions.as_ref().and_then(|unions| unions.get(target)) {
+                Some(union) => union.iter().map(|member| (member.as_str(), Some(target))).collect(),
+                None => vec![(target, None)],
+            };
+            for (to, member_of) in landings {
+                let mut hops = hops.clone();
+                hops.push(Hop { step, from, to, member_of, edge: declared });
+                next.push(hops);
+            }
         }
-        hops.push(hop);
-        from = Some(to);
+        members = next;
     }
-    if hops.is_empty() {
-        return Err(Undeclared::Unknown);
-    }
-    Ok(hops)
+    members.iter().all(|hops| !hops.is_empty()).then_some(members)
 }
 
 /// How the host honours hop `i`'s filter: judged on each arrival, by listing

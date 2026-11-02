@@ -197,7 +197,14 @@ impl Checker<'_> {
                 ));
             }
         }
-        for (span, message) in told {
+        // A listen over a union is one plan per member, each told alike.
+        let mut said: Vec<(Span, String)> = Vec::new();
+        for told in told {
+            if !said.contains(&told) {
+                said.push(told);
+            }
+        }
+        for (span, message) in said {
             self.push(crate::diagnostic::Diagnostic { severity: Some(crate::diagnostic::Severity::Warning), ..crate::diagnostic::Diagnostic::error(crate::codes::CARRIED_WAIT_FROM_WALK, message, span) });
         }
     }

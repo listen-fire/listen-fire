@@ -93,9 +93,9 @@ impl Run<'_> {
             let mut distinct = BTreeSet::new();
             let mut next = Vec::new();
             'paths: for (scope, cursor) in &paths {
-                let room = stop_at.map(|n| StopAt { more: n - distinct.len(), seen: &distinct });
+                let room = stop_at.map(|n| StopAt { more: n - distinct.len(), seen: &distinct, hop });
                 let fetched = self.walk_until(&cursor.position(), &step, read.clone(), scope, &span, room).await.map_err(Stop::Thrown)?;
-                for landed in fetched {
+                for landed in fetched.into_iter().filter(|landed| of_member(hop, &landed.position())) {
                     // Counted by the record it is: two paths may land on one.
                     if stop_at.is_some() && !distinct.insert(record_of(&landed.position())) {
                         continue;
@@ -137,17 +137,25 @@ impl Run<'_> {
 /// Where a fetch for a walk past its limit may page no further: once it has
 /// kept `more` records that `seen`, what the walk's earlier paths landed on,
 /// does not hold, each counted once. A record an earlier path landed on
-/// takes no room, so converging paths never stop a fetch short.
+/// takes no room, so converging paths never stop a fetch short; nor does one
+/// of another member of a union than `hop` watches, which the walk drops.
 #[derive(Clone, Copy)]
 pub(crate) struct StopAt<'a> {
     pub more: usize,
     pub seen: &'a BTreeSet<String>,
+    pub hop: &'a PlanHop,
 }
 
 impl StopAt<'_> {
     /// Whether `kept` holds the records it waits for.
     pub(crate) fn reached(&self, kept: &[Rc<Landed>]) -> bool {
-        let fresh: BTreeSet<String> = kept.iter().map(|landed| record_of(&landed.position())).filter(|record| !self.seen.contains(record)).collect();
+        let fresh: BTreeSet<String> = kept
+            .iter()
+            .map(|landed| landed.position())
+            .filter(|position| of_member(self.hop, position))
+            .map(|position| record_of(&position))
+            .filter(|record| !self.seen.contains(record))
+            .collect();
         fresh.len() >= self.more
     }
 }
@@ -160,6 +168,15 @@ fn record_of(position: &Js) -> String {
         Js::Undefined | Js::Null => crate::js::json_stringify(position, 0),
         id => format!("{}:{}", get(position, "recordType").to_js_string(), crate::js::json_stringify(&id, 0)),
     }
+}
+
+/// Whether a record `hop` lands on is one its plan watches: on a hop planned
+/// for one member of a union (`memberOf`), only a record of that member's
+/// type is, since the union's other members each have a plan of their own.
+/// A record that states no type is no member's, or every member's plan
+/// would watch it.
+fn of_member(hop: &PlanHop, position: &Js) -> bool {
+    hop.member_of.is_none() || crate::traverse::record_type(position).is_some_and(|stated| stated == hop.to)
 }
 
 /// The hop as a walk's step: its edge, outgoing (a listen's hops are the
@@ -192,9 +209,11 @@ mod tests {
     const CATALOG: &str = r#"{"adapters":{"crm":{"constructionArgs":[],"schemas":{"":{
         "positions":{
             "Board":{"properties":{"Name":"text","Open":"boolean","Lead":"text"},"edges":{"Notes":{"target":"Note"}}},
+            "Panel":{"properties":{"Name":"text"},"edges":{"Notes":{"target":"Note"}}},
             "Note":{"properties":{"Owner":"text"},"edges":{}}
         },
-        "collections":{"Boards":{"target":"Board"}},
+        "unions":{"Surface":["Board","Panel"]},
+        "collections":{"Boards":{"target":"Board"},"Surfaces":{"target":"Surface"}},
         "writableRoots":{}}}}},"credentials":{},"plugins":{}}"#;
 
     fn record(record_type: &str, id: &str, fields: Vec<(&str, Js)>) -> Js {
@@ -239,6 +258,7 @@ mod tests {
                     edge: step.edge_type_id,
                     from: String::new(),
                     to: String::new(),
+                    member_of: None,
                     alias: step.alias,
                     taken: and(taken.to_vec()),
                     checked: and(checked.to_vec()),
@@ -286,7 +306,7 @@ mod tests {
                 let field = get(&args, "fieldId").to_js_string();
                 let from = crate::traverse::record_id(&position).to_js_string();
                 let related = match field.as_str() {
-                    "Boards" => boards.clone(),
+                    "Boards" | "Surfaces" => boards.clone(),
                     _ => notes.get(from.as_str()).cloned().unwrap_or_default(),
                 };
                 let result = match request.args["method"].as_str().unwrap() {
@@ -427,6 +447,46 @@ mod tests {
         assert!(asked.contains(&"Notes of b2 page 2".to_string()), "b2's notes are paged past the two b1 landed on: {asked:?}");
         let (done, _) = walk_over(shared(), SOURCE, hops("boards-[b:Boards]->-[n:Notes]->", &[]), Some(2), true);
         assert_eq!(landed(&done), ["Note n1", "Note n2", "Note n3"], "past its limit: one more than it");
+    }
+
+    /// A hop planned for one member of a union (`memberOf`) keeps only the
+    /// records of that member's type: the union's other members have plans
+    /// of their own, and a record that states no type is no member's. Past
+    /// a limit, only the member's records take room.
+    #[test]
+    fn a_hop_planned_for_one_member_of_a_union_keeps_only_that_members_records() {
+        let (_, notes) = world();
+        let board = |id: &str| record("Board", id, vec![("Name", Js::str("Ops"))]);
+        let panel = |id: &str| record("Panel", id, vec![("Name", Js::str("Ops"))]);
+        let untyped = env::object_of(vec![
+            ("adapterType", Js::str("crm")),
+            ("identity", env::object_of(vec![("kind", Js::str("stable")), ("recordId", Js::str("u1")), ("data", env::object_of(vec![]))])),
+        ]);
+        let surfaces = || (vec![panel("p1"), board("b1"), untyped.clone(), panel("p2"), board("b3")], notes.clone());
+        let member = |walk: &str, to: &str| {
+            let mut plan = hops(walk, &[]);
+            plan[0].to = to.to_string();
+            plan[0].member_of = Some("Surface".to_string());
+            plan
+        };
+        let (done, _) = walk_over(surfaces(), SOURCE, member("boards-[b:Surfaces]->", "Board"), None, false);
+        assert_eq!(landed(&done), ["Board b1", "Board b3"], "{done}");
+        let (done, _) = walk_over(surfaces(), SOURCE, member("boards-[b:Surfaces]->", "Panel"), None, false);
+        assert_eq!(landed(&done), ["Panel p1", "Panel p2"], "{done}");
+        // An earlier hop: only the member's records are walked on. The
+        // untyped record, stamped with the union itself, is no member's.
+        let (done, asked) = walk_over(surfaces(), SOURCE, member("boards-[b:Surfaces]->-[n:Notes]->", "Board"), None, false);
+        assert_eq!((landed(&done), along(&done)), (vec!["Note n1".to_string(), "Note n2".to_string(), "Note n4".to_string()], vec![vec!["Board b1".to_string(), "Board b3".to_string()]]), "{done}");
+        assert_eq!(asked, ["Surfaces of undefined", "Notes of b1", "Notes of b3"]);
+        // Paged past a limit of 1: the panels and the untyped record take no
+        // room, so the walk pages on to the second board.
+        let (done, asked) = walk_over(surfaces(), SOURCE, member("boards-[b:Surfaces]->", "Board"), Some(1), true);
+        assert_eq!(landed(&done), ["Board b1", "Board b3"], "{done}");
+        assert_eq!(asked.len(), 5, "every page up to the second board: {asked:?}");
+        // A hop of no union keeps every record, as before: the untyped one
+        // is stamped with the union the collection lands on.
+        let (done, _) = walk_over(surfaces(), SOURCE, hops("boards-[b:Surfaces]->", &[]), None, false);
+        assert_eq!(landed(&done), ["Panel p1", "Board b1", "Surface u1", "Panel p2", "Board b3"], "{done}");
     }
 
     /// A connection the program does not make is said by name.

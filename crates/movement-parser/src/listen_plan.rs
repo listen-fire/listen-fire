@@ -81,6 +81,11 @@ pub struct PlanHop {
     pub from: String,
     /// The record type it lands on.
     pub to: String,
+    /// The union the hop's edge lands on, when this plan watches one member
+    /// of it (`to`): a listen over a union is one plan per member, and the
+    /// host keeps a listed hop's records only when they are of that member.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub member_of: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub alias: Option<String>,
     /// The part of its WHERE the edge's module takes, its conjuncts joined
