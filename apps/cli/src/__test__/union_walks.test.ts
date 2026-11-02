@@ -174,3 +174,16 @@ test('a note narrowed with is reads its own fields: a landing, a union parameter
   assert.match(misread.out, /error MOV_UNKNOWN_PROPERTY .*'Tone'/, misread.out);
   assert.match(misread.out, /error MOV_UNION_MEMBER_ONLY 'Mood' can't be read here/, misread.out);
 });
+
+test('an is test naming a type the note can never be is warned: the types have no overlap', () => {
+  const checked = lf(
+    crmProject('  return c-[:Spaces]->-[:Subjects]->-[n:Notes]-> {\n    if (n is <c-[:Person]->>) {\n      return "never"\n    }\n    return n.Text\n  }'),
+    'check',
+  );
+  assert.equal(checked.code, 0, checked.out);
+  assert.match(
+    checked.out,
+    /warning MOV_IS_NO_OVERLAP 'n' is c\.Remark or c\.Memo, never c\.Person: the types have no overlap, so this test is always false/,
+    checked.out,
+  );
+});

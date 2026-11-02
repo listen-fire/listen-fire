@@ -45,6 +45,8 @@ named in [`RELEASING.md`](RELEASING.md).
   - Why: under 0.14 a read only some of the landings offer is refused, and the only way through was to narrow the record walked from and walk again. The value itself now narrows the way any union does.
   - The engine tests the record's own type, so nothing changes in what a run does.
 
+- **An `is` test naming a type the value can never be is warned** (`MOV_IS_NO_OVERLAP`, a new code). `if (n is <crm-[:Person]->>)`, where `n` is a Memo or a Remark, or a Subject tested for a Memo, says the types have no overlap and the test is always false, as TypeScript does. Introduced by 0.14.0. A warning: the program still runs, and the arm never does.
+
 - **`lazy` is retired for a closure.** `people = () => crm-[:People]->`, read as `people()`, walks again at every call, as `people = lazy crm-[:People]->` walked again at every read. `x = lazy …`, `return lazy …` and a node entry `files: lazy …` are each refused where they are written (`MOV_LAZY_RETIRED`). Introduced by 0.14.0, a new compatibility key, since 0.13 accepts them.
   - Why: a closure already says "run this when it is read", and its call says where. `lazy` was a second spelling of it, with rules of its own about where it could be read.
   - Replace each `lazy` by hand: `x = lazy W` with `x = () => W`, each read of `x` with `x()`; `return lazy W` with `return W`; a node entry `files: lazy W` with a closure bound beside the node (no node entry walks again at each read), or with `files: W` to keep what the walk lands on when the node is built. The refusal names the closure to write.

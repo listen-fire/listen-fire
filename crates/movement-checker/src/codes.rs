@@ -254,6 +254,10 @@ pub const UNION_MEMBER_ONLY: &str = "MOV_UNION_MEMBER_ONLY";
 /// From 0.14: `lazy` (`x = lazy W`, `return lazy W`, a node entry
 /// `k: lazy W`), retired for a closure (`x = () => W`, read as `x()`).
 pub const LAZY_RETIRED: &str = "MOV_LAZY_RETIRED";
+/// From 0.14, a warning: an `is` test naming a record type the value can
+/// never be (`n is <crm-[:Person]->>` where `n` is a Memo or a Remark), as
+/// TypeScript's "no overlap"; the test is always false.
+pub const IS_NO_OVERLAP: &str = "MOV_IS_NO_OVERLAP";
 pub const READ_THROUGH_FIELD: &str = "MOV_READ_THROUGH_FIELD";
 pub const WALK_OFF_HELD_RECORD: &str = "MOV_WALK_OFF_HELD_RECORD";
 pub const WALK_ROOT_NOT_RECORD: &str = "MOV_WALK_ROOT_NOT_RECORD";

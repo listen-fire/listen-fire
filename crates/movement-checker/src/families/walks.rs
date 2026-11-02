@@ -1582,9 +1582,9 @@ struct OneOf {
 }
 
 impl OneOf {
-    /// The members `<instance-[:position]->>` names, and the rest.
-    fn split(&self, instance: &crate::types::position::InstanceRef, position: &str) -> (Vec<Position>, Vec<Position>) {
-        self.members.iter().cloned().partition(|member| is_member_named(member, &instance.name, position))
+    /// The members `<instance-[:position]->>` names.
+    fn named(&self, instance: &crate::types::position::InstanceRef, position: &str) -> Vec<Position> {
+        self.members.iter().filter(|member| is_member_named(member, &instance.name, position)).cloned().collect()
     }
 }
 
@@ -1759,25 +1759,23 @@ impl crate::checker::Checker<'_> {
         if let Some(hops) = &type_.hops_raw {
             self.check_address_pins(&type_.graph, hops, span, scope);
         }
-        let (Some(into), Some(instance), true) = (narrow_into, instance, bare) else { return };
-        // One of several records (`Memo | Remark`): inside the arm it IS the
-        // member the test names, as TypeScript narrows a union.
-        if let (Some(position), None) = (&type_.position, &type_.hops_raw)
-            && let Some(one_of) = self.one_of(subject, scope)
+        if let (true, Some(instance), Some(position), None) = (bare, &instance, &type_.position, &type_.hops_raw)
+            && let Some(value) = self.never_is(subject, scope, instance, position)
         {
-            let (named, _) = one_of.split(&instance, position);
-            if let Some(narrowed) = crate::types::unions::join_positions(&named.iter().collect::<Vec<_>>()) {
-                self.declare_one_of(subject, scope, into, narrowed.position);
-            }
+            let tested = describe_position(&Position::record(instance.clone(), position.clone()));
+            let mut warning = crate::Diagnostic::error(
+                codes::IS_NO_OVERLAP,
+                format!("'{subject}' is {value}, never {tested}: the types have no overlap, so this test is always false. Test for one of what it may be"),
+                span,
+            );
+            warning.severity = Some(Severity::Warning);
+            self.push(warning);
+        }
+        let (Some(into), Some(instance), true) = (narrow_into, instance, bare) else { return };
+        if self.narrow_is_true(subject, type_, scope, into) {
             return;
         }
         let subject_pos = self.symbol_types(subject, scope).and_then(|t| t.pos.clone());
-        if let (Some(Position::Union(union)), Some(position)) = (&subject_pos, &type_.position)
-            && crate::types::position::same_instance(&union.instance, &instance)
-            && union.variants.contains(position)
-        {
-            self.declare_narrowed(subject, scope, into, Some(Position::record(instance.clone(), position.clone())));
-        }
         // The same type guard on a value that may be a record or may be
         // something else (`v = COALESCE(org, "x")`): inside the arm it IS the
         // record the test names — TypeScript's `Org | string` narrowed.
@@ -1828,6 +1826,54 @@ impl crate::checker::Checker<'_> {
             _ => return,
         };
         self.declare_narrowed(subject, scope, into, Some(resolved));
+    }
+
+    /// What a true `subject IS <g-[:T]->>` makes a value that is one of
+    /// several records (`Memo | Remark`: the member(s) it names) or a
+    /// union's record (the variant), declared into `into`, as TypeScript
+    /// narrows a union. False where the subject is neither.
+    pub fn narrow_is_true(&mut self, subject: &str, type_: &movement_parser::lowering::condition::IsType, scope: ScopeId, into: ScopeId) -> bool {
+        let (Some(position), None) = (&type_.position, &type_.hops_raw) else { return false };
+        let Some(instance) = self.graph_instance(&type_.graph, scope) else { return false };
+        if let Some(one_of) = self.one_of(subject, scope) {
+            let named = one_of.named(&instance, position);
+            if let Some(narrowed) = crate::types::unions::join_positions(&named.iter().collect::<Vec<_>>()) {
+                self.declare_one_of(subject, scope, into, narrowed.position);
+            }
+            return true;
+        }
+        if let Some(union) = self.union_of(subject, scope)
+            && crate::types::position::same_instance(&union.instance, &instance)
+            && union.variants.contains(position)
+        {
+            self.declare_narrowed(subject, scope, into, Some(Position::record(instance, position.clone())));
+        }
+        false
+    }
+
+    /// What `subject` may be, described, where none of it can be a record of
+    /// `position` in `instance`: one of several records none of which is
+    /// one (or narrows one), or a union none of whose variants is.
+    fn never_is(&self, subject: &str, scope: ScopeId, instance: &crate::types::position::InstanceRef, position: &str) -> Option<String> {
+        if !matches!(crate::types::position::position_ref_in(instance, position), Some(Position::Position(_))) {
+            return None;
+        }
+        if let Some(one_of) = self.one_of(subject, scope) {
+            let same = one_of.members.iter().any(|member| matches!(member, Position::Position(r) if crate::types::position::same_instance(&r.instance, instance)));
+            return (same && one_of.named(instance, position).is_empty()).then(|| describe_position(&Position::OneOf(one_of.members.clone())));
+        }
+        let union = self.union_of(subject, scope)?;
+        if !crate::types::position::same_instance(&union.instance, instance) {
+            return None;
+        }
+        let overlaps = union.variants.iter().any(|variant| {
+            variant == position
+                || match crate::types::position::position_ref_in(instance, variant) {
+                    Some(Position::Position(record)) => record.position == position || record.narrows.as_deref() == Some(position),
+                    _ => true,
+                }
+        });
+        (!overlaps).then(|| describe_position(&Position::Union(union)))
     }
 
     /// `collectIsElimination`: a bare `IS` that failed rules its variant out.

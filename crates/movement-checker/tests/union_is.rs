@@ -86,3 +86,34 @@ fn a_walk_or_a_write_off_the_narrowed_landing_is_held_to_its_member() {
     assert_eq!(codes(&unnarrowed), ["MOV_UNION_MEMBER_ONLY"], "{unnarrowed:?}");
     assert!(unnarrowed[0].contains("Narrow it first (`if (n is <crm-[:Memo]->>) { … n-[:Pinned]-> … }`), or walk what every one of them has"), "{}", unnarrowed[0]);
 }
+
+/// Every diagnostic `functions` raises, warnings included.
+fn all(functions: &str) -> Vec<String> {
+    let source = format!("import {{ crm as m }} from adapters\ncrm = connect m\n{functions}\n");
+    let catalog = CatalogSnapshot::load(CATALOG).unwrap();
+    let options = CheckOptions { upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
+    check_source(&source, &catalog, options)
+        .unwrap()
+        .into_iter()
+        .filter(|d| d.severity != Some(movement_checker::Severity::Info))
+        .map(|d| format!("{} {}", d.code, d.message))
+        .collect()
+}
+
+#[test]
+fn a_test_naming_a_type_the_value_can_never_be_is_warned() {
+    for (how, functions) in each_value("if (n is <crm-[:Person]->>) {\n  x = 1\n}") {
+        let found = all(&functions);
+        assert_eq!(codes(&found), ["MOV_IS_NO_OVERLAP"], "{how}: {found:?}");
+        assert!(found[0].ends_with("'n' is crm.Memo or crm.Remark, never crm.Person: the types have no overlap, so this test is always false. Test for one of what it may be"), "{how}: {}", found[0]);
+    }
+    let union = all("function go() {\n  crm-[s:Subjects]-> {\n    if (s is <crm-[:Memo]->>) {\n      x = 1\n    }\n  }\n}");
+    assert_eq!(codes(&union), ["MOV_IS_NO_OVERLAP"], "{union:?}");
+    assert!(union[0].contains("never crm.Memo: the types have no overlap"), "{}", union[0]);
+    for fine in ["if (n is <crm-[:Memo]->>) {\n  x = 1\n}", "if (n is <crm-[:Remark]->>) {\n  x = 1\n}"] {
+        for (how, functions) in each_value(fine) {
+            assert_eq!(all(&functions), Vec::<String>::new(), "{how}");
+        }
+    }
+    assert_eq!(all("function go() {\n  crm-[s:Subjects]-> {\n    if (s is <crm-[:Person]->>) {\n      x = 1\n    }\n  }\n}"), Vec::<String>::new());
+}
