@@ -30,6 +30,10 @@ named in [`RELEASING.md`](RELEASING.md).
   - Each member is a record type. A value type (`<text | number>`) is refused (`MOV_UNKNOWN_TYPE_NAME`): a closed set of values is declared as its own `type`. A function a listen fires is typed by records of the listen's own connection.
   - For hosts: a parameter's type in the program tree may be `{ kind: "union", members: [TypeRef, …], span }` ([platform-adoption-0.13.md](docs/contracts/platform-adoption-0.13.md#after-0130)).
 
+- **A type a narrowing makes is known by its name alone.** `function stage_of(c: <hiring-[:\`Candidates Change\`]->>)` checks with no listen or walk in the program narrowing the base's `Tables` to Candidates. Its fields are typed, and so is the row its `Record` reaches; a misspelled field is refused. 0.13.0 refused the type as unknown (`MOV_UNKNOWN_POSITION`) unless something else narrowed to it.
+  - Why: the name is the type, as TypeScript's `CandidatesChange` is known wherever it is written. Before, a parameter's type was known only when a walk elsewhere happened to make it.
+  - How: listen-fire looks for the name among what the connection's members land on (each table's changes, and the row each change holds), and describes that member as a narrowing walk would. Only the members the connection's root hands over are looked through: for Airtable, a connection positioned at a base (`{ base: "Hiring" }`). A name more than one member lands on stays unknown.
+
 - **A record held as a value can be spread into a map.** `{ ...c.Current }`, or `r = c.Current` then `{ ...r }`, copies the row's fields into the map, each with its declared type, as spreading a map with known keys does. Later members override, a misspelled key is refused as for any map, and a row that may be absent gives fields that may be absent. 0.13.0 refused it (`MOV_MAP_SPREAD_NOT_KEYED`).
   - Why: TypeScript allows `{ ...obj }` of a plain object, and a held record is a plain object type. Nothing else about it changes: it still has no edges and no identity, so no walk, write or record parameter takes it.
 

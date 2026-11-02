@@ -31,7 +31,8 @@ use movement_checker::slots::{expression_of_slot, expression_of_text};
 use movement_checker::types::event_address::conjuncts;
 use movement_parser::ast::{
     ArmExpression, AwaitExpression, AwaitSource, CallArg, CallbackSubject, ClosureExpression, CollectionOpExpression, CombinatorArms, CombinatorExpression,
-    ExprSlot, LinkTarget, MovementParam, NodeEntry, NodeLiteral, ParamTypeRef, PathHead, PathRoot, RValue, Statement, UniqueClause, UntilCondition, WriteTarget,
+    ExprSlot, LinkTarget, MovementParam, NodeEntry, NodeLiteral, ParamTypeRef, PathHead, PathRoot, RValue, Statement, TypeRef, UniqueClause, UntilCondition,
+    WriteTarget,
 };
 use movement_parser::lowering::expression::{Expression, ListElement, ObjectMember, TraversalStep};
 
@@ -271,20 +272,43 @@ impl Scan<'_> {
     fn walk_closure(&mut self, closure: &ClosureExpression, scope: &Scope) {
         let mut inner = scope.clone();
         for param in &closure.params {
+            self.visit_written_type(param.type_.as_ref());
             match self.param_grounding(param) {
                 Some(grounding) => inner.insert(param.name.clone(), grounding),
                 None => inner.remove(&param.name),
             };
         }
+        self.visit_written_type(closure.return_type.as_ref());
         self.walk(&closure.body, &inner);
     }
 
     /// `paramGrounding`: a parameter typed with a position roots chains there.
     fn param_grounding(&self, param: &MovementParam) -> Option<Grounding> {
         let Some(ParamTypeRef::Name(type_ref)) = &param.type_ else { return None };
+        self.type_grounding(type_ref)
+    }
+
+    /// The record type a written type names on a constructed connection.
+    fn type_grounding(&self, type_ref: &TypeRef) -> Option<Grounding> {
         let position = type_ref.position.clone()?;
         let construction = self.bindings.get(&type_ref.graph)?;
         Some(Grounding { construction: construction.clone(), prefix: Vec::new(), start_position: Some(position) })
+    }
+
+    /// A written type names the record types it holds, each one a chain of
+    /// no hops: a type a narrowing makes (`<at-[:\`Candidates Change\`]->>`)
+    /// is grafted as when a walk narrows to it.
+    fn visit_written_type(&mut self, written: Option<&ParamTypeRef>) {
+        let named: Vec<&TypeRef> = match written {
+            Some(ParamTypeRef::Name(type_ref)) => vec![type_ref],
+            Some(ParamTypeRef::Union(union)) => union.members.iter().collect(),
+            Some(ParamTypeRef::Value(_)) | None => Vec::new(),
+        };
+        for type_ref in named {
+            if let Some(grounding) = self.type_grounding(type_ref) {
+                self.emit(&grounding);
+            }
+        }
     }
 
     /// `blockScope`: a block head grounds each of its hop aliases for the body.
@@ -468,7 +492,9 @@ impl Scan<'_> {
                 Statement::Collection(collection) => self.visit_collection_op(&collection.collection, &scope),
                 Statement::Movement(movement) => {
                     let mut inner = scope.clone();
+                    self.visit_written_type(movement.return_type.as_ref());
                     for param in &movement.params {
+                        self.visit_written_type(param.type_.as_ref());
                         if let Some(grounding) = self.param_grounding(param) {
                             inner.insert(param.name.clone(), grounding);
                         }
@@ -533,6 +559,11 @@ pub async fn refine_instance_schema<W: Walk>(schema: Js, chains: &[&InstanceChai
     let mut refining = Grafting { input, schema, attempted: HashSet::new(), grafted: IndexMap::new() };
     for chain in chains {
         let mut current = chain.start_position.clone();
+        if let Some(named) = &current
+            && refining.position(named).is_none()
+        {
+            refining.ground_named(named).await?;
+        }
         for step in &chain.steps {
             let TraversalStep::Edge(edge) = step else { break };
             let target = match &current {
@@ -610,19 +641,28 @@ impl<W: Walk> Grafting<'_, '_, '_, W> {
             }
         };
 
+        let Some(refined_name) = self.graft_member(type_name, &selected, &key).await.map_err(failed)? else { return Ok(None) };
+        let member_type = self.grafted.get(&refined_name).cloned().unwrap_or_default();
+        self.entry("refinements").insert(key.clone(), Js::str(&refined_name));
+        self.entry("selectedMembers").insert(key, Js::str(member_type));
+        Ok(Some(refined_name))
+    }
+
+    /// `selected`, a member of `type_name`, grafted as its refined position
+    /// with the nodes its edges land on, once however many selections or
+    /// names reach it. `synthetic` names it to the projection.
+    async fn graft_member(&mut self, type_name: &str, selected: &str, synthetic: &str) -> Result<Option<String>, String> {
         let refined_name = format!("{type_name} \"{selected}\"");
-        if let Some(member_type) = self.grafted.get(&refined_name).cloned() {
-            self.entry("refinements").insert(key.clone(), Js::str(&refined_name));
-            self.entry("selectedMembers").insert(key, Js::str(member_type));
+        if self.grafted.contains_key(&refined_name) {
             return Ok(Some(refined_name));
         }
         if self.position(&refined_name).is_some() {
             return Ok(None);
         }
-        let Some(descriptor) = self.input.walker.describe_member(&selected).await.map_err(failed)? else { return Ok(None) };
+        let Some(descriptor) = self.input.walker.describe_member(selected).await? else { return Ok(None) };
         let member_type = descriptor.get("displayName").and_then(Js::as_str).unwrap_or_default().to_string();
-        let landings = self.landings_of(&selected, &descriptor).await.map_err(failed)?;
-        let projected = project_refined(self.input, &Refined { name: &refined_name, synthetic: &format!("{type_name}::{key}"), descriptor: &descriptor, landings: &landings });
+        let landings = self.landings_of(selected, &descriptor).await?;
+        let projected = project_refined(self.input, &Refined { name: &refined_name, synthetic: &format!("{type_name}::{synthetic}"), descriptor: &descriptor, landings: &landings });
         let Some(Js::Obj(mut position)) = projected.position else { return Ok(None) };
         // The member is still one of the type, and the WHERE that picked it
         // ranges over the type: the type's own fields are read as the type
@@ -643,10 +683,36 @@ impl<W: Walk> Grafting<'_, '_, '_, W> {
         }
 
         positions_mut(&mut self.schema).insert(refined_name.clone(), Js::Obj(position));
-        self.entry("refinements").insert(key.clone(), Js::str(&refined_name));
-        self.entry("selectedMembers").insert(key, Js::str(&member_type));
         self.grafted.insert(refined_name.clone(), member_type);
         Ok(Some(refined_name))
+    }
+
+    /// A record type the program names that the schema lacks: one a member
+    /// of a type lands on (a table's changes, and the row each change
+    /// holds), the member then grafted as a walk narrowed to it would be.
+    /// The members searched are those the connection's root hands over; a
+    /// name more than one of them lands on is left unknown, as is one none
+    /// does, and where it is written the checker says so.
+    async fn ground_named(&mut self, named: &str) -> Result<(), String> {
+        if !self.attempted.insert(format!("named:{named}")) {
+            return Ok(());
+        }
+        let failed = |why: String| format!("finding the record type {named} failed: {why}");
+        let mut landing_on = Vec::new();
+        for (member, type_name) in self.input.walker.root_members().await.map_err(failed)? {
+            if self.position(&type_name).is_none() {
+                continue;
+            }
+            let Some(descriptor) = self.input.walker.describe_member(&member).await.map_err(failed)? else { continue };
+            let landings = self.landings_of(&member, &descriptor).await.map_err(failed)?;
+            if landings.iter().any(|(target, _)| target == named) {
+                landing_on.push((member, type_name));
+            }
+        }
+        if let [(member, type_name)] = landing_on.as_slice() {
+            self.graft_member(type_name, member, &format!("named:{named}")).await.map_err(failed)?;
+        }
+        Ok(())
     }
 
     /// The nodes the member's edges land on that the schema has no position
@@ -1043,9 +1109,30 @@ mod tests {
                 chain(&["Spreadsheet?", "Companies"], None),
                 chain(&["Spreadsheet"], None),
                 chain(&["Spreadsheet", "Companies"], None),
+                // The parameter's type names its record type, walked or not.
+                chain(&[], Some("Spreadsheet")),
                 chain(&["Companies"], Some("Spreadsheet")),
             ]
         );
+    }
+
+    /// A type the program names that only a member's edges land on (a
+    /// sheet's table's notes) is grafted as a walk narrowed to that member
+    /// would graft it, with nothing in the program walking there.
+    #[test]
+    fn a_type_named_only_by_a_parameter_grounds_the_member_it_lands_under() {
+        let source = "import { sheets } from adapters\ns = connect sheets\n\nfunction g(n: <s-[:`Company Note`]->>) {\n  return n.Text\n}\n";
+        let (schema, asked) = refined(source);
+        assert_eq!(checked(&schema, source), Vec::<(String, String)>::new(), "{}", schema.to_json());
+        assert!(schema.get("positions").and_then(|p| p.get("Spreadsheet \"Pipeline Sheet\"")).is_some(), "{}", schema.to_json());
+        assert_eq!(map(&schema, "refinements"), Vec::<(String, String)>::new(), "no WHERE selected it");
+        assert_eq!(asked, ["meta:", "Spreadsheet:sh1", "Table:tblC", "Note:tblC", "Person:p1", "Spreadsheet:sh2", "Table:tblD"]);
+        let misspelled = source.replace("n.Text", "n.Txt");
+        let found = checked(&refined(&misspelled).0, &misspelled);
+        assert_eq!(found.iter().map(|(c, _)| c.as_str()).collect::<Vec<_>>(), ["MOV_UNKNOWN_PROPERTY"], "{found:?}");
+        let nowhere = source.replace("Company Note", "Company Nte");
+        let found = checked(&refined(&nowhere).0, &nowhere);
+        assert_eq!(found.iter().map(|(c, _)| c.as_str()).collect::<Vec<_>>(), ["MOV_UNKNOWN_POSITION"], "{found:?}");
     }
 
     #[test]
@@ -1063,6 +1150,6 @@ mod tests {
                     .collect()
             })
             .collect();
-        assert_eq!(found, [vec!["Spreadsheet?".to_string(), "Companies".to_string()]]);
+        assert_eq!(found, [vec![], vec!["Spreadsheet?".to_string(), "Companies".to_string()]], "the parameter's type, then the listen's hops");
     }
 }

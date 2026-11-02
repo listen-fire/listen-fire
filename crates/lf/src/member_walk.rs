@@ -87,6 +87,21 @@ impl<'a, W: Walk> Walker<'a, W> {
             .collect())
     }
 
+    /// The members the root hands over, each with its name and its kind.
+    pub(crate) async fn root_members(&self) -> Result<Vec<(String, String)>, String> {
+        let Some(hop) = self.root().await? else { return Ok(Vec::new()) };
+        let Some(Js::Obj(positions)) = hop.get("targetPositions") else { return Ok(Vec::new()) };
+        let paths = self.paths.borrow();
+        Ok(positions
+            .values()
+            .filter_map(|position| {
+                let kind = position.get("recordType").and_then(Js::as_str)?;
+                let (name, _) = paths.iter().find(|(_, path)| *path == position)?;
+                Some((name.clone(), kind.to_string()))
+            })
+            .collect())
+    }
+
     /// `describeType` for a member the walk was handed: one hop along the
     /// path it came with. None when no hop handed it over, or the module has
     /// nothing there.

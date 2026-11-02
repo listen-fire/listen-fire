@@ -809,3 +809,92 @@ test('a quiet webhook is refreshed a day before it lapses, and one that lapsed i
     await fake.stop();
   }
 });
+
+/** A function over the Candidates table's changes whose parameter is the
+ *  program's only mention of them: no listen narrows the base's Tables to
+ *  Candidates, and the type is still known, two levels deep (the change, and
+ *  the row its `Record` reaches). */
+const NAMED_ONLY = `import { \`@lf/airtable\` as airtable } from adapters
+import { henry_airtable } from credentials
+
+hiring = connect airtable using henry_airtable { base: "Hiring" }
+
+function stage_of(c: <hiring-[:\`Candidates Change\`]->>) {
+  return exists(c.Current) ? c.Current.Stage : only(c-[:Record]->).Stage
+}
+`;
+
+test('a parameter spelled by a narrowed type is known with nothing else narrowing to it, and a field it lacks is refused', async () => {
+  const fake = await fakeChannels();
+  try {
+    const dir = await hiringProject(fake);
+    writeFileSync(join(dir, 'movements/hiring.mvt'), NAMED_ONLY);
+    const checked = lfSync(dir, 'check');
+    assert.equal(checked.code, 0, checked.out);
+    for (const misspelled of [NAMED_ONLY.replace('c.Current.Stage', 'c.Current.Stge'), NAMED_ONLY.replace('only(c-[:Record]->).Stage', 'only(c-[:Record]->).Stge')]) {
+      writeFileSync(join(dir, 'movements/hiring.mvt'), misspelled);
+      const refused = lfSync(dir, 'check');
+      assert.equal(refused.code, 1, refused.out);
+      assert.match(refused.out, /error MOV_UNKNOWN_PROPERTY .*Stge/);
+    }
+    writeFileSync(join(dir, 'movements/hiring.mvt'), NAMED_ONLY.replace('Candidates Change', 'Candidate Change'));
+    const unknown = lfSync(dir, 'check');
+    assert.equal(unknown.code, 1, unknown.out);
+    assert.match(unknown.out, /error MOV_UNKNOWN_POSITION .*'Candidate Change'/);
+  } finally {
+    await fake.stop();
+  }
+});
+
+/** A function over any table's changes or the Candidates table's takes the
+ *  union of the two, fired by a listen narrowed to Candidates and called with
+ *  a change of either. */
+const AUDIT = `import { \`@lf/airtable\` as airtable } from adapters
+import { henry_airtable } from credentials
+
+hiring = connect airtable using henry_airtable { base: "Hiring" }
+
+function audit(c: <hiring-[:Change]-> | hiring-[:\`Candidates Change\`]->>) {
+  write hiring-[:Interviews]-> {
+    Candidate: c.Kind
+    From: "audit"
+    Changed: coalesce(only(c-[:Record]->).Id, "gone")
+  }
+}
+
+function candidates(c: <hiring-[:\`Candidates Change\`]->>) {
+  audit(c)
+}
+
+function any_table(c: <hiring-[:Change]->>) {
+  audit(c)
+}
+
+listen to hiring-[t:Tables WHERE t.Name == "Candidates"]->-[c:Changes WHERE c.Kind == "created"]-> fire audit
+`;
+
+test("a function over any change or the Candidates table's takes both, and a listen narrowed to Candidates fires it", async () => {
+  const fake = await fakeChannels();
+  try {
+    const dir = await hiringProject(fake);
+    writeFileSync(join(dir, 'movements/hiring.mvt'), AUDIT);
+    const checked = lfSync(dir, 'check');
+    assert.equal(checked.code, 0, checked.out);
+    writeFileSync(join(dir, 'movements/hiring.mvt'), AUDIT.replace('only(c-[:Record]->).Id', 'only(c-[:Record]->).Stage'));
+    const narrowOnly = lfSync(dir, 'check');
+    assert.equal(narrowOnly.code, 1, narrowOnly.out);
+    assert.match(narrowOnly.out, /error MOV_UNKNOWN_PROPERTY .*Stage/);
+    writeFileSync(join(dir, 'movements/hiring.mvt'), AUDIT);
+    const server = await serving(dir);
+    try {
+      await until(() => server.lines.filter((l) => /registered webhook ach\d+/.test(l)).length >= 1, server.lines);
+      await deliver(fake, { changeType: 'add', tableId: 'tblCAND01', recordId: 'recADA', fields: { Name: 'Ada', Stage: 'Applied' } });
+      await until(() => server.lines.some((l) => /^run \S+ hiring:audit completed$/.test(l)), server.lines);
+      assert.match(JSON.stringify(await fake.json('/airtable/v0/appHIRE01/tblINTV01')), /"fldICand":"created"/);
+    } finally {
+      await server.stop();
+    }
+  } finally {
+    await fake.stop();
+  }
+});
