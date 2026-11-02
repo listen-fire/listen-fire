@@ -357,6 +357,10 @@ Each entry shows a 0.12 listen, the 0.13 listen `listen-fire upgrade` writes for
 - A change is one per row an edit touched, with `Kind` (`created`, `updated`, `deleted`), `Current` (the row as the edit left it) and `Previous` (as it was). Each is a record read with `.`, and absent where there is no row, so the rewrite tests it first (section 9).
 - The rewrite narrows to the table by its id, and the parameter to that table's change type, whose rows have the table's fields. Narrowing by name (`t.Name == "Candidates"`) follows a rename in Airtable.
 - `field` alone becomes a comparison of `Current` with `Previous`; `events` becomes `c.Kind IN [...]`. A connection not positioned at a base starts at its `Bases`: `at-[b:Bases WHERE b.Name == "Hiring"]->-[t:Tables …]->`.
+- A function's reads of the 0.12 change are rewritten by hand (from listen-fire 0.13.1):
+  - ``change.`Changed Fields` `` stays ``c.`Changed Fields` ``.
+  - `change.base`, `change.table` and `change.record` become ``c.`Base Id` ``, ``c.`Table Id` `` and ``c.`Record Id` ``.
+  - `change-[:Record]->`, the row as the edit left it, becomes `c.Current`, and `` change-[:`Old Record`]-> `` becomes `c.Previous`, each tested present first. `c-[:Record]->` is the row as it is now, read from Airtable.
 
 #### `@lf/slack`
 

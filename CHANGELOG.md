@@ -100,6 +100,7 @@ named in [`RELEASING.md`](RELEASING.md).
 - **A webhook delivery's acknowledgement counts what it brought.** `eventsProcessed` counts the arrivals (and any events) a delivery reported, on `listen-fire` and in the engine's door; since 0.13 it was always 0, as modules report arrivals, not events. Only a sender that reads the count noticed.
 - **`@lf/webhook` keeps no token a sender puts in the query or the body.** It declares `inbound.redactFields`, so the request a delivery keeps for a replay drops the query parameters and top-level body fields `token`, `access_token`, `api_key`, `apikey`, `api_token`, `secret`, `client_secret`, `password` and `signature`. The run still reads the body as it was sent; a replay reads it without them.
 - **A Slack reaction on a file arrives again.** It arrives on the `Reactions` of each message that shares the file, as a reaction on that message does (`@lf/slack` reads the shares with `files.info`); since 0.13 it was dropped. When Slack does not answer `files.info`, the delivery fails by name and Slack sends it again.
+- **An Airtable change names the fields it touched and its ids again.** A table's change carries `Changed Fields` (every field a created row was given, none for a deleted one) and `Base Id`, `Table Id` and `Record Id`, as 0.12's `Record Change` carried `Changed Fields`, `base`, `table` and `record`. 0.13 dropped them with the type, though nothing else gives a deleted row's id or the list of fields an edit touched. The migration guide says how a 0.12 function's reads become these.
 
 ## [0.13.0] - 2026-11-02
 

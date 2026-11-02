@@ -459,7 +459,8 @@ describe('AirtableAdapter entry-position (base) scoping', () => {
       targetTypeId: 'Change', readable: false, listenable: true, delivery: 'scope', identity: 'Id', attributes: true,
     });
     const change = await adapter.describe('Change');
-    expect(change?.fields.map((f) => f.fieldId)).toEqual(['Id', 'Kind', 'Current', 'Previous']);
+    expect(change?.fields.map((f) => f.fieldId)).toEqual(['Id', 'Kind', 'Current', 'Previous', 'Changed Fields', 'Base Id', 'Table Id', 'Record Id']);
+    expect(change?.fields.find((f) => f.fieldId === 'Changed Fields')).toMatchObject({ kind: 'string', cardinality: 'many', required: true });
     expect(change?.fields.find((f) => f.fieldId === 'Kind')?.enumValues).toEqual(['created', 'updated', 'deleted']);
     // The row before and after is held as a value, read through; the row now is an edge, a read.
     expect(change?.fields.find((f) => f.fieldId === 'Current')).toMatchObject({ kind: 'record', record: { typeId: 'Row' }, mayBeAbsent: true });
@@ -868,6 +869,12 @@ describe('arrivalsFromPayload', () => {
       { recordType: 'Deals', externalId: 'recGONE' },
     ]);
     expect(arrivals.every((a) => a.occurredAt === '2026-11-01T09:00:00.000Z')).toBe(true);
+    // What the edit touched, as 0.12's `Changed Fields` named it, and the ids a program reads (a deleted row's too).
+    expect(arrivals.map((a) => [a.landing.fields['Changed Fields'], a.landing.fields['Base Id'], a.landing.fields['Table Id'], a.landing.fields['Record Id']])).toEqual([
+      [['Name', 'Stage'], 'appCRM01', 'tblDEALS01', 'recNEW01'],
+      [['Name', 'Stage'], 'appCRM01', 'tblDEALS01', 'recOLD01'],
+      [[], 'appCRM01', 'tblDEALS01', 'recGONE'],
+    ]);
     // The ids the `Record` edge reads the row again by.
     expect(changeDataOf(arrivals[1].landing.fields)?.row).toEqual({ id: 'recOLD01', baseId: 'appCRM01', tableId: 'tblDEALS01', table: 'Deals' });
   });
@@ -905,9 +912,9 @@ describe('arrivalsFromPayload', () => {
       },
       context(false),
     );
-    expect(arrivals.map((a) => [a.identity, a.landing.fields.Current, a.landing.fields.Previous])).toEqual([
-      ['11:recLEFT', { Name: 'Acme' }, { Name: 'Acme', Stage: 'Seed' }],
-      ['11:recNULL', { Name: 'Beta', Stage: null }, { Name: 'Beta', Stage: 'Seed' }],
+    expect(arrivals.map((a) => [a.identity, a.landing.fields.Current, a.landing.fields.Previous, a.landing.fields['Changed Fields']])).toEqual([
+      ['11:recLEFT', { Name: 'Acme' }, { Name: 'Acme', Stage: 'Seed' }, ['Stage']],
+      ['11:recNULL', { Name: 'Beta', Stage: null }, { Name: 'Beta', Stage: 'Seed' }, ['Stage']],
     ]);
   });
 

@@ -659,6 +659,47 @@ test('an update that leaves a collaborator unchanged does not fire Owner changin
   }
 });
 
+/** What 0.12's `Record Change` let a program read off the change itself:
+ *  the fields it touched and the ids of its base, table and row. */
+const TOUCHED = `import { \`@lf/airtable\` as airtable } from adapters
+import { henry_airtable } from credentials
+
+hiring = connect airtable using henry_airtable { base: "Hiring" }
+
+function touched(c: <hiring-[:\`Candidates Change\`]->>) {
+  return "\${c.Kind} \${c.\`Record Id\`} in \${c.\`Table Id\`} of \${c.\`Base Id\`}: \${c.\`Changed Fields\`}"
+}
+
+listen to hiring-[t:Tables WHERE t.Name == "Candidates"]->-[c:Changes]-> fire touched
+`;
+
+test('a change names the fields it touched and its base, table and row ids, a deleted row\'s too', async () => {
+  const fake = await fakeChannels();
+  try {
+    const dir = await hiringProject(fake);
+    writeFileSync(join(dir, 'movements/hiring.mvt'), TOUCHED);
+    const checked = lfSync(dir, 'check');
+    assert.equal(checked.code, 0, checked.out);
+    const server = await serving(dir);
+    try {
+      await until(() => server.lines.filter((l) => /registered webhook ach\d+/.test(l)).length >= 2, server.lines);
+      const runs = () => server.lines.filter((l) => /^run \S+ hiring:touched completed$/.test(l)).length;
+      await deliver(fake, { changeType: 'update', tableId: 'tblCAND01', recordId: 'recADA', fields: { Email: 'ada@new.example', Stage: 'Interview' }, previous: { Email: 'ada@example.com', Stage: 'Applied' } });
+      await until(() => runs() === 1, server.lines);
+      await deliver(fake, { changeType: 'remove', tableId: 'tblCAND01', recordId: 'recBOB' });
+      await until(() => runs() === 2, server.lines);
+    } finally {
+      await server.stop();
+    }
+    const listed = JSON.parse(lfSync(dir, 'runs', '--json').out) as { runs: Array<{ runId: string }> };
+    const returned = listed.runs.map((r) => lfSync(dir, 'runs', 'show', r.runId).out).join('\n');
+    assert.match(returned, /updated recADA in tblCAND01 of appHIRE01: .*Email.*Stage/, returned);
+    assert.match(returned, /deleted recBOB in tblCAND01 of appHIRE01: /, returned);
+  } finally {
+    await fake.stop();
+  }
+});
+
 test('upgrade rewrites the 0.12 Airtable listen and its Record Change parameter', async () => {
   const fake = await fakeChannels();
   try {

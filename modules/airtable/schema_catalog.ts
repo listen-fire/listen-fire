@@ -25,8 +25,12 @@ import {
   type AirtableTableMeta,
 } from './types';
 import {
+  AIRTABLE_BASE_ID,
+  AIRTABLE_CHANGED_FIELDS,
   AIRTABLE_CHANGE_KINDS,
   AIRTABLE_CHANGE_RECORD_EDGE,
+  AIRTABLE_RECORD_ID,
+  AIRTABLE_TABLE_ID,
   AIRTABLE_CHANGE_TYPE,
   AIRTABLE_CHANGES_EDGE,
   AIRTABLE_ROW_TYPE,
@@ -549,6 +553,18 @@ function changeDescriptor(input: { typeId: string; row: string }): SchemaTypeDes
       { fieldId: 'Kind', displayName: 'Kind', kind: 'enum', enumValues: [...AIRTABLE_CHANGE_KINDS], writable: false, required: true, description: 'What happened to the row.' },
       held('Current', 'The row as the edit left it, every field by name. Absent when the row was deleted.'),
       held('Previous', 'The row as it was before the edit, every field by name. Absent when the row was created, and when it was deleted (Airtable sends no cells then).'),
+      {
+        fieldId: AIRTABLE_CHANGED_FIELDS,
+        displayName: AIRTABLE_CHANGED_FIELDS,
+        kind: 'string',
+        cardinality: 'many',
+        writable: false,
+        required: true,
+        description: 'The names of the fields the edit touched: every field a created row was given, none for a deleted row.',
+      },
+      { ...metaField(AIRTABLE_BASE_ID, "Airtable's id for the base the row is in (app…)."), required: true },
+      { ...metaField(AIRTABLE_TABLE_ID, "Airtable's id for the table the row is in (tbl…)."), required: true },
+      { ...metaField(AIRTABLE_RECORD_ID, "Airtable's id for the row (rec…), a deleted row's too."), required: true },
     ],
     references: [
       {
