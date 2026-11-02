@@ -2091,7 +2091,6 @@ pub fn describe_binding(binding: &Binding) -> String {
         Binding::Node(_) => "a synthesised node",
         Binding::Landed(_) => "a traversed source record",
         Binding::Positions(_) => "a block's returned records",
-        Binding::LazyWalk(_) => "a deferred traversal",
         Binding::Tuple(_) => "a combinator receipt",
         Binding::Closure(_) => "a closure",
         Binding::Extracted { root: true, .. } => "an extract result",

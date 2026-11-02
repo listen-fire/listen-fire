@@ -52,7 +52,7 @@ msg = write finance-[:Messages]-> {
 r = race(
   () => {
     press = await msg-[:Interactions]->
-    return only(press-[:Actions]->).Value == "approve"
+    return only(press-[:Actions]->)?.Value == "approve"
   },
   () => { await sleep(1d) },
 )
@@ -65,7 +65,7 @@ if (r[0] == null) {
 \`\`\`
 
 - A press made the moment the message appears still counts.
-- \`only(press-[:Actions]->).Value\` is \`"approve" | "reject"\` here: comparing it with a value the buttons never offered, such as \`"aprove"\`, is refused while you write it, here or on the \`race\`'s slot when an arm returns the \`Value\`.
+- \`only(press-[:Actions]->)?.Value\` is \`"approve" | "reject"\` here: comparing it with a value the buttons never offered, such as \`"aprove"\`, is refused while you write it, here or on the \`race\`'s slot when an arm returns the \`Value\`.
 - \`press-[:By]->\` is the member who pressed.
 - A message deleted while a run waits on it leaves the wait waiting: nothing after the \`await\` runs, so race it with a \`sleep\`.
 
@@ -152,7 +152,7 @@ listen to chat-[:Channels]->-[m:Messages WHERE m.Topic == "lunch-poll" AND m.Tim
 - A block id starting \`lf:\` is reserved for the \`Topic\`: a message whose own \`Blocks\` use one is refused.
 - A thread reply is a message too: a press on a reply written with the \`Topic\` runs the listen as a press on the top-level poll does.
 - \`WITHIN 3d\` on the message means a press on last week's poll runs nothing.
-- The fired function reads the press: \`only(press-[:Actions]->).Value\`, \`press-[:By]->\` who pressed, \`press-[:Message]->\` the poll. Keep the tally where each run can update one row, such as a table written \`unique by\` the poll and the member's \`Id\`, so a changed vote replaces the old one (two members may share a display name, never an \`Id\`).
+- The fired function reads the press: \`only(press-[:Actions]->)?.Value\`, \`press-[:By]->\` who pressed, \`press-[:Message]->\` the poll. Keep the tally where each run can update one row, such as a table written \`unique by\` the poll and the member's \`Id\`, so a changed vote replaces the old one (two members may share a display name, never an \`Id\`).
 
 ### what-fires-a-run
 
@@ -181,7 +181,7 @@ function sign_off(msg: <team-[:Message]->>) {
   r = race(
     () => {
       press = await ask-[:Interactions]->
-      return only(press-[:Actions]->).Value == "ship"
+      return only(press-[:Actions]->)?.Value == "ship"
     },
     () => { await sleep(1d) },
   )
@@ -235,7 +235,7 @@ function ask_lunch(msg: <team-[:Message]->>) {
 function count_vote(press: <team-[:Interaction]->>) {
   poll = only(press-[:Message]->)
   if (poll == null) { fail("a press with no message") }
-  return "\${press-[:By]->.Name} said \${only(press-[:Actions]->).Value} to \${poll.Id}"
+  return "\${press-[:By]->.Name} said \${only(press-[:Actions]->)?.Value} to \${poll.Id}"
 }
 
 listen to team-[:Channels]->-[m:Messages WHERE m.\`Mentions App\` == true]-> fire ask_lunch

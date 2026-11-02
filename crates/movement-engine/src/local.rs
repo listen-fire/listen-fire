@@ -616,7 +616,7 @@ fn refuse_target_where(has_where: bool, at: &str) -> Result<(), Stop> {
 
 /// The node holds the edge the statement appends to.
 fn appendable(node: &Rc<RefCell<Node>>, edge: &str, at: &str, root: &str) -> Result<(), Stop> {
-    if node.borrow().edges.iter().any(|(n, e)| n == edge && e.deferred.is_none()) {
+    if node.borrow().edges.iter().any(|(n, _)| n == edge) {
         return Ok(());
     }
     Err(Stop::Thrown(Failure::engine(
@@ -660,7 +660,7 @@ fn landing_field_order(declared: &[String], written: &JsObject) -> Vec<String> {
 /// names, each carrying its own nested names.
 fn landing_edges(shape: Option<&LandingShape>) -> Vec<(String, Edge)> {
     shape.map_or_else(Vec::new, |shape| {
-        shape.edges.iter().map(|(name, nested)| (name.clone(), Edge { landings: Vec::new(), shape: Some(nested.clone()), deferred: None })).collect()
+        shape.edges.iter().map(|(name, nested)| (name.clone(), Edge { landings: Vec::new(), shape: Some(nested.clone()) })).collect()
     })
 }
 

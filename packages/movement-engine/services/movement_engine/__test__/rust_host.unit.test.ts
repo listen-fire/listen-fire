@@ -216,7 +216,7 @@ describe('an await on a listenable edge, run in the Rust engine through the shim
     '  msg = only(c-[:messages]->)',
     '  if (msg != null) {',
     '    r = await msg-[:Replies]->',
-    '    said = r.Text',
+    '    said = r?.Text',
     '  }',
     '}',
   ].join('\n');
@@ -291,7 +291,7 @@ describe('an await on a listenable edge, run in the Rust engine through the shim
       host: makeTestHost({ adapters: { resolve: () => adapter }, park: { waits, sink: park.sink }, wakes }),
     });
     expect(result.parked).toBe(true);
-    expect(park.awaitParks).toEqual([{ address: expect.any(String), state: expect.objectContaining({ version: 3 }), waitId: 'wait:thread:m-1' }]);
+    expect(park.awaitParks).toEqual([{ address: expect.any(String), state: expect.objectContaining({ version: 4 }), waitId: 'wait:thread:m-1' }]);
     expect(wakes).toEqual([]);
   });
 
@@ -310,7 +310,7 @@ describe('an await on a listenable edge, run in the Rust engine through the shim
       host: makeTestHost({ adapters: { resolve: () => adapter }, park: { waits, sink: park.sink }, wakes }),
     });
     expect(result.parked).toBe(true);
-    expect(park.awaitParks).toEqual([{ address: expect.any(String), state: expect.objectContaining({ version: 3 }), waitId: 'wait:thread:m-1' }]);
+    expect(park.awaitParks).toEqual([{ address: expect.any(String), state: expect.objectContaining({ version: 4 }), waitId: 'wait:thread:m-1' }]);
     expect(asked.filter(([method]) => method === 'arrivals')).toEqual([
       ['arrivals', { segmentId: expect.any(String), waitId: 'wait:thread:m-1' }],
       ['arrivals', { segmentId: expect.any(String), waitId: 'wait:thread:m-1' }],

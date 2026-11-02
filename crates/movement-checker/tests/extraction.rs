@@ -36,7 +36,7 @@ function main(e: <reg-[:entity]->>) {
     detail: <nubmer> "more"
   }
   companies = extract([e.`Name`], Company, { teir: 'careful', model: 'claude-opus-6' })
-  big = only(companies).size > 3
+  big = only(companies)?.size > 3
   lookup("x")
 }
 "#;
@@ -55,7 +55,7 @@ fn stages_calls_and_annotations_say_what_the_typescript_says() {
             ("MOV_UNKNOWN_TYPE_NAME", (13, 5), (13, 28)),
             ("MOV_EXTRACT_CONFIG", (15, 44), (15, 87)),
             ("MOV_EXTRACT_CONFIG", (15, 44), (15, 87)),
-            ("MOV_ABSENT_REQUIRED", (16, 9), (16, 33)),
+            ("MOV_ABSENT_REQUIRED", (16, 9), (16, 34)),
             // `lookup("x")`: from 5 there is no stage to send a plugin that
             // declares no row to, so it is an ordinary call (its effects
             // partial) and not MOV_PLUGIN_ROW_UNDECLARED (22c3e889).

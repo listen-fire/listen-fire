@@ -529,7 +529,7 @@ export type Expression =
    * the name; the evaluator walks the lexical-scope stack to find the
    * matching alias binding.
    */
-  | { type: 'traverse'; aliasRoot?: string; steps: TraversalStep[]; expression: Expression }
+  | { type: 'traverse'; aliasRoot?: string; steps: TraversalStep[]; expression: Expression; optional?: boolean }
   // `filter` is the LEGACY structured form — stored output_v3 ASTs carry it
   // and the KG SQL loader pushes it down. The parser now emits
   // `expressionFilter`: the hop's WHERE as a real Expression over resource

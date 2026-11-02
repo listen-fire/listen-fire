@@ -67,12 +67,12 @@ const OPTIONS: &str = "  poll = write board-[:Polls]-> { Question: \"Lunch?\", O
 
 #[test]
 fn the_answer_is_typed_by_the_literals_written() {
-    let src = format!("{BUTTONS}  if (only(i-[:Actions]->).Value == \"pursu\") {{ return 1 }}\n");
+    let src = format!("{BUTTONS}  if (only(i-[:Actions]->)?.Value == \"pursu\") {{ return 1 }}\n");
     assert_eq!(
         check(CHAT, &src),
-        ["MOV_ENUM_UNKNOWN_VALUE 4:7-4:44 \"pursu\" isn't a value of enum (pursue | pass) — expected one of: pursue | pass. Did you mean \"pursue\"?"]
+        ["MOV_ENUM_UNKNOWN_VALUE 4:7-4:45 \"pursu\" isn't a value of enum (pursue | pass) — expected one of: pursue | pass. Did you mean \"pursue\"?"]
     );
-    let src = format!("{BUTTONS}  if (only(i-[:Actions]->).Value == \"pursue\") {{ return 1 }}\n");
+    let src = format!("{BUTTONS}  if (only(i-[:Actions]->)?.Value == \"pursue\") {{ return 1 }}\n");
     assert_eq!(check(CHAT, &src), Vec::<String>::new());
 }
 
@@ -89,7 +89,7 @@ fn a_second_shape_narrows_a_field_on_the_landing_itself() {
 
 #[test]
 fn a_field_the_edge_names_no_path_for_keeps_its_type() {
-    let src = format!("{BUTTONS}  if (only(i-[:Actions]->).Text == \"anything\" && i.User == \"anyone\") {{ return 1 }}\n");
+    let src = format!("{BUTTONS}  if (only(i-[:Actions]->)?.Text == \"anything\" && i.User == \"anyone\") {{ return 1 }}\n");
     assert_eq!(check(CHAT, &src), Vec::<String>::new());
     let src = format!("{OPTIONS}  if (v.Voter == \"anyone\") {{ return 1 }}\n");
     assert_eq!(check(POLL, &src), Vec::<String>::new());
@@ -97,7 +97,7 @@ fn a_field_the_edge_names_no_path_for_keeps_its_type() {
 
 #[test]
 fn a_built_value_gives_the_base_type_with_a_warning() {
-    let chat = "  msg = write ch-[:Messages]-> { Message: \"Pursue?\", Buttons: [{ Text: \"Pursue\", Value: name }, { Text: \"Pass\", Value: \"pass\" }] }\n  i = await msg-[:Interactions]->\n  if (only(i-[:Actions]->).Value == \"anything\") { return 1 }\n";
+    let chat = "  msg = write ch-[:Messages]-> { Message: \"Pursue?\", Buttons: [{ Text: \"Pursue\", Value: name }, { Text: \"Pass\", Value: \"pass\" }] }\n  i = await msg-[:Interactions]->\n  if (only(i-[:Actions]->)?.Value == \"anything\") { return 1 }\n";
     assert_eq!(
         check(CHAT, chat),
         ["MOV_WRITE_GENERIC_UNTYPED 2:63-2:129 'Buttons[].Value' is not all text literals here, so the 'Actions.Value' of what '-[:Interactions]->' delivers on chat.Message keeps its declared type instead of the values offered. Write each 'Buttons[].Value' as a text literal to have the answer checked against them"]
@@ -121,7 +121,7 @@ fn a_built_value_is_told_as_a_warning() {
 
 #[test]
 fn a_list_held_by_a_name_is_not_literal() {
-    let chat = "  buttons = [{ Text: \"Pursue\", Value: \"pursue\" }]\n  msg = write ch-[:Messages]-> { Message: \"Pursue?\", Buttons: buttons }\n  i = await msg-[:Interactions]->\n  if (only(i-[:Actions]->).Value == \"anything\") { return 1 }\n";
+    let chat = "  buttons = [{ Text: \"Pursue\", Value: \"pursue\" }]\n  msg = write ch-[:Messages]-> { Message: \"Pursue?\", Buttons: buttons }\n  i = await msg-[:Interactions]->\n  if (only(i-[:Actions]->)?.Value == \"anything\") { return 1 }\n";
     assert_eq!(check(CHAT, chat), ["MOV_WRITE_GENERIC_UNTYPED 3:63-3:70 'Buttons[].Value' is not all text literals here, so the 'Actions.Value' of what '-[:Interactions]->' delivers on chat.Message keeps its declared type instead of the values offered. Write each 'Buttons[].Value' as a text literal to have the answer checked against them"]);
     let poll = "  options = [{ Key: \"yes\" }]\n  poll = write board-[:Polls]-> { Question: \"Lunch?\", Options: options }\n  v = await poll-[:Votes]->\n  if (v.Choice == \"anything\") { return 1 }\n";
     assert_eq!(check(POLL, poll), ["MOV_WRITE_GENERIC_UNTYPED 3:64-3:71 'Options[].Key' is not all text literals here, so the 'Choice' of what '-[:Votes]->' delivers on polls.Poll keeps its declared type instead of the values offered. Write each 'Options[].Key' as a text literal to have the answer checked against them"]);
@@ -129,7 +129,7 @@ fn a_list_held_by_a_name_is_not_literal() {
 
 #[test]
 fn a_write_without_the_path_is_not_narrowed_and_not_told() {
-    let chat = "  msg = write ch-[:Messages]-> { Message: \"Pursue?\" }\n  i = await msg-[:Interactions]->\n  if (only(i-[:Actions]->).Value == \"anything\") { return 1 }\n";
+    let chat = "  msg = write ch-[:Messages]-> { Message: \"Pursue?\" }\n  i = await msg-[:Interactions]->\n  if (only(i-[:Actions]->)?.Value == \"anything\") { return 1 }\n";
     assert_eq!(check(CHAT, chat), Vec::<String>::new());
     let poll = "  poll = write board-[:Polls]-> { Question: \"Lunch?\" }\n  v = await poll-[:Votes]->\n  if (v.Choice == \"anything\") { return 1 }\n";
     assert_eq!(check(POLL, poll), Vec::<String>::new());
@@ -137,16 +137,16 @@ fn a_write_without_the_path_is_not_narrowed_and_not_told() {
 
 #[test]
 fn one_of_two_answers_takes_the_values_of_either() {
-    let chat = "  a = write ch-[:Messages]-> { Message: \"A?\", Buttons: [{ Text: \"Yes\", Value: \"yes\" }] }\n  b = write ch-[:Messages]-> { Message: \"B?\", Buttons: [{ Text: \"No\", Value: \"no\" }] }\n  i = await a-[:Interactions]->\n  j = await b-[:Interactions]->\n  k = only([i, j])\n  if (k != null) {\n    if (only(k-[:Actions]->).Value == \"no\") { return 1 }\n    if (only(k-[:Actions]->).Value == \"maybe\") { return 2 }\n  }\n";
-    assert_eq!(check(CHAT, chat), ["MOV_ENUM_UNKNOWN_VALUE 9:9-9:46 \"maybe\" isn't a value of enum (yes | no) — expected one of: yes | no."]);
-    let poll = "  p = write board-[:Polls]-> { Question: \"P?\", Options: [{ Key: \"yes\" }] }\n  q = write board-[:Polls]-> { Question: \"Q?\", Options: [{ Key: \"no\" }] }\n  v = await p-[:Votes]->\n  w = await q-[:Votes]->\n  x = only([v, w])\n  if (x.Choice == \"no\") { return 1 }\n  if (x.Choice == \"maybe\") { return 2 }\n";
-    assert_eq!(check(POLL, poll), ["MOV_ENUM_UNKNOWN_VALUE 8:7-8:26 \"maybe\" isn't a value of enum (yes | no) — expected one of: yes | no."]);
+    let chat = "  a = write ch-[:Messages]-> { Message: \"A?\", Buttons: [{ Text: \"Yes\", Value: \"yes\" }] }\n  b = write ch-[:Messages]-> { Message: \"B?\", Buttons: [{ Text: \"No\", Value: \"no\" }] }\n  i = await a-[:Interactions]->\n  j = await b-[:Interactions]->\n  k = only([i, j])\n  if (k != null) {\n    if (only(k-[:Actions]->)?.Value == \"no\") { return 1 }\n    if (only(k-[:Actions]->)?.Value == \"maybe\") { return 2 }\n  }\n";
+    assert_eq!(check(CHAT, chat), ["MOV_ENUM_UNKNOWN_VALUE 9:9-9:47 \"maybe\" isn't a value of enum (yes | no) — expected one of: yes | no."]);
+    let poll = "  p = write board-[:Polls]-> { Question: \"P?\", Options: [{ Key: \"yes\" }] }\n  q = write board-[:Polls]-> { Question: \"Q?\", Options: [{ Key: \"no\" }] }\n  v = await p-[:Votes]->\n  w = await q-[:Votes]->\n  x = only([v, w])\n  if (x?.Choice == \"no\") { return 1 }\n  if (x?.Choice == \"maybe\") { return 2 }\n";
+    assert_eq!(check(POLL, poll), ["MOV_ENUM_UNKNOWN_VALUE 8:7-8:27 \"maybe\" isn't a value of enum (yes | no) — expected one of: yes | no."]);
 }
 
 #[test]
 fn an_awaited_answer_is_present_where_it_is_read() {
     // The expense approval's shape: the await in a race arm, walked off unguarded.
-    let chat = "  msg = write ch-[:Messages]-> { Message: \"Approve?\", Buttons: [{ Text: \"Approve\", Value: \"approve\" }, { Text: \"Reject\", Value: \"reject\" }] }\n  r = race(\n    () => {\n      press = await msg-[:Interactions]->\n      return { choice: only(press-[:Actions]->).Value, by: press-[:By]->.Name, who: press.User }\n    },\n    () => { await sleep(1d) },\n  )\n  if (r[0] == null) { return \"expired\" }\n  return r[0].choice\n";
+    let chat = "  msg = write ch-[:Messages]-> { Message: \"Approve?\", Buttons: [{ Text: \"Approve\", Value: \"approve\" }, { Text: \"Reject\", Value: \"reject\" }] }\n  r = race(\n    () => {\n      press = await msg-[:Interactions]->\n      return { choice: only(press-[:Actions]->)?.Value, by: press-[:By]->.Name, who: press.User }\n    },\n    () => { await sleep(1d) },\n  )\n  if (r[0] == null) { return \"expired\" }\n  return r[0].choice\n";
     assert_eq!(check(CHAT, chat), Vec::<String>::new());
     let poll = "  poll = write board-[:Polls]-> { Question: \"Lunch?\", Options: [{ Key: \"yes\" }] }\n  v = await poll-[:Votes]->\n  return v.Choice == \"yes\" && v.Voter == name\n";
     assert_eq!(check(POLL, poll), Vec::<String>::new());
@@ -171,7 +171,7 @@ fn the_path_grammar() {
 
 #[test]
 fn an_empty_list_at_the_path_is_told_and_keeps_the_declared_type() {
-    let chat = "  msg = write ch-[:Messages]-> { Message: \"Pursue?\", Buttons: [] }\n  i = await msg-[:Interactions]->\n  if (only(i-[:Actions]->).Value == \"anything\") { return 1 }\n";
+    let chat = "  msg = write ch-[:Messages]-> { Message: \"Pursue?\", Buttons: [] }\n  i = await msg-[:Interactions]->\n  if (only(i-[:Actions]->)?.Value == \"anything\") { return 1 }\n";
     assert_eq!(
         check(CHAT, chat),
         ["MOV_WRITE_LITERALS_EMPTY 2:63-2:65 this write sets no 'Buttons[].Value', so no answer on '-[:Interactions]->' from chat.Message can take its 'Actions.Value' from it; the field keeps its declared type. Add the entries the answer may choose from, or leave 'Buttons' out of the write"]

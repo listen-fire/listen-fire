@@ -886,7 +886,7 @@ impl Run<'_> {
                     _ => Vec::new(),
                 };
                 let landings = self.build_records(&nested, child, site, shown, resources, tallies);
-                edges.push((child.name.clone(), Edge { landings, shape: Some(landing_shape_of(child)), deferred: None }));
+                edges.push((child.name.clone(), Edge { landings, shape: Some(landing_shape_of(child)) }));
             }
             let node = Node {
                 fields,

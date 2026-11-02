@@ -124,7 +124,12 @@ pub fn expr(v: &Value) -> Read<MExpr> {
         "paren" => MExpr::Paren { expr: boxed(o, "expr")?, at },
         "list" => MExpr::List { elements: each(o, "elements", list_element)?, at },
         "map" => MExpr::Map { entries: each(o, "entries", map_member)?, at },
-        "member" => MExpr::Member { object: boxed(o, "object")?, property: name(field(o, "property")?)?, at },
+        "member" => MExpr::Member {
+            object: boxed(o, "object")?,
+            property: name(field(o, "property")?)?,
+            optional: optional(o, "optional").and_then(Value::as_bool).unwrap_or(false),
+            at,
+        },
         "index" => MExpr::Index { object: boxed(o, "object")?, index: boxed(o, "index")?, at },
         "call" => MExpr::Call { callee: boxed(o, "callee")?, args: each(o, "args", call_arg)?, at },
         "path" => MExpr::Path { root: optional_boxed(o, "root")?, hops: each(o, "hops", hop)?, at },

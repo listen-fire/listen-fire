@@ -20,6 +20,50 @@ named in [`RELEASING.md`](RELEASING.md).
 
 <!-- add merged PRs here -->
 
+### Breaking (0.14.0)
+
+Guide: [`docs/language/migrating-to-0.14.md`](docs/language/migrating-to-0.14.md), with each change before and after, and what `listen-fire upgrade` rewrites or leaves to you.
+
+- **A field is never read with `.` through a value that may be missing, wherever the value comes from**, as TypeScript refuses `x.F` under strict null checks where `x` may be undefined. 0.13 refused it through a change's row and a map member. 0.14 refuses it too through a graph record that may be missing (`t = only(…)`, `first(…)`, a named `match`, then `t.Name`), through a call's result (`only(…).F`) and through an index read (`l[1].F`, `d["a"].F`), with `MOV_ABSENT_REQUIRED`. In 0.13 these read absent and checked clean, so a lookup that found nothing went unseen.
+  - `x?.F` is added. It reads a field through a value that may be missing, and is absent when the value is, so `x?.F == null` holds then. It runs exactly as `x.F` ran in 0.13.
+  - Narrowing still proves a value present: `exists(x)`, `x != null`, an `if`, a guard clause. `x?.F != null` proves `x` present too.
+  - An index read at a literal is narrowed by what it reads: `exists(l[1])` or `l[1] != null` proves every later `l[1]`. `exists` takes an index read at a literal from 0.14 (`exists(l[1])`, `exists(d["a"])`); a call's result is still tested with `!= null`.
+  - A map's member is one entry however it is spelled, as in TypeScript: a test of `d["a"]` proves `d.a`, and a test of `d.a` proves `d["a"]`.
+  - The refusal carries a safe rewrite, `.` to `?.` at the refused read. It keeps what the program does, so `listen-fire upgrade` applies it unasked: `only(walk).F` becomes `only(walk)?.F`, and a presence test `x.F != null` becomes `x?.F != null`, which narrows `x` as before.
+  - Not added: `?.` through an edge (`x?-[:E]->`). A walk off a record that may be missing stays refused; walk it inside `if (exists(x)) { … }`.
+  - **Which pins it reads.** `0.14.x` only: the compatibility key moves, so a project or an automation pinned to `0.13.x` is refused by name ("validate it under 0.14.0 and upgrade it"). `listen-fire upgrade` rewrites each refused read and moves the pin.
+  - **For embedders.** A lowered field read written with `?.` carries `optional: true` (`engine-contracts`' expression schema; omitted when false). The engine evaluates it as a plain read. The wasm artifacts are rebuilt.
+  - The language server completes field names after `?.` as after `.`, and after a field holding a record (`c.Previous?.`).
+  - `listen-fire upgrade`'s warning about a wait's captured value names a read as written (`founder?.Email`).
+
+- **The loop guard slot is removed.** `listen-fire check` and every command that opens a project refuse an `lf.yaml` naming `core.loopGuard`, and a core module whose `lf-external.yaml` or manifest says `slot: loopGuard`, by name: "the loop guard slot is retired: remove it; the loop breaker (lf.yaml's loopWindow and loopDepth) replaces it". Why: listen-fire stopped calling a guard in the release before, nothing read what one remembered, and the loop breaker caps every chain. Gone with it: `@lf/fingerprint-guard`, `listen-fire --contract-guard` and `--contract-guard-slot`, the slot's contract suite, `loopGuard` from `CORE_SLOTS` (`engine-contracts`), and module-kit's `LoopGuard`. To upgrade: delete `core.loopGuard` from `lf.yaml`, and any guard module from the externals folder.
+
+- **A run's walk off a union lands on one of the members' landings, and is checked there.** Where a union's members land the same edge on different record types (a Person's `Notes` on a Memo, a Company's on a Remark), `crm-[:Subjects]->-[n:Notes]->` lands a Memo or a Remark, as TypeScript's `Memo | Remark`. A read, a walk or a write off it is held to what every one of them has: `n.Text` checks, `n.Mood` (a Memo's alone) is refused (`MOV_UNION_MEMBER_ONLY`), and so is a field none of them has (`MOV_UNKNOWN_PROPERTY`). This holds in a block, a walk bound to a name, `map` over a walk, a walk inside an expression and `exists`. Introduced by 0.14.0, a new compatibility key, since 0.13 accepts these programs.
+  - Why: 0.13 typed nothing past such a hop, so every read off it checked clean whatever it named, and a misspelled field failed only at run time. A listen through a union was already checked this way.
+  - The fix, by hand: narrow the landing with `is`. `crm-[:Subjects]->-[n:Notes]-> { if (n is <crm-[:Memo]->>) { … n.Mood … } else { … n.Tone … } }` reads a Memo's `Mood` and a Remark's `Tone`; the refusal names the test to write. Or read a field every member's landing has. `listen-fire upgrade` has no rewrite for it: only the author knows what a Remark should give where a Memo's `Mood` was read.
+  - An edge whose members land on one record type is unchanged.
+
+- **`is` narrows a value that is one of several records.** `if (n is <crm-[:Memo]->>) { … n.Mood … } else { … n.Tone … }`: inside the arm `n` is the Memo, and in the `else` (and every later arm) the rest of what it may be, as TypeScript narrows `Memo | Remark`. It narrows a walk's landing off a union, a parameter of several record types, and a `? :` or `coalesce` of records of different types; a read, a walk and a write in the arm are held to the member it names. Introduced by 0.14.0 with the walk off a union it narrows.
+  - Why: under 0.14 a read only some of the landings offer is refused, and the only way through was to narrow the record walked from and walk again. The value itself now narrows the way any union does.
+  - The engine tests the record's own type, so nothing changes in what a run does.
+
+- **An `is` test naming a type the value can never be is warned** (`MOV_IS_NO_OVERLAP`, a new code). `if (n is <crm-[:Person]->>)`, where `n` is a Memo or a Remark, or a Subject tested for a Memo, says the types have no overlap and the test is always false, as TypeScript does. Introduced by 0.14.0. A warning: the program still runs, and the arm never does.
+
+- **Narrowing by `is` continues below an arm that always leaves.** `if (n is <crm-[:Memo]->>) { return n.Mood }` followed by `return n.Tone`: below the `if`, `n` is the rest of what it may be (a Remark), as TypeScript narrows past an early return or a `fail`. It holds where the arm, and every arm before it, always returns or fails, for a value that is one of several records and for a union's record (`s is <crm-[:Person]->>` leaves a Company below). Where the `else` and every arm but one always leave, that arm's test holds below. Introduced by 0.14.0.
+  - A read below that used to be refused as `MOV_UNION_MEMBER_ONLY` is now held to the rest: a field only the tested member has is `MOV_UNKNOWN_PROPERTY` there.
+
+- **`lazy` is retired for a closure.** `people = () => crm-[:People]->`, read as `people()`, walks again at every call, as `people = lazy crm-[:People]->` walked again at every read. `x = lazy …`, `return lazy …` and a node entry `files: lazy …` are each refused where they are written (`MOV_LAZY_RETIRED`). Introduced by 0.14.0, a new compatibility key, since 0.13 accepts them.
+  - Why: a closure already says "run this when it is read", and its call says where. `lazy` was a second spelling of it, with rules of its own about where it could be read.
+  - Replace each `lazy` by hand: `x = lazy W` with `x = () => W`, each read of `x` with `x()`; `return lazy W` with `return W`; a node entry `files: lazy W` with a closure bound beside the node (no node entry walks again at each read), or with `files: W` to keep what the walk lands on when the node is built. The refusal names the closure to write.
+  - `listen-fire upgrade` rewrites none of it, even with `--all`, and leaves the pin where it is until each is replaced. A closure's call reads differently from a kept walk where the name is bound whole to another name or passed to a function, so only the author knows which meaning was wanted.
+  - The engine no longer runs a kept walk: a program that reaches it unchecked fails by name. A paused run's state moves to version 4, which holds no kept walk; a 0.13 run paused holding one (park state 3) is refused on resume, by name ("this run paused holding a `lazy` walk"). Let such runs finish, or cancel them, before upgrading. Any other 0.13 pause resumes.
+
+- **`triggerEventOf` leaves the engine package's `public/inbound`.** It built the 0.12 trigger, which no 0.13 host makes, and was deprecated in 0.13.1. Build a run's event with `arrivalTriggerOf`.
+
+- **An Affinity opportunity list's change `Field` is an enum of the list's columns.** A listen on `` `List Entry — <opportunity list>` ``'s `Changes` naming a `Field` that is not one of its columns is refused (`MOV_ENUM_UNKNOWN_VALUE`), as on every other list.
+  - Why: 0.13 typed it as text, as the list's columns were not on its record type, so a misspelled column checked clean and never ran.
+  - The fix, by hand: name one of the list's columns, as the refusal lists them. `listen-fire upgrade` rewrites nothing.
+
 ## [0.13.1] - 2026-11-02
 
 A patch release of the 0.13 line: it reads the same pins as 0.13.0 (every `0.13.x`) and changes the meaning of no program that checks under 0.13.0. It mainly fixes what 0.13.0 stopped passing from a module to a run: who acted (Slack, email, Telegram, WhatsApp, Granola and Attio reported nobody, so a host that runs only registered senders dropped their runs), the record a fired record links to (Dealroom, Evertrace), Affinity's changed values and Airtable's ids. It also makes schedules fire on time, lets `connect` name a module without importing it, and stops `listen-fire upgrade` moving a pin past a rewrite that may change behaviour. Adapter protocol 2.7 adds `pollAgainAt` and an arrival's `actor`; a host that ignores them behaves as 0.13.0.
@@ -81,13 +125,13 @@ A patch release of the 0.13 line: it reads the same pins as 0.13.0 (every `0.13.
 
 ### Deprecated
 
-- **The loop guard slot is retired.** A project whose `lf.yaml` names one (`core: { loopGuard: … }`) runs as before, but listen-fire starts no guard: it prints one notice naming it as it starts, and never calls `guard.open` or `guard.recordWrite`. It also no longer reads each record back after a write to hand it to the guard, which saves one `readRecord` call per write. listen-fire's loop breaker (`loopWindow`, `loopDepth`) already caps every chain of writes and arrivals, and nothing read what a guard remembered. Remove `core.loopGuard` from `lf.yaml`; 0.14.0 refuses it ([loop-guard-slot.md](docs/contracts/loop-guard-slot.md)).
+- **The loop guard slot is retired.** A project whose `lf.yaml` names one (`core: { loopGuard: … }`) runs as before, but listen-fire starts no guard: it prints one notice naming it as it starts, and never calls `guard.open` or `guard.recordWrite`. It also no longer reads each record back after a write to hand it to the guard, which saves one `readRecord` call per write. listen-fire's loop breaker (`loopWindow`, `loopDepth`) already caps every chain of writes and arrivals, and nothing read what a guard remembered. Remove `core.loopGuard` from `lf.yaml`; 0.14.0 refuses it.
 
 - **`triggerEventOf`** in the engine package's `public/inbound` is deprecated. It builds the 0.12 trigger, which no 0.13 host makes; build a run's event with `arrivalTriggerOf`. 0.14.0 removes it.
 
 ### Removed
 
-- **The loop guard slot's `guard.isEcho` is retired** (within adapter protocol 2; no version moves). listen-fire stopped calling it in 0.13, when the loop breaker replaced echo suppression. Now listen-fire's built-in guard, `@lf/fingerprint-guard`, no longer answers it (`listen-fire --contract-guard` refuses it as `method_not_implemented`), and the slot's contract suite holds a guard to `guard.recordWrite` alone. A guard module that still offers `guard.isEcho` loads as before and is never asked ([loop-guard-slot.md](docs/contracts/loop-guard-slot.md)).
+- **The loop guard slot's `guard.isEcho` is retired** (within adapter protocol 2; no version moves). listen-fire stopped calling it in 0.13, when the loop breaker replaced echo suppression. Now listen-fire's built-in guard, `@lf/fingerprint-guard`, no longer answers it (`listen-fire --contract-guard` refuses it as `method_not_implemented`), and the slot's contract suite holds a guard to `guard.recordWrite` alone. A guard module that still offers `guard.isEcho` loads as before and is never asked.
 
 ### Fixed
 

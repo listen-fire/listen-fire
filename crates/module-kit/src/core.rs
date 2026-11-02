@@ -1,5 +1,5 @@
 //! Core slots: the host's own services, filled by a module
-//! (docs/contracts/store-slot.md, limiter-slot.md, loop-guard-slot.md,
+//! (docs/contracts/store-slot.md, limiter-slot.md,
 //! wake-slot.md). Each
 //! slot's methods are those documents' tables, method for method, carried in
 //! the adapter protocol's envelope like every other module's (`store.open`,
@@ -999,17 +999,5 @@ slot! {
             name: Option<String>,
             label: String,
         }) -> OcrRead;
-    }
-}
-
-// ── loop guard ───────────────────────────────────────────────────────────────
-
-slot! {
-    /// The loop guard slot: told of each record write a run makes.
-    pub trait LoopGuard served as LoopGuardModule in slot "loopGuard" {
-        "guard.open" => fn open(GuardOpen { #[serde(default)] settings: BTreeMap<String, String> }) -> ();
-        /// `writer` (`listen:<file>:<movement>`) wrote `external_id`; `record`
-        /// is the source's answer read back right after (`null`: gone).
-        "guard.recordWrite" => fn record_write(GuardRecordWrite { adapter: String, record_type: String, external_id: String, writer: String, record: Js }) -> ();
     }
 }

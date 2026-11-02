@@ -125,7 +125,7 @@ fn sort_by_a_function_key() {
     clean(&format!("{ROWS}\n  x = sort(rows, (r) => r.score)"));
     clean(&format!("{ROWS}\n  k = (r: <crm-[:company]->>) => r.score\n  x = sort(rows, k)"));
     // The members come back as themselves: a record's field reads off one.
-    clean(&format!("{ROWS}\n  top = first(sort(rows, (r) => r.score, {{ order: \"desc\" }}))\n  need(coalesce(top.name, fail(\"no top\")))"));
+    clean(&format!("{ROWS}\n  top = first(sort(rows, (r) => r.score, {{ order: \"desc\" }}))\n  need(coalesce(top?.name, fail(\"no top\")))"));
     // Plain values by a computed key.
     clean("  x = sort(xs, (s) => Text.length(s))");
     // The key reads the member through its parameter, so an outer name never hides a field.

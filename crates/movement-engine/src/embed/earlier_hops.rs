@@ -164,12 +164,12 @@ fn an_order_by_reads_each_path_s_own_table() {
 }
 
 /// A node's edge crossed before the walk reaches the source: its landings
-/// held (the walk goes on through the source from each), or kept as a walk
-/// run at the read (the hop's alias naming each record it lands on), in a
-/// block head (the node's plane) and in an expression (the meta walk).
+/// held (the walk goes on through the source from each, the hop's alias
+/// naming each record it lands on), in a graph and in a node, in a block head
+/// (the node's plane) and in an expression (the meta walk).
 #[test]
 fn a_node_s_edge_names_each_landing_to_the_hops_past_it() {
-    for entry in ["graph { tables: s-[:Tables]-> }", "node { tables: lazy s-[:Tables]-> }"] {
+    for entry in ["graph { tables: s-[:Tables]-> }", "node { tables: s-[:Tables]-> }"] {
         let walk = "g-[x:tables]->-[c:History WHERE c.Id == x.Name]->";
         let store = ran(&format!(
             "  g = {entry}\n  {walk} {{\n    write s-[:Logs]-> {{ Text: c.Kind }}\n  }}\n  map({walk}, (r) => {{ write s-[:Logs]-> {{ Text: r.Kind }} }})\n"
@@ -178,13 +178,13 @@ fn a_node_s_edge_names_each_landing_to_the_hops_past_it() {
     }
 }
 
-/// Hops past a kept walk read the hops crossed before it: each group's label
-/// filters the History of every Table its kept walk lands on.
+/// Hops past a nested node's walked edge read the hops crossed before it:
+/// each group's label filters the History of every Table its edge lands on.
 #[test]
-fn hops_past_a_kept_walk_read_the_hops_crossed_before_it() {
+fn hops_past_a_nested_node_s_walked_edge_read_the_hops_crossed_before_it() {
     let walk = "g-[y:groups]->-[:tables]->-[c:History WHERE c.Id == y.label]->";
     let store = ran(&format!(
-        "  g = node {{ groups: [node {{ label: \"B\", tables: lazy s-[:Tables]-> }}, node {{ label: \"A\", tables: lazy s-[:Tables]-> }}] }}\n  {walk} {{\n    write s-[:Logs]-> {{ Text: c.Kind }}\n  }}\n  map({walk}, (r) => {{ write s-[:Logs]-> {{ Text: r.Kind }} }})\n"
+        "  g = node {{ groups: [node {{ label: \"B\", tables: s-[:Tables]-> }}, node {{ label: \"A\", tables: s-[:Tables]-> }}] }}\n  {walk} {{\n    write s-[:Logs]-> {{ Text: c.Kind }}\n  }}\n  map({walk}, (r) => {{ write s-[:Logs]-> {{ Text: r.Kind }} }})\n"
     ));
     assert_eq!(store.logs, vec!["A:B", "B:B", "A:A", "B:A", "A:B", "B:B", "A:A", "B:A"]);
 }

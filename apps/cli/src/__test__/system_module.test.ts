@@ -14,6 +14,7 @@ import { join, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
 import { until } from './attio_fixture';
+import { RELEASE_RE } from './release';
 import { externalPort, lf, lfCommand, project, served, type Served } from './example';
 import { lf as lfAsked, ok } from './interactive';
 import { HEADER, botMessages, deliver, eventCallback, parkedRun, seedSlack, slackWorld } from './slack_world';
@@ -260,7 +261,7 @@ test('`listen to sys {}` from 0.12 is rewritten to e.Kind == "Run Failed", and a
     const upgraded = lf(dir, 'upgrade');
     assert.equal(upgraded.code, 0, upgraded.out);
     assert.equal(readFileSync(file, 'utf8'), now(where));
-    assert.match(upgraded.out, /lf\.yaml: engine: 0\.13\.0 \(was 0\.12\.13\)/);
+    assert.match(upgraded.out, new RegExp(String.raw`lf\.yaml: engine: ${RELEASE_RE} \(was 0\.12\.13\)`));
     const checked = lf(dir, 'check');
     assert.equal(checked.code, 0, checked.out);
   }

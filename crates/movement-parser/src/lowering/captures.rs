@@ -252,14 +252,14 @@ impl Analysis<'_> {
                 reads = Reads::world();
                 Expression::KgValue { query: query.clone(), params: self.each(params, ctx, &mut reads) }
             }
-            Expression::Traverse { alias_root, steps, expression } => {
+            Expression::Traverse { alias_root, steps, expression, optional } => {
                 let root = match alias_root {
                     Some(root) => self.name(root, ctx),
                     None => Reads::record(ctx.level),
                 };
                 let (r, rewritten) = self.walk(root, alias_root, steps, expression, ctx);
                 reads = r;
-                rewritten
+                kept_optional(rewritten, *optional)
             }
             Expression::Exists { steps, where_ } => {
                 let (r, rewritten) = self.exists(Reads::record(ctx.level), steps, where_.as_deref(), ctx);
@@ -328,7 +328,7 @@ impl Analysis<'_> {
         let landing = ctx.level + 1;
         let (reads, steps) = self.steps(root, steps, ctx);
         let (r, terminal) = self.terminal(terminal, &ctx.entering(landing, None));
-        (reads.with(r.leaving(landing)), Expression::Traverse { alias_root: alias_root.clone(), steps, expression: Box::new(terminal) })
+        (reads.with(r.leaving(landing)), Expression::Traverse { alias_root: alias_root.clone(), steps, expression: Box::new(terminal), optional: false })
     }
 
     fn exists(&mut self, root: Reads, steps: &[TraversalStep], where_: Option<&Expression>, ctx: &Ctx) -> (Reads, Expression) {
@@ -372,11 +372,22 @@ impl Analysis<'_> {
     fn terminal(&mut self, e: &Expression, ctx: &Ctx) -> (Reads, Expression) {
         match e {
             Expression::Property { .. } | Expression::EdgeProperty { .. } => (Reads::record(ctx.level), e.clone()),
-            Expression::Traverse { alias_root, steps, expression } => self.walk(Reads::record(ctx.level), alias_root, steps, expression, ctx),
+            Expression::Traverse { alias_root, steps, expression, optional } => {
+                let (reads, rewritten) = self.walk(Reads::record(ctx.level), alias_root, steps, expression, ctx);
+                (reads, kept_optional(rewritten, *optional))
+            }
             Expression::Exists { steps, where_ } => self.exists(Reads::record(ctx.level), steps, where_.as_deref(), ctx),
             other => self.visit(other, ctx),
         }
     }
+}
+
+/// A walk rebuilt from `x?.F` stays one.
+fn kept_optional(mut walk: Expression, optional: bool) -> Expression {
+    if let Expression::Traverse { optional: kept, .. } = &mut walk {
+        *kept = optional;
+    }
+    walk
 }
 
 /// A hole as the run reads it, outside any hop. A hop's WHERE lowers a name
@@ -389,9 +400,12 @@ fn as_run_reads_it(e: &Expression) -> Expression {
         Expression::EdgeProperty { property_type_id, field_only } => {
             Expression::Property { property_type_id: property_type_id.clone(), field_only: *field_only }
         }
-        Expression::Traverse { alias_root, steps, expression } => {
-            Expression::Traverse { alias_root: alias_root.clone(), steps: steps.clone(), expression: Box::new(as_run_reads_it(expression)) }
-        }
+        Expression::Traverse { alias_root, steps, expression, optional } => Expression::Traverse {
+            alias_root: alias_root.clone(),
+            steps: steps.clone(),
+            expression: Box::new(as_run_reads_it(expression)),
+            optional: *optional,
+        },
         Expression::Exists { .. } => e.clone(),
         other => map_parts(other, &as_run_reads_it),
     }

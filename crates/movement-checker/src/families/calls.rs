@@ -624,6 +624,15 @@ impl Checker<'_> {
             {
                 self.set_types(scope, &name, types);
             }
+            let written = String::from_utf16_lossy(&units[at.start..at.end]);
+            let entry = crate::slots::expression_of_slot(&ExprSlot::plain(written.clone(), span)).ok().and_then(|read| {
+                let (root, index) = crate::types::narrowing::entry_read(&read)?;
+                self.typing_env(scope).entry_read(root, index)
+            });
+            if let Some(entry) = entry {
+                self.narrow_entry_read(&name, &entry, scope);
+                self.entry_reads.insert(name, (entry, written.trim().to_string()));
+            }
         }
         Some(rewritten)
     }

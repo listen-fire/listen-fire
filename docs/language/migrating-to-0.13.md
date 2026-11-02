@@ -114,7 +114,7 @@ function `Approve Or Reject`(go: <manual-[:Invocation]->>) {
   r = race(
     () => {
       press = await msg-[:Interactions]->
-      return only(press-[:Actions]->).Value
+      return only(press-[:Actions]->)?.Value
     },
     () => { await sleep(1d) },
   )
@@ -430,7 +430,7 @@ function ask_lunch(t: <cron-[:Ticks]->>) {
 function count_vote(press: <chat-[:Interaction]->>) {
   poll = only(press-[:Message]->)
   if (poll == null) { fail("a press with no message") }
-  answer = only(press-[:Actions]->).Value
+  answer = only(press-[:Actions]->)?.Value
   if (answer == null) { fail("a press with no answer") }
   person = only(press-[:By]->)
   if (person == null) { fail("a press by no one") }
@@ -460,7 +460,7 @@ listen to chat-[:Channels]->-[m:Messages WHERE m.Topic == "lunch-poll" AND m.Tim
   - `NOT exists(c.Previous) OR c.Previous.Stage != "Interview"`;
   - `if (exists(c.Previous)) { … }` in a function, and `&&`, `||` and `!` there.
 - `listen-fire upgrade` writes the tested forms in the listens it rewrites. Anything else is by hand, and holds the pin.
-- Not yet refused in 0.13: a field read off a graph record that may be missing (`x = only(…)`, then `x.Name`) still reads missing. A later release refuses it, with `?.`.
+- Not yet refused in 0.13: a field read off a graph record that may be missing (`x = only(…)`, then `x.Name`) still reads missing. 0.14 refuses it, and reads it with `?.` ([migrating-to-0.14.md](migrating-to-0.14.md)).
 
 ## 10. Diagnostic code index
 

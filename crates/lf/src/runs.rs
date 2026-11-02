@@ -346,7 +346,6 @@ pub async fn open_session(project: Project, opening: &Opening<'_>) -> Result<Ses
     let externals = needed_externals(scan_externals(&project)?, &parsed, registered);
     // A run's segment starts from a copy of its file's parse, kept for the process.
     movement_engine::program::keep_parses(KEPT_PARSES);
-    crate::loop_guard::notice_retired(&project);
     crate::wake::install(crate::wake::of_project(&project, credentials)?);
     // Before any call: the manifest calls below ask it too.
     crate::limiter::install(crate::limiter::of_project(&project, credentials)?);

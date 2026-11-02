@@ -42,6 +42,7 @@ fn canonical_callee(canonical: &str, at: At) -> MExpr {
         Some((ns, member)) => MExpr::Member {
             object: Box::new(name_expr(ns, at)),
             property: Name { text: member.to_string(), quoted: false, at },
+            optional: false,
             at,
         },
         None => name_expr(canonical, at),
@@ -79,7 +80,7 @@ fn through_alias(e: &mut MExpr, alias: &str) {
     {
         return;
     }
-    if let MExpr::Member { object, property, at } = e
+    if let MExpr::Member { object, property, at, .. } = e
         && matches!(object.as_ref(), MExpr::Name { name, .. } if name.text == alias && !name.quoted)
     {
         *e = MExpr::Name { name: Name { text: property.text.clone(), quoted: property.quoted, at: *at }, at: *at, field: true };
@@ -142,13 +143,31 @@ fn is_walk(e: &MExpr) -> bool {
     matches!(e, MExpr::Path { .. } | MExpr::Where { .. })
 }
 
-/// A name, or a field read off one (`x`, `x.F`, `c.Current.Stage`): what
-/// `exists(…)` asks the presence of, besides a walk.
+/// A name, a field read off one, or one read at a literal index (`x`,
+/// `x.F`, `c.Current.Stage`, `l[1]`, `d["a"].Stage`): what `exists(…)` asks
+/// the presence of, besides a walk.
 fn is_value_read(e: &MExpr) -> bool {
     match e {
         MExpr::Name { .. } => true,
-        MExpr::Member { object, .. } => matches!(object.as_ref(), MExpr::Name { .. } | MExpr::Member { .. }) && is_value_read(object),
+        MExpr::Member { object, .. } => is_value_read(object),
+        _ => literal_index(e).is_some(),
+    }
+}
+
+/// `l[1]`, `d["a"]`: a name read at a literal index, as this pass writes an
+/// index read (`AT(l, 1)`); the name it is read off. A call's result is
+/// not one: each call may answer differently.
+pub(crate) fn literal_index(e: &MExpr) -> Option<&Name> {
+    let MExpr::Call { callee, args, .. } = e else { return None };
+    let (MExpr::Name { name: at, .. }, [object, index]) = (callee.as_ref(), args.as_slice()) else { return None };
+    let literal = match &index.value {
+        MExpr::Literal { value, .. } => matches!(value, LiteralValue::Number(_)),
+        MExpr::String { parts, .. } => parts.iter().all(|p| matches!(p, StringPart::Text(_))),
         _ => false,
+    };
+    match &object.value {
+        MExpr::Name { name, .. } if at.text == "AT" && !at.quoted && literal => Some(name),
+        _ => None,
     }
 }
 
@@ -276,7 +295,7 @@ impl<'s> Canon<'s> {
 
     fn inside_walk(&mut self, e: &mut MExpr) {
         let MExpr::Call { callee, .. } = e else { return };
-        let MExpr::Member { object, property, at } = callee.as_ref() else { return };
+        let MExpr::Member { object, property, at, optional: false } = callee.as_ref() else { return };
         let MExpr::Name { name: ns, .. } = object.as_ref() else { return };
         let written = format!("{}.{}", ns.text, property.text);
         if let Some((caps, _)) = table::WALK_CAPS.iter().find(|(_, everyday)| *everyday == written) {
@@ -558,7 +577,7 @@ impl<'s> Canon<'s> {
             Shape::ExistsWalk => match args.first() {
                 Some(arg) if is_walk(&arg.value) => (format!("`{written}` is written `exists`"), Some(rename)),
                 _ => (
-                    "`exists` takes a walk, a name or a field read off one (`exists(x.F)`); any other value's presence is written `… != null`".into(),
+                    "`exists` takes a walk, a name, or a field or literal index read off one (`exists(x.F)`, `exists(l[1])`); any other value's presence is written `… != null`".into(),
                     Some(Edit { at, text: self.grouped(at, format!("{} != null", a(0))) }),
                 ),
             },

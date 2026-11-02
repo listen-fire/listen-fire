@@ -27,6 +27,7 @@ use super::field::*;
 use super::narrowing::{PresenceProof, exists_subject, is_position_terminal, negative_presence_proofs, presence_proofs};
 use super::unions::{join_field_types, join_positions, joined_under, one_record_of};
 use super::pinned_member::pinned_member;
+use super::union_walk::{MemberOnly, Subject, member_only};
 use super::position::{EdgeLanding, Position, describe_position, edge_landing, position_ref_in, refine_selected, unselected_members, instance_of_ref, lookup_property_type, narrow_present, narrow_present_node};
 use super::stdlib::{bare_coercer_returns, movement_meta_key_type, stdlib_function_by_id};
 
@@ -80,6 +81,15 @@ pub trait TypeEnv {
     fn is_zone(&self, _zone: &str) -> Option<bool> {
         None
     }
+    /// What `proof` proves about the other hoisted reads of the entry it is
+    /// about (`EntryRead`).
+    fn same_entry(&self, _proof: &PresenceProof) -> Vec<PresenceProof> {
+        Vec::new()
+    }
+    /// The index read a hoisted name stands for, as written (`l[1]`).
+    fn entry_read_text(&self, _name: &str) -> Option<String> {
+        None
+    }
 }
 
 /// An environment with nothing in it.
@@ -92,6 +102,14 @@ impl TypeEnv for EmptyEnv {
     fn resolve_scalar(&self, _name: &str) -> Option<Ty> {
         None
     }
+}
+
+/// How a map's member is read (`read_dict_member`): inside a map already
+/// read, and through it with `?.`.
+#[derive(Clone, Copy)]
+struct DictRead {
+    within: bool,
+    optional: bool,
 }
 
 /// The identity of an expression node, for the per-node answers kept while
@@ -114,7 +132,7 @@ fn field_read_name(expr: &Expression) -> Option<&str> {
         {
             Some(property_type_id)
         }
-        Expression::Traverse { alias_root: Some(head), steps, expression } if steps.is_empty() && !matches!(**expression, Expression::Exists { .. }) => Some(head),
+        Expression::Traverse { alias_root: Some(head), steps, expression, .. } if steps.is_empty() && !matches!(**expression, Expression::Exists { .. }) => Some(head),
         _ => None,
     }
 }
@@ -157,6 +175,7 @@ pub struct Typing<'a> {
     pub address: bool,
     /// The name a walk starts at, while its first edge is stepped (`msg` in
     /// `msg-[:Interactions]->`): set by whoever knows it, before `walk_steps`.
+    /// Likewise the name a read is taken off (`msg` in `msg.Subject`).
     pub step_root: Option<String>,
     pub last_edge_schema: Option<EdgeSchema>,
     pub last_landings: Vec<Option<Position>>,
@@ -280,16 +299,23 @@ impl<'a> Typing<'a> {
         joined_under(one_record_of(types), old)
     }
 
+    /// The name the step being typed is taken off, when the author wrote one
+    /// (not a nested call's).
+    fn named_root(&self) -> Option<String> {
+        self.step_root.clone().filter(|root| !crate::families::calls::is_nested_call_name(root.trim_matches('`')))
+    }
+
     /// `probeEach`: one step (a field read, an edge hop) off every record a
     /// `OneOf` may be — what every member offers, or a refusal naming the
     /// member that does not offer it. The first refusal among a member's
-    /// reports is the union's, said of that member; anything that is no
-    /// refusal (a warning) is said as it was.
+    /// reports is the union's, said of that member under its own code or
+    /// the one `refusal` gives; anything that is no refusal (a warning) is
+    /// said as it was.
     fn probe_each<T>(
         &mut self,
         members: &[Position],
         mut step: impl FnMut(&mut Self, &Position) -> Option<T>,
-        refusal: impl Fn(&Position, &str) -> String,
+        refusal: impl Fn(&Position, &str) -> (Option<&'static str>, String),
     ) -> Option<Vec<Option<T>>> {
         let mut answers = Vec::new();
         for member in members {
@@ -297,8 +323,8 @@ impl<'a> Typing<'a> {
             let answer = step(self, member);
             let gathered = self.diagnostics.split_off(before);
             if let Some(refused) = gathered.iter().find(|d| d.is_error()) {
-                let message = refusal(member, refused.message.strip_suffix('.').unwrap_or(&refused.message));
-                self.report(&refused.code.clone(), message);
+                let (code, message) = refusal(member, refused.message.strip_suffix('.').unwrap_or(&refused.message));
+                self.report(code.unwrap_or(&refused.code.clone()), message);
                 return None;
             }
             self.diagnostics.extend(gathered);
@@ -369,11 +395,23 @@ impl<'a> Typing<'a> {
     fn step_every_member(&mut self, members: &[Position], edge: &EdgeStep) -> Option<Position> {
         let union = describe_position(&Position::OneOf(members.to_vec()));
         let name = edge.edge_type_id.clone();
-        let landings = self.probe_each(members, |t, member| t.step_edge(Some(member), edge).0, |member, refused| {
-            format!(
-                "'-[:{name}]->' can't be walked here: this may be {union}, and it walks only what every one of them has — {} refuses it ({refused}). Walk it where you know which record you hold",
-                describe_position(member)
-            )
+        let subject = self.named_root().map(|root| Subject { step: format!("{root}-[:{}]->", crate::families::names::spell_name(&name)), name: root });
+        let past_union = member_only(members, |member| !matches!(edge_landing(member, &name), EdgeLanding::Unknown { .. }), subject.as_ref());
+        let landings = self.probe_each(members, |t, member| t.step_edge(Some(member), edge).0, |member, refused| match &past_union {
+            Some(MemberOnly { since, narrowing }) => (
+                Some(codes::UNION_MEMBER_ONLY),
+                format!(
+                    "'-[:{name}]->' can't be walked here: {since}, and it walks only what every one of them has — {} refuses it ({refused}). {narrowing}, or walk what every one of them has",
+                    describe_position(member)
+                ),
+            ),
+            None => (
+                None,
+                format!(
+                    "'-[:{name}]->' can't be walked here: this may be {union}, and it walks only what every one of them has — {} refuses it ({refused}). Walk it where you know which record you hold",
+                    describe_position(member)
+                ),
+            ),
         })?;
         let landings: Vec<Position> = landings.into_iter().collect::<Option<_>>()?;
         join_positions(&landings.iter().collect::<Vec<_>>()).map(|joined| joined.position)
@@ -383,11 +421,23 @@ impl<'a> Typing<'a> {
     /// member's field, joined.
     fn read_every_member(&mut self, members: &[Position], property: &str) -> Option<Ty> {
         let union = describe_position(&Position::OneOf(members.to_vec()));
-        let types = self.probe_each(members, |t, member| t.read_property(Some(member), property), |member, refused| {
-            format!(
-                "'{property}' can't be read here: this may be {union}, and it reads only what every one of them has — {} refuses it ({refused}). Read it where you know which record you hold",
-                describe_position(member)
-            )
+        let subject = self.named_root().map(|root| Subject { step: format!("{root}.{}", crate::families::names::spell_name(property)), name: root });
+        let past_union = member_only(members, |member| lookup_property_type(Some(member), property).is_some(), subject.as_ref());
+        let types = self.probe_each(members, |t, member| t.read_property(Some(member), property), |member, refused| match &past_union {
+            Some(MemberOnly { since, narrowing }) => (
+                Some(codes::UNION_MEMBER_ONLY),
+                format!(
+                    "'{property}' can't be read here: {since}, and it reads only what every one of them has — {} refuses it ({refused}). {narrowing}, or read what every one of them has",
+                    describe_position(member)
+                ),
+            ),
+            None => (
+                None,
+                format!(
+                    "'{property}' can't be read here: this may be {union}, and it reads only what every one of them has — {} refuses it ({refused}). Read it where you know which record you hold",
+                    describe_position(member)
+                ),
+            ),
         })?;
         let types: Vec<Ty> = types.into_iter().collect::<Option<_>>()?;
         join_field_types(&types)
@@ -604,7 +654,8 @@ impl<'a> Typing<'a> {
         let restore_scalars = self.narrowed_scalars.clone();
         let restore_roots = self.narrowed_roots.clone();
         let mut narrowed_position = position.cloned();
-        for proof in proofs {
+        let same_entry: Vec<PresenceProof> = proofs.iter().flat_map(|p| self.env.same_entry(p)).collect();
+        for proof in proofs.iter().chain(&same_entry) {
             match proof {
                 PresenceProof::Binding { root } => {
                     let field = narrowed_position.as_ref().and_then(|p| narrow_present(p, root));
@@ -632,7 +683,7 @@ impl<'a> Typing<'a> {
                         self.narrowed_roots.insert(root.clone(), present);
                     }
                 }
-                PresenceProof::NonBlank { .. } => {}
+                PresenceProof::NonBlank { .. } | PresenceProof::Entry { .. } => {}
             }
         }
         let answer = body(self, narrowed_position.as_ref());
@@ -821,13 +872,13 @@ impl<'a> Typing<'a> {
     }
 
     /// `dictMemberRead`: `d.key` off a name holding a dict.
-    fn dict_member_read(&mut self, alias_root: Option<&str>, steps: &[TraversalStep], member: &Expression) -> Option<Option<Ty>> {
+    fn dict_member_read(&mut self, alias_root: Option<&str>, steps: &[TraversalStep], member: &Expression, optional: bool) -> Option<Option<Ty>> {
         let root = alias_root?;
         if !steps.is_empty() || self.root_type(root).is_some() {
             return None;
         }
         let held = self.scalar_type(root)?;
-        self.read_dict_member(&held, member, &crate::families::values::quote_name(root), false)
+        self.read_dict_member(&held, member, &crate::families::values::quote_name(root), DictRead { within: false, optional })
     }
 
     /// A dot read off a record, `root` (where no hop comes between), that is
@@ -843,7 +894,7 @@ impl<'a> Typing<'a> {
     fn read_off_record(&mut self, root: Option<&str>, record: &Position, terminal: &Expression, held: Option<&HeldRead>) -> Option<Option<Ty>> {
         let (property, past) = match terminal {
             Expression::Property { property_type_id, .. } => (property_type_id.as_str(), None),
-            Expression::Traverse { alias_root: Some(head), steps: past_steps, expression: past } => (head.as_str(), Some((past_steps, &**past))),
+            Expression::Traverse { alias_root: Some(head), steps: past_steps, expression: past, optional } => (head.as_str(), Some((past_steps, &**past, *optional))),
             _ => return None,
         };
         let chain = dot_chain(terminal).unwrap_or_default();
@@ -851,7 +902,7 @@ impl<'a> Typing<'a> {
         if crate::families::walks::report_edge_read_as_field(self, record, &read, held) {
             return Some(None);
         }
-        let (past_steps, past) = past?;
+        let (past_steps, past, optional) = past?;
         let before = self.diagnostics.len();
         let field = self.read_property(Some(record), property);
         if self.diagnostics.len() > before {
@@ -861,7 +912,7 @@ impl<'a> Typing<'a> {
             && let Some(Ty::HeldRecord(fields)) = field.as_ref().map(strip_absent)
         {
             let held = HeldRead { spelled: format!("'{}'", read.label()), subject: read.label(), holder: read.root, held: fields };
-            return Some(self.read_off_held(&held, is_maybe_absent(field.as_ref()), past_steps, past));
+            return Some(self.read_off_held(&held, is_maybe_absent(field.as_ref()) && !optional, past_steps, past));
         }
         let next = match past {
             Expression::Property { property_type_id, .. } if past_steps.is_empty() => Some(property_type_id.as_str()),
@@ -960,17 +1011,20 @@ impl<'a> Typing<'a> {
     }
 
     /// `subject` is the read's text up to the member (`d`, `d.a`).
-    fn read_dict_member(&mut self, held: &Ty, member: &Expression, subject: &str, within: bool) -> Option<Option<Ty>> {
+    /// `read`: whether `d` is read inside a map already read, and whether
+    /// through it with `?.`.
+    fn read_dict_member(&mut self, held: &Ty, member: &Expression, subject: &str, read: DictRead) -> Option<Option<Ty>> {
+        let DictRead { within, optional } = read;
         let Ty::Dict { of, shape } = strip_absent(held) else { return None };
-        let (key, member_steps, member_expression) = match member {
-            Expression::Property { property_type_id, .. } => (property_type_id.clone(), None, None),
-            Expression::Traverse { alias_root: Some(root), steps, expression } => (root.clone(), Some(steps.as_slice()), Some(&**expression)),
+        let (key, member_steps, member_expression, member_optional) = match member {
+            Expression::Property { property_type_id, .. } => (property_type_id.clone(), None, None, false),
+            Expression::Traverse { alias_root: Some(root), steps, expression, optional } => (root.clone(), Some(steps.as_slice()), Some(&**expression), *optional),
             _ => return None,
         };
         if within && shape.as_ref().is_some_and(|s| !s.contains_key(&key)) {
             return None;
         }
-        if is_maybe_absent(Some(held)) {
+        if is_maybe_absent(Some(held)) && !optional {
             crate::families::walks::report_read_through_absent(self, subject, &key);
         }
         let known: Option<Ty> = match shape {
@@ -991,7 +1045,8 @@ impl<'a> Typing<'a> {
         };
         let (Some(steps), Some(expression)) = (member_steps, member_expression) else { return Some(ty) };
         if nested && let Some(inner_ty) = &ty {
-            if let Some(inner) = self.read_dict_member(inner_ty, expression, &format!("{subject}.{}", crate::families::values::quote_name(&key)), true) {
+            let read = DictRead { within: true, optional: member_optional };
+            if let Some(inner) = self.read_dict_member(inner_ty, expression, &format!("{subject}.{}", crate::families::values::quote_name(&key)), read) {
                 return Some(inner);
             }
         }
@@ -1007,7 +1062,9 @@ impl<'a> Typing<'a> {
             && is_maybe_absent(ty.as_ref())
             && let Some(field) = field_read_name(expression)
         {
-            crate::families::walks::report_read_through_absent(self, &format!("{subject}.{}", crate::families::values::quote_name(&key)), field);
+            if !member_optional {
+                crate::families::walks::report_read_through_absent(self, &format!("{subject}.{}", crate::families::values::quote_name(&key)), field);
+            }
             ty = ty.map(|t| strip_absent(&t).clone());
         }
         let record = record_head_position(ty.as_ref());
@@ -1043,8 +1100,8 @@ impl<'a> Typing<'a> {
                 }
                 Some(_) => (self.read_property(position, property_type_id), Vec::new()),
             },
-            Expression::Traverse { alias_root, steps, expression } => {
-                if let Some(read) = self.dict_member_read(alias_root.as_deref(), steps, expression) {
+            Expression::Traverse { alias_root, steps, expression, optional } => {
+                if let Some(read) = self.dict_member_read(alias_root.as_deref(), steps, expression, *optional) {
                     return (read, Vec::new());
                 }
                 // Said, and then read as it always was (as nothing).
@@ -1058,7 +1115,7 @@ impl<'a> Typing<'a> {
                     && let Some((fields, maybe_absent)) = self.held_by_name(root)
                 {
                     let held = HeldRead { spelled: format!("'{root}'"), subject: crate::families::values::quote_name(root), holder: None, held: &fields };
-                    return (self.read_off_held(&held, maybe_absent, steps, expression), Vec::new());
+                    return (self.read_off_held(&held, maybe_absent && !optional, steps, expression), Vec::new());
                 }
                 if let Some(root) = alias_root.as_deref()
                     && let hops = walk_hops(steps, expression)
@@ -1078,6 +1135,14 @@ impl<'a> Typing<'a> {
                     self.report_undescribed_event(root);
                 }
                 self.report_walk_off_maybe_absent(alias_root.as_deref(), steps, expression, start.as_ref());
+                let start = match (alias_root.as_deref(), start) {
+                    (Some(root), Some(Position::MaybeEmpty(present))) if !optional && steps.is_empty() && let Some(field) = field_read_name(expression) => {
+                        crate::families::walks::report_read_through_absent(self, &crate::families::values::quote_name(root), field);
+                        // Read on as the record it is once there: one mistake, one diagnostic.
+                        Some(*present)
+                    }
+                    (_, start) => start,
+                };
                 let observed_start = self.observed.as_ref().map(|_| start.as_ref().and_then(crate::story::instance_of));
                 self.step_root = alias_root.as_deref().map(crate::families::names::spell_name);
                 let destination = self.walk_steps(start, steps, false);
@@ -1105,8 +1170,8 @@ impl<'a> Typing<'a> {
                 if !steps.is_empty() && is_position_terminal(expression) {
                     return (Some(list_of(Ty::record(destination), self.last_ordering)), Vec::new());
                 }
-                // `exists(a-[:E]->)`: the walk is the exists', off the name.
-                if steps.is_empty() && matches!(**expression, Expression::Exists { .. }) {
+                // `exists(a-[:E]->)`, `a.F`: the walk or the read is off the name.
+                if steps.is_empty() {
                     self.step_root = alias_root.as_deref().map(crate::families::names::spell_name);
                 }
                 let typed = self.infer_at(expression, destination.as_ref());
@@ -1837,7 +1902,7 @@ struct ScalarFieldRead {
 fn dot_chain(expr: &Expression) -> Option<Vec<&str>> {
     match expr {
         Expression::Property { property_type_id, .. } => Some(vec![property_type_id.as_str()]),
-        Expression::Traverse { alias_root: Some(head), steps, expression } if steps.is_empty() => {
+        Expression::Traverse { alias_root: Some(head), steps, expression, .. } if steps.is_empty() => {
             let mut chain = vec![head.as_str()];
             chain.extend(dot_chain(expression)?);
             Some(chain)

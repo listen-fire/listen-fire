@@ -377,6 +377,9 @@ pub enum MExpr {
     Member {
         object: Box<MExpr>,
         property: Name,
+        /// `x?.F`: read through a value that may be missing, absent when it is.
+        #[serde(skip_serializing_if = "std::ops::Not::not")]
+        optional: bool,
         at: At,
     },
     Index {
@@ -519,6 +522,22 @@ pub fn names_read(tree: &MExpr) -> Vec<String> {
             }
             other => shared::expr(other, &mut |child| visit(child, found)),
         }
+    }
+    let mut found = Vec::new();
+    visit(tree, &mut found);
+    found
+}
+
+/// Every `.name` read `tree` holds, `?.` ones included, in source order:
+/// each as its object and its name.
+pub fn member_reads(tree: &MExpr) -> Vec<(&MExpr, &Name, bool)> {
+    fn visit<'a>(expr: &'a MExpr, found: &mut Vec<(&'a MExpr, &'a Name, bool)>) {
+        if let MExpr::Member { object, property, optional, .. } = expr {
+            visit(object, found);
+            found.push((object, property, *optional));
+            return;
+        }
+        shared::expr(expr, &mut |child| visit(child, found));
     }
     let mut found = Vec::new();
     visit(tree, &mut found);

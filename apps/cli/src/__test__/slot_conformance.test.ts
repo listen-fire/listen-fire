@@ -4,14 +4,12 @@
 // `public/module-wire`) — the cases every slot module answers alike (its
 // manifest, the envelope's refusals) and the models, judge and files slots'
 // own; the secrets slot's default module is held to the envelope here and to its own
-// cases in secrets_slot_contract (the movements slot's folder module likewise, in movements_slot_contract). The store, limiter and loop guard are held to their families' contract
-// cases over the same wire in run_host_contract, limiter_contract and
-// loop_guard_contract. The browser slot, which listen-fire builds none of, is held to
+// cases in secrets_slot_contract (the movements slot's folder module likewise, in movements_slot_contract). The store and limiter are held to their families' contract
+// cases over the same wire in run_host_contract and limiter_contract. The browser slot, which listen-fire builds none of, is held to
 // its contract through the wire client, against the scripted page served as a
 // browser module.
 
 import { test } from 'node:test';
-import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -20,7 +18,6 @@ import { join } from 'node:path';
 import { FILES_METHODS, JUDGE_METHODS, MODELS_METHODS, MOVEMENTS_METHODS, SECRETS_METHODS } from 'engine-contracts/slots';
 import {
   SlotClient,
-  SlotRefused,
   browserSlotAnswer,
   commonSlotCases,
   filesSlotCases,
@@ -66,21 +63,12 @@ function emptyProject(): string {
   return dir;
 }
 
-/** The loop guard's `guard.isEcho` is retired: the built-in answers it as no method of its own. */
-const isEchoRetired: SlotConformanceCase = {
-  name: 'loopGuard: guard.isEcho is retired, refused as method_not_implemented',
-  async run(client) {
-    await assert.rejects(client.call('guard.isEcho', { adapter: 'attio', externalId: 'r1', writer: 'listen:sync:stamp' }), (error) => error instanceof SlotRefused && error.code === 'method_not_implemented');
-  },
-};
-
 const builtIns: Array<{ slot: Parameters<typeof commonSlotCases>[0]; args: () => string[]; methods: readonly string[]; cases: SlotConformanceCase[] }> = [
   { slot: 'models', args: () => ['--contract-models'], methods: MODELS_METHODS, cases: modelsSlotCases },
   { slot: 'judge', args: () => ['--contract-judge'], methods: JUDGE_METHODS, cases: judgeSlotCases },
   { slot: 'files', args: () => ['--contract-files'], methods: FILES_METHODS, cases: filesSlotCases },
   { slot: 'store', args: () => ['--contract-store', join(mkdtempSync(join(tmpdir(), 'lf-slot-')), 'state.db')], methods: ['store.open', 'runs.start', 'work.claimDue'], cases: [] },
   { slot: 'limiter', args: () => ['--contract-limiter'], methods: ['limiter.acquire'], cases: [] },
-  { slot: 'loopGuard', args: () => ['--contract-guard'], methods: ['guard.open', 'guard.recordWrite'], cases: [isEchoRetired] },
   // The default module, over a project with nothing in it; the slot's own cases are secrets_slot_contract's.
   { slot: 'secrets', args: () => ['--contract-secrets-slot', '--dir', emptyProject()], methods: SECRETS_METHODS, cases: [] },
   // The folder module, likewise; its cases are movements_slot_contract's.

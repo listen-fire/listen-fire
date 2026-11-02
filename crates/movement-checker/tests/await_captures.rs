@@ -60,18 +60,18 @@ fn named(catalog: &str, body: &str) -> Vec<String> {
     found(catalog, body, Some("0.12.13")).into_iter().map(|d| d.split(" in this wait's WHERE").next().unwrap().to_string()).collect()
 }
 
-const MAIL_WAIT: &str = "  founder = only(crm-[:People]->)\n  m = write mail-[:Messages]-> { To: t }\n  r = await m-[x:Replies WHERE x.From == founder.Email]->\n";
-const CHAT_WAIT: &str = "  ticket = only(desk-[:Tickets]->)\n  post = write chat-[:Posts]-> { Text: t }\n  r = await new post-[x:Replies WHERE x.Author == ticket.Owner]->\n";
+const MAIL_WAIT: &str = "  founder = only(crm-[:People]->)\n  m = write mail-[:Messages]-> { To: t }\n  r = await m-[x:Replies WHERE x.From == founder?.Email]->\n";
+const CHAT_WAIT: &str = "  ticket = only(desk-[:Tickets]->)\n  post = write chat-[:Posts]-> { Text: t }\n  r = await new post-[x:Replies WHERE x.Author == ticket?.Owner]->\n";
 
 #[test]
 fn a_wait_reading_a_run_record_is_told_its_value_is_captured_when_upgrading() {
     assert_eq!(
         found(MAIL, MAIL_WAIT, Some("0.12.13")),
-        ["MOV_AWAIT_VALUE_CAPTURED 4:13-4:58 'founder.Email' in this wait's WHERE is read once, when the wait is reached (0.13); under 0.12.13 it was read again at every check, so a change while the run waited changed what the wait accepted. Nothing to rewrite unless the wait should follow the live value: then test it after the wait against `refresh(founder)` (see handbook: reviews#captured-values)"]
+        ["MOV_AWAIT_VALUE_CAPTURED 4:13-4:59 'founder?.Email' in this wait's WHERE is read once, when the wait is reached (0.13); under 0.12.13 it was read again at every check, so a change while the run waited changed what the wait accepted. Nothing to rewrite unless the wait should follow the live value: then test it after the wait against `refresh(founder)` (see handbook: reviews#captured-values)"]
     );
     assert_eq!(
         found(CHAT, CHAT_WAIT, Some("0.12.13")),
-        ["MOV_AWAIT_VALUE_CAPTURED 4:17-4:66 'ticket.Owner' in this wait's WHERE is read once, when the wait is reached (0.13); under 0.12.13 it was read again at every check, so a change while the run waited changed what the wait accepted. Nothing to rewrite unless the wait should follow the live value: then test it after the wait against `refresh(ticket)` (see handbook: reviews#captured-values)"]
+        ["MOV_AWAIT_VALUE_CAPTURED 4:17-4:67 'ticket?.Owner' in this wait's WHERE is read once, when the wait is reached (0.13); under 0.12.13 it was read again at every check, so a change while the run waited changed what the wait accepted. Nothing to rewrite unless the wait should follow the live value: then test it after the wait against `refresh(ticket)` (see handbook: reviews#captured-values)"]
     );
     assert_eq!(found(MAIL, MAIL_WAIT, None), Vec::<String>::new());
     assert_eq!(found(CHAT, CHAT_WAIT, None), Vec::<String>::new());
@@ -110,23 +110,23 @@ fn a_record_a_parameter_holds_is_a_run_record() {
 
 #[test]
 fn each_part_reading_a_run_record_is_told_once() {
-    let body = "  founder = only(crm-[:People]->)\n  m = write mail-[:Messages]-> { To: t }\n  r = await new m-[x:Replies WHERE x.From == founder.Email OR x.Title == founder.Name OR x.To == founder.Email]->\n";
+    let body = "  founder = only(crm-[:People]->)\n  m = write mail-[:Messages]-> { To: t }\n  r = await new m-[x:Replies WHERE x.From == founder?.Email OR x.Title == founder?.Name OR x.To == founder?.Email]->\n";
     assert_eq!(
         named(MAIL, body),
-        ["MOV_AWAIT_VALUE_CAPTURED 4:17-4:114 'founder.Email'", "MOV_AWAIT_VALUE_CAPTURED 4:17-4:114 'founder.Name'"]
+        ["MOV_AWAIT_VALUE_CAPTURED 4:17-4:117 'founder?.Email'", "MOV_AWAIT_VALUE_CAPTURED 4:17-4:117 'founder?.Name'"]
     );
 }
 
 #[test]
 fn a_part_computed_from_several_fields_names_each() {
-    let mail = "  founder = only(crm-[:People]->)\n  m = write mail-[:Messages]-> { To: t }\n  r = await m-[x:Replies WHERE x.Title == \"${founder.Name} <${founder.Email}>\"]->\n";
+    let mail = "  founder = only(crm-[:People]->)\n  m = write mail-[:Messages]-> { To: t }\n  r = await m-[x:Replies WHERE x.Title == \"${founder?.Name} <${founder?.Email}>\"]->\n";
     let told = found(MAIL, mail, Some("0.12.13"));
     assert_eq!(
         told,
-        ["MOV_AWAIT_VALUE_CAPTURED 4:13-4:82 'founder.Name' and 'founder.Email' in this wait's WHERE are read once, when the wait is reached (0.13); under 0.12.13 they were read again at every check, so a change while the run waited changed what the wait accepted. Nothing to rewrite unless the wait should follow the live value: then test it after the wait against `refresh(founder)` (see handbook: reviews#captured-values)"]
+        ["MOV_AWAIT_VALUE_CAPTURED 4:13-4:84 'founder?.Name' and 'founder?.Email' in this wait's WHERE are read once, when the wait is reached (0.13); under 0.12.13 they were read again at every check, so a change while the run waited changed what the wait accepted. Nothing to rewrite unless the wait should follow the live value: then test it after the wait against `refresh(founder)` (see handbook: reviews#captured-values)"]
     );
-    let chat = "  ticket = only(desk-[:Tickets]->)\n  post = write chat-[:Posts]-> { Text: t }\n  r = await new post-[x:Replies WHERE x.Text == \"${ticket.Subject} (${p.Owner})\"]->\n";
-    assert_eq!(named(CHAT, chat), ["MOV_AWAIT_VALUE_CAPTURED 4:17-4:84 'ticket.Subject' and 'p.Owner'"]);
+    let chat = "  ticket = only(desk-[:Tickets]->)\n  post = write chat-[:Posts]-> { Text: t }\n  r = await new post-[x:Replies WHERE x.Text == \"${ticket?.Subject} (${p.Owner})\"]->\n";
+    assert_eq!(named(CHAT, chat), ["MOV_AWAIT_VALUE_CAPTURED 4:17-4:85 'ticket?.Subject' and 'p.Owner'"]);
 }
 
 // A wait's WHERE that walks is refused today (MOV_AWAIT_IMPURE_WHERE), so the

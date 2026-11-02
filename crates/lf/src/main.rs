@@ -26,8 +26,6 @@
 //!   listen-fire --contract-store-slot [--dir <project>]                   the same, over the project's store slot
 //!   listen-fire --contract-limiter                                        the built-in limiter served as a limiter module
 //!   listen-fire --contract-limiter-slot [--dir <project>]                 the same, over the project's limiter slot
-//!   listen-fire --contract-guard                                          the built-in loop guard served as a loop guard module
-//!   listen-fire --contract-guard-slot [--dir <project>]                   the same, over the project's loopGuard slot
 //!   listen-fire --contract-wake-slot [--dir <project>]                    the project's wake module, served through listen-fire's client of it
 //!   listen-fire --contract-ocr-slot [--dir <project>]                     the project's OCR module, served through listen-fire's client of it
 //!   listen-fire --contract-models | --contract-judge | --contract-files   the built-in models, judge, files module served
@@ -65,7 +63,6 @@ mod contract_movements_slot;
 #[cfg(feature = "serve")]
 mod contract_secrets_slot;
 #[cfg(feature = "serve")]
-mod contract_guard;
 #[cfg(feature = "serve")]
 mod contract_limiter;
 #[cfg(feature = "serve")]
@@ -94,11 +91,9 @@ mod lfjson;
 mod log;
 #[cfg(feature = "anthropic")]
 mod json_repair;
-mod guard_module;
 mod limiter;
 mod limiter_module;
 mod limits_door;
-mod loop_guard;
 mod loop_breaker;
 mod records_door;
 #[cfg(feature = "anthropic")]
@@ -193,8 +188,6 @@ const USAGE: &str = "usage: listen-fire <init|check|catalog|lsp|run|resume|runs|
        listen-fire --contract-store-slot [--dir <project>]
        listen-fire --contract-limiter
        listen-fire --contract-limiter-slot [--dir <project>]
-       listen-fire --contract-guard
-       listen-fire --contract-guard-slot [--dir <project>]
        listen-fire --contract-wake-slot [--dir <project>]
        listen-fire --contract-ocr-slot [--dir <project>]
        listen-fire --contract-models | --contract-judge | --contract-files
@@ -227,8 +220,6 @@ const USAGE: &str = "usage: listen-fire <init|check|catalog|lsp|run|resume|runs|
   --contract-store-slot  the same, over the store module the project's store slot names
   --contract-limiter  serve listen-fire's built-in limiter as a limiter module, on --listen
   --contract-limiter-slot  the same, over the limiter module the project's limiter slot names
-  --contract-guard  serve listen-fire's built-in loop guard as a loop guard module, on --listen
-  --contract-guard-slot  the same, over the loop guard module the project's loopGuard slot names
   --contract-wake-slot  serve the wake module the project's wake slot names, through listen-fire's client of it, on --listen
   --contract-models, --contract-judge, --contract-files  serve listen-fire's built-in models, judge or files module, on --listen (the slot conformance suites' bridges)
   --contract-doors  serve the inbound doors over HTTP, their world arranged over stdin/stdout JSON-RPC (the inbound contract suite's bridge)
@@ -270,8 +261,6 @@ struct Args {
     contract_store_slot: bool,
     contract_limiter: bool,
     contract_limiter_slot: bool,
-    contract_guard: bool,
-    contract_guard_slot: bool,
     contract_wake_slot: bool,
     contract_secrets_slot: bool,
     contract_movements_slot: bool,
@@ -321,8 +310,6 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
         contract_store_slot: false,
         contract_limiter: false,
         contract_limiter_slot: false,
-        contract_guard: false,
-        contract_guard_slot: false,
         contract_wake_slot: false,
         contract_secrets_slot: false,
         contract_movements_slot: false,
@@ -373,8 +360,6 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
             "--contract-store-slot" => args.contract_store_slot = true,
             "--contract-limiter" => args.contract_limiter = true,
             "--contract-limiter-slot" => args.contract_limiter_slot = true,
-            "--contract-guard" => args.contract_guard = true,
-            "--contract-guard-slot" => args.contract_guard_slot = true,
             "--contract-wake-slot" => args.contract_wake_slot = true,
             "--contract-secrets-slot" => args.contract_secrets_slot = true,
             "--contract-movements-slot" => args.contract_movements_slot = true,
@@ -732,12 +717,6 @@ async fn serve_contract_bridge(args: &Args) -> Result<Option<i32>, String> {
     } else if args.contract_limiter_slot {
         let (project, env) = project_env()?;
         contract_limiter::serve(limiter::of_project(&project, secrets::Secrets::open(&project, &env)?.credentials())?, listen()?).await?;
-    } else if args.contract_guard {
-        contract_guard::serve(contract_guard::Serving::BuiltIn(None), listen()?).await?;
-    } else if args.contract_guard_slot {
-        let (project, env) = project_env()?;
-        let guard = loop_guard::of_project(&project, secrets::Secrets::open(&project, &env)?.credentials())?.ok_or("the project's loopGuard slot is empty: name a module in lf.yaml's core:")?;
-        contract_guard::serve(contract_guard::Serving::Slot(guard), listen()?).await?;
     } else if args.contract_models {
         #[cfg(feature = "anthropic")]
         contract_slots::serve_models(listen()?).await?;
@@ -775,8 +754,6 @@ async fn serve_contract_bridge(args: &Args) -> Result<Option<i32>, String> {
         || args.contract_store_slot
         || args.contract_limiter
         || args.contract_limiter_slot
-        || args.contract_guard
-        || args.contract_guard_slot
         || args.contract_wake_slot
         || args.contract_secrets_slot
         || args.contract_movements_slot

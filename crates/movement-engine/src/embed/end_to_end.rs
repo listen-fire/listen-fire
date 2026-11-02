@@ -1082,7 +1082,37 @@ fn a_park_of_state_version_2_is_refused_naming_0_12() {
     let state = ParkedState(json!(["o", [["version", 2], ["address", "s1"], ["bindingName", "r"], ["scopeChain", ["l", []]]]]));
     let refused = block_on(resume(&mut Hosts::new().adapters(&mut world).store(&mut parks), &input(&source), &state, Wake::Arrival)).unwrap();
     let Outcome::Failed(failure) = refused else { panic!("{refused:?}") };
-    assert!(failure.message.contains("this run parked under listen-fire 0.12 (park state 2); a 0.13 engine resumes park state 3"), "{}", failure.message);
+    assert!(failure.message.contains("this run parked under listen-fire 0.12 (park state 2); this engine resumes park states 3 and 4"), "{}", failure.message);
+}
+
+/// 0.13's park state (3) reads as 4 when it holds no `lazy` walk.
+#[test]
+fn a_park_of_state_version_3_without_a_lazy_walk_resumes() {
+    let sleep = movement("", "  await sleep(1h)\n  write game-[:notes]-> { Title: \"done\" }\n");
+    let (mut world, mut parks) = (World::default(), Parks::default());
+    block_on(run(&mut Hosts::new().adapters(&mut world).store(&mut parks), &input(&sleep))).unwrap();
+    let ParkedState(mut state) = parks.timers.pop().unwrap().state;
+    let version = state[1].as_array_mut().unwrap().iter_mut().find(|member| member[0] == "version").unwrap();
+    assert_eq!(version[1], json!(4.0));
+    version[1] = json!(3);
+    let done = block_on(resume(&mut Hosts::new().adapters(&mut world).store(&mut parks), &input(&sleep), &ParkedState(state), Wake::Timer)).unwrap();
+    assert!(matches!(done, Outcome::Finished(_)), "{done:?}");
+    assert_eq!(titles(&world), vec!["done"]);
+}
+
+/// A run 0.13 paused holding a `lazy` walk (`x = lazy …`, or a node entry's)
+/// is refused by name: `lazy` is retired in 0.14, and nothing here runs one.
+#[test]
+fn a_park_holding_a_lazy_walk_is_refused_by_name() {
+    let source = movement("", TICKET);
+    let walk = json!({ "head": "/statements/2/body/0/value/lazy/head", "captured": {} });
+    for held in [json!({ "kind": "lazyWalk", "walk": walk }), json!({ "kind": "nodePosition", "fields": {}, "edges": { "tabs": { "kind": "deferred", "walk": walk } } })] {
+        let (mut world, mut parks) = (World::default(), Parks::default());
+        let state = ParkedState(wire(json!({ "version": 3, "address": "s1", "bindingName": "r", "scopeChain": [{ "bindings": { "x": held } }] })));
+        let refused = block_on(resume(&mut Hosts::new().adapters(&mut world).store(&mut parks), &input(&source), &state, Wake::Arrival)).unwrap();
+        let Outcome::Failed(failure) = refused else { panic!("{refused:?}") };
+        assert_eq!(failure.message, "this run paused holding a `lazy` walk (park state 3); `lazy` is retired in 0.14, and this engine resumes no run paused holding one", "{held}");
+    }
 }
 
 /// The movement's source with `functions` declared before `m`, whose body is

@@ -29,7 +29,7 @@ function decide(run: <manual-[:Invocations]->>) {
     Buttons: [{ Text: "Pursue", Value: "pursue" }, { Text: "Pass", Value: "pass" }]
   }
   press = await msg-[:Interactions]->
-  choice = only(press-[:Actions]->).Value
+  choice = only(press-[:Actions]->)?.Value
   if (choice == "pursue") {
     write general-[:Messages]-> { Message: "chose \${choice}" }
   } else {
@@ -109,7 +109,7 @@ function review(run: <manual-[:Invocations]->>) {
   r = race(
     () => {
       press = await msg-[:Interactions]->
-      return { choice: only(press-[:Actions]->).Value, by: press-[:By]->.Name }
+      return { choice: only(press-[:Actions]->)?.Value, by: press-[:By]->.Name }
     },
     () => { await sleep(1d) },
   )

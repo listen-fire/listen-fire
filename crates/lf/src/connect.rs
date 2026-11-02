@@ -704,7 +704,6 @@ async fn connect_core(project: &Project, module: &crate::core::CoreModule, inter
         crate::core::Slot::Judge => Some(&project.core.judge),
         crate::core::Slot::Files => Some(&project.core.files),
         crate::core::Slot::Limiter => Some(&project.core.limiter),
-        crate::core::Slot::LoopGuard => project.core.loop_guard.as_ref(),
         crate::core::Slot::Browser => project.core.browser.as_ref(),
         crate::core::Slot::Wake => project.core.wake.as_ref(),
         crate::core::Slot::Ocr => project.core.ocr.as_ref(),

@@ -135,7 +135,7 @@ The embedded host is built from the engine's public parts, for a host that needs
 
 ## 4. The host's slots
 
-`lf.yaml`'s `core:` section has eight slots ([core slots](core-slots.md)): models, judge, store, files, limiter, loopGuard, browser and wake. An embedded engine has the first four; you fill each with your own part (`engine` on the embedded host, or `inProcessHost` directly). The rest belong to listen-fire's run host.
+`lf.yaml`'s `core:` section has ten slots ([core slots](core-slots.md)): models, judge, store, files, limiter, browser, wake, ocr, secrets and movements. An embedded engine has the first four; you fill each with your own part (`engine` on the embedded host, or `inProcessHost` directly). The rest belong to listen-fire's run host.
 
 | slot | what a run asks of it | how you fill it |
 |---|---|---|

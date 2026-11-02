@@ -1,11 +1,10 @@
-// Parked code — a closure, a kept walk's head and mapping, a body-local
-// declaration — is named in the parked state by its place in the pinned
+// Parked code — a closure, a body-local declaration — is named in the parked state by its place in the pinned
 // program (park state version 2, docs/contracts/park-state.md), and the
 // libraries the run linked ride beside it: their text, or the hash the host's
 // source store (`park.sources`) keeps it by. Each case parks inside a library
 // function and resumes: where the root writes other code at the same span, or
 // the library is edited while the run sleeps, the run still runs the code that
-// was parked (PLAN-08A batch review, R1 and R2).
+// was parked (PLAN-08A batch review, R1).
 
 import { mockCatalogSnapshot, type CatalogSnapshot, type InstanceSchema } from 'movement-lang';
 import { PARK_STATE_VERSION, tenantIdOf, type CodeByPlace, type ParkedScopeState } from 'engine-contracts';
@@ -359,42 +358,6 @@ describe('parked code is read at its place in the program it parked with', () =>
     expect(resumed).toContain('a tag by LIB');
     expect(resumed).not.toContain('a tag by ROO');
     expect(resumed).toContain('"body":"Infra"');
-  });
-
-  const walkLibrary = library([
-    'export function keep(n: <text>) {',
-    '  d = node { cos: lazy crm-[a:companies]-> node { name: Text.concat(a.name, "-L") } }',
-    '  await sleep(1h)',
-    '  return d',
-    '}',
-  ]);
-  const walkRoot = [
-    'import { keep } from "lib/keep"',
-    'function m(msg: <inbox-[:message]->>) {',
-    '  d = keep(msg.subject)',
-    '  d-[c:cos]-> {',
-    '    write crm-[:notes]-> { body: c.name }',
-    '  }',
-    '}',
-  ].join('\n');
-  const related = { companies: [{ name: 'Co1' }] };
-
-  it('walks a library’s kept walk as it was parked, where the root writes no walk (R2)', async () => {
-    const resumed = await parkAndResume({ source: walkRoot, files: walkLibrary, related });
-    expect(resumed).toContain('"body":"Co1-L"');
-  });
-
-  it('walks a library’s kept walk as it was parked, though the root writes another at its head’s span (R2)', async () => {
-    const source = [
-      'export function zork(n: <text>) {',
-      '  d = node { cos: lazy crm-[a:companies]-> node { name: Text.concat(a.name, "-RR") } }',
-      '  return d',
-      '}',
-      walkRoot,
-    ].join('\n');
-    const resumed = await parkAndResume({ source, files: walkLibrary, related });
-    expect(resumed).toContain('"body":"Co1-L"');
-    expect(resumed).not.toContain('Co1-R');
   });
 });
 

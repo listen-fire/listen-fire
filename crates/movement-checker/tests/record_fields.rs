@@ -120,7 +120,7 @@ fn unnarrowed_the_row_is_the_generic_row() {
 fn a_field_is_never_read_through_a_row_that_may_be_absent() {
     let found = candidates("x = c.Previous.Stage");
     assert_eq!(codes(&found), ["MOV_ABSENT_REQUIRED"], "{found:#?}");
-    for told in ["`exists(c.Previous) && c.Previous.Stage …`", "`!exists(c.Previous) || c.Previous.Stage …`", "`if (exists(c.Previous)) { … }`"] {
+    for told in ["`c.Previous?.Stage`", "`exists(c.Previous) && c.Previous.Stage …`", "`if (exists(c.Previous)) { … }`"] {
         assert!(found[0].1.contains(told), "{told}: {found:#?}");
     }
     // Read on as present once refused: the arithmetic says nothing more.
@@ -185,7 +185,52 @@ fn read_through_stays_refused_past_any_other_field() {
 
 #[test]
 fn the_live_record_is_walked_in_the_function() {
-    assert_eq!(candidates("x = only(c-[:Record]->).Stage"), Vec::<(String, String)>::new());
+    assert_eq!(candidates("x = only(c-[:Record]->)?.Stage"), Vec::<(String, String)>::new());
+}
+
+/// The source's MOV_ABSENT_REQUIRED refusals, and the source with each
+/// one's fix applied (a safe `?` inserted before the `.`).
+fn absent_fixed(source: &str) -> (usize, String) {
+    let source = format!("import {{ at as at_module }} from adapters\nat = connect at_module\n{source}");
+    let options = CheckOptions { upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
+    let found: Vec<_> = check_source(&source, &catalog(), options).unwrap().into_iter().filter(|d| d.code == "MOV_ABSENT_REQUIRED").collect();
+    let mut lines: Vec<String> = source.lines().map(String::from).collect();
+    let mut edits: Vec<(usize, usize)> = found
+        .iter()
+        .map(|d| {
+            let fix = d.fix.as_ref().unwrap_or_else(|| panic!("no fix: {}", d.message));
+            assert_eq!(fix["safe"], true, "{}", d.message);
+            let edit = &fix["edits"][0];
+            assert_eq!(edit["text"], "?");
+            let at = &edit["span"]["start"];
+            (at["line"].as_u64().unwrap() as usize, at["col"].as_u64().unwrap() as usize)
+        })
+        .collect();
+    edits.sort();
+    for (line, col) in edits.into_iter().rev() {
+        lines[line - 1].insert(col - 1, '?');
+    }
+    (found.len(), lines.join("\n"))
+}
+
+/// A listen's WHERE and a write's field read `?.` as a function body does,
+/// and the refusal of `.` carries the same safe fix.
+#[test]
+fn optional_chaining_reads_a_row_in_a_listens_where_and_a_writes_field() {
+    let listen = |where_: &str| format!("function f(c: <at-[:`Candidates Change`]->>) {{\n  return c.Kind\n}}\nlisten to at{NARROWED}-[c:Changes WHERE {where_}]-> fire f\n");
+    assert_eq!(errors_of(&listen("c.Previous?.Stage != \"Interview\"")), Vec::<(String, String)>::new());
+    let (refused, after) = absent_fixed(&listen("c.Previous.Stage != \"Interview\" AND c.Current.Stage == \"Interview\""));
+    assert_eq!(refused, 2);
+    assert!(after.contains("WHERE c.Previous?.Stage != \"Interview\" AND c.Current?.Stage == \"Interview\"]->"), "{after}");
+    assert_eq!(absent_fixed(after.split_once("at = connect at_module\n").unwrap().1).0, 0);
+
+    // The catalog's table has no edge a write could create a row through
+    // (MOV_LINKED_UNKNOWN_EDGE); the field's value is judged all the same.
+    let write = |value: &str| format!("function g(c: <at-[:`Candidates Change`]->>) {{\n  r = write at-[:Candidates]-> {{ Name: {value} }}\n  return r\n}}\n");
+    let (refused, after) = absent_fixed(&write("c.Previous.Name"));
+    assert_eq!(refused, 1);
+    assert!(after.contains("{ Name: c.Previous?.Name }"), "{after}");
+    assert_eq!(absent_fixed(&write("c.Previous?.Name")).0, 0);
 }
 
 #[test]
@@ -242,9 +287,9 @@ fn a_general_or_narrowed_function_takes_the_union_of_the_two() {
     assert_eq!(called("at-[:Change]->"), Vec::<(String, String)>::new());
     assert_eq!(codes(&called("at-[:Table]->")), ["MOV_CALL_ARG_TYPE"]);
     // A field only the Candidates rows have is refused off the union's live row.
-    let live = errors_of("function audit(c: <at-[:Change]-> | at-[:`Candidates Change`]->>) {\n  return only(c-[:Record]->).Stage\n}\n");
+    let live = errors_of("function audit(c: <at-[:Change]-> | at-[:`Candidates Change`]->>) {\n  return only(c-[:Record]->)?.Stage\n}\n");
     assert_eq!(codes(&live), ["MOV_UNKNOWN_PROPERTY"], "{live:#?}");
-    assert_eq!(errors_of("function audit(c: <at-[:Change]-> | at-[:`Candidates Change`]->>) {\n  return only(c-[:Record]->).Id\n}\n"), Vec::<(String, String)>::new());
+    assert_eq!(errors_of("function audit(c: <at-[:Change]-> | at-[:`Candidates Change`]->>) {\n  return only(c-[:Record]->)?.Id\n}\n"), Vec::<(String, String)>::new());
 }
 
 #[test]
@@ -374,7 +419,7 @@ fn a_listen_reads_through_a_row_only_once_it_is_tested() {
     }
     let found = listen("c.Current.Stage == \"Interview\" AND c.Previous.Stage != \"Interview\"");
     assert_eq!(codes(&found), ["MOV_ABSENT_REQUIRED", "MOV_ABSENT_REQUIRED"], "{found:#?}");
-    assert!(found[1].1.contains("`exists(c.Previous) AND c.Previous.Stage …`, or `NOT exists(c.Previous) OR c.Previous.Stage …`"), "{found:#?}");
+    assert!(found[1].1.contains("Read it with `c.Previous?.Stage` (absent when 'c.Previous' is), or test it first: `exists(c.Previous) AND c.Previous.Stage …`"), "{found:#?}");
     for where_ in [
         "exists(c.Previous) OR c.Previous.Stage == \"Applied\"",
         "NOT exists(c.Previous) AND c.Previous.Stage == \"Applied\"",

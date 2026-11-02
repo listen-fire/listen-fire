@@ -53,7 +53,7 @@ function \`Intake\`(m: <inbox-[:Emails]->>) {
 sender = extractOne(content, node Sender: "the company that sent this message" { name: <text> "its name" })
 \`\`\`
 
-- Describe the one thing (\`"the company"\`, not \`"each company…"\`). The result is \`Shape | absent\`; handle it like any maybe-absent value (\`coalesce(sender.name, "unknown")\`, a guard).
+- Describe the one thing (\`"the company"\`, not \`"each company…"\`). The result is \`Shape | absent\`; handle it like any maybe-absent value (\`coalesce(sender?.name, "unknown")\`, a guard).
 - A reply naming several is tried once more, then the call fails.
 
 A reply that does not fit the shape is tried once more, then the call fails. Inside \`map\`, \`onError: "warn"\` leaves that record out and carries on.
@@ -131,7 +131,7 @@ map(detailed, (d) => {
 
 - A plugin is imported (\`import { fetchUrl } from plugins\`) and called as a function is: its required input by position, any other in one settings record last (\`research(c.name, { context: m.Subject })\`). It returns a value: \`fetchUrl\` the page's text, \`research\` a record read by name (\`more.summary\`, \`more.dossier\`). Anything it found nothing for is absent, so \`coalesce\` it before it goes into content. Each plugin's own chapter (\`plugin:…\`) says what it takes and returns.
 - \`graph<Detailed> { ...c, ...details }\` copies the record and then its detail as a snapshot you can walk and write from; the declaration decides which fields, and a nested node is followed through the record's edge of the same name. A later field wins.
-- \`details\` may be absent, so a field only it supplies may be too. A required field fed from it is refused when you save: declare it \`<text | null>\`, or write it after the spread with a fallback (\`summary: coalesce(details.summary, "")\`).
+- \`details\` may be absent, so a field only it supplies may be too. A required field fed from it is refused when you save: declare it \`<text | null>\`, or write it after the spread with a fallback (\`summary: coalesce(details?.summary, "")\`).
 - \`{ ...c, ...details }\` builds a dict instead, read with a dot. Use it when nothing needs to walk the result.
 
 ### long-documents
@@ -427,7 +427,7 @@ function \`Enrich\`(m: <inbox-[:Emails]->>) {
   write crm-[:Companies]-> {
     unique by (FUZZY Name)
     Name:          m.Subject
-    Description ?: coalesce(more.summary, page, deck.text)
+    Description ?: coalesce(more.summary, page, deck?.text)
     Domains ?:     more.website
   }
 }
@@ -460,7 +460,7 @@ function \`Intake\`(m: <inbox-[:Emails]->>) {
     write crm-[:Companies]-> {
       unique by (FUZZY Name)
       Name:          c.name
-      Description ?: detail.summary
+      Description ?: detail?.summary
     }
   }, { initialConcurrency: 1, concurrency: 4, onError: "warn" })
 }
@@ -497,8 +497,8 @@ function \`Enrich\`(m: <inbox-[:Emails]->>) {
   })
 
   sender = extractOne(content, node Sender: "the company that sent this message" { name: <text> "its name" })
-  big    = coalesce(extractOne(content, CompanyDetail).employees, 0) > 50
-  write crm-[:Companies]-> { unique by (FUZZY Name) Name: coalesce(sender.name, "unknown"), Description: big ? "large" : "small" }
+  big    = coalesce(extractOne(content, CompanyDetail)?.employees, 0) > 50
+  write crm-[:Companies]-> { unique by (FUZZY Name) Name: coalesce(sender?.name, "unknown"), Description: big ? "large" : "small" }
 }
 `,
     },

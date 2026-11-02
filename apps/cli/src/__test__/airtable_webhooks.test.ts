@@ -489,7 +489,7 @@ hiring = connect airtable using henry_airtable { base: "Hiring" }
 
 function schedule_interview(c: <hiring-[:\`Candidates Change\`]->>) {
   write hiring-[:Interviews]-> {
-    Candidate: coalesce(only(c-[:Record]->).Name, "gone")
+    Candidate: coalesce(only(c-[:Record]->)?.Name, "gone")
     From: exists(c.Previous) ? coalesce(c.Previous.Stage, "nothing") : "nothing"
     Changed: exists(c.Current) ? coalesce(c.Current.Name, "nothing") : "nothing"
   }
@@ -564,7 +564,7 @@ const SPREAD = STAGE.replace(
   r = c.Previous
   before = { ...r }
   write hiring-[:Interviews]-> {
-    Candidate: coalesce(only(c-[:Record]->).Name, "gone")
+    Candidate: coalesce(only(c-[:Record]->)?.Name, "gone")
     From: coalesce(before.Stage, "nothing")
     Changed: coalesce(after.Name, "nothing")
   }
@@ -861,7 +861,7 @@ import { henry_airtable } from credentials
 hiring = connect airtable using henry_airtable { base: "Hiring" }
 
 function stage_of(c: <hiring-[:\`Candidates Change\`]->>) {
-  return exists(c.Current) ? c.Current.Stage : only(c-[:Record]->).Stage
+  return exists(c.Current) ? c.Current.Stage : only(c-[:Record]->)?.Stage
 }
 `;
 
@@ -872,7 +872,7 @@ test('a parameter spelled by a narrowed type is known with nothing else narrowin
     writeFileSync(join(dir, 'movements/hiring.mvt'), NAMED_ONLY);
     const checked = lfSync(dir, 'check');
     assert.equal(checked.code, 0, checked.out);
-    for (const misspelled of [NAMED_ONLY.replace('c.Current.Stage', 'c.Current.Stge'), NAMED_ONLY.replace('only(c-[:Record]->).Stage', 'only(c-[:Record]->).Stge')]) {
+    for (const misspelled of [NAMED_ONLY.replace('c.Current.Stage', 'c.Current.Stge'), NAMED_ONLY.replace('only(c-[:Record]->)?.Stage', 'only(c-[:Record]->)?.Stge')]) {
       writeFileSync(join(dir, 'movements/hiring.mvt'), misspelled);
       const refused = lfSync(dir, 'check');
       assert.equal(refused.code, 1, refused.out);
@@ -899,7 +899,7 @@ function audit(c: <hiring-[:Change]-> | hiring-[:\`Candidates Change\`]->>) {
   write hiring-[:Interviews]-> {
     Candidate: c.Kind
     From: "audit"
-    Changed: coalesce(only(c-[:Record]->).Id, "gone")
+    Changed: coalesce(only(c-[:Record]->)?.Id, "gone")
   }
 }
 
@@ -921,7 +921,7 @@ test("a function over any change or the Candidates table's takes both, and a lis
     writeFileSync(join(dir, 'movements/hiring.mvt'), AUDIT);
     const checked = lfSync(dir, 'check');
     assert.equal(checked.code, 0, checked.out);
-    writeFileSync(join(dir, 'movements/hiring.mvt'), AUDIT.replace('only(c-[:Record]->).Id', 'only(c-[:Record]->).Stage'));
+    writeFileSync(join(dir, 'movements/hiring.mvt'), AUDIT.replace('only(c-[:Record]->)?.Id', 'only(c-[:Record]->)?.Stage'));
     const narrowOnly = lfSync(dir, 'check');
     assert.equal(narrowOnly.code, 1, narrowOnly.out);
     assert.match(narrowOnly.out, /error MOV_UNKNOWN_PROPERTY .*Stage/);

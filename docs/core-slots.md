@@ -100,10 +100,6 @@ Every movement file listen-fire reads goes through the movements slot. The wire 
 - listen-fire has no tenant. A platform running listen-fire for a tenant starts it per tenant and sets the tenant per process, `LF_SECRET__<MODULE>__TENANT=<id>` beside `LF_SECRET__<MODULE>__EXTERNAL=<module>`. The module declares `tenant` among its settings, listen-fire sends the settings on every request, and the module scopes each call. In a cloud deployment the module and its settings come from the environment ([deploy/lf](../deploy/lf/README.md#the-movements-module)).
 - `listen-fire --contract-movements-slot --dir <project>` serves the project's movements slot as a module for the conformance cases, as `--contract-secrets-slot` does for the secrets slot.
 
-## The loop guard
-
-The `loopGuard` slot is retired. A run that writes to the source it listens to hears its own write come back, and listen-fire breaks such loops itself: an arrival on a record a run wrote at most `loopWindow` before continues that run's chain, and the listen whose arrival would make a chain longer than `loopDepth` runs is paused, by name (`lf.yaml`; the handbook's listeners chapter). listen-fire starts no guard an `lf.yaml` still names, and says so as it starts: remove `core.loopGuard` ([loop-guard-slot.md](contracts/loop-guard-slot.md)).
-
 ## The wake
 
 On a scale-from-zero platform no worker runs between jobs. The wake slot tells a module when listen-fire's work is due, so it can start a worker (`listen-fire drain --until-idle`) then:
@@ -167,4 +163,4 @@ A module of your own, started from its `command` or reached at its `url`, fills 
 
 ## Embedding
 
-An embedded engine has four of these slots (models, judge, store, files); you fill each with your own part of the host. The limiter, loop guard, browser, wake and ocr slots are listen-fire's (an embedder's file-to-text is its own, OCR included). See [`embedding.md`](embedding.md#4-the-hosts-slots).
+An embedded engine has four of these slots (models, judge, store, files); you fill each with your own part of the host. The limiter, browser, wake and ocr slots are listen-fire's (an embedder's file-to-text is its own, OCR included). See [`embedding.md`](embedding.md#4-the-hosts-slots).

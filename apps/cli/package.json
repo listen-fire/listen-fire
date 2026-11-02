@@ -9,8 +9,8 @@
   },
   "scripts": {
     "code:type-check": "tsc --pretty --noEmit",
-    "test": "node --conditions=movement-engine-internals --test --require tsx/cjs src/__test__/*.test.ts",
-    "test:postgres": "node --conditions=movement-engine-internals --test --require tsx/cjs src/__test__/integration/*.test.ts"
+    "test": "node --conditions=movement-engine-internals --test --require tsx/cjs --require ./src/__test__/fakes_no_keep_alive.ts src/__test__/*.test.ts",
+    "test:postgres": "node --conditions=movement-engine-internals --test --require tsx/cjs --require ./src/__test__/fakes_no_keep_alive.ts src/__test__/integration/*.test.ts"
   },
   "type": "commonjs",
   "dependencies": {

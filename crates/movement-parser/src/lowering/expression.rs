@@ -90,6 +90,11 @@ pub enum Expression {
         alias_root: Option<String>,
         steps: Vec<TraversalStep>,
         expression: Box<Expression>,
+        /// `x?.F`: the read through the root may find it missing, and is
+        /// absent then — as every read through a missing value is when run.
+        /// Only the checker tells the two apart.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        optional: bool,
     },
     #[serde(rename = "resource_traverse")]
     ResourceTraverse {

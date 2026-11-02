@@ -99,11 +99,11 @@ fn narrowing_on_null_tests_is_what_exists_and_isnull_gave() {
         (format!("{select}\n{write}"), &absent),
         (format!("{select}\n  if (channel != null) {{\n{write}\n  }}"), &none),
         (format!("{name}\n  if (n != null) {{\n{write_n}\n  }}"), &none),
-        (format!("{select}\n  if (channel.Topic != null) {{\n{write_topic}\n  }}"), &none),
+        (format!("{select}\n  if (channel?.Topic != null) {{\n{write_topic}\n  }}"), &none),
         (format!("{select}\n  if (channel != null) {{\n  }}\n{write}"), &absent),
         (format!("{name}\n  if (n == null) {{\n    fail(\"no\")\n  }}\n{write_n}"), &none),
         (format!("{select}\n  if (channel == null) {{\n    fail(\"no\")\n  }}\n{write}"), &none),
-        (format!("{select}\n  if (channel.Topic == null) {{\n    fail(\"no\")\n  }}\n{write_topic}"), &none),
+        (format!("{select}\n  if (channel?.Topic == null) {{\n    fail(\"no\")\n  }}\n{write_topic}"), &none),
         (format!("{name}\n  if (n == null) {{\n  }}\n{write_n}"), &absent),
         (format!("{name}\n  if (n != null || 1 == 1) {{\n{write_n}\n  }}"), &absent),
     ];

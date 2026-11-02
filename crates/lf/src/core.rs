@@ -14,8 +14,7 @@
 //! (listen-fire starts it) or its `url` (a remote module), spoken to over adapter
 //! protocol 2's HTTP — a Unix socket on this box, HTTPS elsewhere
 //! (crate::slot_client): the store (crate::store_module), the limiter
-//! (crate::limiter_module), the loopGuard — empty unless named —
-//! (crate::guard_module), and the models, judge and files slots
+//! (crate::limiter_module), and the models, judge and files slots
 //! (crate::remote_slots). The browser slot (a real page a module drives: a
 //! gated deck, a viewer that draws with script) has no built-in in listen-fire, so it
 //! is empty unless a browser module is named; then listen-fire hands its address to
@@ -47,7 +46,6 @@ pub enum Slot {
     Store,
     Files,
     Limiter,
-    LoopGuard,
     Browser,
     Wake,
     Ocr,
@@ -56,7 +54,7 @@ pub enum Slot {
 }
 
 impl Slot {
-    pub const ALL: [Slot; 11] = [Slot::Models, Slot::Judge, Slot::Store, Slot::Files, Slot::Limiter, Slot::LoopGuard, Slot::Browser, Slot::Wake, Slot::Ocr, Slot::Secrets, Slot::Movements];
+    pub const ALL: [Slot; 10] = [Slot::Models, Slot::Judge, Slot::Store, Slot::Files, Slot::Limiter, Slot::Browser, Slot::Wake, Slot::Ocr, Slot::Secrets, Slot::Movements];
 
     pub fn name(self) -> &'static str {
         match self {
@@ -65,7 +63,6 @@ impl Slot {
             Slot::Store => "store",
             Slot::Files => "files",
             Slot::Limiter => "limiter",
-            Slot::LoopGuard => "loopGuard",
             Slot::Browser => "browser",
             Slot::Wake => "wake",
             Slot::Ocr => "ocr",
@@ -79,7 +76,7 @@ impl Slot {
     }
 
     /// The module a project gets when lf.yaml names none for the slot; None
-    /// for a slot that stays empty unless filled (the loop guard, the browser, the wake, OCR).
+    /// for a slot that stays empty unless filled (the browser, the wake, OCR).
     pub fn default_module(self) -> Option<&'static CoreModule> {
         let name = match self {
             Slot::Models => ANTHROPIC,
@@ -89,7 +86,7 @@ impl Slot {
             Slot::Limiter => MEMORY_LIMITER,
             Slot::Secrets => FILE_SECRETS,
             Slot::Movements => FOLDER_MOVEMENTS,
-            Slot::LoopGuard | Slot::Browser | Slot::Wake | Slot::Ocr => return None,
+            Slot::Browser | Slot::Wake | Slot::Ocr => return None,
         };
         Some(builtin(name).expect("a slot's default is a built-in"))
     }
@@ -156,7 +153,6 @@ pub const NO_OAUTH: &str = "this listen-fire was built without the `oauth` featu
 pub const NO_POSTGRES: &str = "this listen-fire was built without the `postgres` feature, so it has no Postgres store (use the SQLite store, or install the full listen-fire)";
 pub const LOCAL_FILES: &str = "@lf/local-files";
 pub const MEMORY_LIMITER: &str = "@lf/memory-limiter";
-pub const FINGERPRINT_GUARD: &str = "@lf/fingerprint-guard";
 pub const FILE_SECRETS: &str = "@lf/file-secrets";
 pub const FOLDER_MOVEMENTS: &str = "@lf/folder-movements";
 
@@ -165,10 +161,6 @@ const ANTHROPIC_SETTINGS: &[Setting] = &[
     setting("base_url", "another endpoint speaking the Messages API (empty: Anthropic's)", false, true),
 ];
 const SQLITE_SETTINGS: &[Setting] = &[setting("path", "the state file, from the project folder (empty: .lf/state.db)", false, true)];
-const FINGERPRINT_GUARD_SETTINGS: &[Setting] = &[
-    setting("path", "the guard's file, from the project folder (empty: .lf/guard.db)", false, true),
-    setting("url", "a Postgres database every listen-fire worker shares, instead of a file (postgres://…)", true, true),
-];
 const POSTGRES_SETTINGS: &[Setting] = &[setting("url", "the database URL (postgres://…; add ?sslmode=verify-full for verified TLS)", true, false)];
 
 pub const BUILTIN: &[CoreModule] = &[
@@ -180,8 +172,6 @@ pub const BUILTIN: &[CoreModule] = &[
     built_in(LOCAL_FILES, Slot::Files, &[]),
     // Keeps the limits in this process: one listen-fire's calls, not a fleet's.
     built_in(MEMORY_LIMITER, Slot::Limiter, &[]),
-    // Remembers what a run wrote for an hour.
-    built_in(FINGERPRINT_GUARD, Slot::LoopGuard, FINGERPRINT_GUARD_SETTINGS),
     // The secrets file (plain or SOPS) and its lock file: listen-fire's secrets as they always were.
     built_in(FILE_SECRETS, Slot::Secrets, &[]),
     // The movements folder lf.yaml names, walked as it always was.
@@ -200,9 +190,6 @@ pub struct CoreChoice {
     pub store: CoreModule,
     pub files: CoreModule,
     pub limiter: CoreModule,
-    /// The retired loop guard slot's module, if lf.yaml still names one:
-    /// listen-fire starts none (crate::loop_guard::notice_retired).
-    pub loop_guard: Option<CoreModule>,
     /// None: a module asking for a page is refused by name.
     pub browser: Option<CoreModule>,
     /// None: listen-fire tells no one when work is due; a drain finds it on its own tick.
@@ -221,7 +208,6 @@ impl Default for CoreChoice {
             store: Slot::Store.default_module().expect("store has a default").clone(),
             files: Slot::Files.default_module().expect("files has a default").clone(),
             limiter: Slot::Limiter.default_module().expect("limiter has a default").clone(),
-            loop_guard: None,
             browser: None,
             wake: None,
             ocr: None,
@@ -238,6 +224,9 @@ impl CoreChoice {
     pub fn of(named: &BTreeMap<String, String>, installed: &[CoreModule], at: &str) -> Result<CoreChoice, String> {
         let mut choice = CoreChoice::default();
         for (slot_name, module_name) in named {
+            if slot_name == RETIRED_LOOP_GUARD {
+                return Err(format!("{at}: core.loopGuard: {}", loop_guard_retired()));
+            }
             let Some(slot) = Slot::of(slot_name) else {
                 let slots: Vec<&str> = Slot::ALL.iter().map(|s| s.name()).collect();
                 return Err(format!("{at}: core.{slot_name}: not a core slot (the slots: {})", slots.join(", ")));
@@ -276,7 +265,6 @@ impl CoreChoice {
                 Slot::Store => choice.store = module,
                 Slot::Files => choice.files = module,
                 Slot::Limiter => choice.limiter = module,
-                Slot::LoopGuard => choice.loop_guard = Some(module),
                 Slot::Browser => choice.browser = Some(module),
                 Slot::Wake => choice.wake = Some(module),
                 Slot::Ocr => choice.ocr = Some(module),
@@ -290,6 +278,15 @@ impl CoreChoice {
 
 fn builtin_names(slot: Slot) -> String {
     BUILTIN.iter().filter(|m| m.slot == slot).map(|m| m.name.as_ref()).collect::<Vec<_>>().join(", ")
+}
+
+/// The loop guard slot's name: retired in 0.14, refused by name wherever a
+/// project still names it (lf.yaml's `core:`, a module's lf-external.yaml).
+pub const RETIRED_LOOP_GUARD: &str = "loopGuard";
+
+/// What a project naming the retired loop guard slot is told to do.
+pub fn loop_guard_retired() -> &'static str {
+    "the loop guard slot is retired: remove it; the loop breaker (lf.yaml's loopWindow and loopDepth) replaces it"
 }
 
 /// A core module's settings as its install entry holds them (`listen-fire connect`
@@ -316,9 +313,6 @@ pub fn required<'a>(settings: &'a BTreeMap<String, String>, module: &CoreModule,
 /// A module's setup, run by `listen-fire connect` once its settings are written: what
 /// it did, line by line.
 pub fn set_up(project: &Project, module: &CoreModule, settings: &BTreeMap<String, String>) -> Result<Vec<String>, String> {
-    if module.slot == Slot::LoopGuard {
-        return Ok(vec![crate::loop_guard::retired(&module.name)]);
-    }
     if let (Some(process), Slot::Limiter) = (&module.process, module.slot) {
         crate::limiter_module::ProcessLimiter::start(&module.name, process, settings)?;
         return Ok(vec![format!("{} answered as a limiter", module.name)]);
@@ -402,7 +396,6 @@ mod tests {
             [choice.models.name, choice.judge.name, choice.store.name, choice.files.name, choice.limiter.name],
             [ANTHROPIC, JUDGE, SQLITE_STORE, LOCAL_FILES, MEMORY_LIMITER]
         );
-        assert_eq!(choice.loop_guard, None, "no guard runs unless lf.yaml names one");
         assert_eq!(choice.secrets.name, FILE_SECRETS, "credentials are kept in the secrets file unless lf.yaml names a module");
         assert_eq!(choice.movements.name, FOLDER_MOVEMENTS, "movement files are read from the movements folder unless lf.yaml names a module");
     }
@@ -464,10 +457,12 @@ mod tests {
     }
 
     #[test]
-    fn the_loop_guard_is_filled_only_when_named() {
-        let choice = CoreChoice::of(&named(&[("loopGuard", FINGERPRINT_GUARD)]), &[], "lf.yaml").unwrap();
-        assert_eq!(choice.loop_guard.unwrap().name, FINGERPRINT_GUARD);
-        assert!(CoreChoice::of(&named(&[("loopGuard", MEMORY_LIMITER)]), &[], "lf.yaml").unwrap_err().contains("fills the limiter slot"));
+    fn the_retired_loop_guard_slot_is_refused_by_name_with_what_replaces_it() {
+        assert_eq!(
+            CoreChoice::of(&named(&[("loopGuard", "@lf/fingerprint-guard")]), &[], "lf.yaml").unwrap_err(),
+            "lf.yaml: core.loopGuard: the loop guard slot is retired: remove it; the loop breaker (lf.yaml's loopWindow and loopDepth) replaces it"
+        );
+        assert!(Slot::of("loopGuard").is_none());
     }
 
     #[test]
@@ -497,13 +492,12 @@ mod tests {
 
     #[test]
     fn a_module_lf_does_not_build_in_fills_any_slot_of_its_kind() {
-        let installed = [process_module("acme_store", Slot::Store), process_module("acme_llm", Slot::Models), process_module("acme_limits", Slot::Limiter), process_module("acme_guard", Slot::LoopGuard), process_module("acme_files", Slot::Files)];
-        let choice = CoreChoice::of(&named(&[("store", "acme_store"), ("limiter", "acme_limits"), ("loopGuard", "acme_guard"), ("models", "acme_llm"), ("files", "acme_files")]), &installed, "lf.yaml").unwrap();
+        let installed = [process_module("acme_store", Slot::Store), process_module("acme_llm", Slot::Models), process_module("acme_limits", Slot::Limiter), process_module("acme_files", Slot::Files)];
+        let choice = CoreChoice::of(&named(&[("store", "acme_store"), ("limiter", "acme_limits"), ("models", "acme_llm"), ("files", "acme_files")]), &installed, "lf.yaml").unwrap();
         assert_eq!(choice.store, installed[0]);
         assert_eq!(choice.models, installed[1]);
         assert_eq!(choice.limiter, installed[2]);
-        assert_eq!(choice.loop_guard, Some(installed[3].clone()));
-        assert_eq!(choice.files, installed[4]);
+        assert_eq!(choice.files, installed[3]);
         assert!(CoreChoice::of(&named(&[("models", "acme_store")]), &installed, "lf.yaml").unwrap_err().contains("fills the store slot"));
     }
 }

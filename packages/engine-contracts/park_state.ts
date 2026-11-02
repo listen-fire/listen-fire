@@ -80,13 +80,15 @@ export interface CodeAsTree extends ParkedCode {
  */
 export type CodePlace = string;
 
-/** The Rust engine's (version 2 from 0.12, 3 from 0.13): code is its place
- *  in the pinned program (a collection op its span among its statement's
- *  calls), and the libraries ride beside it (`ParkedScopeState.libraries`).
- *  Version 3 adds a run's waits and an await's captured values; 0.13 reads
- *  no version 2 state. */
+/** The Rust engine's (version 2 from 0.12, 3 from 0.13, 4 from 0.14): code is
+ *  its place in the pinned program (a collection op its span among its
+ *  statement's calls), and the libraries ride beside it
+ *  (`ParkedScopeState.libraries`). Version 3 adds a run's waits and an await's
+ *  captured values; 0.13 reads no version 2 state. Version 4 holds no kept
+ *  walk (`lazyWalk`, a node edge's `deferred`): `lazy` is retired in 0.14, and
+ *  a 0.14 engine reads a version 3 state only when it holds none. */
 export interface CodeByPlace extends ParkedCode {
-  version: 3;
+  version: 3 | 4;
   closure: CodePlace;
   shape: CodePlace;
   head: CodePlace;
@@ -284,7 +286,8 @@ export type BindingDescriptor<C extends ParkedCode = CodeAsTree> =
    * instead of unrolling forever.
    */
   | { kind: 'nodeRef'; id: number }
-  /** Bucket 3 (recursive) — a stored, unrun traversal. */
+  /** Bucket 3 (recursive) — a stored, unrun traversal (`lazy`). Version 1,
+   *  and 3; version 4 holds none. */
   | { kind: 'lazyWalk'; walk: DeferredWalkDescriptor<C> }
   | { kind: 'opaque'; what: string; name: string };
 
@@ -327,6 +330,7 @@ export type NodeEdgeDescriptor<C extends ParkedCode = CodeAsTree> =
        *  which a park written before field order was kept still carries. */
       landingShape?: LegacyLandingShape;
     }
+  /** A `lazy` entry's edge. Version 1, and 3; version 4 holds none. */
   | { kind: 'deferred'; walk: DeferredWalkDescriptor<C> };
 
 export interface LegacyLandingShape {
@@ -407,7 +411,7 @@ export type ScopeLink<C extends ParkedCode = CodeAsTree> =
  */
 export interface ParkedScopeState<C extends ParkedCode = CodeAsTree> {
   /** The park state contract's version: 1 for the earlier TypeScript
-   *  engine's states, 3 for the Rust engine's. */
+   *  engine's states, 4 (or 0.13's 3) for the Rust engine's. */
   version: C['version'];
   /** The parked statement's canonical lexical address — the resume entry
    *  point. */

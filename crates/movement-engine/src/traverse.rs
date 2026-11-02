@@ -371,9 +371,9 @@ pub(crate) fn head_probe(root: &str, hops_raw: &str, extra: &[TraversalStep]) ->
     Ok(probed)
 }
 
-/// `continueDeferred`: a walk's iterations under the aliases bound on the
+/// A walk's iterations under the aliases bound on the
 /// way in.
-fn continue_deferred(outer: Vec<(String, Binding)>, iterations: Paths) -> Paths {
+fn continue_under(outer: Vec<(String, Binding)>, iterations: Paths) -> Paths {
     iterations
         .into_iter()
         .map(|(inner, landing)| {
@@ -603,11 +603,6 @@ impl Run<'_> {
                     let Some(steps) = steps else { return Err(over(crate::record::describe(&node))) };
                     self.walk_node_plane(vec![(Vec::new(), node)], steps, scope, span).await
                 }
-                // A lazy binding IS the walk: the whole chain continues from it.
-                Binding::LazyWalk(walk) => {
-                    let Some(steps) = steps else { return Err(over(crate::record::describe_kind("lazyWalk"))) };
-                    self.run_deferred_past(&walk, steps).await
-                }
                 // `found = MAP(pieces, …)`: a value holding records, each the
                 // root of the same hops, in the list's order.
                 Binding::Value(value) => {
@@ -748,8 +743,7 @@ impl Run<'_> {
     }
 
     /// `walkNodePlane`: each hop crosses one edge of a synthesised node,
-    /// fanning out over its landings, path by path; a deferred edge hands the
-    /// rest of the chain to its kept walk, and past a source record the
+    /// fanning out over its landings, path by path; past a source record the
     /// source's own walker takes the rest.
     pub(crate) fn walk_node_plane<'s>(
         &'s self,
@@ -769,35 +763,12 @@ impl Run<'_> {
                 // hops after them.
                 let at = path_scope(scope, &aliases);
                 let landings = match &binding {
-                    Binding::LazyWalk(walk) => {
-                        let iterations = self.run_kept_past(walk, steps, &aliases, None).await?;
-                        reached.extend(continue_deferred(aliases, iterations));
-                        continue;
-                    }
                     Binding::Landed(landed) => {
                         let onward = self.source_head_paths(&landed.position(), landed.read.clone(), steps, &at, span).await.map_err(Stop::Thrown)?;
-                        reached.extend(continue_deferred(aliases, onward));
+                        reached.extend(continue_under(aliases, onward));
                         continue;
                     }
-                    Binding::Node(node) => {
-                        let deferred = node.borrow().edges.iter().find(|(n, _)| *n == step.edge_type_id).and_then(|(_, e)| e.deferred.clone());
-                        match deferred {
-                            None => node.borrow().landings(&step.edge_type_id),
-                            Some(walk) => {
-                                if step.expression_filter.is_some() {
-                                    return Err(Stop::Thrown(Failure::unsupported(
-                                        "WHERE filters on a lazy entry's hop",
-                                        "narrow the entry's own traversal instead — the WHERE belongs on the hop the node's edge is built from",
-                                    )));
-                                }
-                                // The kept walk's own iterations, the hop's
-                                // alias naming each record it lands on.
-                                let iterations = self.run_kept_past(&walk, rest, &aliases, step.alias.as_deref()).await?;
-                                reached.extend(continue_deferred(aliases, iterations));
-                                continue;
-                            }
-                        }
-                    }
+                    Binding::Node(node) => node.borrow().landings(&step.edge_type_id),
                     other => {
                         return Err(Stop::Thrown(Failure::unsupported(
                             &format!("hopping past a '{}' landing that is {}", step.edge_type_id, crate::record::describe(other)),

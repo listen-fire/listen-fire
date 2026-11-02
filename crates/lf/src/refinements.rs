@@ -133,7 +133,7 @@ impl Scan<'_> {
                 .collect()
         };
         match expr {
-            Expression::Traverse { alias_root, steps, expression } => {
+            Expression::Traverse { alias_root, steps, expression, .. } => {
                 let walked: Vec<TraversalStep> = match expression.as_ref() {
                     Expression::Exists { steps: inner, .. } => [steps.clone(), inner.clone()].concat(),
                     _ => steps.clone(),

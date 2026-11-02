@@ -99,7 +99,7 @@ function \`Log Dealflow\`(msg: <inbox-[:Emails]->>) {
       unique by (FUZZY Name)
       Name:    c.name
       Domains: c.website
-      Description ?: "Introduced by \${introducer.name}"
+      Description ?: "Introduced by \${introducer?.name}"
     }
     c-[f:founder]-> {
       write company-[:Team]-> {

@@ -12,7 +12,7 @@ use std::rc::Rc;
 use movement_parser::ast::{MapSpread, NodeEntry, NodeLiteral, ShapeNode};
 use serde_json::Value as Json;
 
-use crate::bindings::{Binding, DeferredWalk, Edge, LandingShape, Node, Scope, ShapeBinding};
+use crate::bindings::{Binding, Edge, LandingShape, Node, Scope, ShapeBinding};
 use crate::env::Trail;
 use crate::eval::{EvalError, Evaluated, Prov};
 use crate::js::{Js, JsObject};
@@ -20,7 +20,6 @@ use crate::program::Stamp;
 use crate::run::{Failure, Run, Stop};
 
 type Built<'s> = std::pin::Pin<Box<dyn std::future::Future<Output = Result<Rc<RefCell<Node>>, Stop>> + 's>>;
-type Iterations<'s> = std::pin::Pin<Box<dyn std::future::Future<Output = Result<Vec<(Vec<(String, Binding)>, Binding)>, Stop>> + 's>>;
 
 /// `readNodePositionField`: the field (`fields[field] ?? null`, through
 /// the plain object's prototype), its own trail.
@@ -71,7 +70,7 @@ impl Node {
                 }
             }
         }
-        self.put(name, Edge { landings, shape: child.map(declared_landing_shape), deferred: None });
+        self.put(name, Edge { landings, shape: child.map(declared_landing_shape) });
     }
 
     /// `edges[name] = landed`: a name already there keeps its place.
@@ -133,16 +132,12 @@ impl Run<'_> {
                             (None, Some(Binding::Shape(shape))) => Some(self.landing_shape_of_declared(&shape).map_err(Stop::Thrown)?),
                             _ => None,
                         };
-                        node.put(name, Edge { landings: Vec::new(), shape, deferred: None });
+                        node.put(name, Edge { landings: Vec::new(), shape });
                     }
+                    NodeEntry::Traversal { lazy: true, .. } => return Err(crate::run::lazy_retired()),
                     NodeEntry::Traversal { name, head, lazy: false, mapping, .. } => {
                         let landings = self.walk_landings(head, mapping.as_ref(), scope, &format!("{path}/entries/{index}/mapping")).await?;
                         node.put_edge(name, landings);
-                    }
-                    // `lazy`: the walk is kept, and run at every read.
-                    NodeEntry::Traversal { name, head, lazy: true, mapping, .. } => {
-                        let walk = self.defer_walk(head, mapping.as_ref(), scope, &format!("{path}/entries/{index}"));
-                        node.put(name, Edge { landings: Vec::new(), shape: None, deferred: Some(walk) });
                     }
                 }
             }
@@ -154,93 +149,6 @@ impl Run<'_> {
     /// for (`resolvedShape`).
     pub(crate) fn landing_shape_of_declared(&self, shape: &ShapeBinding) -> Result<LandingShape, Failure> {
         Ok(declared_landing_shape(&self.resolved_shape(shape)?))
-    }
-
-    /// `deferWalk`: the walk as written and the scope it was written in.
-    /// `deferWalk`: the walk kept, with the scope it is written in captured.
-    /// `path` is the walk's own AST path (its `head` and `mapping` are under
-    /// it).
-    pub(crate) fn defer_walk(&self, head: &movement_parser::ast::PathHead, mapping: Option<&NodeLiteral>, scope: &Rc<Scope>, path: &str) -> Rc<DeferredWalk> {
-        Rc::new(DeferredWalk {
-            head: head.clone(),
-            head_path: format!("{path}/head"),
-            captured: scope.capture(),
-            mapping: mapping.map(|m| (m.clone(), format!("{path}/mapping"))),
-        })
-    }
-
-    /// `runDeferredWalk`: a kept walk run now, against the live source, in
-    /// the scope it captured; each iteration's aliases and landing (a mapped
-    /// walk's landings are its tail's nodes, and bind no alias).
-    pub(crate) fn run_deferred<'s>(&'s self, walk: &'s DeferredWalk) -> Iterations<'s> {
-        self.run_deferred_past(walk, &[])
-    }
-
-    /// `runDeferredWalk(walk, extraSteps)`: the hops past the walk continue
-    /// it, in the scope it captured; past a mapping they are hops on the
-    /// mapped nodes' arrow plane.
-    pub(crate) fn run_deferred_past<'s>(&'s self, walk: &'s DeferredWalk, extra: &'s [movement_parser::lowering::expression::TraversalStep]) -> Iterations<'s> {
-        Box::pin(async move {
-            let Some((mapping, path)) = &walk.mapping else { return self.head_iterations_past(&walk.head, &walk.captured, extra).await };
-            let iterations = self.head_iterations(&walk.head, &walk.captured).await?;
-            let mut mapped = Vec::with_capacity(iterations.len());
-            for (aliases, _) in iterations {
-                let item = walk.captured.child();
-                for (alias, binding) in aliases {
-                    item.declare(alias, binding);
-                }
-                mapped.push((Vec::new(), Binding::Node(self.synthesise_node(mapping, &item, path).await?)));
-            }
-            if extra.is_empty() {
-                return Ok(mapped);
-            }
-            let span = crate::env::js_of_serialized(&walk.head.span);
-            self.walk_node_plane(mapped, extra, &walk.captured, &span).await
-        })
-    }
-
-    /// `run_deferred_past` for a kept walk a path reached part-way through a
-    /// walk: `alias`, the hop onto the kept walk, names each record it lands
-    /// on, and the hops past it read that and the hops the path crossed
-    /// (`outer`) over the kept walk's own. Where they read neither, the hops
-    /// past are walked inside the kept walk, as it was written.
-    pub(crate) fn run_kept_past<'s>(
-        &'s self,
-        walk: &'s DeferredWalk,
-        extra: &'s [movement_parser::lowering::expression::TraversalStep],
-        outer: &'s [(String, Binding)],
-        alias: Option<&'s str>,
-    ) -> Iterations<'s> {
-        Box::pin(async move {
-            let named = |iterations: crate::traverse::Paths| -> crate::traverse::Paths {
-                let Some(alias) = alias else { return iterations };
-                iterations
-                    .into_iter()
-                    .map(|(mut aliases, landing)| {
-                        aliases.push((alias.to_string(), landing.clone()));
-                        (aliases, landing)
-                    })
-                    .collect()
-            };
-            let reads_path = alias.is_some()
-                || extra.iter().any(|hop| matches!(hop, movement_parser::lowering::expression::TraversalStep::Edge(step) if crate::traverse::reads_aliases(step, outer)));
-            if extra.is_empty() || !reads_path {
-                return Ok(named(self.run_deferred_past(walk, extra).await?));
-            }
-            let span = crate::env::js_of_serialized(&walk.head.span);
-            let root = crate::traverse::spell_path_head(&walk.head);
-            let past = crate::traverse::Probe::Walk(extra.to_vec());
-            let mut paths = Vec::new();
-            for (inner, landing) in named(self.run_deferred(walk).await?) {
-                let at = crate::traverse::path_scope(&crate::traverse::path_scope(&walk.captured, &inner), outer);
-                for (onward, last) in self.head_iterations_from(landing, &root, &past, &at, &span).await? {
-                    let mut aliases = inner.clone();
-                    aliases.extend(onward);
-                    paths.push((aliases, last));
-                }
-            }
-            Ok(paths)
-        })
     }
 
     /// `walkLandings`: a traversal entry's landings, walked now as a block
@@ -592,18 +500,12 @@ impl Run<'_> {
         })
     }
 
-    /// `walkNodePlane` of one plain hop from one record: a node's landings
-    /// (a lazy entry's walk run now), a walked record's through its own
-    /// graph; past any other landing the walk does not go.
+    /// `walkNodePlane` of one plain hop from one record: a node's landings,
+    /// a walked record's through its own graph; past any other landing the
+    /// walk does not go.
     async fn node_plane_hop(&self, record: &Binding, edge: &str) -> Result<Vec<Binding>, Stop> {
         match record {
-            Binding::Node(node) => {
-                let deferred = node.borrow().edges.iter().find(|(n, _)| n == edge).and_then(|(_, e)| e.deferred.clone());
-                match deferred {
-                    Some(walk) => Ok(self.run_deferred(&walk).await?.into_iter().map(|(_, landing)| landing).collect()),
-                    None => Ok(node.borrow().landings(edge)),
-                }
-            }
+            Binding::Node(node) => Ok(node.borrow().landings(edge)),
             Binding::Landed(landed) => {
                 let step = plain_hop(edge);
                 let span = Js::Undefined;
@@ -733,7 +635,7 @@ fn graph_value_misfit(binding: &Binding, shape: &ShapeNode, path: &str, presence
         }
     }
     for child in &shape.children {
-        let landings = node.edges.iter().find(|(e, _)| *e == child.name).filter(|(_, e)| e.deferred.is_none()).map(|(_, e)| e.landings.clone()).unwrap_or_default();
+        let landings = node.edges.iter().find(|(e, _)| *e == child.name).map(|(_, e)| e.landings.clone()).unwrap_or_default();
         for landing in &landings {
             if let Some(misfit) = graph_value_misfit(landing, child, &format!("{path}{} → ", child.name), presence_only) {
                 return Some(misfit);

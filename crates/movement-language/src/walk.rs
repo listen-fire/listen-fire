@@ -1,10 +1,11 @@
 //! The record a written receiver holds: a name the check typed, or a walk off
 //! one (`c-[m:Messages]->`, an alias `m` bound by a hop), stepped edge by edge
-//! with the checker's own `edge_landing`.
+//! with the checker's own `edge_landing`, or a field of one holding a record
+//! (`c.Previous`).
 
 use movement_checker::query::Analysis;
 use movement_checker::types::Ty;
-use movement_checker::types::field::describe_field_type;
+use movement_checker::types::field::{describe_field_type, strip_absent};
 use movement_checker::types::position::{EdgeLanding, Position, describe_position, edge_landing, position_schema_of_ref, record_field_types};
 use movement_parser::ast::Loc;
 
@@ -25,6 +26,13 @@ fn receiver_within(analysis: &Analysis, text: &str, at: Loc, depth: usize) -> Op
         let edge = hop_edge(&head[open + 2..])?;
         let from = receiver_within(analysis, &head[..open], at, depth + 1)?;
         return land(&from, &edge);
+    }
+    // A field holding a record (`c.Previous`), read with `.` or `?.` alike.
+    if let Some((head, field)) = field_of(trimmed) {
+        let from = receiver_within(analysis, head, at, depth + 1)?;
+        let ty = movement_checker::types::position::lookup_property_type(Some(strip(&from)), &field)?;
+        let Ty::HeldRecord(held) = strip_absent(&ty) else { return None };
+        return Some(held.position.clone());
     }
     let name = trailing_name(trimmed)?;
     if let Some(position) = analysis.resolve(at, &name).and_then(|id| analysis.position_of(id)) {
@@ -67,6 +75,19 @@ pub fn hop_edge(hop: &str) -> Option<String> {
     }
     let name: String = after.chars().take_while(|c| crate::text::is_word_char(*c) || *c == '#' || *c == '@').collect();
     (!name.is_empty()).then_some(name)
+}
+
+/// `text` read as a field off a receiver (`c.Previous`, `c?.Previous`,
+/// ``c.`Previous Row` ``): the receiver's text and the field.
+fn field_of(text: &str) -> Option<(&str, String)> {
+    let field = trailing_name(text)?;
+    let written = if text.ends_with('`') { field.len() + 2 } else { field.len() };
+    let head = text[..text.len() - written].strip_suffix('.')?;
+    // `...m` spreads `m`: no field read.
+    if head.ends_with('.') {
+        return None;
+    }
+    Some((head.strip_suffix('?').unwrap_or(head), field))
 }
 
 /// The name `text` ends with: an identifier, or a backticked name.

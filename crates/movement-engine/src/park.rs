@@ -48,23 +48,37 @@ use crate::js::{Js, JsObject};
 use crate::flow::{Boundary, CallRecord};
 use crate::run::{Address, Failure, Run, Stop};
 
-/// The park state contract's version this engine writes and reads
+/// The park state contract's version this engine writes
 /// (docs/contracts/park-state.md): version 2 named code by its place in the
 /// pinned program; version 3 parks a run's waits beside its records and an
-/// await's captured values (0.13).
-pub(crate) const PARK_STATE_VERSION: f64 = 3.0;
+/// await's captured values (0.13); version 4 holds no kept walk, `lazy`
+/// being retired (0.14).
+pub(crate) const PARK_STATE_VERSION: f64 = 4.0;
+
+/// The version 0.13's engine wrote. It reads as version 4 unless it holds a
+/// kept walk (`lazyWalk`, a node edge's `deferred`), which nothing here runs.
+const PARK_STATE_VERSION_0_13: f64 = 3.0;
 
 /// The version 0.12's engine wrote: its awaits parked on keys, which no
 /// 0.13 host wakes.
 const PARK_STATE_VERSION_0_12: f64 = 2.0;
 
-/// Why a state this engine does not resume names the release that parked
-/// it, when it is 0.12's.
+/// The refusal of a state holding a kept walk.
+const LAZY_WALK: &str = "resume_state_lazy_walk";
+
+/// Why a state this engine does not resume, by name: one 0.12 parked, or
+/// one holding a `lazy` walk.
 pub fn version_refusal(state: &Json) -> Option<String> {
-    let state = crate::env::decode(state).ok()?;
-    matches!(at(&state, "version"), Some(Js::Number(n)) if *n == PARK_STATE_VERSION_0_12).then(|| {
-        format!("this run parked under listen-fire 0.12 (park state {PARK_STATE_VERSION_0_12}); a 0.13 engine resumes park state {PARK_STATE_VERSION}")
-    })
+    let decoded = crate::env::decode(state).ok()?;
+    match at(&decoded, "version") {
+        Some(Js::Number(n)) if *n == PARK_STATE_VERSION_0_12 => {
+            Some(format!("this run parked under listen-fire 0.12 (park state {PARK_STATE_VERSION_0_12}); this engine resumes park states {PARK_STATE_VERSION_0_13} and {PARK_STATE_VERSION}"))
+        }
+        Some(Js::Number(_)) if resume_refusal(state).as_deref() == Some(LAZY_WALK) => Some(format!(
+            "this run paused holding a `lazy` walk (park state {PARK_STATE_VERSION_0_13}); `lazy` is retired in 0.14, and this engine resumes no run paused holding one"
+        )),
+        _ => None,
+    }
 }
 
 /// What a resumed segment is handed (`ResumeMovementInput`'s state and mode).
@@ -455,10 +469,6 @@ fn serialize_binding(run: &Run<'_>, name: &str, binding: &Binding, park: &mut Pa
             let node = node.borrow();
             let mut edges = JsObject::new();
             for (name, edge) in &node.edges {
-                if let Some(walk) = &edge.deferred {
-                    edges.set(name.clone(), object_of(vec![kind("deferred"), ("walk", serialize_deferred_walk(run, walk, park)?)]));
-                    continue;
-                }
                 let landings: Vec<Js> = edge.landings.iter().map(|l| serialize_binding(run, "", l, park)).collect::<Result<_, _>>()?;
                 let mut descriptor = vec![kind("landed"), ("landings", Js::array(landings))];
                 if let Some(shape) = &edge.shape {
@@ -491,7 +501,6 @@ fn serialize_binding(run: &Run<'_>, name: &str, binding: &Binding, park: &mut Pa
             }
             object_of(members)
         }
-        Binding::LazyWalk(walk) => object_of(vec![kind("lazyWalk"), ("walk", serialize_deferred_walk(run, walk, park)?)]),
         Binding::Tuple(slots) => {
             let slots: Vec<Js> = slots.iter().map(|slot| serialize_binding(run, "", slot, park)).collect::<Result<_, _>>()?;
             object_of(vec![kind("tuple"), ("slots", Js::array(slots))])
@@ -668,16 +677,6 @@ fn serialize_captured(run: &Run<'_>, captured: &Rc<Scope>, park: &mut ParkWriter
     Ok(Js::object(out))
 }
 
-/// `serializeDeferredWalk`: the walk's head as the program holds it, the
-/// scope it captured, and its per-item mapping when it has one.
-fn serialize_deferred_walk(run: &Run<'_>, walk: &crate::bindings::DeferredWalk, park: &mut ParkWriter) -> Result<Js, Failure> {
-    let mut members = vec![("head", code_ref(&walk.head_path)), ("captured", serialize_captured(run, &walk.captured, park)?)];
-    if let Some((_, path)) = &walk.mapping {
-        members.push(("mapping", code_ref(path)));
-    }
-    Ok(object_of(members))
-}
-
 /// `serializeValue`: a record as its own descriptor, a file as one (its
 /// descriptor), a list or a map walked, anything else data.
 fn serialize_value(run: &Run<'_>, value: &Js, park: &mut ParkWriter) -> Result<Js, Failure> {
@@ -793,7 +792,7 @@ pub type Cx<'a> = Option<&'a crate::program::Checked>;
 /// the run starts rather than partway through it.
 pub fn resume_refusal_in(state: &Json, cx: Cx) -> Option<String> {
     let Ok(state) = crate::env::decode(state) else { return Some("resume_state_does_not_read".into()) };
-    if !matches!(at(&state, "version"), Some(Js::Number(n)) if *n == PARK_STATE_VERSION) {
+    if !matches!(at(&state, "version"), Some(Js::Number(n)) if *n == PARK_STATE_VERSION || *n == PARK_STATE_VERSION_0_13) {
         return Some("resume_state_version".into());
     }
     if at(&state, "suspended").is_some_and(|suspended| !matches!(suspended, Js::Bool(true))) {
@@ -871,15 +870,6 @@ fn map_refusal(cx: Cx, entries: Option<&Js>) -> Option<String> {
     pairs(entries).iter().find_map(|(_, entry)| descriptor_refusal(cx, entry))
 }
 
-fn walk_refusal(cx: Cx, walk: Option<&Js>) -> Option<String> {
-    let walk = walk?;
-    let mapping = at(walk, "mapping");
-    if !names_code(cx, at(walk, "head"), |c| matches!(c, CodeAt::Head(_))) || mapping.is_some_and(|m| !names_code(cx, Some(m), |c| matches!(c, CodeAt::Literal(_)))) {
-        return Some(NOT_READ.into());
-    }
-    map_refusal(cx, at(walk, "captured"))
-}
-
 fn value_refusal(cx: Cx, value: &Js) -> Option<String> {
     match text(at(value, "kind")) {
         Some("record") => at(value, "binding").and_then(|x| descriptor_refusal(cx, x)),
@@ -905,7 +895,7 @@ fn descriptor_refusal(cx: Cx, descriptor: &Js) -> Option<String> {
             map_refusal(cx, at(descriptor, "captured")).or_else(|| at(descriptor, "scope").and_then(|x| scope_link_refusal(cx, x)))
         }
         "localShape" => (!names_code(cx, at(descriptor, "declaration"), |c| matches!(c, CodeAt::Shape(_)))).then(|| NOT_READ.to_string()),
-        "lazyWalk" => walk_refusal(cx, at(descriptor, "walk")),
+        "lazyWalk" => Some(LAZY_WALK.into()),
         "handle" => waits_refusal(descriptor).or_else(|| at(descriptor, "old").and_then(|x| descriptor_refusal(cx, x))),
         "sourcePosition" => waits_refusal(descriptor),
         "positions" => items(at(descriptor, "landings")).iter().find_map(|x| descriptor_refusal(cx, x)),
@@ -913,7 +903,7 @@ fn descriptor_refusal(cx: Cx, descriptor: &Js) -> Option<String> {
         "recordValue" => at(descriptor, "value").and_then(|x| value_refusal(cx, x)),
         "nodePosition" => pairs(at(descriptor, "edges")).iter().find_map(|(_, edge)| match text(at(edge, "kind")) {
             Some("landed") => items(at(edge, "landings")).iter().find_map(|x| descriptor_refusal(cx, x)),
-            Some("deferred") => walk_refusal(cx, at(edge, "walk")),
+            Some("deferred") => Some(LAZY_WALK.into()),
             _ => Some("resume_state_does_not_read".into()),
         }),
         // Data, a name or an identity: nothing to look into.
@@ -1281,13 +1271,6 @@ fn index_map(entries: Option<&Js>, park: &mut ParkReader) {
     }
 }
 
-fn index_walk(walk: Option<&Js>, park: &mut ParkReader) {
-    // The walk's `head` and `mapping` are code.
-    if let Some(walk) = walk {
-        index_map(at(walk, "captured"), park);
-    }
-}
-
 fn index_value(value: &Js, park: &mut ParkReader) {
     match text(at(value, "kind")) {
         Some("record") => {
@@ -1331,7 +1314,6 @@ fn index_descriptor(descriptor: &Js, park: &mut ParkReader) {
             for (_, edge) in pairs(at(descriptor, "edges")) {
                 match text(at(edge, "kind")) {
                     Some("landed") => items(at(edge, "landings")).iter().for_each(|landing| index_descriptor(landing, park)),
-                    Some("deferred") => index_walk(at(edge, "walk"), park),
                     other => unreachable_kind("edge", other),
                 }
             }
@@ -1356,7 +1338,6 @@ fn index_descriptor(descriptor: &Js, park: &mut ParkReader) {
                 index_value(value, park);
             }
         }
-        Some("lazyWalk") => index_walk(at(descriptor, "walk"), park),
         // Nothing a park numbers: their payload is data or code, never a
         // descriptor.
         Some(

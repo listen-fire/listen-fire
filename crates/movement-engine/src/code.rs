@@ -137,11 +137,6 @@ impl Walk {
             (RValue::InlineBlock { inline_block }, "inlineBlock") => self.statements(&inline_block.body, rest.strip_prefix(&["body"])?),
             (RValue::Closure { closure }, "closure") => self.closure(closure, rest),
             (RValue::Node { node }, "node") => self.literal(node, rest),
-            (RValue::Lazy { lazy }, "lazy") => match rest.split_first()? {
-                (&"head", rest) => self.head(&lazy.head, rest),
-                (&"mapping", rest) => self.literal(lazy.mapping.as_ref()?, rest),
-                _ => None,
-            },
             (RValue::Expr { expr }, "expr") => self.slot(expr, rest),
             _ => None,
         }
@@ -363,7 +358,7 @@ mod tests {
                 read += 1;
             }
         }
-        assert!(read >= 390, "the corpus holds its programs: {read}");
+        assert!(read >= 385, "the corpus holds its programs: {read}");
         for kind in ["closure", "movement", "head", "literal", "shape", "nested"] {
             assert!(found.get(kind).copied().unwrap_or(0) > 0, "the corpus reaches no {kind}: {found:?}");
         }

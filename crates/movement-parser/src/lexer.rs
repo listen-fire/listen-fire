@@ -290,6 +290,13 @@ impl<'a> Scanner<'a> {
         if c == unit('.') {
             return Ok(token(start + 1, Tok::Op(".")));
         }
+        // `x?.F`, as TypeScript reads it: not before a digit (`a ?.5 : b` is
+        // a choice) and not before a spread (`?...x`).
+        if self.window_starts_with(start, "?.")
+            && !self.at(start + 2).is_some_and(|u| is_ascii_digit(u) || u == unit('.'))
+        {
+            return Ok(token(start + 2, Tok::Op("?.")));
+        }
         for p in ["(", ")", "[", "]", "{", "}", ",", ":", "|", "?", ";"] {
             if c == p.as_bytes()[0] as u16 {
                 return Ok(token(start + 1, Tok::Punct(p)));
@@ -437,6 +444,10 @@ mod tests {
         assert_eq!(kinds("@parent.created"), vec![Tok::Special("@parent.created".into()), Tok::Eof]);
         assert_eq!(kinds("...m")[0], Tok::Punct("..."));
         assert_eq!(kinds("a.b")[1], Tok::Op("."));
+        assert_eq!(kinds("a?.b")[1], Tok::Op("?."));
+        // A choice of a fraction, and a set-if-empty spread, are not optional reads.
+        assert_eq!(kinds("a ?.5 : b")[1], Tok::Punct("?"));
+        assert_eq!(kinds("?...m")[0], Tok::Punct("?"));
         assert_eq!(kinds("=>")[0], Tok::Op("=>"));
         assert_eq!(kinds("<=")[0], Tok::Op("<="));
     }

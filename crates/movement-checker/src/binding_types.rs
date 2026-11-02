@@ -54,7 +54,15 @@ impl Checker<'_> {
 
     /// A typing of expressions against `scope`.
     pub fn typing_env(&self, scope: ScopeId) -> ScopeEnv<'_> {
-        ScopeEnv { scopes: &self.scopes, scope, zones: self.zones, nodes: &self.nodes, upgrading_from: self.upgrading_from, function_values: &self.function_values }
+        ScopeEnv {
+            scopes: &self.scopes,
+            scope,
+            zones: self.zones,
+            nodes: &self.nodes,
+            upgrading_from: self.upgrading_from,
+            function_values: &self.function_values,
+            entry_reads: &self.entry_reads,
+        }
     }
 
     /// An expression slot's type in `scope`, and what it may hold where its
@@ -69,9 +77,31 @@ impl Checker<'_> {
         Some((expr, ty, may_hold))
     }
 
-    /// `declarePresence`: each proven name shadowed by its narrowed self.
+    /// `declarePresence`: each proven name shadowed by its narrowed self; a
+    /// proof about an entry holds for the reads of it hoisted later in `into`.
     pub(crate) fn declare_presence(&mut self, proofs: &[PresenceProof], scope: ScopeId, into: ScopeId) {
+        let entries: Vec<_> = {
+            let env = self.typing_env(scope);
+            proofs.iter().filter_map(|proof| env.entry_of(proof).map(|(entry, about)| (into, entry, about))).collect()
+        };
+        self.proven_entries.extend(entries);
+        self.narrow_declared(proofs, scope, into);
+    }
+
+    /// A hoisted read of an entry, narrowed by what its scope proved about the entry.
+    pub(crate) fn narrow_entry_read(&mut self, name: &str, entry: &crate::types::narrowing::EntryRead, scope: ScopeId) {
+        let chain: Vec<ScopeId> = self.scopes.chain(scope).collect();
+        let proofs: Vec<PresenceProof> =
+            self.proven_entries.iter().filter(|(at, proven, _)| chain.contains(at) && proven == entry).map(|(_, _, proof)| proof.about(name)).collect();
+        self.narrow_declared(&proofs, scope, scope);
+    }
+
+    fn narrow_declared(&mut self, proofs: &[PresenceProof], scope: ScopeId, into: ScopeId) {
         for proof in proofs {
+            // An entry's proof is about the entry, never the name it is read off.
+            if matches!(proof, PresenceProof::Entry { .. }) {
+                continue;
+            }
             let Resolution::Found(id) = self.scopes.resolve(scope, proof.root()) else { continue };
             let symbol = self.scopes.symbol(id).clone();
             let mut narrowed = symbol.clone();
@@ -110,6 +140,7 @@ impl Checker<'_> {
                         narrowed.types.pos = Some(position);
                     }
                 }
+                PresenceProof::Entry { .. } => continue,
             }
             let narrowed = self.scopes.add_symbol(narrowed);
             self.scopes.declare(into, narrowed);
@@ -506,7 +537,7 @@ fn collected_types(returned: &ReturnShape, ordering: crate::types::field::Collec
 fn aggregated_bare_path(expr: &Expression) -> Option<(Option<&str>, &[movement_parser::lowering::expression::TraversalStep])> {
     use movement_parser::lowering::expression::AggregationFunction as F;
     let Expression::Aggregate { fn_: F::First | F::Last | F::Only, expression, .. } = expr else { return None };
-    let Expression::Traverse { alias_root, steps, expression: terminal } = &**expression else { return None };
+    let Expression::Traverse { alias_root, steps, expression: terminal, .. } = &**expression else { return None };
     if steps.is_empty() || !crate::types::narrowing::is_position_terminal(terminal) {
         return None;
     }

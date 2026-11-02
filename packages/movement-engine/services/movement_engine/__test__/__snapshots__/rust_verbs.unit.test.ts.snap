@@ -821,7 +821,7 @@ exports[`match in the Rust engine finds through the judge, reads the record whol
               "kind": "literal",
               "span": {
                 "end": {
-                  "col": 64,
+                  "col": 66,
                   "line": 7,
                 },
                 "start": {
@@ -956,7 +956,7 @@ exports[`match in the Rust engine narrows the shortlist by the target’s WHERE 
               "kind": "literal",
               "span": {
                 "end": {
-                  "col": 64,
+                  "col": 66,
                   "line": 7,
                 },
                 "start": {
@@ -1084,7 +1084,7 @@ exports[`match in the Rust engine skips the iteration whose match misses, and ru
               "kind": "literal",
               "span": {
                 "end": {
-                  "col": 69,
+                  "col": 70,
                   "line": 8,
                 },
                 "start": {
@@ -1152,7 +1152,7 @@ exports[`match in the Rust engine skips the iteration whose match misses, and ru
               "kind": "literal",
               "span": {
                 "end": {
-                  "col": 69,
+                  "col": 70,
                   "line": 8,
                 },
                 "start": {

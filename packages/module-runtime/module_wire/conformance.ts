@@ -3,10 +3,10 @@
 // the family's (`services/secrets/contract.ts`), and the cases every slot module answers alike (its
 // manifest, the envelope's refusals). Each runs against any server over the
 // wire: written once here, they hold listen-fire's built-ins (`listen-fire --contract-<slot>`)
-// and a third-party module in any language to the same meaning. The store,
-// limiter and loop guard are held to their families' contract cases
-// (`services/run_host/contract.ts`, `limiter/contract.ts`,
-// `loop_guard/contract.ts`) driven over this same wire; the browser to
+// and a third-party module in any language to the same meaning. The store
+// and limiter are held to their families' contract cases
+// (`services/run_host/contract.ts`, `limiter/contract.ts`) driven over this
+// same wire; the browser to
 // `services/browser/contract.ts` through its wire client.
 
 import { strict as assert } from 'node:assert';

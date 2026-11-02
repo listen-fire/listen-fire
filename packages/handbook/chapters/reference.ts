@@ -48,7 +48,8 @@ Types **always** wear angle brackets; positions, scalar values, and handles **ne
 - Brackets: automation params (\`m: <inbox-[:Emails]->>\`, \`root: <crm>\`), extract field annotations (\`amount: <number>\`, borrowed \`stage: <crm-[:Requests]->.Stage>\`), declared fields (\`Name: <text>\`), \`is\` tests (\`rec is <crm-[:Companies]->>\`), explicit polymorphic targets (\`match a-[:related]-><Companies> { … }\`).
 - No brackets: write targets (\`write crm-[:Companies]->\`), traversal hops and edge names, \`unique by\` components, call arguments, per-family answer types (a \`Check\` answers boolean, a \`Provide\` answers whatever its \`Answer Type\` names — no bracket-generic syntax).
 - Primitives: \`<text>\`, \`<number>\`, \`<boolean>\`, \`<date>\`, \`<datetime>\`, \`<file>\`, \`<json>\`. Borrowed path: \`<instance-[:record_type]->.field>\`. An extract or declared field may add \`| null\` (\`<text | null>\`): a missing one arrives null.
-- One of several record types: \`n: <crm-[:Memo]-> | crm-[:Remark]->>\` takes a Memo or a Remark. It reads, walks and writes only what every member has, and takes a value of any member, or of a union whose every member it holds.
+- One of several record types: \`n: <crm-[:Memo]-> | crm-[:Remark]->>\` takes a Memo or a Remark. It reads, walks and writes only what every member has, and takes a value of any member, or of a union whose every member it holds. \`is\` narrows it: \`if (n is <crm-[:Memo]->>) { … n.Mood … } else { … n.Tone … }\`, and below an arm that always returns or fails, it is the rest.
+- A walk off a union lands the same way: where a Person's \`Notes\` land on a Memo and a Company's on a Remark, \`crm-[:Subjects]->-[n:Notes]->\` lands a Memo or a Remark, narrowed by \`is\` as above. So is a \`? :\` or \`coalesce\` of records of different types.
 - Declared refinement: \`type Thesis = <"Consumer" | "Infra">\` at file scope, then \`<Thesis>\` anywhere a type goes. It constrains an extraction to those values, tells the model which to pick from, and flags a literal that is not one of them; the values are ordinary text everywhere else.
 - \`<json>\` is a **structured value** — an object or list literal written verbatim into a field that takes one (a system's own rich-message document; its chapter names the field). Opaque: pass it through, never operate on it. Keys inside an object literal are comma-separated; a write body's fields are newline-separated.
 
@@ -157,13 +158,15 @@ fail("unexpected record kind")                   # abort the whole run with a re
 \`\`\`
 n = only(company-[t:Notes WHERE t.Title == "Brief"]->)   # T | absent — a lookup that might match nothing
 d = first(company.Domains)                 # T | absent — same, over a field
+t = n?.Title                               # reads through n: absent when n is
+if (n?.Title != null) { … }                # proves n present INSIDE this arm, as exists(n) does
 if (n == null) { fail("no notes found") } # guard clause — n is present for every line after
 if (n != null) { … }                       # narrows n present INSIDE this arm only
 x = d != null ? "\${d}" : ""                # narrows d present in the true arm only
 Field ?: d                                 # '?:' takes a maybe-absent value, no guard needed
 \`\`\`
 
-\`first\`/\`List.last\`/\`List.min\`/\`List.max\`/\`xs[n]\` over anything that can come up empty, and a named \`match\` that found nothing, type \`T | absent\`. Using such a value where a present one is required — a write or traversal target, a dot-plane field read, an ordered comparison (\`<\` \`<=\` \`>\` \`>=\`) — is refused until narrowed, naming the fix. \`==\`/\`!=\` against \`null\` is the presence test (loose: \`null\` and absent mean the same thing); against any other value a maybe-absent side needs no guard (absent is never equal to a present value), and a condition (\`if\`, \`? :\`, \`&&\`/\`||\`/\`!\`) reads a missing boolean as false. Both sides must still match in kind. \`exists(…)\` takes related records (\`exists(msg-[:Attachments]->)\`) or a value (\`exists(x)\`, \`exists(x.Field)\`: the same test as \`x.Field != null\`); \`x != null\` and \`x == null\` take a bound name or a field read off one, and a proven field proves the record it came off. A field may hold a record, a value read with \`.\` (\`c.Current.Stage\`): it has fields only, no edges, and the record as it is now is reached by its edge (\`c-[:Record]->\`). A field is never read through a value that may be absent — a change's row (\`c.Previous\` is absent on a created row) or a map member: test it first, \`exists(c.Previous) && c.Previous.Stage == "Applied"\`, \`!exists(c.Previous) || c.Previous.Stage != "Interview"\`, or inside \`if (exists(c.Previous)) { … }\`. A WHERE writes them \`AND\`, \`OR\`, \`NOT\`.
+\`first\`/\`List.last\`/\`List.min\`/\`List.max\`/\`xs[n]\` over anything that can come up empty, and a named \`match\` that found nothing, type \`T | absent\`. Using such a value where a present one is required — a write or traversal target, a field read with \`.\`, an ordered comparison (\`<\` \`<=\` \`>\` \`>=\`) — is refused until narrowed, naming the fix. \`==\`/\`!=\` against \`null\` is the presence test (loose: \`null\` and absent mean the same thing); against any other value a maybe-absent side needs no guard (absent is never equal to a present value), and a condition (\`if\`, \`? :\`, \`&&\`/\`||\`/\`!\`) reads a missing boolean as false. Both sides must still match in kind. \`exists(…)\` takes related records (\`exists(msg-[:Attachments]->)\`) or a value (\`exists(x)\`, \`exists(x?.Field)\`: the same test as \`x?.Field != null\`); \`x != null\` and \`x == null\` take a bound name or a field read off one, and a proven field proves the record it came off. A field may hold a record, a value read with \`.\` (\`c.Current.Stage\`): it has fields only, no edges, and the record as it is now is reached by its edge (\`c-[:Record]->\`). A field is never read with \`.\` through a value that may be absent: any of the above, a call's result (\`only(…).F\`), an index read (\`xs[0].F\`), a change's row (\`c.Previous\` is absent on a created row) or a map member. Read it with \`?.\` (\`n?.Title\`, \`c.Previous?.Stage\`), absent when the value is, or test it first: \`exists(c.Previous) && c.Previous.Stage == "Applied"\`, \`!exists(c.Previous) || c.Previous.Stage != "Interview"\`, or inside \`if (exists(c.Previous)) { … }\`. A test of an index read at a literal (\`exists(xs[0])\`) proves every later \`xs[0]\`. A WHERE writes them \`AND\`, \`OR\`, \`NOT\`.
 
 ### listeners
 
@@ -190,7 +193,7 @@ msg = write ops-[:Messages]-> {
 r = race(
   () => {
     press = await msg-[:Interactions]->        # one press
-    return only(press-[:Actions]->).Value      # "pursue" | "pass", from the Buttons written
+    return only(press-[:Actions]->)?.Value      # "pursue" | "pass", from the Buttons written
   },
   () => {
     reply = await new msg-[:Replies]->         # only a reply arriving from now
@@ -253,8 +256,8 @@ Content is a list (shared content first, record-specific content last, so repeat
 - **Leaving a wait with no timeout.** An \`await\` on a person or a system waits forever when nothing comes, or when its record is deleted; race it against \`() => { await sleep(2d) }\` so a default takes over when time runs out.
 - **Expecting one extraction per piece from a list.** \`extract(pieces, Shape)\` reads them all as a single job; \`map(pieces, (p) => extract([p], Shape))\` is the per-piece form.
 - **Verifying from the target system only.** The run record shows what was sent and why; read provenance before editing the automation.
-- **Using a maybe-absent value unguarded.** A write/traversal target, a link end, a dot-plane field read, or an ordered comparison off a \`first\`/\`List.last\`/\`List.min\`/\`List.max\`/\`xs[n]\` result or a named \`match\` is refused until narrowed — guard with \`if (x == null) { fail(…) }\` (or an \`else\` arm), \`x != null\`, or \`?:\` on the write field.
-- **Binding a field just to test it.** \`x.Field != null\` reads the field directly; no intermediate binding.
+- **Using a maybe-absent value unguarded.** A write/traversal target, a link end, a field read with \`.\`, or an ordered comparison off a \`first\`/\`List.last\`/\`List.min\`/\`List.max\`/\`xs[n]\` result or a named \`match\` is refused until narrowed — guard with \`if (x == null) { fail(…) }\` (or an \`else\` arm), \`x != null\`, or \`?:\` on the write field, or read the field with \`x?.Field\`.
+- **Binding a field just to test it.** \`x.Field != null\` reads the field directly (\`x?.Field != null\` when \`x\` may be absent, which proves \`x\` present too); no intermediate binding.
 - **Keeping a closure as data.** A closure lives in a variable or a parameter, or is passed as an argument where it is written (\`map(xs, (x) => …)\`, \`all(f, g)\`). In a list, under a key, in a field or as what a \`map\` returns it is refused when you save.
 - **Calling something that may not be a function.** A name is called when its type shows it is a closure (\`g = label\` then \`g()\`, a closure-typed parameter); a value that may be something else is refused when you save.`,
 };

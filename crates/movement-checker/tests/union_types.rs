@@ -45,7 +45,7 @@ fn reads(body: &str) -> Vec<String> {
 #[test]
 fn what_every_member_has_is_read_and_walked() {
     assert_eq!(reads("return n.Text"), Vec::<String>::new());
-    assert_eq!(reads("return only(n-[:Author]->).Name"), Vec::<String>::new());
+    assert_eq!(reads("return only(n-[:Author]->)?.Name"), Vec::<String>::new());
 }
 
 #[test]

@@ -253,7 +253,7 @@ const TUPLE_MATCH = '  found = match (co-[:notes]->, pe-[:notes]->) { unique by 
 describe('a match over a tuple of paths', () => {
   it('finds the record at the convergence of both paths', async () => {
     const rust = await run({
-      body: [...PARENTS, TUPLE_MATCH, '  write crm-[:notes]-> { body: "${found.`body`} ${found.`region`}" }'].join('\n'),
+      body: [...PARENTS, TUPLE_MATCH, '  write crm-[:notes]-> { body: "${found?.`body`} ${found?.`region`}" }'].join('\n'),
       candidates: { note: [NOTE] },
       read: { 'note-1': { region: 'EU' } },
     });
@@ -269,7 +269,7 @@ describe('a match over a tuple of paths', () => {
   it('asks the judge with every candidate, and binds the one it picks', async () => {
     const other: ExternalRecordRef = { adapterType: 'attio', externalId: 'note-2', data: { body: 'Acme Ltd' } };
     const rust = await run({
-      body: [...PARENTS, '  found = match (co-[:notes]->, pe-[:notes]->) { unique by (FUZZY `body`), body: "Acm" }', '  write crm-[:notes]-> { body: coalesce(found.`body`, "none") }'].join('\n'),
+      body: [...PARENTS, '  found = match (co-[:notes]->, pe-[:notes]->) { unique by (FUZZY `body`), body: "Acm" }', '  write crm-[:notes]-> { body: coalesce(found?.`body`, "none") }'].join('\n'),
       candidates: { note: [NOTE, other] },
       judge: 1,
     });
@@ -278,7 +278,7 @@ describe('a match over a tuple of paths', () => {
 
   it('matches between two traversed records', async () => {
     const rust = await run({
-      body: ['  crm-[c:companies]-> {', '    crm-[p:people]-> {', '      found = match (c-[:notes]->, p-[:notes]->) { unique by (`body`), body: c.`name` }', '      write crm-[:notes]-> { body: "${found.`body`}/${p.`name`}" }', '    }', '  }'].join('\n'),
+      body: ['  crm-[c:companies]-> {', '    crm-[p:people]-> {', '      found = match (c-[:notes]->, p-[:notes]->) { unique by (`body`), body: c.`name` }', '      write crm-[:notes]-> { body: "${found?.`body`}/${p.`name`}" }', '    }', '  }'].join('\n'),
       related: { companies: [{ id: 'c-1', fields: { name: 'Acme' } }], people: [{ id: 'p-1', fields: { name: 'Ada' } }] },
       candidates: { note: [NOTE] },
     });
@@ -290,7 +290,7 @@ describe('a match over a tuple of paths', () => {
       'export function find(n: <text>) {',
       ...PARENTS,
       '  found = match (co-[:notes]->, pe-[:notes]->) { unique by (`body`), body: n }',
-      '  return coalesce(found.`body`, "none")',
+      '  return coalesce(found?.`body`, "none")',
       '}',
     ]);
     const source = ['import { find } from "lib/forms"', movement(['  b = find(msg.`subject`)', '  write crm-[:notes]-> { body: b }'])].join('\n');
@@ -302,7 +302,7 @@ describe('a match over a tuple of paths', () => {
     // Parked before the parents are written: a handle rehydrated from a
     // park lands in a graph of its own, so two of them fail
     // a tuple's one-graph rule (reported, not this port's to change).
-    const body = ['  await sleep(1h)', ...PARENTS, TUPLE_MATCH, '  write crm-[:notes]-> { body: coalesce(found.`body`, "none") }'].join('\n');
+    const body = ['  await sleep(1h)', ...PARENTS, TUPLE_MATCH, '  write crm-[:notes]-> { body: coalesce(found?.`body`, "none") }'].join('\n');
     const resumed = await parkAndResume({ body, candidates: { note: [NOTE] } });
     expect(resumed).toContain('"body":"Acme"');
   });

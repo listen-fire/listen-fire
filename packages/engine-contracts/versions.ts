@@ -27,13 +27,14 @@ export { CATALOG_SNAPSHOT_VERSION, DEPRECATED_CATALOG_SNAPSHOT_VERSIONS, SUPPORT
 export { DEPRECATED_STORY_ANALYSIS_VERSIONS, STORY_ANALYSIS_VERSION, SUPPORTED_STORY_ANALYSIS_VERSIONS };
 
 /** A parked flow's state (docs/contracts/park-state.md). Engine to engine: a
- *  host stores it and hands it back. Version 3 is the Rust engine's from 0.13
- *  (2 was 0.12's, whose awaits parked on keys); the earlier TypeScript engine
- *  wrote and read 1. */
-export const PARK_STATE_VERSION = 3;
+ *  host stores it and hands it back. Version 4 is the Rust engine's from 0.14,
+ *  which holds no `lazy` walk; it reads 0.13's 3 too, refusing one that holds
+ *  a `lazy` walk (2 was 0.12's, whose awaits parked on keys). The earlier
+ *  TypeScript engine wrote and read 1. */
+export const PARK_STATE_VERSION = 4;
 
 /** The park state versions this release reads: each engine its own. */
-export const SUPPORTED_PARK_STATE_VERSIONS: ReadonlySet<number> = new Set([1, 3]);
+export const SUPPORTED_PARK_STATE_VERSIONS: ReadonlySet<number> = new Set([1, 3, 4]);
 
 /** The host families and the entry points (docs/contracts/host-families.md),
  *  carried on every `segment.open`. */

@@ -107,7 +107,7 @@ function decide(run: <manual-[:Invocations]->>) {
     Buttons: [{ Text: "Pursue", Value: "pursue" }, { Text: "Pass", Value: "pass" }]
   }
   press = await msg-[:Interactions]->
-  write general-[:Messages]-> { Message: "chose \${only(press-[:Actions]->).Value}" }
+  write general-[:Messages]-> { Message: "chose \${only(press-[:Actions]->)?.Value}" }
 }
 
 listen to manual-[:Invocations]-> fire decide

@@ -14,7 +14,7 @@
 //!   add      = mul (('+' | '-') mul)*
 //!   mul      = unary (('*' | '/' | '%') unary)*
 //!   unary    = '-' unary | '!' unary | postfix
-//!   postfix  = primary ('.' name | '(' args ')' | hop+ | '[' where ']')*
+//!   postfix  = primary (('.' | '?.') name | '(' args ')' | hop+ | '[' where ']')*
 //!   primary  = '(' where ')' | closure | IF | literal | string | name | '@…'
 //!            | hop+ | list | map | '<' type '>' | node | graph | declaration
 //!
@@ -54,6 +54,10 @@ pub fn parse_expression_raw(text: &str) -> Result<MExpr, SyntaxError> {
         None => Ok(tree),
     }
 }
+
+/// `?.` anywhere but a field read off a value.
+pub const OPTIONAL_READS_A_FIELD: &str =
+    "'?.' reads a field through a value that may be missing (`x?.Name`) — a walk's records and a function family's members are read with '.'";
 
 /// `!`, which the lexer reads as the keyword `NOT`.
 fn is_bang(tok: &Token) -> bool {
@@ -523,11 +527,15 @@ impl<'a> ExpressionParser<'a> {
             if !self.can_continue(&tok) {
                 return Ok(expr);
             }
-            if tok.is_op(".") {
+            if tok.is_op(".") || tok.is_op("?.") {
                 self.advance()?;
-                let property = self.read_name("after '.'")?;
-                expr = MExpr::Member { object: Box::new(expr), property, at: self.span(start) };
+                let optional = tok.is_op("?.");
+                let property = self.read_name(if optional { "after '?.'" } else { "after '.'" })?;
+                expr = MExpr::Member { object: Box::new(expr), property, optional, at: self.span(start) };
                 continue;
+            }
+            if tok.is_punct("(") && matches!(expr, MExpr::Member { optional: true, .. }) {
+                return fail(OPTIONAL_READS_A_FIELD, tok.start);
             }
             if tok.is_punct("(") && matches!(expr, MExpr::Name { .. } | MExpr::Member { .. }) {
                 let args = self.parse_call_args()?;
@@ -1612,6 +1620,16 @@ mod tests {
         assert_eq!(t["hops"][0]["direction"], "in");
         assert_eq!(t["hops"][0]["alias"]["text"], "m");
         assert_eq!(t["hops"][0]["arrow"], "-");
+    }
+
+    #[test]
+    fn an_optional_read_is_a_member_marked_optional() {
+        let t = tree("x?.a.b");
+        assert_eq!(t["kind"], "member");
+        assert!(t.get("optional").is_none());
+        assert_eq!(t["object"]["optional"], true);
+        assert_eq!(t["object"]["at"], at(0, 4));
+        assert_eq!(error("Text?.upper(x)"), (OPTIONAL_READS_A_FIELD.to_string(), 11));
     }
 
     #[test]

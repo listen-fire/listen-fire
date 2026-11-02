@@ -354,28 +354,91 @@ impl HeldRead<'_> {
 }
 
 /// `MOV_ABSENT_REQUIRED`: a field read through a value that may be absent
-/// (`c.Previous.Stage`, where a created row has no previous), as TypeScript
-/// refuses `x.F` where `x` may be undefined. `exists(x)` proves it present in
-/// the right side of an AND, `NOT exists(x)` in the right side of an OR, and
-/// either in the arm of an `if` it decides.
+/// (`c.Previous.Stage`, where a created row has no previous; `x.Name`, where
+/// `x = only(…)` may find nothing), as TypeScript refuses `x.F` where `x` may
+/// be undefined. `x?.F` reads it, absent when `x` is; `exists(x)` proves it
+/// present in the right side of an AND, `NOT exists(x)` in the right side of
+/// an OR, and either in the arm of an `if` it decides. The fix, `?.`, is
+/// placed by the slot the read is in (`absent_read_fixes`).
 pub fn report_read_through_absent(typing: &mut Typing, subject: &str, field: &str) {
-    // A nested call's staged value (`r[0]`, `only(…)` read on): a test of
-    // the expression (`r[0] != null`) does not narrow the name it is staged
-    // under, so its read stays typed as it was.
-    if subject.chars().any(|c| crate::families::calls::is_nested_call_name(&c.to_string())) {
-        return;
-    }
     let read = format!("{subject}.{}", quote_name(field));
-    let message = if typing.hop_where.is_some() {
-        format!(
-            "'{subject}' may be absent, and '{read}' reads through it. Test it first: `exists({subject}) AND {read} …`, or `NOT exists({subject}) OR {read} …`."
-        )
-    } else {
-        format!(
-            "'{subject}' may be absent, and '{read}' reads through it. Test it first: `exists({subject}) && {read} …`, `!exists({subject}) || {read} …`, or read it inside `if (exists({subject})) {{ … }}`."
-        )
+    let optional = format!("{subject}?.{}", quote_name(field));
+    // A nested call's or an index's staged value (`only(…)`, `r[0]`) has no
+    // name to show.
+    let staged = subject.chars().any(|c| crate::families::calls::is_nested_call_name(&c.to_string()));
+    let and = if typing.hop_where.is_some() { "AND" } else { "&&" };
+    // An index read is tested as written (`exists` takes only a name or a
+    // field read); a call's result is never narrowed, each call answering anew.
+    let entry = typing.env.entry_read_text(subject.trim_matches('`'));
+    let message = match (staged, typing.hop_where.is_some()) {
+        (true, _) => match entry {
+            Some(entry) => {
+                let read = format!("{entry}.{}", quote_name(field));
+                format!(
+                    "'{entry}' may be absent, and '{read}' reads through it. Read it with `{entry}?.{}` (absent when '{entry}' is), or test it first: `{entry} != null {and} {read} …`.",
+                    quote_name(field)
+                )
+            }
+            None => format!(
+                "this value may be absent, and '.{}' reads through it. Read it with `?.{}` (absent when the value is), or name the value and test the name first: `x = …`, then `exists(x)`.",
+                quote_name(field),
+                quote_name(field)
+            ),
+        },
+        (false, true) => format!(
+            "'{subject}' may be absent, and '{read}' reads through it. Read it with `{optional}` (absent when '{subject}' is), or test it first: `exists({subject}) AND {read} …`."
+        ),
+        (false, false) => format!(
+            "'{subject}' may be absent, and '{read}' reads through it. Read it with `{optional}` (absent when '{subject}' is), or test it first: `exists({subject}) && {read} …`, or read it inside `if (exists({subject})) {{ … }}`."
+        ),
     };
     typing.report(codes::ABSENT_REQUIRED, message);
+    if let Some(diagnostic) = typing.diagnostics.last_mut() {
+        diagnostic.read_through = Some((subject.to_string(), field.to_string()));
+    }
+}
+
+/// Places the fix of each read `report_read_through_absent` refused in
+/// `slot`: `?.` for its `.`. The two read alike (absent when the value is),
+/// so an upgrade applies it unasked. A read refused twice takes the places it
+/// is written in order.
+pub fn absent_read_fixes(slot: &movement_parser::ast::ExprSlot, diagnostics: &mut [crate::diagnostic::Diagnostic]) {
+    if !diagnostics.iter().any(|d| d.read_through.is_some()) {
+        return;
+    }
+    let Ok(tree) = movement_parser::expr::parse_expression_raw(&slot.raw) else { return };
+    let units: Vec<u16> = slot.raw.encode_utf16().collect();
+    let spelled = |text: &str| text.chars().filter(|c| !c.is_whitespace() && *c != '`').collect::<String>();
+    let reads = movement_parser::tree::member_reads(&tree);
+    let mut taken = vec![false; reads.len()];
+    for diagnostic in diagnostics.iter_mut() {
+        let Some((subject, field)) = diagnostic.read_through.take() else { continue };
+        let subject = spelled(&subject);
+        let found = reads.iter().enumerate().position(|(i, (object, name, optional))| {
+            let at = object.at();
+            !taken[i] && !optional && name.text == field && spelled(&String::from_utf16_lossy(&units[at.start..at.end])) == subject
+        });
+        let Some(i) = found else { continue };
+        taken[i] = true;
+        let (object, name, _) = reads[i];
+        let Some(dot) = (object.at().end..name.at.start).rev().find(|&u| units[u] == u16::from(b'.')) else { continue };
+        let span = crate::families::calls::span_of_extent(slot, movement_parser::tree::At { start: dot, end: dot });
+        diagnostic.fix = Some(serde_json::json!({ "edits": [{ "span": span, "text": "?" }], "safe": true }));
+    }
+}
+
+/// `absent_read_fixes` for a head's hops (a listen's WHERE), read as a walk
+/// off a stand-in root one column before them. The hops end where the head
+/// does; over several lines they have no exact place (`head_hops_extent`).
+pub fn absent_head_read_fixes(head: &PathHead, diagnostics: &mut [crate::diagnostic::Diagnostic]) {
+    if head.hops_raw.contains('\n') {
+        return;
+    }
+    let end = head.span.end;
+    let Some(col) = end.col.checked_sub(head.hops_raw.encode_utf16().count() + 1).filter(|col| *col >= 1) else { return };
+    let start = movement_parser::ast::Loc { line: end.line, col };
+    let slot = movement_parser::ast::ExprSlot::plain(format!("x{}", head.hops_raw), movement_parser::ast::Span { start, end });
+    absent_read_fixes(&slot, diagnostics);
 }
 
 /// `MOV_WALK_OFF_HELD_RECORD`: a walk off what a `record` field holds. It
@@ -1389,6 +1452,8 @@ impl crate::checker::Checker<'_> {
         }
         self.record_observed(head.span, scope, observed);
         self.effects.note_watchable_reads(&watchable);
+        let mut diagnostics = diagnostics;
+        absent_head_read_fixes(head, &mut diagnostics);
         for diagnostic in diagnostics {
             self.push(diagnostic);
         }
@@ -1505,8 +1570,33 @@ fn narrowing_example(u: &crate::types::position::UnionPosition, carrying: &[&Str
 // ── IS-test narrowing (`checkCondition`'s isTest case, `checkIf`'s
 // elimination down the arms) ──
 
-/// What the failed `IS` tests above an arm ruled out, per subject name.
+/// What the failed `IS` tests above an arm ruled out, per subject name: a
+/// union's variants, or, for one of several records, each test's instance
+/// and record type (`one_of_test`).
 pub type RuledOut = indexmap::IndexMap<String, Vec<String>>;
+
+/// The records a value may be one of, and whether it may be none.
+struct OneOf {
+    members: Vec<Position>,
+    may_be_empty: bool,
+}
+
+impl OneOf {
+    /// The members `<instance-[:position]->>` names.
+    fn named(&self, instance: &crate::types::position::InstanceRef, position: &str) -> Vec<Position> {
+        self.members.iter().filter(|member| is_member_named(member, &instance.name, position)).cloned().collect()
+    }
+}
+
+/// A failed test of one of several records, as `RuledOut` keeps it.
+fn one_of_test(instance: &crate::types::position::InstanceRef, position: &str) -> String {
+    format!("{}\u{0}{position}", instance.name)
+}
+
+/// The member is a record of `position` in `instance`, or a narrowing of one.
+fn is_member_named(member: &Position, instance: &str, position: &str) -> bool {
+    matches!(member, Position::Position(record) if record.instance.name == instance && (record.position == position || record.narrows.as_deref() == Some(position)))
+}
 
 /// `residualUnion`: a union with only `remaining` left; one left is that position.
 fn residual_union(union: &crate::types::position::UnionPosition, remaining: &[String]) -> Position {
@@ -1568,6 +1658,39 @@ impl crate::checker::Checker<'_> {
             Position::Union(u) => Some(u.clone()),
             _ => None,
         }
+    }
+
+    /// The records `name` may be one of (`Memo | Remark`): its position, or
+    /// the record its value holds.
+    fn one_of(&self, name: &str, scope: ScopeId) -> Option<OneOf> {
+        let types = self.symbol_types(name, scope)?;
+        let typed = types.pos.clone().or_else(|| match types.field.as_ref().map(crate::types::field::strip_absent) {
+            Some(Ty::Record(Some(position))) => Some((**position).clone()),
+            _ => None,
+        })?;
+        let (of, may_be_empty) = match typed {
+            Position::MaybeEmpty(of) => (*of, true),
+            other => (other, crate::types::field::is_maybe_absent(types.field.as_ref())),
+        };
+        let Position::OneOf(members) = of else { return None };
+        Some(OneOf { members, may_be_empty })
+    }
+
+    /// Re-declares `name` (resolved from `scope`) into `into` as `position`,
+    /// its value's record with it.
+    fn declare_one_of(&mut self, name: &str, scope: ScopeId, into: ScopeId, position: Position) {
+        let Resolution::Found(id) = self.scopes.resolve(scope, name) else { return };
+        let mut symbol = self.scopes.symbol(id).clone();
+        if symbol.types.field.is_some() {
+            let record = match &position {
+                Position::MaybeEmpty(of) => crate::types::field::maybe_absent(Ty::record(Some((**of).clone()))),
+                other => Ty::record(Some(other.clone())),
+            };
+            symbol.types.field = Some(record);
+        }
+        symbol.types.pos = Some(position);
+        let narrowed = self.scopes.add_symbol(symbol);
+        self.scopes.declare(into, narrowed);
     }
 
     /// Re-declares `name` (resolved from `scope`) into `into` with a sharper position.
@@ -1636,14 +1759,23 @@ impl crate::checker::Checker<'_> {
         if let Some(hops) = &type_.hops_raw {
             self.check_address_pins(&type_.graph, hops, span, scope);
         }
-        let (Some(into), Some(instance), true) = (narrow_into, instance, bare) else { return };
-        let subject_pos = self.symbol_types(subject, scope).and_then(|t| t.pos.clone());
-        if let (Some(Position::Union(union)), Some(position)) = (&subject_pos, &type_.position)
-            && crate::types::position::same_instance(&union.instance, &instance)
-            && union.variants.contains(position)
+        if let (true, Some(instance), Some(position), None) = (bare, &instance, &type_.position, &type_.hops_raw)
+            && let Some(value) = self.never_is(subject, scope, instance, position)
         {
-            self.declare_narrowed(subject, scope, into, Some(Position::record(instance.clone(), position.clone())));
+            let tested = describe_position(&Position::record(instance.clone(), position.clone()));
+            let mut warning = crate::Diagnostic::error(
+                codes::IS_NO_OVERLAP,
+                format!("'{subject}' is {value}, never {tested}: the types have no overlap, so this test is always false. Test for one of what it may be"),
+                span,
+            );
+            warning.severity = Some(Severity::Warning);
+            self.push(warning);
         }
+        let (Some(into), Some(instance), true) = (narrow_into, instance, bare) else { return };
+        if self.narrow_is_true(subject, type_, scope, into) {
+            return;
+        }
+        let subject_pos = self.symbol_types(subject, scope).and_then(|t| t.pos.clone());
         // The same type guard on a value that may be a record or may be
         // something else (`v = COALESCE(org, "x")`): inside the arm it IS the
         // record the test names — TypeScript's `Org | string` narrowed.
@@ -1696,11 +1828,70 @@ impl crate::checker::Checker<'_> {
         self.declare_narrowed(subject, scope, into, Some(resolved));
     }
 
+    /// What a true `subject IS <g-[:T]->>` makes a value that is one of
+    /// several records (`Memo | Remark`: the member(s) it names) or a
+    /// union's record (the variant), declared into `into`, as TypeScript
+    /// narrows a union. False where the subject is neither.
+    pub fn narrow_is_true(&mut self, subject: &str, type_: &movement_parser::lowering::condition::IsType, scope: ScopeId, into: ScopeId) -> bool {
+        let (Some(position), None) = (&type_.position, &type_.hops_raw) else { return false };
+        let Some(instance) = self.graph_instance(&type_.graph, scope) else { return false };
+        if let Some(one_of) = self.one_of(subject, scope) {
+            let named = one_of.named(&instance, position);
+            if let Some(narrowed) = crate::types::unions::join_positions(&named.iter().collect::<Vec<_>>()) {
+                self.declare_one_of(subject, scope, into, narrowed.position);
+            }
+            return true;
+        }
+        if let Some(union) = self.union_of(subject, scope)
+            && crate::types::position::same_instance(&union.instance, &instance)
+            && union.variants.contains(position)
+        {
+            self.declare_narrowed(subject, scope, into, Some(Position::record(instance, position.clone())));
+        }
+        false
+    }
+
+    /// What `subject` may be, described, where none of it can be a record of
+    /// `position` in `instance`: one of several records none of which is
+    /// one (or narrows one), or a union none of whose variants is.
+    fn never_is(&self, subject: &str, scope: ScopeId, instance: &crate::types::position::InstanceRef, position: &str) -> Option<String> {
+        if !matches!(crate::types::position::position_ref_in(instance, position), Some(Position::Position(_))) {
+            return None;
+        }
+        if let Some(one_of) = self.one_of(subject, scope) {
+            let same = one_of.members.iter().any(|member| matches!(member, Position::Position(r) if crate::types::position::same_instance(&r.instance, instance)));
+            return (same && one_of.named(instance, position).is_empty()).then(|| describe_position(&Position::OneOf(one_of.members.clone())));
+        }
+        let union = self.union_of(subject, scope)?;
+        if !crate::types::position::same_instance(&union.instance, instance) {
+            return None;
+        }
+        let overlaps = union.variants.iter().any(|variant| {
+            variant == position
+                || match crate::types::position::position_ref_in(instance, variant) {
+                    Some(Position::Position(record)) => record.position == position || record.narrows.as_deref() == Some(position),
+                    _ => true,
+                }
+        });
+        (!overlaps).then(|| describe_position(&Position::Union(union)))
+    }
+
     /// `collectIsElimination`: a bare `IS` that failed rules its variant out.
     pub fn collect_is_elimination(&self, condition: &movement_parser::lowering::condition::MovementCondition, scope: ScopeId, ruled_out: &mut RuledOut) {
         let movement_parser::lowering::condition::MovementCondition::IsTest { subject_raw, type_ } = condition else { return };
         let subject = subject_raw.trim();
         if !crate::slots::is_bare_ident(subject) {
+            return;
+        }
+        if let (Some(position), None) = (&type_.position, &type_.hops_raw)
+            && self.one_of(subject, scope).is_some()
+            && let Some(instance) = self.graph_instance(&type_.graph, scope)
+        {
+            let eliminated = ruled_out.entry(subject.to_string()).or_default();
+            let test = one_of_test(&instance, position);
+            if !eliminated.contains(&test) {
+                eliminated.push(test);
+            }
             return;
         }
         let Some(union) = self.union_of(subject, scope) else { return };
@@ -1734,6 +1925,20 @@ impl crate::checker::Checker<'_> {
     /// `declareEliminated`: each subject, its union minus what was ruled out.
     pub fn declare_eliminated(&mut self, ruled_out: &RuledOut, scope: ScopeId, into: ScopeId) {
         for (name, eliminated) in ruled_out {
+            if let Some(one_of) = self.one_of(name, scope) {
+                let mut rest = one_of.members.clone();
+                for test in eliminated {
+                    let Some((instance, position)) = test.split_once('\u{0}') else { continue };
+                    rest.retain(|member| !is_member_named(member, instance, position));
+                }
+                if rest.len() < one_of.members.len()
+                    && let Some(joined) = crate::types::unions::join_positions(&rest.iter().collect::<Vec<_>>())
+                {
+                    let position = if one_of.may_be_empty { Position::MaybeEmpty(Box::new(joined.position)) } else { joined.position };
+                    self.declare_one_of(name, scope, into, position);
+                }
+                continue;
+            }
             let Some(union) = self.union_of(name, scope) else { continue };
             let remaining: Vec<String> = union.variants.iter().filter(|v| !eliminated.contains(v)).cloned().collect();
             if remaining.len() == union.variants.len() {

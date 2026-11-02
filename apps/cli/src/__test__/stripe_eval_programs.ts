@@ -23,13 +23,13 @@ function \`Payment Failed\`(e: <pay-[:InvoiceChange]->>) {
   if (inv == null) { fail("\${e.Type} is not about an invoice") }
   customer = only(inv-[:Customer]->)
   attempt = only(inv-[c:Charges WHERE c.Status == "failed" ORDER BY c.Created DESC LIMIT 1]->)
-  reason = coalesce(attempt.\`Failure Message\`, attempt.\`Outcome Seller Message\`, "Stripe gave no reason")
+  reason = coalesce(attempt?.\`Failure Message\`, attempt?.\`Outcome Seller Message\`, "Stripe gave no reason")
   amount = Currency.formatFigure(inv.\`Amount Due\`, inv.Currency)
 
   billing = only(chat-[ch:Channels WHERE ch.Name == "billing"]->)
   if (billing == null) { fail("no #billing channel") }
   write billing-[:Messages]-> {
-    Message: "Payment failed: \${coalesce(customer.Name, inv.\`Customer Name\`)} — \${amount} (\${inv.Currency}). Stripe says: \${reason}"
+    Message: "Payment failed: \${coalesce(customer?.Name, inv.\`Customer Name\`)} — \${amount} (\${inv.Currency}). Stripe says: \${reason}"
   }
 }
 

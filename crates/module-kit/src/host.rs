@@ -21,7 +21,7 @@ use tokio::net::TcpListener;
 
 use crate::adapter::{Adapter, AdapterModule};
 use crate::context::{Ctx, ModuleError};
-use crate::core::{Limiter, LimiterModule, LoopGuard, LoopGuardModule, Ocr, OcrModule, Store, StoreModule, Wake, WakeModule};
+use crate::core::{Limiter, LimiterModule, Ocr, OcrModule, Store, StoreModule, Wake, WakeModule};
 use crate::module::Module;
 use crate::plugin::{PluginModule, Plugins};
 
@@ -126,10 +126,6 @@ impl Host {
 
     pub fn limiter(self, name: &str, limiter: impl Limiter + 'static) -> Host {
         self.module(LimiterModule::new(name, limiter))
-    }
-
-    pub fn loop_guard(self, name: &str, guard: impl LoopGuard + 'static) -> Host {
-        self.module(LoopGuardModule::new(name, guard))
     }
 
     pub fn wake(self, name: &str, wake: impl Wake + 'static) -> Host {

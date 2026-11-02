@@ -46,9 +46,6 @@ pub enum Binding {
     /// (`kind: 'extractPosition'`). `id` is the binding object's own
     /// identity: a walk wraps the same entity in a new one each time.
     Extracted { emission: Rc<crate::extract::emission::Emission>, root: bool, id: Identity },
-    /// A walk kept to run at each read (`kind: 'lazyWalk'`): `x = lazy
-    /// msg-[a:files]->`.
-    LazyWalk(Rc<DeferredWalk>),
     /// A bound block's returned records (`kind: 'positions'`, run.ts
     /// `blockValue`), or a list of records a value holds read as the records
     /// it holds (`heldBinding`).
@@ -190,7 +187,6 @@ impl Binding {
             (Binding::Node(a), Binding::Node(b)) => Rc::ptr_eq(a, b),
             (Binding::Landed(a), Binding::Landed(b)) => Rc::ptr_eq(a, b),
             (Binding::Extracted { id: a, .. }, Binding::Extracted { id: b, .. }) => a == b,
-            (Binding::LazyWalk(a), Binding::LazyWalk(b)) => Rc::ptr_eq(a, b),
             (Binding::Tuple(a), Binding::Tuple(b)) => Rc::ptr_eq(a, b),
             (Binding::Closure(a), Binding::Closure(b)) => Rc::ptr_eq(a, b),
             (Binding::ShapePosition(a), Binding::ShapePosition(b)) => Rc::ptr_eq(a, b),
@@ -256,7 +252,7 @@ impl Landed {
 }
 
 /// `{kind: 'nodePosition', fields, fieldOrder, fieldProvenance, landedOn?,
-/// edges}`, the edges all landed (this engine builds no deferred one).
+/// edges}`, the edges all landed.
 #[derive(Debug, Default)]
 pub struct Node {
     /// As the JavaScript object holds them: in its key order.
@@ -289,28 +285,12 @@ impl Node {
 pub struct Edge {
     pub landings: Vec<Binding>,
     pub shape: Option<LandingShape>,
-    /// A `lazy` entry's edge (`{kind: 'deferred', walk}`): it holds no
-    /// landings, and every read of it runs the walk again.
-    pub deferred: Option<Rc<DeferredWalk>>,
 }
 
 impl Edge {
     pub fn landed(landings: Vec<Binding>) -> Edge {
-        Edge { landings, shape: None, deferred: None }
+        Edge { landings, shape: None }
     }
-}
-
-/// `DeferredWalk`: a traversal as written, the scope it was written in
-/// captured flat (`captureScope`: later bindings never reach it), and the
-/// per-item tail its landings are synthesised through, if any.
-#[derive(Debug)]
-pub struct DeferredWalk {
-    pub head: movement_parser::ast::PathHead,
-    /// The head's AST path: a park writes the head as the program holds it.
-    pub head_path: String,
-    pub captured: Rc<Scope>,
-    /// The tail literal, and its AST path.
-    pub mapping: Option<(movement_parser::ast::NodeLiteral, String)>,
 }
 
 /// `LocalLandingShape`: a declared node's field names in declaration order

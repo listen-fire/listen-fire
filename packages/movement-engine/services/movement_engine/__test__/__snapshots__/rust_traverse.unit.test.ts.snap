@@ -1193,7 +1193,7 @@ exports[`the expression tail, on both engines COUNT and FIRST over a traversal a
               "kind": "literal",
               "span": {
                 "end": {
-                  "col": 59,
+                  "col": 60,
                   "line": 9,
                 },
                 "start": {
@@ -1214,7 +1214,7 @@ exports[`the expression tail, on both engines COUNT and FIRST over a traversal a
               "kind": "literal",
               "span": {
                 "end": {
-                  "col": 59,
+                  "col": 60,
                   "line": 9,
                 },
                 "start": {
@@ -1317,7 +1317,7 @@ exports[`the expression tail, on both engines COUNT and FIRST over a traversal a
               "kind": "literal",
               "span": {
                 "end": {
-                  "col": 59,
+                  "col": 60,
                   "line": 9,
                 },
                 "start": {
@@ -1338,7 +1338,7 @@ exports[`the expression tail, on both engines COUNT and FIRST over a traversal a
               "kind": "literal",
               "span": {
                 "end": {
-                  "col": 59,
+                  "col": 60,
                   "line": 9,
                 },
                 "start": {
@@ -1736,7 +1736,7 @@ exports[`the expression tail, on both engines COUNT and FIRST over a traversal f
               "kind": "literal",
               "span": {
                 "end": {
-                  "col": 59,
+                  "col": 60,
                   "line": 9,
                 },
                 "start": {
@@ -1757,7 +1757,7 @@ exports[`the expression tail, on both engines COUNT and FIRST over a traversal f
               "kind": "literal",
               "span": {
                 "end": {
-                  "col": 59,
+                  "col": 60,
                   "line": 9,
                 },
                 "start": {
@@ -2113,7 +2113,7 @@ exports[`the expression tail, on both engines COUNT and FIRST over a traversal w
               "kind": "literal",
               "span": {
                 "end": {
-                  "col": 59,
+                  "col": 60,
                   "line": 9,
                 },
                 "start": {
@@ -2134,7 +2134,7 @@ exports[`the expression tail, on both engines COUNT and FIRST over a traversal w
               "kind": "literal",
               "span": {
                 "end": {
-                  "col": 59,
+                  "col": 60,
                   "line": 9,
                 },
                 "start": {

@@ -446,7 +446,7 @@ mod tests {
 
     #[test]
     fn a_fixless_upgrade_note_is_listed_and_holds_the_pin() {
-        let source = "import { crm as crm_module, mail as mail_module } from adapters\ncrm = connect crm_module\nmail = connect mail_module\nfunction go(t: <text>) {\n  founder = only(crm-[:People]->)\n  m = write mail-[:Messages]-> { To: t }\n  r = await m-[x:Replies WHERE x.From == founder.Email]->\n}\n";
+        let source = "import { crm as crm_module, mail as mail_module } from adapters\ncrm = connect crm_module\nmail = connect mail_module\nfunction go(t: <text>) {\n  founder = only(crm-[:People]->)\n  m = write mail-[:Messages]-> { To: t }\n  r = await m-[x:Replies WHERE x.From == founder?.Email]->\n}\n";
         let catalog = CatalogSnapshot::load(CATALOG).unwrap();
         let upgraded = upgrade_source(source, &catalog, false, "0.12.13");
         assert_eq!(upgraded.source, source);
@@ -455,8 +455,8 @@ mod tests {
         // Two notes, neither with a rewrite: the WHERE's captured value, and
         // the wait no `sleep` races.
         assert_eq!(notes.len(), 2, "{notes:?}");
-        assert!(notes.iter().any(|n| n.starts_with("go.mvt:7:13 warning MOV_AWAIT_VALUE_CAPTURED 'founder.Email' in this wait's WHERE is read once")), "{notes:?}");
-        assert!(notes.iter().any(|n| n.starts_with("go.mvt:7:7 warning MOV_AWAIT_MAY_HANG 'await m-[x:Replies WHERE x.From == founder.Email]->' is not in a `race` with a `sleep`")), "{notes:?}");
+        assert!(notes.iter().any(|n| n.starts_with("go.mvt:7:13 warning MOV_AWAIT_VALUE_CAPTURED 'founder?.Email' in this wait's WHERE is read once")), "{notes:?}");
+        assert!(notes.iter().any(|n| n.starts_with("go.mvt:7:7 warning MOV_AWAIT_MAY_HANG 'await m-[x:Replies WHERE x.From == founder?.Email]->' is not in a `race` with a `sleep`")), "{notes:?}");
         assert!(matches!(pin_step("engine: 0.12.13\n", upgraded.remaining.len(), upgraded.notes.len()).unwrap(), PinStep::Held { remaining: 0, unchecked: 2 }));
         assert!(matches!(pin_step("engine: 0.12.13\n", upgraded.remaining.len(), 0).unwrap(), PinStep::Set(_)));
         // Under this release's own pin there is nothing to say.
@@ -551,5 +551,22 @@ mod tests {
         let fix = |l, c0, c1, t: &str| Fix { edits: vec![Edit { start: (l, c0), end: (l, c1), text: t.into() }], safe: true, key: Value::Null };
         // "é😀" is 3 UTF-16 units; the edit after it starts at column 4.
         assert_eq!(apply("é😀xy\nz", &[fix(1, 4, 5, "X"), fix(2, 1, 1, ">")]), "é😀Xy\n>z");
+    }
+
+    const STORE: &str = r#"{"adapters":{
+      "store":{"canFire":false,"constructionArgs":[],"schemas":{"":{"positions":{
+        "Table":{"properties":{"Name":"text"},"edges":{}}},
+        "collections":{"Tables":{"target":"Table"}},"writableRoots":{}}}}
+    },"credentials":{},"plugins":{}}"#;
+
+    /// `lazy` is replaced by hand: even `--all` rewrites none of it, and each
+    /// stands, holding the pin (`pin_step`).
+    #[test]
+    fn lazy_is_left_for_the_author_and_holds_the_pin() {
+        let catalog = CatalogSnapshot::load(STORE).unwrap();
+        let source = "import { store } from adapters\ns = connect store\n\nfunction kept() {\n  return lazy s-[t:Tables]->\n}\n\nfunction lz() {\n  tables = lazy s-[t:Tables]->\n  g = node { tabs: lazy s-[t:Tables]-> }\n  return { n: count(tables), m: count(g-[:tabs]->) }\n}\n";
+        let upgraded = upgrade_source(source, &catalog, true, "0.13.0");
+        assert_eq!(upgraded.source, source);
+        assert_eq!(upgraded.remaining.iter().map(|d| d.code.as_str()).collect::<Vec<_>>(), ["MOV_LAZY_RETIRED"; 3]);
     }
 }

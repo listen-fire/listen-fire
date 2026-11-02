@@ -4,8 +4,11 @@
 
 use crate::scope::{Resolution, ScopeId, Scopes};
 
+use movement_parser::lowering::expression::StaticValue;
+
 use super::field::{CollectionOrder, Ty};
 use super::infer::TypeEnv;
+use super::narrowing::{EntryRead, PresenceProof};
 use super::position::Position;
 
 /// What a binding is typed as, on whichever plane (`ScopeSymbol`'s
@@ -43,6 +46,9 @@ pub struct ScopeEnv<'s> {
     /// Each function declared with a name read as a value
     /// (`functionAsValue`), typed before the typing that reads it.
     pub function_values: &'s std::collections::HashMap<crate::scope::SymbolId, super::position::ClosureType>,
+    /// Each index read hoisted out of an expression, by the name it is bound
+    /// to: its structure, and its text as written.
+    pub entry_reads: &'s std::collections::HashMap<String, (EntryRead, String)>,
 }
 
 impl ScopeEnv<'_> {
@@ -50,6 +56,26 @@ impl ScopeEnv<'_> {
         match self.scopes.resolve(self.scope, name) {
             Resolution::Found(id) => Some(&self.scopes.symbol(id).types),
             _ => None,
+        }
+    }
+
+    /// `root[index]` by its structure, `root` resolved here.
+    pub fn entry_read(&self, root: &str, index: &StaticValue) -> Option<EntryRead> {
+        let Resolution::Found(id) = self.scopes.resolve(self.scope, root) else { return None };
+        let symbol = self.scopes.symbol(id);
+        Some(EntryRead { name: symbol.name.clone(), declared: symbol.span, index: index.clone() })
+    }
+
+    /// The entry a proof is about, written (`l[1] != null`, `d.a != null`,
+    /// the member `d["a"]`) or hoisted, and the proof restated about it.
+    pub fn entry_of(&self, proof: &PresenceProof) -> Option<(EntryRead, PresenceProof)> {
+        match proof {
+            PresenceProof::Entry { root, index } => Some((self.entry_read(root, index)?, proof.clone())),
+            PresenceProof::Field { root, property } if !self.entry_reads.contains_key(root) => {
+                let index = StaticValue::String(property.clone());
+                Some((self.entry_read(root, &index)?, PresenceProof::Entry { root: root.clone(), index }))
+            }
+            other => self.entry_reads.get(other.root()).map(|(entry, _)| (entry.clone(), other.clone())),
         }
     }
 }
@@ -109,5 +135,14 @@ impl TypeEnv for ScopeEnv<'_> {
 
     fn is_many_valued_name(&self, name: &str) -> bool {
         self.types(name).is_some_and(|t| t.many_valued)
+    }
+
+    fn same_entry(&self, proof: &PresenceProof) -> Vec<PresenceProof> {
+        let Some((entry, proof)) = self.entry_of(proof) else { return Vec::new() };
+        self.entry_reads.iter().filter(|(name, (read, _))| *read == entry && name.as_str() != proof.root()).map(|(name, _)| proof.about(name)).collect()
+    }
+
+    fn entry_read_text(&self, name: &str) -> Option<String> {
+        self.entry_reads.get(name).map(|(_, written)| written.clone())
     }
 }

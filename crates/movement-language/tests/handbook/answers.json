@@ -1705,7 +1705,7 @@
 {"at":{"character":21,"line":13},"codeActions":[],"complete":{"items":7,"word":{"end":{"character":21,"line":13},"start":{"character":21,"line":13}}}},
 {"at":{"character":4,"line":14},"definition":null,"hover":null},
 {"at":{"character":33,"line":14},"codeActions":[],"complete":{"items":123,"word":{"end":{"character":33,"line":14},"start":{"character":33,"line":14}}}},
-{"at":{"character":53,"line":14},"codeActions":[],"complete":{"items":2,"word":{"end":{"character":53,"line":14},"start":{"character":53,"line":14}}}},
+{"at":{"character":54,"line":14},"codeActions":[],"complete":{"items":2,"word":{"end":{"character":54,"line":14},"start":{"character":54,"line":14}}}},
 {"at":{"character":4,"line":15},"definition":null,"hover":null},
 {"at":{"character":24,"line":15},"codeActions":[],"complete":{"items":123,"word":{"end":{"character":24,"line":15},"start":{"character":24,"line":15}}}}
 ]},
@@ -1749,7 +1749,7 @@
 {"at":{"character":6,"line":23},"definition":null,"hover":null},
 {"at":{"character":23,"line":23},"codeActions":[],"complete":{"items":2,"word":{"end":{"character":23,"line":23},"start":{"character":23,"line":23}}}},
 {"at":{"character":6,"line":24},"definition":null,"hover":null},
-{"at":{"character":28,"line":24},"codeActions":[],"complete":{"items":2,"word":{"end":{"character":28,"line":24},"start":{"character":28,"line":24}}}},
+{"at":{"character":29,"line":24},"codeActions":[],"complete":{"items":2,"word":{"end":{"character":29,"line":24},"start":{"character":29,"line":24}}}},
 {"at":{"character":7,"line":26},"codeActions":[],"complete":{"items":133,"word":{"end":{"character":7,"line":26},"start":{"character":7,"line":26}}}},
 {"at":{"character":7,"line":26},"definition":null,"hover":null}
 ]},
@@ -1796,11 +1796,11 @@
 {"at":{"character":2,"line":26},"definition":{"file":null,"range":{"end":{"character":8,"line":26},"start":{"character":2,"line":26}}},"hover":{"contents":"```movement\nsender: an extracted 'Sender' record (or absent)\n```\nSet on line 27. It may be empty, so check it before use.\n\n[Docs](<docs>/reference#top-level)","range":{"end":{"character":8,"line":26},"start":{"character":2,"line":26}}}},
 {"at":{"character":83,"line":26},"codeActions":[],"complete":{"items":139,"word":{"end":{"character":83,"line":26},"start":{"character":83,"line":26}}}},
 {"at":{"character":2,"line":27},"definition":{"file":null,"range":{"end":{"character":5,"line":27},"start":{"character":2,"line":27}}},"hover":{"contents":"```movement\nbig: boolean\n```\nSet on line 28.\n\n[Docs](<docs>/reference#top-level)","range":{"end":{"character":5,"line":27},"start":{"character":2,"line":27}}}},
-{"at":{"character":55,"line":27},"codeActions":[],"complete":{"items":2,"word":{"end":{"character":55,"line":27},"start":{"character":55,"line":27}}}},
+{"at":{"character":56,"line":27},"codeActions":[],"complete":{"items":2,"word":{"end":{"character":56,"line":27},"start":{"character":56,"line":27}}}},
 {"at":{"character":2,"line":28},"definition":null,"hover":null},
 {"at":{"character":13,"line":28},"codeActions":[],"complete":{"items":6,"word":{"end":{"character":13,"line":28},"start":{"character":13,"line":28}}}},
 {"at":{"character":29,"line":28},"codeActions":[],"complete":{"items":140,"word":{"end":{"character":29,"line":28},"start":{"character":29,"line":28}}}},
-{"at":{"character":74,"line":28},"codeActions":[],"complete":{"items":2,"word":{"end":{"character":74,"line":28},"start":{"character":74,"line":28}}}}
+{"at":{"character":75,"line":28},"codeActions":[],"complete":{"items":2,"word":{"end":{"character":75,"line":28},"start":{"character":75,"line":28}}}}
 ]},
 {"construct": "is type tests (union narrowing through a branch)",
 "probes": [
@@ -2100,7 +2100,7 @@
 {"at":{"character":25,"line":14},"codeActions":[],"complete":{"items":158,"word":{"end":{"character":25,"line":14},"start":{"character":25,"line":14}}}},
 {"at":{"character":6,"line":15},"definition":null,"hover":null},
 {"at":{"character":25,"line":15},"codeActions":[],"complete":{"items":165,"word":{"end":{"character":25,"line":15},"start":{"character":25,"line":15}}}},
-{"at":{"character":38,"line":15},"codeActions":[],"complete":{"items":2,"word":{"end":{"character":38,"line":15},"start":{"character":38,"line":15}}}},
+{"at":{"character":39,"line":15},"codeActions":[],"complete":{"items":2,"word":{"end":{"character":39,"line":15},"start":{"character":39,"line":15}}}},
 {"at":{"character":6,"line":18},"definition":null,"hover":null},
 {"at":{"character":6,"line":19},"definition":null,"hover":null},
 {"at":{"character":17,"line":19},"codeActions":[],"complete":{"items":158,"word":{"end":{"character":17,"line":19},"start":{"character":17,"line":19}}}},
@@ -2993,7 +2993,7 @@
 {"at":{"character":6,"line":29},"definition":null,"hover":null},
 {"at":{"character":17,"line":29},"codeActions":[],"complete":{"items":2,"word":{"end":{"character":17,"line":29},"start":{"character":17,"line":29}}}},
 {"at":{"character":6,"line":30},"definition":null,"hover":null},
-{"at":{"character":49,"line":30},"codeActions":[],"complete":{"items":2,"word":{"end":{"character":49,"line":30},"start":{"character":49,"line":30}}}},
+{"at":{"character":50,"line":30},"codeActions":[],"complete":{"items":2,"word":{"end":{"character":50,"line":30},"start":{"character":50,"line":30}}}},
 {"at":{"character":4,"line":32},"definition":{"file":null,"range":{"end":{"character":19,"line":25},"start":{"character":18,"line":25}}},"hover":{"contents":"```movement\nc: an extracted 'Company' record\n```\nParameter of a function written inside Log Dealflow.\n\n[Docs](<docs>/reference#top-level)","range":{"end":{"character":5,"line":32},"start":{"character":4,"line":32}}}},
 {"at":{"character":7,"line":32},"codeActions":[],"complete":{"items":2,"word":{"end":{"character":7,"line":32},"start":{"character":7,"line":32}}}},
 {"at":{"character":6,"line":33},"definition":null,"hover":null},
@@ -3087,7 +3087,7 @@
 {"at":{"character":4,"line":11},"definition":null,"hover":null},
 {"at":{"character":6,"line":12},"definition":null,"hover":null},
 {"at":{"character":40,"line":12},"codeActions":[],"complete":{"items":42,"word":{"end":{"character":40,"line":12},"start":{"character":40,"line":12}}}},
-{"at":{"character":83,"line":12},"codeActions":[],"complete":{"items":247,"word":{"end":{"character":83,"line":12},"start":{"character":83,"line":12}}}}
+{"at":{"character":84,"line":12},"codeActions":[],"complete":{"items":247,"word":{"end":{"character":84,"line":12},"start":{"character":84,"line":12}}}}
 ]},
 {"construct": "List.sum/avg/min/max over a list of numbers",
 "probes": [

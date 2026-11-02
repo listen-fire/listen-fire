@@ -96,7 +96,7 @@ Record ids are identity, and cross the wire unchanged.
 
 ## Transport
 
-Every module kind — adapter, plugin, and every core slot (store, models, judge, files, limiter, loopGuard, browser) — is reached this one way: this envelope over HTTP. Where it listens decides how:
+Every module kind — adapter, plugin, and every core slot (store, models, judge, files, limiter, browser, wake, ocr, secrets, movements) — is reached this one way: this envelope over HTTP. Where it listens decides how:
 
 | where the module runs | its address | how |
 |---|---|---|
@@ -1519,12 +1519,13 @@ page = web.fetchUrl(u)
 - **Kind.** The manifest may say what the module is: `"kind": "adapter"`,
   `"plugin"` or `"core"`. A `core` module fills one of the host's core
   services and names it in `"slot"`: `models`, `judge`, `store`, `files`,
-  `limiter`, `loopGuard` or `browser`.
+  `limiter`, `browser`, `wake`, `ocr`, `secrets` or `movements`.
   The host names one module per slot (lf.yaml's `core:`); a slot's contract
   is its methods and its conformance suite: [store](store-slot.md),
-  [limiter](limiter-slot.md), [loopGuard](loop-guard-slot.md),
-  [models](models-slot.md), [judge](judge-slot.md), [files](files-slot.md),
-  [browser](browser-slot.md), each over [the transport](#transport). A core
+  [limiter](limiter-slot.md), [models](models-slot.md),
+  [judge](judge-slot.md), [files](files-slot.md), [browser](browser-slot.md),
+  [wake](wake-slot.md), [ocr](ocr-slot.md), [secrets](secrets-slot.md),
+  [movements](movements-slot.md), each over [the transport](#transport). A core
   module answers `manifest` with `{ protocolVersion: 2, protocolMinor, name,
   kind: "core", slot, methods }` (`protocolMinor` as [Versioning](#versioning)
   says: optional, what the module needs its host to speak, never raised by its `methods`).
@@ -1937,6 +1938,7 @@ from `apps/cli`.
 
 ## Changes
 
+- **The loop guard slot is removed** (within version 2; listen-fire 0.14.0; breaking for a module that fills it). A core module whose manifest or `lf-external.yaml` names `slot: loopGuard` is refused by name, as is an `lf.yaml` that names `core.loopGuard`: the host's loop breaker replaces it. listen-fire stopped calling the slot's methods before 0.14.0.
 - **Adapter protocol 2.7: a poll may say when to poll again, and who acted rides on the arrival** (within version 2; 2026-11-02; listen-fire 0.13.1; additive). `poll` may answer `pollAgainAt`, an ISO instant: the host polls that edge next at the earlier of it and its interval, never sooner than a second on ([Polled sources](#polled-sources-and-periodic-tasks)). The cron unit answers its next tick. An arrival may carry `actor`, as `extractActor` answers; the run it fires reads `@actor_*` from it and a host resolves `@user_*` from it ([Who acted](#who-acted)). The run's trigger keeps the arrival's `about` and `actor`, and is stamped with its `occurredAt` (when the host took it, for one that names none), so a run's writes say when the change they follow happened. Why: a schedule is cron's polled `Ticks` edge, and a tick seen only on the next poll fired up to an interval (60 seconds) late; and a run is handed the arrival and never the raw event, so whatever a run or a host feature needs travels on the arrival, set at the door. Both are host behaviours, as 2.3 was: an older host ignores `pollAgainAt` and polls on its interval, and drops `actor` and asks `extractActor`, so a module that answers either states no minor for it.
 - **The settings poll and the events subscription leave the protocol** (adapter protocol 2.6, within version 2; 2026-11-01; listen-fire 0.13.0; breaking for a module that still answers them). `poll` is asked only as `{ edge, filter?, scope?, cursor? }` and answers `{ arrivals, cursor? }`; a 0.12 `{ events, checkpoint }` answer is refused, naming `arrivals`. `ensureEventSubscription` is asked only for an edge; `removeEventSubscription` keeps the 0.12 form only to remove a webhook a 0.12 listen registered, and a host removes such a webhook rather than refreshing it. `emit` is refused 410 (`emit_retired`), naming `wake`; it kept events that fired no listen. Why: a 0.13 listen is a traversal, and nothing a settings poll or an events webhook brings can fire one.
 - **`inbound.redactFields`** (adapter protocol 2.6, within version 2; 2026-11-01; listen-fire 0.13.0; additive). A module names the body and query fields that may carry a credential, and a kept request drops them ([Declared inbound signatures](#declared-inbound-signatures)); a header whose name holds `token`, `key`, `auth`, `hmac` or `password`, or `set-cookie`, is never kept either. A module that names one states `protocolMinor: 6`. Why: Slack sends its legacy verification `token` in the body, and a kept request is stored for days. `@lf/slack` names `token`.

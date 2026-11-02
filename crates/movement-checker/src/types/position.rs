@@ -321,6 +321,9 @@ pub struct RecordPosition {
     /// named (`answerShapeFrom`). It is what landed on an edge off that
     /// write's record, or is reached from such a landing.
     pub write_typed: Option<WriteTypedFields>,
+    /// The record is one of the landings of an edge walked off a union
+    /// whose members' edges land on different record types (`union_walk`).
+    pub past_union: Option<Rc<super::union_walk::PastUnion>>,
 }
 
 /// Paths from a record to a field (edge names, then the field's), each with
@@ -417,6 +420,7 @@ impl Position {
             run_built: false,
             parameter: None,
             write_typed: None,
+            past_union: None,
         })
     }
 
@@ -1062,14 +1066,16 @@ fn landing_of(from: &Position, edge: &str) -> EdgeLanding {
             }
             let schemas: Vec<&EdgeSchema> = carrying.iter().filter_map(|v| u.instance.schema.positions.get(v)?.edges.get(edge)).collect();
             let first = schemas[0];
-
             if schemas.iter().all(|s| s.target == first.target) {
-                match position_ref_in(&u.instance, &first.target) {
+                return match position_ref_in(&u.instance, &first.target) {
                     Some(landing) => EdgeLanding::Landed { landing, edge: Some(first.clone()) },
                     None => EdgeLanding::Untyped { edge: Some(first.clone()) },
-                }
-            } else {
-                EdgeLanding::Untyped { edge: Some(first.clone()) }
+                };
+            }
+            let targets: Vec<(&str, &str)> = carrying.iter().zip(&schemas).map(|(variant, s)| (variant.as_str(), s.target.as_str())).collect();
+            match super::union_walk::joined_landing(u, edge, &targets) {
+                Some(landing) => EdgeLanding::Landed { landing, edge: Some(first.clone()) },
+                None => EdgeLanding::Untyped { edge: Some(first.clone()) },
             }
         }
         Position::Extract { node, .. } if node.declared => EdgeLanding::Untyped { edge: None },

@@ -5,7 +5,6 @@
 // pushes through.
 
 export * from '../services/translation_graph/triggers/types';
-export * from '../services/translation_graph/triggers/trigger_event';
 export * from '../services/translation_graph/triggers/listen_config';
 export * from '../services/translation_graph/triggers/listen_plans';
 export * from '../services/translation_graph/engine/inbound/discriminate';

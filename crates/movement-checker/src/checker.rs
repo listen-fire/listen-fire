@@ -104,6 +104,13 @@ pub struct Checker<'c> {
     /// The name each call hoisted out of an expression is bound to, by where
     /// the call starts in the file (`nested_call_name`).
     pub nested_call_names: std::cell::RefCell<std::collections::HashMap<(usize, usize), String>>,
+    /// Each index read hoisted out of an expression, by the name it is bound
+    /// to: its structure, and its text as written.
+    pub entry_reads: std::collections::HashMap<String, (crate::types::narrowing::EntryRead, String)>,
+    /// What a condition or a guard proved about an entry (`l[1] != null`),
+    /// for the scope it holds in: a later hoisted read of the entry there is
+    /// narrowed as it is declared.
+    pub proven_entries: Vec<(ScopeId, crate::types::narrowing::EntryRead, crate::types::narrowing::PresenceProof)>,
     /// The file's statements' spans, and every name it declares or binds at
     /// its top (with the shapes the extraction keyword's rewrites generate):
     /// where a rewrite hoists a declaration, and the names it may not take.
@@ -132,6 +139,8 @@ pub struct Supplied<'a> {
 
 /// A write's scopes, one per record its root may be (`scopesByMember`).
 struct ByMember {
+    /// The name written to.
+    name: String,
     members: Vec<Position>,
     scopes: Vec<ScopeId>,
 }
@@ -275,6 +284,8 @@ impl<'c> Checker<'c> {
             named_orders: Default::default(),
             hoisted_texts: Default::default(),
             nested_call_names: Default::default(),
+            entry_reads: Default::default(),
+            proven_entries: Vec::new(),
             file_statement_spans: Vec::new(),
             file_names: Default::default(),
             packages: Default::default(),
@@ -313,6 +324,7 @@ impl<'c> Checker<'c> {
         self.declare_units(file);
         self.enter_file_facts(statements);
         self.check_statement_list(statements, file);
+        self.report_lazy_retired(statements);
         self.report_missing_listens();
         self.report_waits_that_may_hang();
         self.report_carried_waits_counted_from_the_walk();
@@ -701,6 +713,8 @@ impl<'c> Checker<'c> {
         };
         self.record_observed(slot.span, scope, observed);
         self.effects.note_watchable_reads(&watchable);
+        let mut diagnostics = diagnostics;
+        crate::families::walks::absent_read_fixes(slot, &mut diagnostics);
         self.push_typed(diagnostics);
         SlotTyped { expr: Some(parsed), ty, may_hold, held }
     }
@@ -719,10 +733,14 @@ impl<'c> Checker<'c> {
     /// condition false below the `if` (while every arm before it leaves too);
     /// the `else` sees every arm's condition false; and when the `else` and
     /// every arm but one leave, that arm's condition holds below.
-    /// A failed bare `IS` test rules its variant out of the arms below it.
+    /// A failed bare `IS` test rules its variant out of the arms below it,
+    /// and out of the statements after the `if` when its arm, and every arm
+    /// before it, always leaves (TypeScript's narrowing past an early return).
     fn check_if(&mut self, statement: &movement_parser::ast::IfStatement, scope: ScopeId) {
         // A failed bare `IS` rules its variant out of every later arm and the `else`.
         let mut ruled_out = crate::families::walks::RuledOut::default();
+        // … and out of what follows the `if`, where its arm always leaves.
+        let mut ruled_out_below = crate::families::walks::RuledOut::default();
         let mut all_prior_terminate = true;
         let mut arm_terminates = Vec::new();
         let branch = self.record_node(statement.span, scope, crate::story::What::Branch { arms: Vec::new(), otherwise: None });
@@ -738,14 +756,19 @@ impl<'c> Checker<'c> {
             let terminating = terminates(&arm.body);
             self.record_body(arm.span, "arm", terminating);
             arm_terminates.push(terminating);
-            if all_prior_terminate && terminating {
+            let left = all_prior_terminate && terminating;
+            if left {
                 self.narrow_condition_negation(&arm.condition, scope, scope);
             }
-            all_prior_terminate = all_prior_terminate && terminating;
+            all_prior_terminate = left;
             if let Ok(condition) = condition_of_slot(&arm.condition) {
                 self.collect_is_elimination(&condition, scope, &mut ruled_out);
+                if left {
+                    self.collect_is_elimination(&condition, scope, &mut ruled_out_below);
+                }
             }
         }
+        self.declare_eliminated(&ruled_out_below, scope, scope);
         let Some(else_arm) = &statement.else_arm else { return };
         let else_scope = self.scopes.open(Some(scope));
         self.note_extent(else_arm.span, else_scope);
@@ -804,8 +827,12 @@ impl<'c> Checker<'c> {
             other => vec![other],
         };
         for conjunct in conjuncts {
-            if let MovementCondition::Expr { expr } = conjunct {
-                self.narrow_presence(&expr, scope, scope, slot.span);
+            match conjunct {
+                MovementCondition::Expr { expr } => self.narrow_presence(&expr, scope, scope, slot.span),
+                MovementCondition::IsTest { subject_raw, type_ } if crate::slots::is_bare_ident(subject_raw.trim()) => {
+                    self.narrow_is_true(subject_raw.trim(), &type_, scope, scope);
+                }
+                MovementCondition::IsTest { .. } | MovementCondition::And { .. } => {}
             }
         }
     }
@@ -864,6 +891,8 @@ impl<'c> Checker<'c> {
                 };
                 self.record_observed(slot.span, scope, observed);
                 self.effects.note_watchable_reads(&watchable);
+                let mut diagnostics = diagnostics;
+                crate::families::walks::absent_read_fixes(slot, &mut diagnostics);
                 self.push_typed(diagnostics);
                 // Gating on a structured value is always true, never a decision.
                 if let Some(message) = crate::families::values::json_opaque_message(ty.as_ref(), "used as a condition") {
@@ -1126,7 +1155,7 @@ impl<'c> Checker<'c> {
                 own
             })
             .collect();
-        Some(ByMember { members, scopes })
+        Some(ByMember { name: crate::families::names::spell_name(&name), members, scopes })
     }
 
     /// `everyMember`: a check run once per member of a union. What every
@@ -1152,7 +1181,18 @@ impl<'c> Checker<'c> {
                 let everywhere = each.iter().all(|others| others.iter().any(|other| key(other) == key(d)));
                 let mut d = d.clone();
                 if !everywhere {
-                    d.message = format!("{} (this may be {union}, and a write to it is held to every one of them)", d.message.strip_suffix('.').unwrap_or(&d.message));
+                    let offering = |member: &Position| {
+                        by_member.members.iter().zip(&each).any(|(m, said)| std::ptr::eq(m, member) && !said.iter().any(|other| key(other) == key(&d)))
+                    };
+                    let said = d.message.strip_suffix('.').unwrap_or(&d.message).to_string();
+                    let subject = crate::types::union_walk::Subject { name: by_member.name.clone(), step: format!("write {} {{ … }}", by_member.name) };
+                    d.message = match crate::types::union_walk::member_only(&by_member.members, offering, Some(&subject)) {
+                        Some(crate::types::union_walk::MemberOnly { since, narrowing }) => {
+                            d.code = crate::codes::UNION_MEMBER_ONLY.to_string();
+                            format!("{said} ({since}, and a write to it is held to every one of them. {narrowing})")
+                        }
+                        None => format!("{said} (this may be {union}, and a write to it is held to every one of them)"),
+                    };
                 }
                 self.diagnostics.push(d);
             }

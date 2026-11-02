@@ -49,7 +49,7 @@ mail = connect gmail using henry_mail
 function invoice(msg: <mail-[:Messages]->>) {
   msg-[a:Attachments]-> {
     d = extractOne([a.File], node I: "the invoice" { total: <text> "the amount the invoice asks for" })
-    fail("\${a.Name} total \${d.total}")
+    fail("\${a.Name} total \${d?.total}")
   }
 }
 
