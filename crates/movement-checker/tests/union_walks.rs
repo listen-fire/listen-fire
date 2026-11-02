@@ -58,8 +58,8 @@ const FORMS: &[Form] = &[
     },
     Form {
         name: "bound walk",
-        unnarrowed: |read| format!("  l = crm-[:Subjects]->-[:Notes]->\n  x = only(l).{read}"),
-        narrowed: |read| format!("{NARROW}      l = s-[:Notes]->\n      x = only(l).{read}{CLOSE}"),
+        unnarrowed: |read| format!("  l = crm-[:Subjects]->-[:Notes]->\n  x = only(l)?.{read}"),
+        narrowed: |read| format!("{NARROW}      l = s-[:Notes]->\n      x = only(l)?.{read}{CLOSE}"),
     },
     Form {
         name: "map over a walk",
@@ -68,8 +68,8 @@ const FORMS: &[Form] = &[
     },
     Form {
         name: "expression walk",
-        unnarrowed: |read| format!("  x = only(crm-[:Subjects]->-[:Notes]->).{read}"),
-        narrowed: |read| format!("{NARROW}      x = only(s-[:Notes]->).{read}{CLOSE}"),
+        unnarrowed: |read| format!("  x = only(crm-[:Subjects]->-[:Notes]->)?.{read}"),
+        narrowed: |read| format!("{NARROW}      x = only(s-[:Notes]->)?.{read}{CLOSE}"),
     },
 ];
 
@@ -118,15 +118,15 @@ fn a_field_no_landing_has_is_unknown() {
 
 #[test]
 fn a_walk_on_along_an_edge_every_landing_has_is_typed() {
-    assert_eq!(errors("  x = only(crm-[:Subjects]->-[:Notes]->-[:Author]->).Name"), Vec::<String>::new());
-    let typo = errors("  x = only(crm-[:Subjects]->-[:Notes]->-[:Author]->).Nmae");
+    assert_eq!(errors("  x = only(crm-[:Subjects]->-[:Notes]->-[:Author]->)?.Name"), Vec::<String>::new());
+    let typo = errors("  x = only(crm-[:Subjects]->-[:Notes]->-[:Author]->)?.Nmae");
     assert_eq!(codes(&typo), ["MOV_UNKNOWN_PROPERTY"], "{typo:#?}");
     assert!(typo[0].contains("crm.Person has no field 'Nmae'"), "{typo:#?}");
 }
 
 #[test]
 fn an_edge_only_one_landing_has_is_refused_until_narrowed() {
-    for body in ["  x = only(crm-[:Subjects]->-[:Notes]->-[:Pinned]->).Name", "  x = exists(crm-[:Subjects]->-[:Notes]->-[:Pinned]->)"] {
+    for body in ["  x = only(crm-[:Subjects]->-[:Notes]->-[:Pinned]->)?.Name", "  x = exists(crm-[:Subjects]->-[:Notes]->-[:Pinned]->)"] {
         let found = errors(body);
         assert_eq!(codes(&found), ["MOV_UNION_MEMBER_ONLY"], "{body}: {found:#?}");
         assert!(found[0].starts_with("MOV_UNION_MEMBER_ONLY '-[:Pinned]->' can't be walked here: since 0.14,"), "{found:#?}");

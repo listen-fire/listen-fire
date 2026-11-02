@@ -37,14 +37,15 @@ fn codes(found: &[String]) -> Vec<&str> {
 }
 
 /// `body` in a function where `n` is one of a Memo or a Remark, each way a
-/// value comes to be one.
+/// value comes to be one. A conditional or `COALESCE` of `only(…)` may be
+/// absent, so it is tested first: from 0.14 no field is read through it.
 fn each_value(body: &str) -> Vec<(&'static str, String)> {
     let indented = |pad: &str| body.lines().map(|l| format!("{pad}{l}")).collect::<Vec<_>>().join("\n");
     vec![
         ("a union walk's landing", format!("function go() {{\n  crm-[:Subjects]->-[n:Notes]-> {{\n{}\n  }}\n}}", indented("    "))),
         ("a union parameter", format!("function go(n: <crm-[:Memo]-> | crm-[:Remark]->>) {{\n{}\n}}", indented("  "))),
-        ("a conditional of records", format!("function go(k: <number>) {{\n  n = k > 1 ? only(crm-[:Memos]->) : only(crm-[:Remarks]->)\n{}\n}}", indented("  "))),
-        ("a COALESCE of records", format!("function go() {{\n  n = coalesce(only(crm-[:Memos]->), only(crm-[:Remarks]->))\n{}\n}}", indented("  "))),
+        ("a conditional of records", format!("function go(k: <number>) {{\n  n = k > 1 ? only(crm-[:Memos]->) : only(crm-[:Remarks]->)\n  if (n == null) {{ return \"\" }}\n{}\n}}", indented("  "))),
+        ("a COALESCE of records", format!("function go() {{\n  n = coalesce(only(crm-[:Memos]->), only(crm-[:Remarks]->))\n  if (n == null) {{ return \"\" }}\n{}\n}}", indented("  "))),
     ]
 }
 

@@ -287,9 +287,9 @@ fn a_general_or_narrowed_function_takes_the_union_of_the_two() {
     assert_eq!(called("at-[:Change]->"), Vec::<(String, String)>::new());
     assert_eq!(codes(&called("at-[:Table]->")), ["MOV_CALL_ARG_TYPE"]);
     // A field only the Candidates rows have is refused off the union's live row.
-    let live = errors_of("function audit(c: <at-[:Change]-> | at-[:`Candidates Change`]->>) {\n  return only(c-[:Record]->).Stage\n}\n");
+    let live = errors_of("function audit(c: <at-[:Change]-> | at-[:`Candidates Change`]->>) {\n  return only(c-[:Record]->)?.Stage\n}\n");
     assert_eq!(codes(&live), ["MOV_UNKNOWN_PROPERTY"], "{live:#?}");
-    assert_eq!(errors_of("function audit(c: <at-[:Change]-> | at-[:`Candidates Change`]->>) {\n  return only(c-[:Record]->).Id\n}\n"), Vec::<(String, String)>::new());
+    assert_eq!(errors_of("function audit(c: <at-[:Change]-> | at-[:`Candidates Change`]->>) {\n  return only(c-[:Record]->)?.Id\n}\n"), Vec::<(String, String)>::new());
 }
 
 #[test]
