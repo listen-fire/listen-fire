@@ -140,3 +140,40 @@ test("a listen's WHERE reads a message's fields by the names the run reads them 
     assert.match(skipped.out, /matches the WHERE of no listen on it: it runs nothing/, id);
   }
 });
+
+test("a message's record carries only the email's own fields: Mailgun's signing fields reach no run and no kept request", async () => {
+  const listens = [
+    'import { email } from adapters',
+    '',
+    'inbox = connect email',
+    '',
+    'function seen(m: <inbox-[:Emails]->>) { return { subject: m.Subject, key: m.Key } }',
+    '',
+    'listen to inbox-[e:Emails WHERE e.Key == "deals"]-> fire seen',
+    '',
+  ].join('\n');
+  const dir = await intake(listens);
+  const check = lf(dir, 'check');
+  assert.equal(check.code, 0, check.out);
+
+  const fired = sentTo(dir, 'inbox+deals@acme.test', 'signed');
+  assert.equal(fired.code, 0, fired.out);
+  assert.match(fired.out, /returned/);
+  const runId = /run ([0-9a-f-]{36})/.exec(fired.out)?.[1];
+  assert.ok(runId, fired.out);
+  const shown = lf(dir, 'runs', 'show', runId);
+  assert.equal(shown.code, 0, shown.out);
+  const arrival = (JSON.parse(shown.out) as { run: { event: { arrival: { landing: { fields: Record<string, unknown> } } } } }).run.event.arrival;
+  assert.equal(arrival.landing.fields['subject'], 'Hello');
+  for (const signing of ['token', 'timestamp', 'signature']) assert.equal(signing in arrival.landing.fields, false, `the run's record holds ${signing}`);
+  assert.doesNotMatch(shown.out, /tok-signed/);
+
+  const listed = lf(dir, 'deliveries');
+  assert.equal(listed.code, 0, listed.out);
+  const deliveryId = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/.exec(listed.out)?.[0];
+  assert.ok(deliveryId, listed.out);
+  const kept = (JSON.parse(lf(dir, 'deliveries', 'show', deliveryId, '--request').out) as { delivery: { request: { body: string } } }).delivery.request;
+  const keptForm = new URLSearchParams(Buffer.from(kept.body, 'base64').toString('utf8'));
+  assert.equal(keptForm.get('subject'), 'Hello');
+  for (const signing of ['token', 'timestamp', 'signature']) assert.equal(keptForm.has(signing), false, `the kept body holds ${signing}`);
+});

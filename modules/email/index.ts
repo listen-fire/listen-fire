@@ -22,6 +22,7 @@ import type { InboundCheck, InboundCheckInput } from 'movement-engine/public/ada
 import { EmailAdapter, type EmailSources } from './adapter';
 import { EMAIL_CREDENTIAL, emailAccessFrom } from './credential';
 import { checkEmailInbound, type EmailInboundSources } from './inbound/check';
+import { MAILGUN_SIGNING_FIELDS } from './inbound/mail';
 import { EMAIL_MANIFEST } from './manifest';
 import { fetchEmailAttachment } from './providers';
 
@@ -57,7 +58,8 @@ export const emailModule = defineModule({
   protocolMinor: 6,
   // Mailgun and Resend each sign their own way, neither a declared scheme.
   // `svix-id` tells a Resend notification from a Mailgun post when a kept request is replayed.
-  inbound: { providerKey: 'email', scheme: 'module', captureHeaders: ['svix-id'] },
+  // A Mailgun post is signed by form fields; a kept request holds none of them.
+  inbound: { providerKey: 'email', scheme: 'module', captureHeaders: ['svix-id'], redactFields: [...MAILGUN_SIGNING_FIELDS] },
   create: (ctx) => new InboundEmailAdapter(emailSourcesFrom(ctx), { access: () => emailAccessFrom(ctx) }),
 });
 

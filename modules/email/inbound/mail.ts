@@ -70,6 +70,17 @@ export function parseEmailAddress(raw: string | undefined | null): string | null
 
 // ── Mailgun ────────────────────────────────────────────────────────────────
 
+/** The form fields Mailgun signs a post with. They prove the post; they are not
+ *  the email, so no record carries them and a kept request drops them. */
+export const MAILGUN_SIGNING_FIELDS = ['token', 'timestamp', 'signature'] as const;
+
+/** A Mailgun form without its signing fields: the email's own fields. */
+export function withoutMailgunSigning(form: Record<string, unknown>): Record<string, unknown> {
+  const own = { ...form };
+  for (const field of MAILGUN_SIGNING_FIELDS) delete own[field];
+  return own;
+}
+
 export interface MailgunSignature {
   signature: string;
   token: string;

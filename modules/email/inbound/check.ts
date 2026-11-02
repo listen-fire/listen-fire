@@ -24,7 +24,7 @@ import { inboxKeyOf } from '../address';
 import { DEFAULT_API_BASE_URL } from '../resend';
 import { fetchResendEmailPayload } from '../resend_inbound';
 import { EMAILS_EDGE, EMAIL_KEY_FIELD } from '../types';
-import { RESEND_RECEIVED_EVENT_TYPE, mailgunSignatureVerifies, readMailgunMessage, readResendEnvelope } from './mail';
+import { RESEND_RECEIVED_EVENT_TYPE, mailgunSignatureVerifies, readMailgunMessage, readResendEnvelope, withoutMailgunSigning } from './mail';
 import { verifySvixSignature } from './svix';
 
 import type { EmailProviderAccess } from '../providers';
@@ -66,7 +66,7 @@ function checkMailgun(request: InboundRequest): InboundCheck {
     // transient, and a bad signature will never become good.
     if (!mailgunSignatureVerifies(message, request.secret)) return refused(406);
   }
-  return acceptedEmail(normaliseInboundEmailPayload(form), message.token || undefined);
+  return acceptedEmail(normaliseInboundEmailPayload(withoutMailgunSigning(form)), message.token || undefined);
 }
 
 async function checkResend(request: InboundRequest, sources: EmailInboundSources): Promise<InboundCheck> {

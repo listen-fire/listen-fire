@@ -89,6 +89,18 @@ describe('@lf/email checks its own inbound', () => {
     expect(answer.arrivals?.[0]).not.toHaveProperty('key');
   });
 
+  it("carries only the email's own fields: Mailgun's token, timestamp and signature prove the post and are never in the record", async () => {
+    const { adapter } = load();
+    const answer = await adapter.checkInbound!(request({ body: mailgunForm(), secret: MAILGUN_KEY }));
+    expect(answer.outcome).toBe('accepted');
+    if (answer.outcome !== 'accepted') return;
+    const arrival = answer.arrivals?.[0];
+    const fields = arrival !== undefined && 'landing' in arrival ? arrival.landing.fields : {};
+    for (const signing of ['token', 'timestamp', 'signature']) expect(fields).not.toHaveProperty(signing);
+    expect(fields).toMatchObject({ subject: 'Hello', sender: 'ada@example.com', recipient: 'in+k@lf.test' });
+    expect(JSON.stringify(answer)).not.toContain('tok-1');
+  });
+
   it('refuses a Mailgun post signed with another key (406, never retried)', async () => {
     const { adapter } = load();
     expect(await adapter.checkInbound!(request({ body: mailgunForm('wrong'), secret: MAILGUN_KEY }))).toEqual({ outcome: 'refused', status: 406 });
