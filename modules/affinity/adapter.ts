@@ -67,6 +67,7 @@ import {
   describeChange,
   recordEdgeOf,
   recordTypeOfChange,
+  unplacedChange,
   type ChangeArrival,
   type ChangedRecord,
 } from './changes';
@@ -212,13 +213,14 @@ export class AffinityAdapter extends BaseAdapter {
    * the `Changes` of the record it is about (changes.ts), carrying that record
    * as Affinity holds it now (none for a deleted one). A field value's event
    * names the field by the name its record publishes it under. An event about
-   * anything else (a note, a reminder, a list) runs nothing.
+   * anything else (a note, a reminder, a list) runs nothing. A list entry's
+   * change whose list is not known arrives typed by nothing (`unplacedChange`).
    */
   async preprocessInbound(input: { raw: unknown }): Promise<{ events: []; arrivals: ChangeArrival[] }> {
     const change = changeOf(input.raw);
     if (change === null) return { events: [], arrivals: [] };
     const recordType = await this.recordTypeOf(change.record, change.fieldId);
-    if (recordType === undefined) return { events: [], arrivals: [] };
+    if (recordType === undefined) return { events: [], arrivals: [unplacedChange(change)] };
     const decoded = await this.structuredIdFor(recordType);
     const record = change.kind === 'deleted' || decoded === undefined ? null : await this.changedRecordNow(recordType, decoded, change.record.id);
     const field = change.fieldId === undefined ? undefined : await this.fieldTitle(recordType, change.fieldId);
@@ -267,15 +269,12 @@ export class AffinityAdapter extends BaseAdapter {
     return listId === undefined ? undefined : (await this.perListNamesByListId()).get(listId);
   }
 
-  /** The list a list-scoped field belongs to, from the field catalogs of the
-   *  two kinds of list that have fields of their own. */
+  /** The list a list-scoped field belongs to, from the workspace's whole
+   *  field catalog: an opportunity list's fields are in neither the
+   *  organizations' nor the people's. */
   private async listOfField(fieldId: number): Promise<number | undefined> {
     const client = await this.getApiClient();
-    for (const type of ['ORGANIZATION', 'PERSON'] as const) {
-      const listId = (await cachedFields({ client, type })).find((f) => f.id === fieldId)?.list_id;
-      if (listId != null) return listId;
-    }
-    return undefined;
+    return (await client.getFields({})).find((f) => f.id === fieldId)?.list_id ?? undefined;
   }
 
   /** The name a record type publishes a custom field under, by its Affinity id. */

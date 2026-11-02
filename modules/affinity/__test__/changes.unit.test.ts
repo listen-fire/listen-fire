@@ -127,17 +127,42 @@ describe('@lf/affinity reports each event as the arrival on its record’s Chang
     expect(added).toMatchObject({ key: 'list-entry:13', landing: { recordType: 'List Entry Change — People List', fields: { Kind: 'created' } }, occurredAt: '2026-10-02T00:00:00Z' });
   });
 
-  it('a note, a reminder, a list, a field value on a list the workspace does not list, and junk run nothing', async () => {
+  it('a note, a reminder, a list and junk run nothing', async () => {
     const { adapter } = makeAdapter();
     for (const raw of [
       fieldValue('note.created', { id: 500, content: 'hi' }),
       fieldValue('reminder.updated', { id: 800 }),
       fieldValue('list.created', { id: 9 }),
-      fieldValue('field_value.updated', { id: 1, field_id: 999, entity_type: 1, entity_id: 7101, list_entry_id: 13, value: 'x' }),
       { nonsense: true },
     ]) {
       expect(await adapter.preprocessInbound({ raw })).toEqual({ events: [], arrivals: [] });
     }
+  });
+
+  it("an opportunity list's column names its list from the workspace's whole field catalog", async () => {
+    const { adapter } = makeAdapter();
+    const moved = (await adapter.preprocessInbound({ raw: fieldValue('field_value.updated', { id: 91, field_id: 300, entity_type: 8, entity_id: 700, list_entry_id: 9302, value: 30 }) })).arrivals[0];
+    expect(moved).toMatchObject({ key: 'list-entry:9302', landing: { recordType: 'List Entry Change — Deals', fields: { Kind: 'updated', Record: '9302' } } });
+  });
+
+  it('a list entry change whose list the workspace does not name states no record type, so each listen on Changes says it could not judge it', async () => {
+    const { adapter } = makeAdapter();
+    const unplaced = async (raw: unknown) => (await adapter.preprocessInbound({ raw })).arrivals;
+    const byField = await unplaced(fieldValue('field_value.updated', { id: 1, field_id: 999, entity_type: 1, entity_id: 7101, list_entry_id: 13, value: 'x' }));
+    expect(byField).toEqual([
+      {
+        edge: 'Changes',
+        key: 'list-entry:13',
+        identity: expect.stringMatching(/^field_value\.updated:1:/),
+        // Its field is named by a record type it has none of: a filter on `Field` is undecided, not false.
+        landing: { recordId: byField[0]?.identity, fields: { Id: byField[0]?.identity, Kind: 'updated', Record: '13' }, unknown: ['Field'] },
+        parents: [null],
+        occurredAt: '2026-09-21T14:13:20.000Z',
+      },
+    ]);
+    const byList = await unplaced(fieldValue('list_entry.created', { id: 14, list_id: 9999, entity_id: 7201, entity_type: 0 }));
+    expect(byList).toMatchObject([{ key: 'list-entry:14', landing: { fields: { Kind: 'created', Record: '14' } }, parents: [null] }]);
+    expect(byList[0] !== undefined && 'landing' in byList[0] ? byList[0].landing.recordType : 'gone').toBeUndefined();
   });
 });
 

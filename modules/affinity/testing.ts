@@ -222,6 +222,12 @@ const PERSON_FIELDS = [
   { id: 200, name: 'Title', list_id: null, enrichment_source: 'none', value_type: 6, allows_multiple: false, dropdown_options: null },
 ];
 
+/** The Deals opportunity list's own column: in neither catalog above, only in
+ *  the workspace's whole one. */
+const OPPORTUNITY_LIST_FIELDS = [
+  { id: 300, name: 'Deal Stage', list_id: 557, enrichment_source: 'none', value_type: 7, allows_multiple: false, dropdown_options: [{ id: 30, text: 'Sourced', rank: 0, color: 0 }] },
+];
+
 export function makeAdapter(input?: {
   /** The record Affinity's matcher fetched, as `findMatching…` hands it back. */
   orgMatch?: { id: number; name?: string | null; domain?: string | null; domains?: string[] | null } | null;
@@ -280,7 +286,8 @@ export function makeAdapter(input?: {
   const fakeClient = {
     getWhoami: async () => ({ tenant: { id: 1, name: 'Acme', subdomain: 'acme' }, user: { id: 1, firstName: 'A', lastName: 'B', email: 'a@b.co' }, grant: { type: 't', scope: 's', createdAt: '' } }),
     getFields: async ({ type, limitToListId }: { type?: string; limitToListId?: number }) => {
-      const base = type === 'PERSON' ? PERSON_FIELDS : ORG_FIELDS;
+      // No type is the workspace's whole catalog, as Affinity answers it.
+      const base = type === 'PERSON' ? PERSON_FIELDS : type === 'ORGANIZATION' ? ORG_FIELDS : [...ORG_FIELDS, ...PERSON_FIELDS, ...OPPORTUNITY_LIST_FIELDS];
       return limitToListId ? base.filter((f) => !f.list_id || f.list_id === limitToListId) : base;
     },
     getAllLists: async () => [

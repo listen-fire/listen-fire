@@ -249,6 +249,31 @@ export function changeOf(raw: unknown): AffinityChange | null {
   };
 }
 
+/**
+ * A list entry's change whose list the workspace does not name (a list this
+ * connection cannot see, or one made since its lists were read): it states no
+ * record type, so no listen on `Changes` can tell whether it is its own. The
+ * host says so for each (an `Arrival Not Judged`), where it once ran nothing
+ * without a word, and `listens replay` puts it through again once the list is
+ * known.
+ */
+export function unplacedChange(change: AffinityChange): ChangeArrival {
+  return {
+    edge: AFFINITY_CHANGES_EDGE,
+    key: changesKey(change.record),
+    identity: change.identity,
+    landing: {
+      recordId: change.identity,
+      fields: { Id: change.identity, Kind: change.kind, Record: change.record.id },
+      // The field is named by the record type it is on: a filter on it is
+      // undecided, never false.
+      ...(change.fieldId !== undefined ? { unknown: ['Field'] } : {}),
+    },
+    parents: [null],
+    ...(change.occurredAt !== undefined ? { occurredAt: change.occurredAt } : {}),
+  };
+}
+
 function changedRecord(subject: string, body: Record<string, unknown>): ChangedRecord | null {
   const entity = AFFINITY_CHANGED_ENTITIES.find((e) => e === subject);
   if (entity !== undefined) {

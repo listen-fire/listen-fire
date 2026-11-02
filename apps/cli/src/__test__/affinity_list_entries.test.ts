@@ -13,6 +13,7 @@ import { createHmac } from 'node:crypto';
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { test } from 'node:test';
 
 import { fakeAffinity, type Fake } from './affinity_fixture';
@@ -178,6 +179,35 @@ test("a listen on the Deals list's entries runs on each Status change, naming th
     const returned = listed.runs.map((r) => lf(dir, 'runs', 'show', r.runId).out);
     assert.ok(returned.some((out) => out.includes('updated Status: Diligence')), returned.join('\n'));
     assert.ok(returned.some((out) => out.includes('updated Status: Passed')), returned.join('\n'));
+  } finally {
+    await fake.stop();
+  }
+});
+
+test("a change to an entry of a list the workspace does not name is reported as not judged by the list's listen, not dropped", async () => {
+  const fake = await fakeAffinity(mkdtempSync(join(tmpdir(), 'lf-affinity-fake-')));
+  try {
+    const port = await freePort();
+    const dir = project(fake, '', MOVED, `publicUrl: http://127.0.0.1:${port}\n`);
+    const serving = await served(dir, ['--port', String(port)]);
+    try {
+      const url = (await serving.waitFor(/registered webhook \S+ for the arrivals on Changes at /)).replace(/^.* at /, '');
+      // A column of a list this connection cannot see: no list names entry 4242, so no listen can tell it is its own.
+      const delivered = await deliver(url, 'field_value.updated', { id: 9001, field_id: 99999, entity_type: 1, entity_id: 1, list_entry_id: 4242, value: 'x' });
+      assert.equal(delivered.status, 200, delivered.text);
+      await serving.waitFor(/deal_date:moved: an arrival on Changes cannot be judged \(.*does not say its record type.*\): it runs nothing/);
+    } finally {
+      await serving.stop();
+    }
+    const db = new DatabaseSync(join(dir, '.lf', 'state.db'));
+    try {
+      const facts = db.prepare('select pipeline, edge, record_id as recordId from arrival_unjudged').all().map((row) => ({ ...row }));
+      assert.equal(facts.length, 1, JSON.stringify(facts));
+      assert.match(String(facts[0]?.pipeline), /^listen:deal_date:moved:[0-9a-f]{8}$/);
+      assert.equal(facts[0]?.edge, 'Changes');
+    } finally {
+      db.close();
+    }
   } finally {
     await fake.stop();
   }
