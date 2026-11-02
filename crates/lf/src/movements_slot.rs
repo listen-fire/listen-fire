@@ -1206,6 +1206,10 @@ mod tests {
         let dir = temp("lf-watch-now");
         fs::write(dir.join("a.mvt"), "one").unwrap();
         let module = FolderMovements::at(&dir);
+        // Started before the clock: the OS's watcher starts through fseventsd
+        // on macOS, one stream at a time across every watcher this test run
+        // starts and stops, so its start is not the wait this test times.
+        module.watcher().unwrap();
         on_runtime(async || {
             let asked = std::time::Instant::now();
             let first = match module.watch(None, WAIT).await.unwrap() {
