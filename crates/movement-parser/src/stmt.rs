@@ -220,12 +220,15 @@ struct MarkerOptions {
     allow_hops: bool,
     allow_field_tail: bool,
     allow_null: bool,
+    /// `<a-[:X]-> | a-[:Y]->>`: one of several records.
+    allow_union: bool,
 }
 
-const HOPS: MarkerOptions = MarkerOptions { allow_hops: true, allow_field_tail: false, allow_null: false };
-const FIELD_TAIL: MarkerOptions = MarkerOptions { allow_hops: false, allow_field_tail: true, allow_null: false };
-const FIELD_TAIL_NULL: MarkerOptions = MarkerOptions { allow_hops: false, allow_field_tail: true, allow_null: true };
-const PLAIN: MarkerOptions = MarkerOptions { allow_hops: false, allow_field_tail: false, allow_null: false };
+const HOPS: MarkerOptions = MarkerOptions { allow_hops: true, allow_field_tail: false, allow_null: false, allow_union: false };
+const PARAM: MarkerOptions = MarkerOptions { allow_union: true, ..HOPS };
+const FIELD_TAIL: MarkerOptions = MarkerOptions { allow_hops: false, allow_field_tail: true, allow_null: false, allow_union: false };
+const FIELD_TAIL_NULL: MarkerOptions = MarkerOptions { allow_hops: false, allow_field_tail: true, allow_null: true, allow_union: false };
+const PLAIN: MarkerOptions = MarkerOptions { allow_hops: false, allow_field_tail: false, allow_null: false, allow_union: false };
 
 struct Marker {
     text: String,
@@ -233,6 +236,8 @@ struct Marker {
     position: Option<String>,
     nullable: bool,
     span: Span,
+    /// The members after the first of a union type, each spanning itself.
+    union_rest: Vec<Marker>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -658,9 +663,13 @@ impl Parser {
                 let text = self.read_borrowed_field_tail(&root, context)?;
                 let nullable = self.read_null_suffix(&format!("{root}-[:…]->.…"), options.allow_null)?;
                 self.expect(">", &format!("to close the type '<{root}-[:…]->.…'"))?;
-                return Ok(Marker { text, hops_raw: None, position: None, nullable, span: self.span_from(start) });
+                return Ok(Marker { text, hops_raw: None, position: None, nullable, span: self.span_from(start), union_rest: Vec::new() });
             }
             let (hops_raw, position) = self.read_type_address_hops(&root, context, options.allow_hops)?;
+            if options.allow_union && self.at_union_bar() {
+                let first = Marker { text: root, hops_raw: Some(hops_raw), position, nullable: false, span: self.span_from(root_start), union_rest: Vec::new() };
+                return self.read_union_rest(first, context);
+            }
             self.read_null_suffix(&format!("{root}{hops_raw}"), false)?;
             self.expect(">", &format!("to close the type '<{root}'"))?;
             return Ok(Marker {
@@ -669,11 +678,73 @@ impl Parser {
                 position,
                 nullable: false,
                 span: self.span_from(start),
+                union_rest: Vec::new(),
             });
+        }
+        if options.allow_union && self.at_union_bar() {
+            let first = Marker { text: root, hops_raw: None, position: None, nullable: false, span: self.span_from(root_start), union_rest: Vec::new() };
+            return self.read_union_rest(first, context);
         }
         let nullable = self.read_null_suffix(&root, options.allow_null)?;
         self.expect(">", &format!("to close the type '<{root}'"))?;
-        Ok(Marker { text: root, hops_raw: None, position: None, nullable, span: self.span_from(start) })
+        Ok(Marker { text: root, hops_raw: None, position: None, nullable, span: self.span_from(start), union_rest: Vec::new() })
+    }
+
+    /// At ` | x` where `x` is not `null`: a union type's next member. `| null`
+    /// is left to `read_null_suffix`, which says where it may be written.
+    fn at_union_bar(&self) -> bool {
+        let mut at = self.pos;
+        let units = self.src.units();
+        while at < units.len() && (units[at] == unit(' ') || units[at] == unit('\t')) {
+            at += 1;
+        }
+        if at >= units.len() || units[at] != unit('|') {
+            return false;
+        }
+        at += 1;
+        while at < units.len() && (units[at] == unit(' ') || units[at] == unit('\t')) {
+            at += 1;
+        }
+        scan_ident(units, at).is_none_or(|(name, _)| name != "null")
+    }
+
+    /// `| crm-[:Remark]-> …>` — a union type's members after the first,
+    /// through the closing `>`: TypeScript's `Memo | Remark`. Each member is
+    /// a record type, written as a parameter's is.
+    fn read_union_rest(&mut self, first: Marker, context: &str) -> SResult<Marker> {
+        let mut rest = Vec::new();
+        loop {
+            let mark = self.pos;
+            self.skip_inline_ws();
+            if !self.try_consume("|") {
+                self.pos = mark;
+                break;
+            }
+            self.skip_inline_ws();
+            let member_start = self.pos;
+            if self.at_word("null") {
+                return self.fail_at(
+                    "A union type's members are records, and a parameter is never missing: '| null' is written only on an extraction field's annotation or a declared node's field",
+                    member_start,
+                );
+            }
+            let root = self.read_name(&format!("a type after '|' {context} (e.g. <crm-[:Memo]-> | crm-[:Remark]->>)"))?;
+            if self.is('.') {
+                let root_raw = self.text(member_start, self.pos);
+                return Err(self.retired_dotted_type(&root, root_raw, member_start, HOPS));
+            }
+            self.skip_inline_ws();
+            let (hops_raw, position) = if self.starts_hop() {
+                let (hops_raw, position) = self.read_type_address_hops(&root, context, true)?;
+                (Some(hops_raw), position)
+            } else {
+                (None, None)
+            };
+            rest.push(Marker { text: root, hops_raw, position, nullable: false, span: self.span_from(member_start), union_rest: Vec::new() });
+        }
+        self.skip_inline_ws();
+        self.expect(">", "to close the union type")?;
+        Ok(Marker { union_rest: rest, ..first })
     }
 
     /// `<text | null>` — an extraction field that may be missing. Only a
@@ -4068,8 +4139,15 @@ impl Parser {
             Some(context) => context.to_string(),
             None => format!("for the parameter '{param_name}' (e.g. <inbox-[:message]->>)"),
         };
-        let marker = self.read_type_marker(&context, HOPS)?;
-        Ok(ParamTypeRef::Name(type_ref_from_marker(marker)))
+        let start = self.pos;
+        let mut marker = self.read_type_marker(&context, PARAM)?;
+        if marker.union_rest.is_empty() {
+            return Ok(ParamTypeRef::Name(type_ref_from_marker(marker)));
+        }
+        let rest = std::mem::take(&mut marker.union_rest);
+        let mut members = vec![type_ref_from_marker(marker)];
+        members.extend(rest.into_iter().map(type_ref_from_marker));
+        Ok(ParamTypeRef::Union(UnionTypeRef { members, span: self.span_from(start) }))
     }
 
     /// `): <number>` — the type a function declares it returns.
@@ -4963,6 +5041,41 @@ mod tests {
         // A lone `\r` does not start a line.
         let ast = program("x = 1 \r y = 2");
         assert_eq!(ast.pointer("/statements/0/value/expr/raw"), Some(&json!("1 \r y = 2")));
+    }
+
+    #[test]
+    fn a_union_parameter_type_holds_each_member_as_a_parameter_type_would() {
+        let ast = program("function noted(n: <crm-[:Memo]-> | crm-[:`Remark Type`]-> | Doc>): <crm-[:Memo]-> | crm-[:Remark]->> {\n  return n\n}\n");
+        let param = &ast["statements"][0]["params"][0]["type"];
+        assert_eq!(param["kind"], json!("union"));
+        let members: Vec<(Value, Value, Value)> =
+            param["members"].as_array().unwrap().iter().map(|m| (m["graph"].clone(), m["hopsRaw"].clone(), m["position"].clone())).collect();
+        assert_eq!(
+            members,
+            [
+                (json!("crm"), json!("-[:Memo]->"), json!("Memo")),
+                (json!("crm"), json!("-[:`Remark Type`]->"), json!("Remark Type")),
+                (json!("Doc"), Value::Null, Value::Null),
+            ]
+        );
+        assert_eq!(param["span"], json!({ "start": { "line": 1, "col": 19 }, "end": { "line": 1, "col": 65 } }));
+        assert_eq!(param["members"][1]["span"], json!({ "start": { "line": 1, "col": 36 }, "end": { "line": 1, "col": 58 } }));
+        assert_eq!(ast["statements"][0]["returnType"]["kind"], json!("union"));
+        // A pinned member keeps its WHERE, as a single address does.
+        let pinned = program("function f(c: <at-[:Change]-> | at-[:Change WHERE Kind == \"created\"]->>) {\n  return c\n}\n");
+        assert_eq!(pinned["statements"][0]["params"][0]["type"]["members"][1]["hopsRaw"], json!("-[:Change WHERE Kind == \"created\"]->"));
+        assert_eq!(pinned["statements"][0]["params"][0]["type"]["members"][1].get("position"), None);
+    }
+
+    #[test]
+    fn a_union_type_never_takes_null_and_closes_once() {
+        let message = |source: &str| error(source)["message"].as_str().unwrap().to_string();
+        assert!(message("function f(n: <crm-[:Memo]-> | null>) {\n}\n").contains("'<crm-[:Memo]-> | null>' is written only on an extraction field"));
+        assert!(message("function f(n: <crm-[:Memo]-> | crm-[:Remark]-> | null>) {\n}\n").contains("A union type's members are records"));
+        assert!(message("function f(n: <crm-[:Memo]-> | >) {\n}\n").contains("Expected a type after '|'"));
+        assert!(message("function f(n: <crm-[:Memo]-> | crm.Remark>) {\n}\n").contains("Write '<crm-[:Remark]->>'"));
+        // Elsewhere a type is still one type.
+        assert!(message("listen to hooks-[:Requests]-><Payment | Refund> fire f\n").contains("Only '| null' may follow a type"));
     }
 
     #[test]

@@ -378,6 +378,15 @@ impl Checker<'_> {
                 }
                 PlaneType { pos: self.position_from_type_ref(reference, scope).map(Box::new), field: None }
             }
+            // One of several records, joined by the union rule: `A | A` is
+            // `A`. A member naming no record leaves the whole unknown, and
+            // is refused where it is written (`check_union_type`,
+            // `report_param_position`).
+            ParamTypeRef::Union(union) => {
+                let members: Option<Vec<Position>> = union.members.iter().map(|member| self.position_from_type_ref(member, scope)).collect();
+                let joined = members.and_then(|members| crate::types::unions::join_positions(&members.iter().collect::<Vec<_>>()));
+                PlaneType { pos: joined.map(|joined| Box::new(joined.position)), field: None }
+            }
         }
     }
 

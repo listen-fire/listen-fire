@@ -9,12 +9,10 @@
 // commonly is.
 //
 // A Person's and a Company's own `Notes` land on a Memo and a Remark, so a
-// listen ending on them fires a function whose parameter must accept both, as
-// TypeScript's `Memo | Remark` would. The language has no spelling for such a
-// parameter yet, so that listen does not check, and its run is a todo until a
-// written union type lands. Each subject's `Owner` is a User whose `Notes`
-// land on a Note, so a listen through the union to an owner's notes fires a
-// function that takes a Note: that one runs here.
+// listen ending on them fires a function whose parameter accepts both, written
+// as TypeScript's `Memo | Remark` is: `<c-[:Memo]-> | c-[:Remark]->>`. Each
+// subject's `Owner` is a User whose `Notes` land on a Note, so a listen
+// through the union to an owner's notes fires a function that takes a Note.
 
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
@@ -181,17 +179,15 @@ test("the fired function's parameter is held to what lands under every member", 
   assert.equal(check.out.match(/ error /g)?.length, 1, `an announced edge off a union is not write-only: ${check.out}`);
 });
 
-const UNSPELLED = 'a parameter that takes a Memo or a Remark has no spelling yet';
-
-test("a listen through a union onto each member's own notes fires once per arrival", { todo: UNSPELLED }, () => {
-  const dir = crmProject('<c-[:Memo]->>');
+test("a listen through a union onto each member's own notes fires a function typed by the union of the landings, once per arrival", () => {
+  const dir = crmProject('<c-[:Memo]-> | c-[:Remark]->>');
   const check = lf(dir, 'check');
   assert.equal(check.code, 0, check.out);
   const armed = drain(dir, 0);
   assert.deepEqual([...new Set(polledScopes(dir))].sort(), ['c1', 'p1'], `each Acme subject is polled, the other person never: ${armed}`);
   const [line, ...more] = listensLines(dir);
   assert.deepEqual(more, [], 'one line for the one listen');
-  assert.match(line, / — watching 1 Person and 1 Company, resolved /, line);
+  assert.match(line, / — watching 1 Company and 1 Person, resolved /, line);
   notes(dir, [
     { id: 'n1', on: 'p1', at: 1 },
     { id: 'n2', on: 'c1', at: 2 },

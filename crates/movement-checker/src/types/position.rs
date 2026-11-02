@@ -585,7 +585,16 @@ pub fn positions_match(arg: &Position, param: &Position) -> Option<bool> {
             _ => Some(false),
         },
         Position::Meta { instance } => Some(matches!(arg, Position::Meta { instance: a } if same_instance(a, instance))),
-        Position::Handle(_) | Position::Extract { .. } | Position::Closure(_) | Position::Local(_) | Position::MaybeEmpty(_) | Position::OneOf(_) => None,
+        // One of several records is asked for (`<A | B>`): a record fits
+        // where it fits one of them, as TypeScript's `A` fits `A | B`.
+        Position::OneOf(members) => {
+            let fits: Vec<Option<bool>> = members.iter().map(|member| positions_match(arg, member)).collect();
+            if fits.contains(&Some(true)) {
+                return Some(true);
+            }
+            fits.iter().all(|fit| *fit == Some(false)).then_some(false)
+        }
+        Position::Handle(_) | Position::Extract { .. } | Position::Closure(_) | Position::Local(_) | Position::MaybeEmpty(_) => None,
     }
 }
 

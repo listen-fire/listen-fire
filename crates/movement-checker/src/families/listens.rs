@@ -403,8 +403,14 @@ fn call_arg_name(arg: &CallArg) -> Option<&str> {
 pub fn spell_param_type(type_: &ParamTypeRef) -> String {
     match type_ {
         ParamTypeRef::Value(value) => spell_value_type(value),
-        ParamTypeRef::Name(reference) => format!("{}{}", reference.graph, reference.hops_raw.as_deref().unwrap_or("")),
+        ParamTypeRef::Name(reference) => spell_type_ref(reference),
+        ParamTypeRef::Union(union) => union.members.iter().map(spell_type_ref).collect::<Vec<_>>().join(" | "),
     }
+}
+
+/// A named type as written, without the brackets.
+fn spell_type_ref(reference: &movement_parser::ast::TypeRef) -> String {
+    format!("{}{}", reference.graph, reference.hops_raw.as_deref().unwrap_or(""))
 }
 
 /// `spellValueType`.

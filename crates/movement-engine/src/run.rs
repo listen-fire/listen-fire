@@ -918,6 +918,7 @@ impl Run<'_> {
             )));
         }
         let param = &movement.params[0];
+        let one_of;
         let type_ref = match &param.type_ {
             None => {
                 return Err(Stop::Thrown(Failure::engine(
@@ -926,6 +927,21 @@ impl Run<'_> {
                 )));
             }
             Some(ParamTypeRef::Name(type_ref)) => type_ref,
+            // One of several records (`<c-[:Memo]-> | c-[:Remark]->>`): what
+            // arrives is one of them, and says which by its own record type,
+            // so the entry is seeded on their connection with no type of its
+            // own. Its members on different connections name no one source.
+            Some(ParamTypeRef::Union(union)) => {
+                let graph = &union.members[0].graph;
+                if union.members.iter().any(|member| member.graph != *graph) {
+                    return Err(Stop::Thrown(Failure::unsupported(
+                        &format!("a movement parameter of one of several connections' records ('{}: <{}>')", param.name, spell_param_type(param.type_.as_ref().expect("matched"))),
+                        "type the parameter by records of the one connection the listen is on",
+                    )));
+                }
+                one_of = ast::TypeRef { graph: graph.clone(), position: None, hops_raw: Some(String::new()), span: union.span };
+                &one_of
+            }
             // The host named a callee as the entry: no check can see which
             // function a host will name, and a function taking a value is a
             // legal callee, so this is the host's request, not a gap the
@@ -2622,6 +2638,7 @@ fn spell_param_type(type_: &ast::ParamTypeRef) -> String {
     match type_ {
         ast::ParamTypeRef::Value(value) => spell_value_type(value),
         ast::ParamTypeRef::Name(name) => format!("{}{}", name.graph, name.hops_raw.as_deref().unwrap_or("")),
+        ast::ParamTypeRef::Union(union) => union.members.iter().map(|name| format!("{}{}", name.graph, name.hops_raw.as_deref().unwrap_or(""))).collect::<Vec<_>>().join(" | "),
     }
 }
 

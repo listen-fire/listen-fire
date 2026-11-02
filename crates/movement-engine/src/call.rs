@@ -332,6 +332,7 @@ impl Run<'_> {
         match type_ {
             None => false,
             Some(ParamTypeRef::Value(_)) => true,
+            Some(ParamTypeRef::Union(_)) => false,
             Some(ParamTypeRef::Name(type_)) if type_.hops_raw.is_some() => false,
             Some(ParamTypeRef::Name(type_)) => {
                 movement_parser::catalog::helpers::parse_field_type_name(Some(&type_.graph)).is_some()

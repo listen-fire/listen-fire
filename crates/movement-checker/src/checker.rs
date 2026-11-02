@@ -910,7 +910,10 @@ impl<'c> Checker<'c> {
             let of = self.movement_param_of(&movement.name, scope);
             self.type_param(body, &param.name, type_, scope, &of);
             self.note_parameter_entry(&param.name, param.span, body);
-            self.note_undescribed_event(body, &param.name, type_, graph);
+            match type_ {
+                ParamTypeRef::Union(_) => self.note_closure_undescribed_event(body, &param.name, type_, scope),
+                _ => self.note_undescribed_event(body, &param.name, type_, graph),
+            }
         }
         // A `return` straight in the body is a step on its spine, not a lane
         // it caps: only what caps every lane ends the story's movement.
@@ -942,7 +945,14 @@ impl<'c> Checker<'c> {
     /// A parameter's type: a graph's name resolves; a value type names nothing.
     /// What the graph's name resolved to.
     pub(crate) fn check_param_type(&mut self, type_: &ParamTypeRef, scope: ScopeId) -> Option<crate::scope::SymbolId> {
-        let ParamTypeRef::Name(reference) = type_ else { return None };
+        let reference = match type_ {
+            ParamTypeRef::Name(reference) => reference,
+            ParamTypeRef::Union(union) => {
+                self.check_union_type(union, scope);
+                return None;
+            }
+            ParamTypeRef::Value(_) => return None,
+        };
         if reference.position.is_none() && reference.hops_raw.is_none() {
             if SCALAR_TYPE_NAMES.contains(&reference.graph.as_str()) {
                 return None;
@@ -954,6 +964,27 @@ impl<'c> Checker<'c> {
             }
         }
         self.resolve_name(&reference.graph, reference.span, scope)
+    }
+
+    /// `<crm-[:Memo]-> | crm-[:Remark]->>`: each member a record type, its
+    /// name resolved as a parameter type's is. A value type is never a
+    /// member: the union is of records (a closed set of values is a `type`).
+    fn check_union_type(&mut self, union: &movement_parser::ast::UnionTypeRef, scope: ScopeId) {
+        for member in &union.members {
+            if member.position.is_none() && member.hops_raw.is_none() {
+                let declared = matches!(self.scopes.resolve(scope, &member.graph), Resolution::Found(id) if self.scopes.symbol(id).kind == SymbolKind::Type);
+                if declared || SCALAR_TYPE_NAMES.contains(&member.graph.as_str()) {
+                    let message = format!(
+                        "'{}' is a value type, and a union type's members are records ('<crm-[:Memo]-> | crm-[:Remark]->>') — a closed set of values is declared as its own type (`type Stage = <\"A\" | \"B\">`)",
+                        member.graph
+                    );
+                    self.report(crate::codes::UNKNOWN_TYPE_NAME, message, member.span);
+                    continue;
+                }
+            }
+            let graph = self.resolve_name(&member.graph, member.span, scope);
+            self.check_param_source(member, graph);
+        }
     }
 
     /// A closure whose caller supplies its parameters' types (a call's

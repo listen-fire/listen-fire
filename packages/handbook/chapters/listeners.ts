@@ -16,7 +16,7 @@ listen as "Deal intake" to inbox-[e:Emails WHERE e.Key == "deals"]-> fire \`Inta
 \`\`\`
 
 - A listen is a traversal from a connection (\`inbox\`), never the adapter, ending on an edge its system announces arrivals on (\`-[e:Emails]->\`). Each system's chapter names those edges.
-- \`fire\` names the function that runs, once per arrival. Its parameter is typed by what lands, addressed from the connection: the edge (\`function intake(m: <inbox-[:Emails]->>)\`) or the record type (\`<chat-[:Interaction]->>\`).
+- \`fire\` names the function that runs, once per arrival. Its parameter is typed by what lands, addressed from the connection: the edge (\`function intake(m: <inbox-[:Emails]->>)\`) or the record type (\`<chat-[:Interaction]->>\`). Where what lands may be one of several record types (a listen through a person-or-company's notes, each landing on its own type), the parameter takes each of them: \`<crm-[:Memo]-> | crm-[:Remark]->>\`.
 - \`as "…"\` names the listener in run history and lists. Two listeners firing the same automation need distinct names.
 - Schedules are \`cron-[t:Ticks WHERE t.Schedule == "0 9 * * 1-5" AND t.Zone == "Europe/London"]->\`, and ad-hoc runs — "Run now", pasted text, uploaded files — are \`manual-[:Invocations]->\`; each has its own chapter.
 

@@ -1377,24 +1377,38 @@ export interface ValueTypeKey {
   span: Span;
 }
 
-/** A parameter's written type: a name, or a value type spelled in full. */
-export type ParamTypeRef = TypeRef | ValueTypeRef;
+/**
+ * `<crm-[:Memo]-> | crm-[:Remark]->>` — a value that is one of several
+ * records: TypeScript's `Memo | Remark`. At least two members, each a record
+ * type written as a parameter's is.
+ */
+export interface UnionTypeRef {
+  kind: 'union';
+  members: TypeRef[];
+  span: Span;
+}
+
+/** A parameter's written type: a name, a value type spelled in full, or a
+ *  union of record types. */
+export type ParamTypeRef = TypeRef | ValueTypeRef | UnionTypeRef;
 
 /** Is this parameter type a value type spelled in full (rather than a name)? */
 export function isValueTypeRef(type: ParamTypeRef): type is ValueTypeRef {
-  return 'kind' in type;
+  return 'kind' in type && type.kind !== 'union';
 }
 
 /** The parameter type as a NAME (a position, a node declaration, a scalar, a
- *  refinement) — undefined when none was written or it is a value type spelled
- *  in full, which names no graph. */
+ *  refinement) — undefined when none was written, or it is a value type
+ *  spelled in full or a union, neither of which names one graph. */
 export function typeNameOf(type: ParamTypeRef | undefined): TypeRef | undefined {
-  return type === undefined || isValueTypeRef(type) ? undefined : type;
+  return type === undefined || 'kind' in type ? undefined : type;
 }
 
 /** A parameter's written type in its surface spelling, without the brackets. */
 export function spellParamType(type: ParamTypeRef): string {
-  return isValueTypeRef(type) ? spellValueType(type) : `${type.graph}${type.hopsRaw ?? ''}`;
+  if (!('kind' in type)) return `${type.graph}${type.hopsRaw ?? ''}`;
+  if (type.kind === 'union') return type.members.map((member) => `${member.graph}${member.hopsRaw ?? ''}`).join(' | ');
+  return spellValueType(type);
 }
 
 /** A written value type in its surface spelling, for diagnostics. */

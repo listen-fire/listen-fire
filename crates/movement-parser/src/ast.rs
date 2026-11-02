@@ -902,11 +902,22 @@ pub struct ValueTypeKey {
     pub span: Span,
 }
 
+/// `<crm-[:Memo]-> | crm-[:Remark]->>` — a value that is one of several
+/// records: TypeScript's `Memo | Remark`. At least two members, each a
+/// record type written as a parameter's is.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(tag = "kind", rename = "union")]
+pub struct UnionTypeRef {
+    pub members: Vec<TypeRef>,
+    pub span: Span,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(untagged)]
 pub enum ParamTypeRef {
     Name(TypeRef),
     Value(ValueType),
+    Union(UnionTypeRef),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]

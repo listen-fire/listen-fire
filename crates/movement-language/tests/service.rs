@@ -374,3 +374,22 @@ fn the_hover_lists_every_edge_a_listen_may_end_on() {
     let hover = listen.hover(text, after(text, "listen to cha", 0)).unwrap();
     assert!(hover.contents.contains("Listen to: Messages, Interactions"), "{}", hover.contents);
 }
+
+const UNION_CATALOG: &str = r#"{"adapters":{"crm":{"canFire":false,"constructionArgs":[],"schemas":{"":{"positions":{
+  "Memo":{"properties":{"Text":"text","Mood":"text"},"edges":{}},
+  "Remark":{"properties":{"Text":"text","Tone":"text"},"edges":{}}},
+  "collections":{"Memos":{"target":"Memo"},"Remarks":{"target":"Remark"}},
+  "writableRoots":{}}}}},"credentials":{},"plugins":{}}"#;
+
+/// A parameter of a written union type is one of its records, and offers
+/// what every one of them has.
+#[test]
+fn a_union_parameter_hovers_as_one_of_its_records() {
+    let service = Service::new(CatalogSnapshot::load(UNION_CATALOG).unwrap());
+    let text = "import { crm as m } from adapters\ncrm = connect m\nfunction noted(n: <crm-[:Memo]-> | crm-[:Remark]->>) {\n  return n.Text\n}\n";
+    let hover = service.hover(text, after(text, "return n", 0)).unwrap();
+    assert!(hover.contents.contains("n: crm.Memo or crm.Remark"), "{}", hover.contents);
+    assert!(hover.contents.contains("Fields: Text (text)"), "{}", hover.contents);
+    let hover = service.hover(text, after(text, "function no", 0)).unwrap();
+    assert!(hover.contents.contains("function noted(n: <crm-[:Memo]-> | crm-[:Remark]->>)"), "{}", hover.contents);
+}

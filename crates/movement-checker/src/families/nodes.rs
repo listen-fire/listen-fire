@@ -534,7 +534,7 @@ impl Checker<'_> {
                 let report_plane = |this: &mut Self, type_: &ParamTypeRef| -> bool {
                     match type_ {
                         ParamTypeRef::Value(value) => this.report_value_type(value, scope),
-                        ParamTypeRef::Name(_) => {
+                        ParamTypeRef::Name(_) | ParamTypeRef::Union(_) => {
                             this.check_param_type(type_, scope);
                         }
                     }

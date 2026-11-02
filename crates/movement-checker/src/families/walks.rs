@@ -1403,7 +1403,17 @@ impl crate::checker::Checker<'_> {
     /// `positionFromTypeRefStrict`, the reporting half: a written parameter
     /// type naming a position its graph's schema does not have.
     pub fn report_param_position(&mut self, type_: &movement_parser::ast::ParamTypeRef, scope: ScopeId) {
-        let movement_parser::ast::ParamTypeRef::Name(reference) = type_ else { return };
+        use movement_parser::ast::ParamTypeRef;
+        let reference = match type_ {
+            ParamTypeRef::Name(reference) => reference,
+            ParamTypeRef::Union(union) => {
+                for member in &union.members {
+                    self.report_param_position(&ParamTypeRef::Name(member.clone()), scope);
+                }
+                return;
+            }
+            ParamTypeRef::Value(_) => return,
+        };
         if reference.hops_raw.is_none() && reference.position.is_none() {
             return;
         }
@@ -1845,6 +1855,8 @@ impl crate::checker::Checker<'_> {
     /// catalog has no description of (`checkMovement`): nothing types it, so
     /// what is read or written off it is said where it is.
     pub(crate) fn note_undescribed_event(&mut self, body: ScopeId, param: &str, type_: &movement_parser::ast::ParamTypeRef, graph: Option<crate::scope::SymbolId>) {
+        // A union's members are each noted where its graph resolves
+        // (`note_closure_undescribed_event`'s path), never through one graph.
         let movement_parser::ast::ParamTypeRef::Name(reference) = type_ else { return };
         let (Some(hops), Some(graph)) = (&reference.hops_raw, graph) else { return };
         let symbol = self.scopes.symbol(graph);
@@ -1870,7 +1882,17 @@ impl crate::checker::Checker<'_> {
     /// closure's parameter, whose type `type_param` has already resolved (and
     /// reported on).
     pub(crate) fn note_closure_undescribed_event(&mut self, body: ScopeId, param: &str, type_: &movement_parser::ast::ParamTypeRef, scope: ScopeId) {
-        let movement_parser::ast::ParamTypeRef::Name(reference) = type_ else { return };
+        use movement_parser::ast::ParamTypeRef;
+        let reference = match type_ {
+            ParamTypeRef::Name(reference) => reference,
+            ParamTypeRef::Union(union) => {
+                for member in &union.members {
+                    self.note_closure_undescribed_event(body, param, &ParamTypeRef::Name(member.clone()), scope);
+                }
+                return;
+            }
+            ParamTypeRef::Value(_) => return,
+        };
         let crate::scope::Resolution::Found(graph) = self.scopes.resolve(scope, &reference.graph) else { return };
         if let Some(id) = self.scopes.scope(body).symbols.get(param).copied() {
             let types = &self.scopes.symbol(id).types;

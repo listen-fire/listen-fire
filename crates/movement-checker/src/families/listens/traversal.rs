@@ -16,7 +16,7 @@
 //! MOV_LISTEN_NOT_INSTANCE, MOV_LISTEN_PARAM_MISMATCH,
 //! MOV_LISTEN_DUPLICATE, MOV_LISTEN_ALIAS_DUPLICATE.
 
-use movement_parser::ast::{ListenDeclaration, PathHead, PathRoot, TypeRef};
+use movement_parser::ast::{ListenDeclaration, ParamTypeRef, PathHead, PathRoot, TypeRef};
 use movement_parser::catalog::types::{CollectionSchema, Delivery, EdgeSchema, InstanceSchema, PositionSchema};
 use movement_parser::listen_plan::{HopJudged, ListenPlan, PlanHop, PlanMember};
 use movement_parser::lowering::expression::{EdgeStep, Expression, LogicalOp, TraversalStep};
@@ -496,6 +496,23 @@ impl Checker<'_> {
             return;
         }
         let Some(type_) = &written[0].type_ else { return };
+        // What lands is a record of the connection the listen is on, and the
+        // run is seeded on the one connection its parameter's type names.
+        if let ParamTypeRef::Union(union) = type_
+            && let Some(other) = union.members.iter().find(|member| member.graph != statement.instance)
+        {
+            let message = format!(
+                "'{}' takes '{}: <{}>', but this listen fires with records of '{}' alone, and '<{}>' is another connection's — type every member of the union by '{}'",
+                statement.movement,
+                written[0].name,
+                super::spell_param_type(type_),
+                statement.instance,
+                super::spell_param_type(&ParamTypeRef::Name(other.clone())),
+                statement.instance
+            );
+            self.report(codes::LISTEN_PARAM_MISMATCH, message, statement.span);
+            return;
+        }
         if let Some(node) = landing {
             return self.check_listen_payload_param(node, &written[0], type_, decl_scope, statement);
         }

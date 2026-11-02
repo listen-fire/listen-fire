@@ -225,6 +225,28 @@ fn a_narrowed_landing_is_accepted_where_its_unnarrowed_type_is_asked_for() {
     assert_eq!(codes(&unnarrowed), ["MOV_LISTEN_PARAM_MISMATCH"], "{unnarrowed:#?}");
 }
 
+/// A function over any table's changes or the Candidates table's alone
+/// takes the union of the two, as TypeScript writes `Change | CandidatesChange`:
+/// a Candidates change is accepted (narrowed by a listen, or held by a
+/// parameter spelled by its name), and so is a change of any table. What it
+/// reads is what both have; the live row is a Row or a Candidates row.
+#[test]
+fn a_general_or_narrowed_function_takes_the_union_of_the_two() {
+    const AUDIT: &str = "function audit(c: <at-[:Change]-> | at-[:`Candidates Change`]->>) {\n  return c.Kind\n}\n";
+    assert_eq!(errors_of(AUDIT), Vec::<(String, String)>::new());
+    let fired = |path: &str| errors_of(&format!("{AUDIT}listen to at{path}-[c:Changes WHERE c.Kind == \"created\"]-> fire audit\n"));
+    assert_eq!(fired(NARROWED), Vec::<(String, String)>::new());
+    assert_eq!(fired("-[:Tables]->"), Vec::<(String, String)>::new());
+    let called = |param: &str| errors_of(&format!("{AUDIT}function f(c: <{param}>) {{\n  audit(c)\n}}\n"));
+    assert_eq!(called("at-[:`Candidates Change`]->"), Vec::<(String, String)>::new());
+    assert_eq!(called("at-[:Change]->"), Vec::<(String, String)>::new());
+    assert_eq!(codes(&called("at-[:Table]->")), ["MOV_CALL_ARG_TYPE"]);
+    // A field only the Candidates rows have is refused off the union's live row.
+    let live = errors_of("function audit(c: <at-[:Change]-> | at-[:`Candidates Change`]->>) {\n  return only(c-[:Record]->).Stage\n}\n");
+    assert_eq!(codes(&live), ["MOV_UNKNOWN_PROPERTY"], "{live:#?}");
+    assert_eq!(errors_of("function audit(c: <at-[:Change]-> | at-[:`Candidates Change`]->>) {\n  return only(c-[:Record]->).Id\n}\n"), Vec::<(String, String)>::new());
+}
+
 #[test]
 fn a_selected_member_passes_to_a_function_of_its_type() {
     let call = |param: &str| {
