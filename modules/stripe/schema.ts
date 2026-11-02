@@ -77,6 +77,11 @@ function field(
   return { fieldId, displayName, kind, writable: false, required: false, ...extra };
 }
 
+/** Said in the first sentence of each type holding an amount: a reader that
+ *  shows a type by its first sentence (the catalog text, a run's text, `modules
+ *  show`) then says what its numbers are, which no field type can. */
+const IN_MAJOR_UNITS = 'amounts in major units of its `Currency` (490 usd is $490, not cents)';
+
 /** An amount, in major units of the record's `Currency`. */
 function money(fieldId: string, displayName: string, what: string, extra: Partial<SchemaFieldDescriptor> = {}): SchemaFieldDescriptor {
   return field(fieldId, displayName, 'number', {
@@ -235,7 +240,7 @@ function changeDescriptor(object: StripeChangedObject): SchemaTypeDescriptor {
 const CUSTOMER_DESCRIPTOR: SchemaTypeDescriptor = {
   typeId: STRIPE_CUSTOMER_TYPE_ID,
   displayName: STRIPE_CUSTOMER_DISPLAY_NAME,
-  description: 'A customer: its invoices, subscriptions and charges.',
+  description: `A customer: its invoices, subscriptions and charges; ${IN_MAJOR_UNITS}.`,
   fields: [
     field('id', 'Id', 'string', { required: true, description: 'The customer id (`cus_…`).' }),
     field('email', 'Email', 'string', { capability: EQ, description: '`==` in a `Customers` WHERE reaches Stripe (case-sensitive there).' }),
@@ -270,7 +275,7 @@ const CUSTOMER_DESCRIPTOR: SchemaTypeDescriptor = {
 const INVOICE_DESCRIPTOR: SchemaTypeDescriptor = {
   typeId: STRIPE_INVOICE_TYPE_ID,
   displayName: STRIPE_INVOICE_DISPLAY_NAME,
-  description: 'An invoice: what is owed and paid, and where the customer pays it. Walk `Customer`, `Subscription` and `Charges` (why a payment failed).',
+  description: `An invoice: what is owed and paid, and where the customer pays it; ${IN_MAJOR_UNITS}. Walk \`Customer\`, \`Subscription\` and \`Charges\` (why a payment failed).`,
   fields: [
     field('id', 'Id', 'string', { required: true, description: 'The invoice id (`in_…`).' }),
     field('number', 'Number', 'string', { description: 'The number on the invoice, once it is finalized.' }),
@@ -362,7 +367,7 @@ const CHARGE_DESCRIPTOR: SchemaTypeDescriptor = {
   typeId: STRIPE_CHARGE_TYPE_ID,
   displayName: STRIPE_CHARGE_DISPLAY_NAME,
   description:
-    'A charge: one attempt to take a payment, successful or not. `Status` says which; a failed one says why in ' +
+    `A charge: one attempt to take a payment, successful or not (\`Status\` says which); ${IN_MAJOR_UNITS}. A failed one says why in ` +
     '`Failure Code`, `Failure Message` and `Outcome Seller Message`. Walk `Customer` and `Invoice`.',
   fields: [
     field('id', 'Id', 'string', { required: true, description: 'The charge id (`ch_…`).' }),

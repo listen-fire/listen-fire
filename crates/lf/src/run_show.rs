@@ -1,8 +1,10 @@
 //! `listen-fire runs show <run-id>` as text: what an agent reads to fix a run,
 //! each fact once. Its status and error; the event, as the records that
-//! arrived (the landing and each carried parent) with the fields their record
-//! types declare; one line per write and per trace entry; what it is parked
-//! on; its earlier attempts. `--json` is the whole document (crate::lfjson).
+//! arrived (the landing and each carried parent), each with its record type's
+//! first sentence (what its values are, as the catalog says it: Stripe's
+//! amounts in major units) and the fields its record type declares; one line
+//! per write and per trace entry; what it is parked on; its earlier attempts.
+//! `--json` is the whole document (crate::lfjson).
 //!
 //! A module puts its raw fields on an arrival beside the typed ones
 //! (adapter protocol, Reporting arrivals), and only its schema tells them
@@ -22,9 +24,15 @@ use crate::secrets::Secrets;
 /// A value longer than this, as JSON, is cut in the text.
 const VALUE_CHARS: usize = 300;
 
-/// The fields a record type declares, each with the key its module puts it
-/// under on an arrival (its field id, where that is not its name).
-type Declared = Vec<(String, String)>;
+/// A record type as its module declares it.
+#[derive(Default)]
+struct Declared {
+    /// Its description's first sentence, as the catalog text shows it.
+    about: Option<String>,
+    /// Each field, with the key its module puts it under on an arrival (its
+    /// field id, where that is not its name).
+    fields: Vec<(String, String)>,
+}
 
 /// The record types the event's records are, by name; or why they could not be read.
 type Typing = Result<BTreeMap<String, Declared>, String>;
@@ -88,7 +96,8 @@ fn declared_in(schema: &Js, wanted: &[&str]) -> BTreeMap<String, Declared> {
             Some(Js::Obj(properties)) => properties.keys().map(|field| (field.clone(), ids.and_then(|i| i.get(field)).and_then(Js::as_str).unwrap_or(field).to_string())).collect(),
             _ => Vec::new(),
         };
-        declared.insert(name.to_string(), fields);
+        let about = position.get("description").and_then(Js::as_str).map(crate::modules::first_sentence);
+        declared.insert(name.to_string(), Declared { about, fields });
     }
     declared
 }
@@ -210,13 +219,18 @@ fn event_lines(event: &Js, arrival: &Js, typing: &Typing, out: &mut Vec<String>,
     }
     for (record, how) in records_of(arrival) {
         let record_type = get(&record, "recordType").unwrap_or_default();
-        out.push(format!("  {how} {record_type} {}:", get(&record, "recordId").unwrap_or_default()));
+        let declared = typing.as_ref().map(|types| types.get(&record_type));
+        let about = match &declared {
+            Ok(Some(Declared { about: Some(about), .. })) => format!(" {about}"),
+            _ => String::new(),
+        };
+        out.push(format!("  {how} {record_type} {}:{about}", get(&record, "recordId").unwrap_or_default()));
         let fields = match record.get("fields") {
             Some(Js::Obj(fields)) => fields.clone(),
             _ => Obj::new(),
         };
-        let shown: Vec<(String, &Js)> = match typing.as_ref().map(|types| types.get(&record_type)) {
-            Ok(Some(declared)) => declared.iter().filter_map(|(name, key)| fields.get(key).or_else(|| fields.get(name)).map(|v| (name.clone(), v))).collect(),
+        let shown: Vec<(String, &Js)> = match declared {
+            Ok(Some(declared)) => declared.fields.iter().filter_map(|(name, key)| fields.get(key).or_else(|| fields.get(name)).map(|v| (name.clone(), v))).collect(),
             Ok(None) => {
                 out.push(format!("    (every field shown: its module declares no record type {record_type})"));
                 fields.iter().map(|(k, v)| (k.clone(), v)).collect()
@@ -297,10 +311,14 @@ mod tests {
         .unwrap()
     }
 
+    fn fields(names: &[(&str, &str)]) -> Vec<(String, String)> {
+        names.iter().map(|(name, key)| (name.to_string(), key.to_string())).collect()
+    }
+
     fn typed() -> Typing {
         let mut types = BTreeMap::new();
-        types.insert("InvoiceChange".to_string(), vec![("Id".to_string(), "Id".to_string()), ("Kind".to_string(), "Kind".to_string())]);
-        types.insert("Invoice".to_string(), vec![("Id".to_string(), "Id".to_string()), ("Amount Due".to_string(), "Amount Due".to_string())]);
+        types.insert("InvoiceChange".to_string(), Declared { about: None, fields: fields(&[("Id", "Id"), ("Kind", "Kind")]) });
+        types.insert("Invoice".to_string(), Declared { about: Some("An invoice; amounts in major units of its `Currency`".into()), fields: fields(&[("Id", "Id"), ("Amount Due", "Amount Due")]) });
         Ok(types)
     }
 
@@ -318,7 +336,7 @@ mod tests {
                 "  landed InvoiceChange evt_1:",
                 "    Id: \"evt_1\"",
                 "    Kind: \"payment_failed\"",
-                "  carried Invoice in_1:",
+                "  carried Invoice in_1: An invoice; amounts in major units of its `Currency`",
                 "    Id: \"in_1\"",
                 "    Amount Due: 490",
                 "writes (1):",
@@ -338,7 +356,7 @@ mod tests {
     #[test]
     fn a_field_its_module_keys_by_id_is_shown_by_its_name() {
         let mut types = BTreeMap::new();
-        types.insert("InvoiceChange".to_string(), vec![("Event Type".to_string(), "type".to_string())]);
+        types.insert("InvoiceChange".to_string(), Declared { about: None, fields: fields(&[("Event Type", "type")]) });
         let shown = text(&run(), &Ok(types));
         assert!(shown.contains("  landed InvoiceChange evt_1:\n    Event Type: \"invoice.payment_failed\"\n"), "{shown}");
         assert!(shown.contains("    (every field shown: its module declares no record type Invoice)"), "{shown}");

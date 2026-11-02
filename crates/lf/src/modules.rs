@@ -632,7 +632,7 @@ impl Summary {
     }
 }
 
-fn first_sentence(text: &str) -> String {
+pub(crate) fn first_sentence(text: &str) -> String {
     text.split_once(". ").map_or(text, |(first, _)| first).trim_end_matches('.').to_string()
 }
 
