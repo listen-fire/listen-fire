@@ -236,6 +236,13 @@ fn legacy_extraction() -> Failure {
     )
 }
 
+/// `lazy` (`x = lazy W`, `return lazy W`, a node entry `k: lazy W`), which
+/// 0.14 retired for a closure: the checker refuses it (MOV_LAZY_RETIRED), and
+/// a program that reaches here unchecked fails by its name.
+pub(crate) fn lazy_retired() -> Stop {
+    Stop::Thrown(Failure::engine("MOVENG_RUNTIME", "'lazy' is retired in 0.14; replace it with a closure (`x = () => W`, read as `x()`) — the checker should have caught this".into()))
+}
+
 /// How a run stops early.
 pub(crate) enum Stop {
     /// Before any host-visible effect, the run's input turned out to be
@@ -1404,8 +1411,7 @@ impl Run<'_> {
     async fn statement(&self, statement: &Statement, scope: &Rc<Scope>, at: &Address, path: &str) -> Result<Flow, Stop> {
         match statement {
             Statement::Assign(assign) => {
-                // A write is its own entry (`assign`); a lazy binding's
-                // records enter where they are read (crate::waits).
+                // A write is its own entry (`assign`).
                 let entry = match assign.value {
                     RValue::Write { .. } | RValue::Lazy { .. } => None,
                     _ => self.entry_at(path).await?,
@@ -1607,11 +1613,7 @@ impl Run<'_> {
                 let instance = self.instance_binding(name, construct);
                 scope.declare(name, Binding::Instance(Rc::new(instance)));
             }
-            // Nothing runs here: every read of the name runs the walk.
-            RValue::Lazy { lazy } => {
-                let walk = self.defer_walk(&lazy.head, lazy.mapping.as_ref(), scope, &format!("{path}/value/lazy"));
-                scope.declare(name, Binding::LazyWalk(walk));
-            }
+            RValue::Lazy { .. } => return Err(lazy_retired()),
             RValue::Await { r#await } => self.awaiting(&r#await.source, Some(name), scope, at, &format!("{path}/value/await/source")).await?,
             RValue::Combinator { combinator } => self.combinator(combinator, Some(name), scope, at, &format!("{path}/value/combinator")).await?,
             RValue::Closure { closure } => {
@@ -1721,7 +1723,6 @@ impl Run<'_> {
             | Binding::Extracted { .. }
             | Binding::Landed(_)
             | Binding::Node(_)
-            | Binding::LazyWalk(_)
             | Binding::Positions(_)
             | Binding::Tuple(_)
             | Binding::Closure(_)
@@ -1894,10 +1895,6 @@ impl Run<'_> {
         match ask {
             Ask::EventField { field } => self.event_field(&field).await.map(Ok),
             Ask::Bare { name, member } => match scope.resolve(&name) {
-                // A walk kept to run at each read is, read bare, the records
-                // it lands on now (`count(lazy …)`), as the walk written
-                // there would be.
-                Some(Binding::LazyWalk(walk)) => self.deferred_records(&walk).await.map(Ok),
                 Some(binding) => self.bare(&name, binding, member).map(Ok),
                 None => Err(Failure::engine("MOVENG_RUNTIME", format!("'{name}' is not in scope — the checker should have caught this"))),
             },
@@ -3450,7 +3447,6 @@ mod tests {
             json!({ "kind": "closure", "closure": "/statements/1", "captured": {} }),
             json!({ "kind": "localShape", "declaration": "/statements/0/body/0" }),
             json!({ "kind": "fileClosure", "name": "f", "file": "lib/gone" }),
-            json!({ "kind": "lazyWalk", "walk": { "head": "/statements/9/body/0", "captured": {} } }),
         ] {
             let input = json!({
                 "entry": "segment", "source": source, "languageVersion": movement_parser::version::LANGUAGE_VERSION, "segmentId": "g1", "serves": [],

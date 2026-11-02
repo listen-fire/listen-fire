@@ -398,7 +398,6 @@ impl Run<'_> {
                     | Binding::Landed(_)
                     | Binding::Node(_)
                     | Binding::Extracted { .. }
-                    | Binding::LazyWalk(_)
                     | Binding::ShapePosition(_)
                     | Binding::Resource(_)) => Ok(binding),
                     other => Err(Stop::Thrown(Failure::unsupported(

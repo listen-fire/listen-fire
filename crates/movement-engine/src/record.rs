@@ -34,7 +34,6 @@ pub fn kind_of(binding: &Binding) -> String {
         Binding::Node(_) => "nodePosition",
         Binding::Landed(_) => "sourcePosition",
         Binding::Positions(_) => "positions",
-        Binding::LazyWalk(_) => "lazyWalk",
         Binding::Tuple(_) => "tuple",
         Binding::Closure(_) => "closure",
         Binding::Extracted { root: true, .. } => "extractRoot",
@@ -68,7 +67,6 @@ pub fn describe_kind(kind: &str) -> String {
         "movement" => "a movement declaration",
         "shapePosition" => "an in-memory shape position",
         "nodePosition" => "a synthesised node",
-        "lazyWalk" => "a deferred traversal",
         "plugin" => "a plugin",
         "opaque" => "an import",
         other => return other.to_string(),
@@ -197,7 +195,6 @@ pub fn is_position(binding: &Binding) -> bool {
         | Binding::Landed(_)
         | Binding::Positions(_)
         | Binding::Node(_)
-        | Binding::LazyWalk(_)
         | Binding::ShapePosition(_)
         | Binding::Resource(_) => true,
         Binding::Instance(_) | Binding::Value(_) | Binding::Shape(_) | Binding::Movement(_) | Binding::Plugin(_) | Binding::Opaque { .. } | Binding::Tuple(_) | Binding::Closure(_) => false,
@@ -210,7 +207,7 @@ pub fn is_position(binding: &Binding) -> bool {
 pub fn is_one_record(binding: &Binding) -> bool {
     match binding {
         Binding::Handle(_) | Binding::Extracted { .. } | Binding::Landed(_) | Binding::Node(_) | Binding::ShapePosition(_) | Binding::Resource(_) => true,
-        Binding::Event | Binding::Instance(_) | Binding::Positions(_) | Binding::Value(_) | Binding::Shape(_) | Binding::Movement(_) | Binding::LazyWalk(_)
+        Binding::Event | Binding::Instance(_) | Binding::Positions(_) | Binding::Value(_) | Binding::Shape(_) | Binding::Movement(_)
         | Binding::Plugin(_) | Binding::Opaque { .. } | Binding::Tuple(_) | Binding::Closure(_) => false,
     }
 }
@@ -249,7 +246,6 @@ pub fn own_property(binding: &Binding, key: &str) -> Result<Js, EvalError> {
         (Binding::Node(_), what @ ("fields" | "fieldProvenance" | "edges")) => internal(what),
         (Binding::Extracted { .. }, "emission") => internal("emission"),
         (Binding::Positions(landings), "landings") => Ok(Js::array(landings.iter().cloned().map(held).collect())),
-        (Binding::LazyWalk(_), "walk") => internal("walk"),
         (Binding::Instance(instance), "name") => Ok(Js::str(instance.name.clone())),
         (Binding::Instance(instance), "adapterSlug") => Ok(Js::str(instance.adapter_slug.clone())),
         // Never its credential's name: a credential is never a value, so an
@@ -422,7 +418,6 @@ pub fn fields_of(binding: &Binding) -> Result<JsObject, EvalError> {
             ));
         }
         Binding::Positions(_)
-        | Binding::LazyWalk(_)
         | Binding::Instance(_)
         | Binding::Shape(_)
         | Binding::Movement(_)
@@ -514,12 +509,6 @@ fn plain_record_within(binding: &Binding, path: &mut Vec<Binding>) -> Result<Js,
         Binding::Node(node) => {
             let held: Vec<(String, crate::bindings::Edge)> = node.borrow().edges.clone();
             for (name, edge) in held {
-                if edge.deferred.is_some() {
-                    return Err(unsupported(
-                        &format!("writing out the '{name}' edge of a record, which is a lazy walk that has not been run"),
-                        Some("await it first"),
-                    ));
-                }
                 let landed = edge.landings.iter().map(|l| plain_record(l, path)).collect::<Result<Vec<_>, _>>()?;
                 edges.push((name, Js::array(landed)));
             }

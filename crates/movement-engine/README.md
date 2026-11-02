@@ -294,7 +294,8 @@ read fails before the host is asked anything, with MOVENG_UNSUPPORTED
 | reason | the state | what closes it |
 |---|---|---|
 | `resume_state_does_not_read` | it does not read off the wire; its scopes, frames or journals (a frame's own) are not lists; or a descriptor has no kind this engine rebuilds | nothing: a malformed or foreign record |
-| `resume_state_version` | a version other than 3 (docs/contracts/park-state.md: version 2 names code by its place in the pinned program, and pins each library by `park.sources` hash; version 3 parks a run's waits beside its records and an await's captured values) | nothing: a version 1 state is the TypeScript engine's, and a run it parked fails its resume by `parkedOnEngine` before reaching here. A version 2 state (0.12's) is refused by its own message: "this run parked under listen-fire 0.12 (park state 2); a 0.13 engine resumes park state 3" |
+| `resume_state_version` | a version other than 3 or 4 (docs/contracts/park-state.md: version 2 names code by its place in the pinned program, and pins each library by `park.sources` hash; version 3 parks a run's waits beside its records and an await's captured values; version 4 holds no `lazy` walk) | nothing: a version 1 state is the TypeScript engine's, and a run it parked fails its resume by `parkedOnEngine` before reaching here. A version 2 state (0.12's) is refused by its own message: "this run parked under listen-fire 0.12 (park state 2); this engine resumes park states 3 and 4" |
+| `resume_state_lazy_walk` | a kept walk (`lazyWalk`, a node edge's `deferred`), which a 0.13 run parked holding; `lazy` is retired in 0.14 | nothing: a version 3 state holding one is refused by its own message, "this run paused holding a `lazy` walk (park state 3); `lazy` is retired in 0.14, and this engine resumes no run paused holding one" |
 | `resume_state_suspended` | a `suspended` other than `true` | nothing: the park-state contract refuses it |
 | `resume_state_code_does_not_read` | code the state names (a closure, a run-time arm's body, a body-local declaration, a kept walk's head or mapping) that is not text, or whose place holds no code of that kind in the pinned program (checked once the program and its pinned libraries are read, before anything runs); a code reference declared in a library the program does not link | nothing: this engine writes only places that resolve |
 | `resume_state_kind:blockMeta` | a block's meta edges bound as a name | nothing: no run makes one (the TypeScript's builders of it are called nowhere, and the language retires every `#` hop) |
@@ -347,10 +348,8 @@ or a host holds at run time. Each names its construct:
 - multi-hop linked writes; a `unique by` clause with no key or reading
   beyond the candidate; a WHERE or `unique by` on a shape write;
 - a hop that is not an edge, in a block head, a walk, an `EXISTS` or down an
-  extraction; an incoming hop on an adapter that cannot walk one; a WHERE
-  on a lazy entry's hop or on a run-built node's edges; naming a deferred
-  edge's landing while hopping past it; hopping past a landing that is not
-  a record;
+  extraction; an incoming hop on an adapter that cannot walk one; hopping
+  past a landing that is not a record;
 - a block head rooted at a name no head starts from (a value, a handle
   that bound no record);
 - an `await` on a host that serves no park sink, or of an edge the adapter
@@ -792,10 +791,8 @@ written with. In a node literal, a declared edge (`companies: <Company>`,
 landing shape (its fields, and each nested node as an edge of its own, the
 `extends` chain folded in as `inheritDeclaration` folds it); a traversal
 entry (`files: msg-[a:files]->`, or with a per-item `node { … }` tail) is
-walked where the literal stands, as a block head walks; a `lazy` entry
-(and `x = lazy …`) keeps the walk, its scope captured flat
-(`captureScope`), and runs it at every read: a block head over the edge,
-`files.\`name\`` (each landing's field, collapsed), `EXISTS(files)`.
+walked where the literal stands, as a block head walks. `lazy`, retired
+in 0.14, fails the run by name (the checker refuses it first).
 A graph of a declared shape (`graph<Company> { … }`, its `extends` folded
 in) makes each child edge the shape declares, empty where the literal wrote
 none, carrying the child's landing shape; orders its fields as declared;

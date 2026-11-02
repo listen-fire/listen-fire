@@ -32,7 +32,7 @@ use std::rc::Rc;
 
 use movement_parser::ast::{CallStatement, CombinatorArms, CombinatorExpression, CombinatorKind, MovementDeclaration, RValue, Statement, TraversalBlock};
 
-use crate::bindings::{Binding, Closure, DeferredWalk, Edge, Handle, InstanceBinding, Landed, Node, Scope};
+use crate::bindings::{Binding, Closure, Edge, Handle, InstanceBinding, Landed, Node, Scope};
 use crate::collection::{CollectionRun, OpOrigin};
 use crate::combinator::null_slot;
 use crate::env::{Trail, ValueBinding};
@@ -1011,7 +1011,6 @@ impl Run<'_> {
                     }
                 }
                 Some("nodePosition") => Binding::Node(self.rehydrate_node(descriptor, park).await?),
-                Some("lazyWalk") => Binding::LazyWalk(self.rehydrate_walk(at(descriptor, "walk").unwrap_or(&Js::Undefined), park).await?),
                 Some("value") => {
                     let value = at(descriptor, "value").cloned().unwrap_or(Js::Undefined);
                     let trail = at(descriptor, "provenance").map(|p| self.rehydrate_trail(p)).transpose().map_err(|e| malformed(&e))?;
@@ -1225,42 +1224,19 @@ impl Run<'_> {
         }
         let mut edges = Vec::new();
         for (edge, held) in pairs(at(descriptor, "edges")) {
-            if text(at(held, "kind")) == Some("landed") {
-                let mut landings = Vec::new();
-                for landing in items(at(held, "landings")) {
-                    landings.push(self.rehydrate(&landing, park).await?);
-                }
-                edges.push((edge.clone(), Edge { landings, shape: landing_shape_of(held), deferred: None }));
-            } else {
-                let walk = self.rehydrate_walk(at(held, "walk").unwrap_or(&Js::Undefined), park).await?;
-                edges.push((edge.clone(), Edge { landings: Vec::new(), shape: None, deferred: Some(walk) }));
+            if text(at(held, "kind")) != Some("landed") {
+                return Err(runtime(format!("the parked state holds the node edge '{edge}', which is not a landed one")));
             }
+            let mut landings = Vec::new();
+            for landing in items(at(held, "landings")) {
+                landings.push(self.rehydrate(&landing, park).await?);
+            }
+            edges.push((edge.clone(), Edge { landings, shape: landing_shape_of(held) }));
         }
         let landed_on = text(at(descriptor, "landedOn")).map(String::from);
         let resources = items(at(descriptor, "resources")).iter().map(rehydrate_resource).collect();
         *node.borrow_mut() = Node { fields: ordered, field_order: order, field_provenance: provenance, landed_on, edges, resources };
         Ok(node)
-    }
-
-    /// `rehydrateDeferredWalk`: the walk as it was parked — its head and its
-    /// mapping, one piece of parked code — in the scope it captured.
-    async fn rehydrate_walk(&self, descriptor: &Js, park: &ParkReader) -> Result<Rc<DeferredWalk>, Stop> {
-        let (head, head_path) = parked_code(&self.checked, at(descriptor, "head"), "kept walk's head", |code| match code {
-            crate::code::CodeAt::Head(head) => Some(head),
-            _ => None,
-        })?;
-        let mapping = match at(descriptor, "mapping") {
-            None => None,
-            mapping => Some(parked_code(&self.checked, mapping, "kept walk's mapping", |code| match code {
-                crate::code::CodeAt::Literal(literal) => Some(literal),
-                _ => None,
-            })?),
-        };
-        let captured = Scope::root();
-        for (name, entry) in pairs(at(descriptor, "captured")) {
-            captured.declare(name.clone(), self.rehydrate(entry, park).await?);
-        }
-        Ok(Rc::new(DeferredWalk { head, head_path, captured, mapping }))
     }
 
     /// A closure the state names, and the file its body is written in.

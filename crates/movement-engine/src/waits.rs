@@ -17,9 +17,6 @@
 //! - **Read at the `await`** (crate::awaits): the arrivals after the mark not
 //!   yet judged, in log order, each judged by the WHERE and noted; the first
 //!   that counts is bound.
-//! - **A lazy binding opens nothing where it is assigned:** its records
-//!   enter where a stamped entry reads them (an `await` only takes a name
-//!   holding one record, so they always reach one).
 
 use std::collections::BTreeMap;
 use std::rc::Rc;

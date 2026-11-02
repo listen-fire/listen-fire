@@ -299,16 +299,6 @@ impl Run<'_> {
                     let field = direct_field(expr, name, "a synthesised node")?;
                     crate::node::node_field(&node.borrow(), field).map_err(|e| Failure::of_eval(e, ""))
                 }
-                // The read IS the walk; hops past it continue it
-                // (`resolveDeferred(binding.walk, expr.steps)`).
-                Binding::LazyWalk(walk) => {
-                    let reached = self.deferred_landings(&walk, steps).await?;
-                    if let Some((hops, where_)) = exists_terminal(expr, name, true)? {
-                        let found = self.exists(hops, where_, reached, scope, span).await?;
-                        return Ok(Evaluated { value: Js::Bool(found), prov: none() });
-                    }
-                    self.read_landings(expr, reached, name, "a deferred traversal").await
-                }
                 Binding::Positions(landings) => {
                     let reached = self.walk_meta(landings, steps, name, scope, span).await?;
                     if let Some((hops, where_)) = exists_terminal(expr, name, true)? {
@@ -393,13 +383,6 @@ impl Run<'_> {
             for (aliases, binding) in start {
                 let at = path_scope(scope, &aliases);
                 match &binding {
-                    // A lazy binding IS the walk: the whole remaining chain,
-                    // this hop included, continues from it.
-                    Binding::LazyWalk(walk) => {
-                        let iterations = self.run_kept_past(walk, steps, &aliases, None).await.map_err(crate::write::failure_of)?;
-                        reached.extend(iterations.into_iter().map(|(_, landing)| landing));
-                        continue;
-                    }
                     Binding::Landed(landed) => {
                         let walked = self.walk_adapter(&landed.position(), &landed.read, steps, name, &at, span).await?;
                         reached.extend(walked.into_iter().map(Binding::Landed));
@@ -430,18 +413,6 @@ impl Run<'_> {
                         continue;
                     }
                     Binding::Node(node) => {
-                        let deferred = node.borrow().edges.iter().find(|(n, _)| *n == step.edge_type_id).and_then(|(_, e)| e.deferred.clone());
-                        if let Some(walk) = deferred {
-                            if step.expression_filter.is_some() {
-                                return Err(Failure::unsupported(
-                                    &format!("WHERE filters on a synthesised node's edges ('{name}')"),
-                                    "narrow the entry's own traversal instead — the WHERE belongs on the hop the node's edge is built from",
-                                ));
-                            }
-                            let iterations = self.run_kept_past(&walk, rest, &aliases, step.alias.as_deref()).await.map_err(crate::write::failure_of)?;
-                            reached.extend(iterations.into_iter().map(|(_, landing)| landing));
-                            continue;
-                        }
                         let landings = node.borrow().landings(&step.edge_type_id);
                         let kept = self.keep_in_memory_hop(landings, step, &at, span).await?;
                         reached.extend(self.walk_meta_paths(crossed(&aliases, kept), rest, name, scope, span).await?);
@@ -480,12 +451,6 @@ impl Run<'_> {
         })
     }
 
-    /// A deferred walk read bare: the list of what it lands on now.
-    pub(crate) async fn deferred_records(&self, walk: &crate::bindings::DeferredWalk) -> Result<Evaluated, Failure> {
-        let landed = self.deferred_landings(walk, &[]).await?;
-        self.records_held(landed)
-    }
-
     /// Records in hand as the list value holding them, citing each one.
     fn records_held(&self, landed: Vec<Binding>) -> Result<Evaluated, Failure> {
         let mut origins: Vec<u32> = Vec::new();
@@ -502,12 +467,6 @@ impl Run<'_> {
                 .collect(),
         );
         Ok(Evaluated { value, prov: Prov::Built(Trail { origins, direct: None }) })
-    }
-
-    /// `runDeferredWalk(walk, extraSteps)`: the walk's landings, the hops
-    /// past it walked inside it, in the scope it captured.
-    async fn deferred_landings(&self, walk: &crate::bindings::DeferredWalk, steps: &[TraversalStep]) -> Result<Vec<Binding>, Failure> {
-        Ok(self.run_deferred_past(walk, steps).await.map_err(crate::write::failure_of)?.into_iter().map(|(_, l)| l).collect())
     }
 
     /// `hopFilterKeeps` over a record in hand: the hop's WHERE, its alias
@@ -656,13 +615,7 @@ impl Run<'_> {
                     .iter()
                     .map(|child| Binding::Extracted { emission: child.clone(), root: false, id: Identity::new() })
                     .collect()),
-                Binding::Node(node) => {
-                    let deferred = node.borrow().edges.iter().find(|(n, _)| *n == step.edge_type_id).and_then(|(_, e)| e.deferred.clone());
-                    match deferred {
-                        Some(walk) => Ok(self.run_deferred(&walk).await.map_err(crate::write::failure_of)?.into_iter().map(|(_, l)| l).collect()),
-                        None => Ok(node.borrow().landings(&step.edge_type_id)),
-                    }
-                }
+                Binding::Node(node) => Ok(node.borrow().landings(&step.edge_type_id)),
                 // `settledAll`: every record's hop at once, in order.
                 Binding::Positions(landings) => {
                     let hops: Vec<_> = landings.iter().map(|landing| self.step_cursor(landing, step, scope, span)).collect();

@@ -45,6 +45,7 @@ named in [`RELEASING.md`](RELEASING.md).
   - Why: a closure already says "run this when it is read", and its call says where. `lazy` was a second spelling of it, with rules of its own about where it could be read.
   - Replace each `lazy` by hand: `x = lazy W` with `x = () => W`, each read of `x` with `x()`; `return lazy W` with `return W`; a node entry `files: lazy W` with a closure bound beside the node (no node entry walks again at each read), or with `files: W` to keep what the walk lands on when the node is built. The refusal names the closure to write.
   - `listen-fire upgrade` rewrites none of it, even with `--all`, and leaves the pin where it is until each is replaced. A closure's call reads differently from a kept walk where the name is bound whole to another name or passed to a function, so only the author knows which meaning was wanted.
+  - The engine no longer runs a kept walk: a program that reaches it unchecked fails by name. A paused run's state moves to version 4, which holds no kept walk; a 0.13 run paused holding one (park state 3) is refused on resume, by name ("this run paused holding a `lazy` walk"). Let such runs finish, or cancel them, before upgrading. Any other 0.13 pause resumes.
 
 ## [0.13.1] - 2026-11-02
 

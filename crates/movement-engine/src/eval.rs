@@ -668,9 +668,9 @@ impl<'a> Evaluator<'a> {
         {
             // `x != null` is how a program writes what
             // `EXISTS(x)` asked: a name bound to records that may be none (a
-            // block's returned records, a kept walk) is present only when it
-            // holds one, exactly as EXISTS answers.
-            if matches!(self.env.binding(name), Some(Binding::Positions(_) | Binding::LazyWalk(_)))
+            // block's returned records) is present only when it holds one,
+            // exactly as EXISTS answers.
+            if matches!(self.env.binding(name), Some(Binding::Positions(_)))
             {
                 let exists = Expression::Traverse {
                     alias_root: Some(name.clone()),

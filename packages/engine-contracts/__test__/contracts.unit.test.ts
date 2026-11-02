@@ -231,18 +231,20 @@ describe('a host families version is refused at segment.open unless this host se
 });
 
 describe('a park state version is refused on read unless this release reads it', () => {
-  it('passes the versions it reads: 1 (the TypeScript engine) and 3 (the Rust engine)', () => {
+  it('passes the versions it reads: 1 (the TypeScript engine), and 4 and 0.13\'s 3 (the Rust engine)', () => {
+    expect(PARK_STATE_VERSION).toBe(4);
     expect(() => refuseUnsupportedParkStateVersion(PARK_STATE_VERSION)).not.toThrow();
+    expect(() => refuseUnsupportedParkStateVersion(3)).not.toThrow();
     expect(() => refuseUnsupportedParkStateVersion(1)).not.toThrow();
   });
 
   it('refuses another version, or none, naming the contract, what it saw and what it reads', () => {
     // 0.12's: its awaits parked on keys no 0.13 host wakes.
     expect(() => refuseUnsupportedParkStateVersion(2)).toThrow(
-      'the parked state carries park state version 2, which this release does not read (supported: 1, 3)',
+      'the parked state carries park state version 2, which this release does not read (supported: 1, 3, 4)',
     );
     expect(() => refuseUnsupportedParkStateVersion(undefined)).toThrow(
-      'the parked state carries park state version none, which this release does not read (supported: 1, 3)',
+      'the parked state carries park state version none, which this release does not read (supported: 1, 3, 4)',
     );
   });
 });
