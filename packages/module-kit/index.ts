@@ -17,6 +17,7 @@ export * from './host_limits';
 export * from './retry_fetch';
 export * from './embed';
 export * from './inbound';
+export * from './fired';
 export * from './stripe_signature';
 export {
   AdapterBadRequestError,

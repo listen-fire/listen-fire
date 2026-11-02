@@ -3,9 +3,8 @@
 // extraction, and the poll (paging / checkpoint / folder filter / empty-skip /
 // ordering). No network; the API client is faked.
 
-import type { TriggerEvent } from 'engine-contracts';
-
 import { RESOURCES_REFERENCE_FIELD_ID } from 'movement-engine/public/adapter';
+import { arrivalTriggerOf } from 'movement-engine/public/inbound';
 import {
   ADAPTER_META_TYPE_ID,
   makeMetaPosition,
@@ -205,8 +204,12 @@ describe('GranolaAdapter', () => {
     ).rejects.toThrow();
   });
 
-  it('extracts the note owner as the email-scheme originator', async () => {
-    const event = { payload: normalizeNote(note()) } as TriggerEvent;
+  it('extracts the note owner as the email-scheme originator, from the meeting its poll delivered', async () => {
+    const { arrivals } = await pollGranola(fakeClient([note()]), { edge: 'Meetings', cursor: { updatedAfter: '2026-06-19T00:00:00.000Z' } });
+    const [arrival] = arrivals;
+    if (arrival === undefined || 'gone' in arrival) throw new Error('the poll delivered no meeting');
+    // The run's trigger, as the host hands it to a run its listen fired.
+    const event = arrivalTriggerOf({ pipelineInputId: 'notes:summarise', adapterType: 'granola', arrival, now: new Date() });
     const actor = await adapter.extractActor({ event });
     expect(actor).toEqual({
       identifier: 'priya@fund.com',
