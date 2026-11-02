@@ -25,12 +25,14 @@ named in [`RELEASING.md`](RELEASING.md).
 - **A field is never read with `.` through a value that may be missing, wherever the value comes from**, as TypeScript refuses `x.F` under strict null checks where `x` may be undefined. 0.13 refused it through a change's row and a map member. 0.14 refuses it too through a graph record that may be missing (`t = only(…)`, `first(…)`, a named `match`, then `t.Name`), through a call's result (`only(…).F`) and through an index read (`l[1].F`, `d["a"].F`), with `MOV_ABSENT_REQUIRED`. In 0.13 these read absent and checked clean, so a lookup that found nothing went unseen.
   - `x?.F` is added. It reads a field through a value that may be missing, and is absent when the value is, so `x?.F == null` holds then. It runs exactly as `x.F` ran in 0.13.
   - Narrowing still proves a value present: `exists(x)`, `x != null`, an `if`, a guard clause. `x?.F != null` proves `x` present too.
-  - An index read at a literal is narrowed by what it reads: `l[1] != null` proves every later `l[1]`.
+  - An index read at a literal is narrowed by what it reads: `exists(l[1])` or `l[1] != null` proves every later `l[1]`. `exists` takes an index read at a literal from 0.14 (`exists(l[1])`, `exists(d["a"])`); a call's result is still tested with `!= null`.
+  - A map's member is one entry however it is spelled, as in TypeScript: a test of `d["a"]` proves `d.a`, and a test of `d.a` proves `d["a"]`.
   - The refusal carries a safe rewrite, `.` to `?.` at the refused read. It keeps what the program does, so `listen-fire upgrade` applies it unasked: `only(walk).F` becomes `only(walk)?.F`, and a presence test `x.F != null` becomes `x?.F != null`, which narrows `x` as before.
   - Not added: `?.` through an edge (`x?-[:E]->`). A walk off a record that may be missing stays refused; walk it inside `if (exists(x)) { … }`.
   - **Which pins it reads.** `0.14.x` only: the compatibility key moves, so a project or an automation pinned to `0.13.x` is refused by name ("validate it under 0.14.0 and upgrade it"). `listen-fire upgrade` rewrites each refused read and moves the pin.
   - **For embedders.** A lowered field read written with `?.` carries `optional: true` (`engine-contracts`' expression schema; omitted when false). The engine evaluates it as a plain read. The wasm artifacts are rebuilt.
-  - **Known gap.** The language server completes no field names after `?.` yet.
+  - The language server completes field names after `?.` as after `.`, and after a field holding a record (`c.Previous?.`).
+  - `listen-fire upgrade`'s warning about a wait's captured value names a read as written (`founder?.Email`).
 
 ## [0.13.1] - 2026-11-02
 
