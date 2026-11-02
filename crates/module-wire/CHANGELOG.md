@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.12.9 - 2026-11-02
+
 - `PROTOCOL_MINOR` is 7: adapter protocol 2.7, a poll's answer may say when the edge is next worth polling, and an arrival may name who acted. The results check keeps `poll`'s `pollAgainAt` (a non-empty string) and takes an arrival's `actor` (an actor identity). 2.7 is a host behaviour and names no method, so `PROTOCOL_MINORS` gains no row.
 - The results check takes an arrival's landing and parents naming `unknown`, the fields the module could not read (adapter protocol 2.6, additive).
 - The results check takes `poll`'s 2.6 answer for a listenable edge, `{ arrivals, cursor? }`, beside a listen's `{ events, checkpoint? }`.

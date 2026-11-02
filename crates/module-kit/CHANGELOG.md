@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.13.0 - 2026-11-02
+
 - Breaking: the `LoopGuard` trait loses `is_echo`, with `Echo` and `CurrentRecord`: the loop guard slot retired `guard.isEcho`, which listen-fire stopped calling in 0.13 (docs/contracts/loop-guard-slot.md). A guard built on the kit drops its `is_echo` to compile; one still serving the method over the wire is never asked.
 - `UnjudgedNote` and `UnjudgedArrival` carry `adapter` (the module the arrival came from) and `landing` (what landed, `{ recordId?, recordType?, fields }`, as its module reported it). A store module built on the kit keeps both and answers them on `unjudged.list`: `@lf/system` recognises a report about one of its own `Arrival Not Judged` events by them (docs/contracts/system-events.md). Both read as none when absent.
 - The `Store` trait gains `unjudged.note` (`UnjudgedNote { pipeline, arrival, file, movement, delivery_id, edge, record_id, reason, cause, at, attempt, forget_before }`, answering whether it is new) and `unjudged.list` (`UnjudgedList { after, pipeline, limit }`, answering `Vec<UnjudgedArrival>`): each listen that could not judge an arrival, once per listen, arrival and attempt (0 as delivered, one more per `listen-fire listens replay`), which listen-fire's records door reports as `Arrival Not Judged` (docs/contracts/store-slot.md); listen-fire keeps and reads none from a store that answers `method_not_implemented`.
