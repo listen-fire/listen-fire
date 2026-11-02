@@ -3,11 +3,14 @@
 // `Notes`) is one listen per member: listen-fire resolves each member's
 // heads from the same walk, keeping only that member's records, and polls
 // each head's notes for that member's listen alone. One note fires the
-// function once.
+// function once. `Notes` is announced and never listed, as the edge a listen
+// ends on commonly is.
 //
-// The walk does not type what lands past a union (a Memo or a Remark here),
-// so the check holds the fired function's parameter to nothing: `noted`
-// says it takes a Memo and is fired with a Remark too.
+// What lands is a Memo under a Person and a Remark under a Company, so the
+// fired function's parameter must accept both, as TypeScript's `Memo |
+// Remark` would. The language has no spelling for such a parameter yet (a
+// module names a union only as a collection onto it), so the listen does not
+// check, and the run is a todo until it has one.
 
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
@@ -34,7 +37,7 @@ const { defineModule } = require(${JSON.stringify(join(MODULE_KIT, 'define.ts'))
 const at = (name) => join(__dirname, name);
 const held = (name) => (existsSync(at(name)) ? JSON.parse(readFileSync(at(name), 'utf8')) : []);
 const field = (id, name) => ({ fieldId: id, displayName: name, kind: 'string', writable: false, required: false });
-const notes = (targetTypeId) => ({ fieldId: 'notes', name: 'Notes', targetTypeId, cardinality: 'many', direction: 'outgoing', readable: true, listenable: true, delivery: 'polled', pollEverySeconds: 1, cursor: true, identity: 'Id' });
+const notes = (targetTypeId) => ({ fieldId: 'notes', name: 'Notes', targetTypeId, cardinality: 'many', direction: 'outgoing', readable: false, listenable: true, delivery: 'polled', pollEverySeconds: 1, cursor: true, identity: 'Id' });
 const subject = (typeId, displayName, noteType) => ({ typeId, displayName, fields: [field('id', 'Id'), field('name', 'Name')], references: [notes(noteType)] });
 const note = (typeId, displayName) => ({ typeId, displayName, fields: [field('id', 'Id'), field('text', 'Text')], references: [] });
 const types = {
@@ -92,7 +95,8 @@ module.exports = defineModule({
 
 const LISTEN = 'listen to c-[:Spaces]->-[s:Subjects WHERE s.Name == "Acme"]->-[:Notes]-> fire noted';
 
-function crmProject(): string {
+/** The project, `noted` taking `param`. */
+function crmProject(param: string): string {
   const dir = project();
   rmSync(join(dir, 'movements'), { recursive: true });
   mkdirSync(join(dir, 'movements'));
@@ -108,7 +112,7 @@ function crmProject(): string {
     ]),
   );
   notes(dir, []);
-  writeFileSync(join(dir, 'movements/subjects.mvt'), `import { crm } from adapters\n\nc = connect crm\n\nfunction noted(n: <c-[:Memo]->>) {\n  fail("noted \${n.Text}")\n}\n\n${LISTEN}\n`);
+  writeFileSync(join(dir, 'movements/subjects.mvt'), `import { crm } from adapters\n\nc = connect crm\n\nfunction noted(n: ${param}) {\n  fail("noted \${n.Text}")\n}\n\n${LISTEN}\n`);
   return dir;
 }
 
@@ -132,8 +136,17 @@ function polledSubjects(dir: string): string[] {
   return polls.map((l) => JSON.parse(l) as { edge: string; scope?: string }).filter((p) => p.edge === 'Notes').map((p) => p.scope ?? '(none)');
 }
 
-test('a listen through a union fires once per arrival, each member watching only its own subjects', () => {
-  const dir = crmProject();
+test("the fired function's parameter is held to what lands under every member", () => {
+  const check = lf(crmProject('<c-[:Memo]->>'), 'check');
+  assert.notEqual(check.code, 0, check.out);
+  assert.match(check.out, /MOV_LISTEN_PARAM_MISMATCH 'noted' takes 'n: <c-\[:Memo\]->>', .* 'c-\[:Spaces\]->-\[:Subjects\]-><Company>-\[:Notes\]->' lands c\.Remark/, check.out);
+  assert.equal(check.out.match(/ error /g)?.length, 1, `an announced edge off a union is not write-only: ${check.out}`);
+});
+
+const UNSPELLED = 'a parameter that takes a Memo or a Remark has no spelling yet';
+
+test('a listen through a union fires once per arrival, each member watching only its own subjects', { todo: UNSPELLED }, () => {
+  const dir = crmProject('<c-[:Memo]->>');
   const check = lf(dir, 'check');
   assert.equal(check.code, 0, check.out);
   const armed = drain(dir, 0);

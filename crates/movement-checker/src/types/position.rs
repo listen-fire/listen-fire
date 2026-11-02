@@ -955,6 +955,20 @@ pub fn is_artificial_edge(edge: &str) -> bool {
     edge.starts_with('@')
 }
 
+/// A write-only edge: nothing is read along it. One its module announces
+/// arrivals on still lands, off one record type or off a union of them (the
+/// walks family says whether it must be awaited).
+pub fn reads_nothing(edge: &EdgeSchema) -> bool {
+    edge.readable == Some(false) && edge.listenable != Some(true)
+}
+
+/// Off a union, the members' edges (`carried`) read nothing where none of
+/// them can be listed and one of them reads nothing: the one said. An edge
+/// every member announces arrivals on lands, as it does off one record type.
+pub fn union_reads_nothing<'e>(carried: &[&'e EdgeSchema]) -> Option<&'e EdgeSchema> {
+    carried.iter().all(|edge| edge.readable == Some(false)).then(|| carried.iter().find(|edge| reads_nothing(edge)).copied()).flatten()
+}
+
 /// `stepEdge`, the typing half: the landing of `edge` off `from`.
 /// `_version` stays for the callers in other crates until they drop it.
 pub fn edge_landing(from: &Position, edge: &str) -> EdgeLanding {
@@ -1004,9 +1018,7 @@ fn landing_of(from: &Position, edge: &str) -> EdgeLanding {
                 }
                 return EdgeLanding::Unknown { available: edges.keys().cloned().collect() };
             };
-            // A write-only edge reads nothing; a listenable one still lands (the
-            // walks family says whether it must be awaited).
-            if edge_schema.readable == Some(false) && edge_schema.listenable != Some(true) {
+            if reads_nothing(edge_schema) {
                 return EdgeLanding::Untyped { edge: Some(edge_schema.clone()) };
             }
             let target = generic.unwrap_or_else(|| edge_schema.target.clone());
@@ -1033,8 +1045,8 @@ fn landing_of(from: &Position, edge: &str) -> EdgeLanding {
                 return EdgeLanding::Unknown { available };
             }
             let carried: Vec<&EdgeSchema> = carrying.iter().filter_map(|v| u.instance.schema.positions.get(v)?.edges.get(edge)).collect();
-            if carried.iter().all(|s| s.readable == Some(false)) {
-                return EdgeLanding::Untyped { edge: carried.first().map(|s| (*s).clone()) };
+            if let Some(write_only) = union_reads_nothing(&carried) {
+                return EdgeLanding::Untyped { edge: Some(write_only.clone()) };
             }
             if carrying.len() != u.variants.len() {
                 return EdgeLanding::SomeVariants { carrying };

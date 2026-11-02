@@ -410,16 +410,25 @@ const UNIONS: &str = r#"{"adapters":{"crm":{"canFire":false,"constructionArgs":[
       "Notes":{"target":"Note","listenable":true,"delivery":"connection","carries":["Subjects"]},
       "Calls":{"target":"Note","listenable":true,"delivery":"connection"},
       "Tasks":{"target":"Note","listenable":true,"delivery":"connection"},
-      "Links":{"target":"Subject"}}},
+      "Links":{"target":"Subject"},
+      "Pings":{"target":"Note","readable":false,"listenable":true,"delivery":"connection"},
+      "Jots":{"target":"Memo","readable":false,"listenable":true,"delivery":"connection"},
+      "Logs":{"target":"Note","readable":false,"listenable":true,"delivery":"connection"}}},
     "Company":{"properties":{"Name":"text"},"edges":{
       "Notes":{"target":"Note","listenable":true,"delivery":"connection","carries":["Subjects"]},
       "Calls":{"target":"Note"},
-      "Links":{"target":"Subject"}}},
-    "Note":{"properties":{"Text":"text"},"edges":{}}},
-    "unions":{"Subject":["Person","Company"]},
+      "Links":{"target":"Subject"},
+      "Pings":{"target":"Note","readable":false,"listenable":true,"delivery":"connection"},
+      "Jots":{"target":"Remark","readable":false,"listenable":true,"delivery":"connection"},
+      "Logs":{"target":"Note","readable":false,"writable":true}}},
+    "Note":{"properties":{"Text":"text"},"edges":{}},
+    "Memo":{"properties":{"Text":"text"},"edges":{}},
+    "Remark":{"properties":{"Text":"text"},"edges":{}}},
+    "unions":{"Subject":["Person","Company"],"Writing":["Memo","Remark"]},
     "collections":{"Subjects":{"target":"Subject","membersChange":{"relistEverySeconds":300},"capability":{"filter":"native","supportsLimit":false}},
                    "Things":{"target":"Subject","listenable":true,"delivery":"connection"},
-                   "People":{"target":"Person","membersChange":{"relistEverySeconds":300},"listenable":true,"delivery":"connection"}},
+                   "People":{"target":"Person","membersChange":{"relistEverySeconds":300},"listenable":true,"delivery":"connection"},
+                   "Writings":{"target":"Writing"}},
     "writableRoots":{}}}}},"credentials":{},"plugins":{}}"#;
 
 /// The plans a check of `source` against the union catalog answers, and its
@@ -548,4 +557,39 @@ fn the_missing_listen_hint_ends_on_an_edge() {
             "MOV_LISTEN_MISSING 5:1-5:1 'n' has no listener, so nothing dispatches it — add a listen statement, e.g. listen to crm-[:…]-> fire n",
         ]
     );
+}
+
+/// A listen over a union fires its function with what lands under every
+/// member, so the parameter accepts each member's landing, as TypeScript's
+/// parameter accepts every member of a union argument: a Memo under a
+/// Person, a Remark under a Company.
+#[test]
+fn the_parameter_accepts_what_lands_under_every_member() {
+    let listen = |function: &str| check_unions(&format!("{function}\nlisten to crm-[:Subjects]->-[:Jots]-> fire h\n"));
+    // Typed by a union of the landings: accepted.
+    assert_eq!(listen("function h(w: <crm-[:Writings]->>) { return w.Text }"), (2, Vec::<String>::new()));
+    assert_eq!(
+        listen("function h(w: <crm-[:Memo]->>) { return w.Text }"),
+        (0, vec!["MOV_LISTEN_PARAM_MISMATCH 'h' takes 'w: <crm-[:Memo]->>', but a listen over a union fires with what lands under every member, and 'crm-[:Subjects]-><Company>-[:Jots]->' lands crm.Remark — the parameter's type must accept it".to_string()])
+    );
+    assert_eq!(
+        listen("function h(w: <crm-[:Note]->>) { return w.Text }"),
+        (0, vec!["MOV_LISTEN_PARAM_MISMATCH 'h' takes 'w: <crm-[:Note]->>', but a listen over a union fires with what lands under every member, and 'crm-[:Subjects]-><Person>-[:Jots]->' lands crm.Memo and 'crm-[:Subjects]-><Company>-[:Jots]->' lands crm.Remark — the parameter's type must accept each".to_string()])
+    );
+    // Members that land on one record type are held to it.
+    assert_eq!(check_unions("listen to crm-[:Subjects]->-[:Notes]-> fire p\n").1, ["MOV_LISTEN_PARAM_MISMATCH 'p' takes 'n: <crm-[:Person]->>', but this listen fires with what lands on '-[:Notes]->' ('<crm-[:Subjects]->-[:Notes]->>') — the parameter's type must accept it"]);
+}
+
+/// An edge every member announces arrivals on and lists nothing along is
+/// what it is off one record type: a listen ends on it, a wait takes it, and
+/// any other read is told to wait.
+#[test]
+fn a_union_s_announce_only_edge_is_held_to_one_record_type_s_rule() {
+    let (plans, errors) = answer_unions("listen to crm-[:Subjects]->-[:Pings]-> fire f\n");
+    assert_eq!((spelled_hops(&plans), errors), (vec!["-[:Subjects]->Person (of Subject) Person-[:Pings]->Note".to_string(), "-[:Subjects]->Company (of Subject) Company-[:Pings]->Note".to_string()], Vec::<String>::new()));
+    let ran = |body: &str| answer_unions(&format!("function h(s: <crm-[:Things]->>) {{ {body} }}\nlisten to crm-[:Things]-> fire h\n")).1;
+    assert_eq!(ran("return await s-[:Pings]->"), Vec::<String>::new());
+    // Where one member's edge is write-only, a read off the union reads nothing.
+    assert_eq!(ran("return s-[:Logs]->").iter().map(|e| e.split(' ').next().unwrap()).collect::<Vec<_>>(), ["MOV_WRITE_ONLY_EDGE"]);
+    assert_eq!(ran("return s-[:Pings]->"), ["MOV_AWAIT_REQUIRED '-[:Pings]->' on crm.Subject can't be listed — its module only announces what arrives on it. Wait for one: `await s-[:Pings]->`"]);
 }

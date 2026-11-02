@@ -27,7 +27,8 @@ use crate::families::flow::spell_path_head;
 use crate::families::names::spell_name;
 use crate::families::walks::{alias_reads, is_pure_predicate};
 use crate::scope::{Resolution, ScopeId, SymbolId, SymbolKind};
-use crate::types::position::{Instance, Position, positions_match};
+use crate::types::position::{Instance, InstanceRef, Position, describe_position, display_name_of, position_ref_in, positions_match};
+use crate::types::unions::join_positions;
 
 /// One hop of the traversal, as its module declares it.
 #[derive(Clone, Copy)]
@@ -141,7 +142,14 @@ impl Checker<'_> {
             .and_then(|instance| self.plan_listen(statement, path, instance, &steps, scope))
             .map(|plans| plans.into_iter().map(|plan| ListenPlan { landing: stated.clone(), ..plan }).collect());
         if let Some(walk) = &walk {
-            let landed = walk.landed.as_ref().map(present);
+            // Past a union whose members land on different record types the
+            // walk types nothing: what lands is one of each member's landings.
+            let members = match (&instance, &walk.landed) {
+                (Some(instance), None) => member_landings(instance, path, &steps),
+                _ => Vec::new(),
+            };
+            let joined = join_positions(&members.iter().map(|m| &m.landing).collect::<Vec<_>>()).map(|joined| joined.position);
+            let landed = walk.landed.as_ref().map(present).or(joined.as_ref());
             if let (Some(stated), Some(landed)) = (&statement.landing, landed)
                 && !untyped(landed)
             {
@@ -153,7 +161,7 @@ impl Checker<'_> {
                 );
                 self.report(codes::LISTEN_SHAPE_MISMATCH, message, stated.span);
             }
-            self.check_listen_fires(statement, path, &steps, landed, landing, scope);
+            self.check_listen_fires(statement, path, &steps, Landed { landed, members: &members }, landing, scope);
         }
         // Each member's plan is its own listen; the listen as written is a
         // duplicate when any of them is another listen's.
@@ -464,7 +472,8 @@ impl Checker<'_> {
     /// The function a listen fires takes one parameter, and what lands on
     /// the listen's last edge must be assignable to its type: the node the
     /// listen states it is, where its module leaves it untyped.
-    fn check_listen_fires(&mut self, statement: &ListenDeclaration, path: &PathHead, steps: &[EdgeStep], landed: Option<&Position>, landing: Option<SymbolId>, scope: ScopeId) {
+    fn check_listen_fires(&mut self, statement: &ListenDeclaration, path: &PathHead, steps: &[EdgeStep], landed: Landed, landing: Option<SymbolId>, scope: ScopeId) {
+        let Landed { landed, members } = landed;
         let Some(last) = steps.last().map(|s| s.edge_type_id.as_str()) else { return };
         let Some(id) = self.resolve_reference(&statement.movement, statement.span, scope) else { return };
         let kind = self.scopes.symbol(id).kind;
@@ -510,6 +519,28 @@ impl Checker<'_> {
         }
         let declared = self.movement_declared_params(id).and_then(|p| p.into_iter().next());
         let param = declared.as_ref().and_then(|p| p.plane.pos.as_deref());
+        // A listen over a union fires with what lands under each member, so
+        // the parameter accepts every member's landing, as TypeScript's
+        // parameter accepts every member of a union argument.
+        if let Some(param) = param
+            && !members.is_empty()
+        {
+            let refused: Vec<&MemberLanding> = members.iter().filter(|member| positions_match(&member.landing, param) == Some(false)).collect();
+            if refused.is_empty() {
+                return;
+            }
+            let lands: Vec<String> = refused.iter().map(|member| format!("'{}' lands {}", member.path, describe_position(&member.landing))).collect();
+            let message = format!(
+                "'{}' takes '{}: <{}>', but a listen over a union fires with what lands under every member, and {} — the parameter's type must accept {}",
+                statement.movement,
+                written[0].name,
+                super::spell_param_type(type_),
+                lands.join(" and "),
+                if refused.len() == 1 { "it" } else { "each" }
+            );
+            self.report(codes::LISTEN_PARAM_MISMATCH, message, statement.span);
+            return;
+        }
         let fits = match (param, landed) {
             (None, _) => declared.as_ref().is_none_or(|p| p.plane.field.is_none()),
             (Some(param), Some(landed)) => positions_match(landed, param) != Some(false),
@@ -527,6 +558,45 @@ impl Checker<'_> {
         );
         self.report(codes::LISTEN_PARAM_MISMATCH, message, statement.span);
     }
+}
+
+/// What a listen fires its function with: the walk's landing, and, past a
+/// union whose members land on different record types, each member's.
+struct Landed<'a> {
+    landed: Option<&'a Position>,
+    members: &'a [MemberLanding],
+}
+
+/// What lands under one member of a union a listen goes through or onto,
+/// and that member's traversal as an author reads it.
+struct MemberLanding {
+    path: String,
+    landing: Position,
+}
+
+/// Each member traversal's landing, where the hops go through or onto a
+/// union; none where they do not.
+fn member_landings(instance: &InstanceRef, path: &PathHead, steps: &[EdgeStep]) -> Vec<MemberLanding> {
+    let Some(members) = declared_hops(&instance.schema, steps).filter(|members| members.len() > 1) else { return Vec::new() };
+    let root = match &path.root {
+        Some(PathRoot::Name { name }) => spell_name(name),
+        _ => String::new(),
+    };
+    let landings: Option<Vec<MemberLanding>> = members
+        .iter()
+        .map(|hops| {
+            let landing = position_ref_in(instance, hops.last()?.to)?;
+            let spelled: String = hops
+                .iter()
+                .map(|hop| {
+                    let member = hop.member_of.map(|_| format!("<{}>", display_name_of(instance, hop.to))).unwrap_or_default();
+                    format!("-[:{}]->{member}", hop.step.edge_type_id)
+                })
+                .collect();
+            Some(MemberLanding { path: format!("{root}{spelled}"), landing })
+        })
+        .collect();
+    landings.unwrap_or_default()
 }
 
 /// Each hop's edge as the schema declares it, from the connection down: one

@@ -3,13 +3,13 @@
 // rule, the digest of connected systems, and the handbook as the tools serve
 // it.
 
-import { HANDBOOK_POINTER_BY_CODE } from 'movement-lang';
+import { HANDBOOK_POINTER_BY_CODE, type PositionSchema } from 'movement-lang';
 
-import { authoringDiagnostics, checkProgram, unsavedRefusal, validationOf } from '../check';
+import { authoringDiagnostics, checkProgram, listensOf, unsavedRefusal, validationOf } from '../check';
 import { describeFromSnapshot, renderConnectionsDigest } from '../digest';
 import { readHandbook, searchHandbook } from '../handbook';
 import type { TenantCatalog } from '../host';
-import { CATALOG, fileAs } from './fixtures';
+import { CATALOG, PRELUDE, fileAs } from './fixtures';
 
 const check = (source: string) => checkProgram({ source, catalog: CATALOG.snapshot });
 
@@ -52,6 +52,35 @@ describe('the check', () => {
     expect(unsavedRefusal(clean, validationOf(fileAs('Lead'), clean))).toBeNull();
     const unverified = { ...clean, unverified: ['crm (timed out)'] };
     expect(unsavedRefusal(unverified, validationOf(fileAs('Lead'), unverified))).toMatchObject({ errors: ['crm (timed out)'], message: expect.stringMatching(/could not be checked/) });
+  });
+
+  it('counts the listens nothing fires by statement: one written over a union comes to a plan per member', () => {
+    const note: PositionSchema = { properties: { Text: 'text' }, edges: {} };
+    const subject: PositionSchema = { properties: { Name: 'text' }, edges: { Notes: { target: 'Note', listenable: true, delivery: 'connection' } } };
+    const snapshot: TenantCatalog['snapshot'] = {
+      ...CATALOG.snapshot,
+      adapters: {
+        ...CATALOG.snapshot.adapters,
+        crm: {
+          ...CATALOG.snapshot.adapters.crm,
+          schemas: {
+            workspace: {
+              positions: { Person: subject, Company: subject, Note: note },
+              unions: { Subject: ['Company', 'Person'] },
+              collections: { Subjects: { target: 'Subject' } },
+              writableRoots: {},
+            },
+          },
+        },
+      },
+    };
+    const source = `${PRELUDE}
+function noted(n: <app-[:Note]->>) { return n.Text }
+
+listen to app-[:Subjects]->-[:Notes]-> fire noted
+listen to app-[:Subjects]->-[:Nowhere]-> fire noted
+`;
+    expect(listensOf(source, snapshot)).toEqual({ plans: [expect.objectContaining({ movement: 'noted' }), expect.objectContaining({ movement: 'noted' })], unwatched: 1 });
   });
 });
 

@@ -105,3 +105,4 @@ Each bundled module's 0.13 shape; a host that read their events reads `arrivals`
 ## After 0.13.0
 
 - **A listen over a union is one plan per member.** A plan hop may carry `memberOf`, the union its edge lands on, when the plan watches one member of it (`to`). The platform's checker plans such a listen once per member, as `listen-fire` does, and its hosts read `memberOf`: listing that hop keeps only records of the member's type ([listen_plan.ts](../../packages/engine-contracts/listen_plan.ts)). `MOV_LISTEN_UNION_HOP` is no longer raised.
+- **The check's answer names each listen statement that does not check.** One statement can come to several plans, so plans no longer count statements. `checkAnswerInRust` answers `unwatched`, the span of each `listen to <traversal>` the check refused (absent when there is none); a host that warns about listens nothing fires counts these ([rust_checker.ts](../../packages/movement-lang/checker/rust_checker.ts)).

@@ -55,7 +55,7 @@ use crate::types::field::{CollectionOrder, HeldRecord, Ty, describe_field_type, 
 use crate::types::scope_env::SymbolTypes;
 use crate::types::event_address::conjuncts;
 use crate::types::infer::Typing;
-use crate::types::position::{EdgeLanding, Instance, Position, describe_position, display_name_of, is_artificial_edge, position_schema_of_ref};
+use crate::types::position::{EdgeLanding, Instance, Position, describe_position, display_name_of, is_artificial_edge, position_schema_of_ref, union_reads_nothing};
 
 /// The engine-made edge to the record as it stood before a write.
 pub const OLD_EDGE: &str = "@old";
@@ -125,21 +125,7 @@ fn report_step(typing: &mut Typing, from: &Position, edge: &str, filter: Option<
                 return;
             };
             if edge_schema.listenable == Some(true) {
-                if typing.awaited {
-                    if filter.is_some_and(|f| !is_pure_predicate(f)) {
-                        report_await_impure_where(typing, edge);
-                    }
-                    return;
-                }
-                if !edge_is_readable(edge_schema) {
-                    let wait = typing.step_root.as_ref().map(|root| format!(" Wait for one: `await {root}-[:{edge}]->`")).unwrap_or_default();
-                    typing.report(
-                        codes::AWAIT_REQUIRED,
-                        format!("'-[:{edge}]->' on {} can't be listed — its module only announces what arrives on it.{wait}", describe_edge_owner(from)),
-                    );
-                    return;
-                }
-                typing.watchable_reads.push(edge.to_string());
+                report_listenable_step(typing, &describe_edge_owner(from), edge, edge_is_readable(edge_schema), filter);
             }
             // A write-only edge is the writes family's (MOV_WRITE_ONLY_EDGE).
         }
@@ -153,12 +139,15 @@ fn report_step(typing: &mut Typing, from: &Position, edge: &str, filter: Option<
             }
             let carrying: Vec<&String> =
                 u.variants.iter().filter(|v| u.instance.schema.positions.get(*v).is_some_and(|p| p.edges.contains_key(edge))).collect();
-            if !carrying.is_empty()
-                && carrying.iter().all(|v| !edge_is_readable(&u.instance.schema.positions[v.as_str()].edges[edge]))
-            {
+            let carried: Vec<&EdgeSchema> = carrying.iter().map(|v| &u.instance.schema.positions[v.as_str()].edges[edge]).collect();
+            if union_reads_nothing(&carried).is_some() {
                 return; // MOV_WRITE_ONLY_EDGE: the writes family's.
             }
             if carrying.len() == u.variants.len() {
+                // Held to the rule one record type's edge is.
+                if carried.iter().all(|e| e.listenable == Some(true)) {
+                    report_listenable_step(typing, &describe_position(from), edge, carried.iter().all(|e| edge_is_readable(e)), filter);
+                }
                 return;
             }
             if !carrying.is_empty() {
@@ -207,6 +196,24 @@ fn report_step(typing: &mut Typing, from: &Position, edge: &str, filter: Option<
         },
         Position::MaybeEmpty(of) => report_step(typing, of, edge, filter),
     }
+}
+
+/// A hop along an edge its module announces arrivals on, off `owner`: a
+/// wait takes one, and any other read lists it, which only a readable edge
+/// allows.
+fn report_listenable_step(typing: &mut Typing, owner: &str, edge: &str, readable: bool, filter: Option<&Expression>) {
+    if typing.awaited {
+        if filter.is_some_and(|f| !is_pure_predicate(f)) {
+            report_await_impure_where(typing, edge);
+        }
+        return;
+    }
+    if !readable {
+        let wait = typing.step_root.as_ref().map(|root| format!(" Wait for one: `await {root}-[:{edge}]->`")).unwrap_or_default();
+        typing.report(codes::AWAIT_REQUIRED, format!("'-[:{edge}]->' on {owner} can't be listed — its module only announces what arrives on it.{wait}"));
+        return;
+    }
+    typing.watchable_reads.push(edge.to_string());
 }
 
 fn report_await_impure_where(typing: &mut Typing, edge: &str) {

@@ -135,7 +135,7 @@ async function saveChecked(
     remaining = validation.diagnostics;
   }
   const listens = listensOf(input.source, snapshot);
-  const unplanned = listens === null ? 0 : listens.written - listens.plans.length;
+  const unplanned = listens?.unwatched ?? 0;
   const warnings: string[] =
     listens === null
       ? ['The text does not parse, so it declares no listens: it will not fire until a readable text is saved.']

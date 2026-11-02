@@ -138,17 +138,18 @@ export function unsavedRefusal(result: CheckResult, validation: Validation) {
   return null;
 }
 
-/** What a text's listens come to against `catalog`: the plan the engine's
- *  check answers for each that checks, and how many it writes on a
- *  traversal (`listen to app-[:Companies]-> fire f`), so the ones without
- *  a plan can be named. Null when the text does not parse. */
-export function listensOf(source: string, catalog: CatalogSnapshot): { plans: ListenPlan[]; written: number } | null {
-  let written: number;
+/** What a text's listens come to against `catalog`: the plans the engine's
+ *  check answers for those that check (one listen written over a union
+ *  comes to one plan per member), and how many of the listens written on a
+ *  traversal (`listen to app-[:Companies]-> fire f`) do not check, so nothing
+ *  fires them. Null when the text does not parse. */
+export function listensOf(source: string, catalog: CatalogSnapshot): { plans: ListenPlan[]; unwatched: number } | null {
   try {
-    written = parsePinned({ source, languageVersion: ENGINE_VERSION }).statements.filter((s) => s.kind === 'listen' && s.path !== undefined).length;
+    parsePinned({ source, languageVersion: ENGINE_VERSION });
   } catch (error) {
     if (error instanceof MovementEngineError) return null;
     throw error;
   }
-  return { plans: listenPlansOf(checkAnswerInRust(source, catalog, { languageVersion: ENGINE_VERSION })), written };
+  const answer = checkAnswerInRust(source, catalog, { languageVersion: ENGINE_VERSION });
+  return { plans: listenPlansOf(answer), unwatched: answer.unwatched?.length ?? 0 };
 }
