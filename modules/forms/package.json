@@ -1,7 +1,7 @@
 {
   "name": "@listen-fire/forms",
   "license": "Apache-2.0",
-  "version": "0.13.0",
+  "version": "0.13.1",
   "description": "Forms as a module: a write makes a form at an unguessable link under listen-fire serve, its fields the node the write names; a person (or an agent) answers it once, and the answer arrives on the form's Submissions, typed by that node.",
   "engines": {
     "node": ">=22.23.4 <23"

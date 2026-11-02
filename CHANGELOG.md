@@ -20,6 +20,10 @@ named in [`RELEASING.md`](RELEASING.md).
 
 <!-- add merged PRs here -->
 
+## [0.13.1] - 2026-11-02
+
+A patch release of the 0.13 line: it reads the same pins as 0.13.0 (every `0.13.x`) and changes the meaning of no program that checks under 0.13.0. It mainly fixes what 0.13.0 stopped passing from a module to a run: who acted (Slack, email, Telegram, WhatsApp, Granola and Attio reported nobody, so a host that runs only registered senders dropped their runs), the record a fired record links to (Dealroom, Evertrace), Affinity's changed values and Airtable's ids. It also makes schedules fire on time, lets `connect` name a module without importing it, and stops `listen-fire upgrade` moving a pin past a rewrite that may change behaviour. Adapter protocol 2.7 adds `pollAgainAt` and an arrival's `actor`; a host that ignores them behaves as 0.13.0.
+
 ### Changed
 
 - **`connect` names the adapter and the credential itself, so neither is imported.** ``gh = connect `@lf/github` using my_github`` checks and runs with no `import … from adapters` and no `import … from credentials`. Why: an adapter and a credential are only ever named in a `connect`, so the checker types them there. Imports are for plugins and other files.
@@ -2937,7 +2941,8 @@ Releases before v0.11 are kept one file per minor line, newest first:
 - [v0.2.x](docs/changelog/v0.2.md) (v0.2.0)
 - [v0.1.x](docs/changelog/v0.1.md) (v0.1.0 to v0.1.2)
 
-[Unreleased]: https://github.com/listen-fire/listen-fire/compare/v0.13.0...HEAD
+[Unreleased]: https://github.com/listen-fire/listen-fire/compare/v0.13.1...HEAD
+[0.13.1]: https://github.com/listen-fire/listen-fire/compare/v0.13.0...v0.13.1
 [0.13.0]: https://github.com/listen-fire/listen-fire/compare/v0.12.13...v0.13.0
 [0.12.13]: https://github.com/listen-fire/listen-fire/compare/v0.12.12...v0.12.13
 [0.12.12]: https://github.com/listen-fire/listen-fire/compare/v0.12.11...v0.12.12

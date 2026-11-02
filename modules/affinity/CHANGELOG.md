@@ -1,5 +1,16 @@
 # @listen-fire/affinity
 
+## 0.13.1
+
+### Patch Changes
+
+- 22995c3: A record's change carries the changed field's value and says how it changed, as Airtable's changes carry theirs. `Field Change` is `set`, `changed` or `cleared` (a field value's `created`, `updated` and `deleted` events). `Current` is the record holding only the changed field, at the value set or changed to, and `Previous` at the value cleared, each typed by the record's own field (a dropdown by its label; a field holding several values, as the list of the one value added or removed). Affinity sends no value a change replaced, so `Previous` is unknown on a `changed` change. A field the record type does not name marks `Field`, `Current` and `Previous` unknown, so a filter on them is undecided (an `Arrival Not Judged`) where `c.Field == null` passed it. An opportunity list's scalar columns are its entries' fields, read from the workspace's whole field catalog, read-only; its change names them, its `Field` still text as 0.13.0 typed it. The upgrade note on `organization.updated` offers ``AND c.`Field Change` == null``.
+- 8e06e5a: A change to an entry of an opportunity list finds its list: a column's list is looked up in the workspace's whole field catalog, where only the organizations' and people's were searched. A list entry's change whose list still cannot be named (a list the connection cannot see, or one made since its lists were read) arrives stating no record type, its `Field` unknown, so each listen on `Changes` it could be for reports it could not judge it (`Arrival Not Judged`), and `listen-fire listens replay` puts it through again; since 0.13 it ran nothing without a word.
+- Updated dependencies [4516899]
+- Updated dependencies [4bb86df]
+- Updated dependencies [c7004f6]
+  - @listen-fire/module-kit@0.14.0
+
 ## 0.13.0
 
 ### Minor Changes

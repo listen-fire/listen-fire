@@ -1,5 +1,22 @@
 # @listen-fire/system
 
+## 0.14.0
+
+### Minor Changes
+
+- 89f2ee7: `@lf/system` knows an arrival a listen could not judge that is itself one of its `Arrival Not Judged` events by what landed: a landing with that `Kind` on its own `Events`. Before, it matched a prefix of the record id it minted. `SystemRecords`' `UnjudgedArrival` gains `adapter` (the module the arrival came from) and `landing` (what landed, as its module reported it), both `null` when the host kept none; the records door answers both. `@listen-fire/embed`'s `dispatch` answers each `notJudged` with `adapterType` and `landing`: keep them with the fact. The `Event` record programs read is unchanged.
+- 758185b: `Validation Issue` and `Deprecated Version` have a reader. `SystemRecords` gains the optional `validationIssues` and `deprecatedVersions` (each `({ after: { at, automationId }, limit }) => ProgramNotice[]`, oldest first: the program, the version involved, the reason, when it was found, an optional URL), and the poll keeps a mark per kind in its cursor. A host without them reports neither kind, as before; listen-fire supplies none, so its own records are unchanged. lf-platform's deploy check supplies both (docs/contracts/system-events.md).
+
+### Patch Changes
+
+- 83543ba: `connect` names the adapter and the credential itself (``gh = connect `@lf/github` using my_github``, `crm = connect #acme_crm using acme` for a module that is no package), with no `import … from adapters` or `from credentials`; the import form is deprecated and still checks under a `0.13` pin. The wasm checks the new form; the handbook, the modules' examples and the authoring MCP's guidance show only it, and the handbook's programs listen to the `manual` and `cron` units by name rather than connecting them.
+  
+  `@listen-fire/embed`: a module the host registers from a package (`modules: [{ module: slackModule, package: "@lf/slack" }]`) is connected by that package's name, as on every host; the host's own modules are connected as `#` and their adapter type.
+- Updated dependencies [4516899]
+- Updated dependencies [4bb86df]
+- Updated dependencies [c7004f6]
+  - @listen-fire/module-kit@0.14.0
+
 ## 0.13.0
 
 ### Minor Changes

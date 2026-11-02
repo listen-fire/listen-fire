@@ -1,5 +1,16 @@
 # @listen-fire/airtable
 
+## 0.13.1
+
+### Patch Changes
+
+- cb9b91a: A table's change names what 0.12's `Record Change` did again: `Changed Fields`, the fields the edit touched (every field a created row was given, none for a deleted one), and `Base Id`, `Table Id` and `Record Id`, Airtable's ids for the row's base, table and row (a deleted row's too, which `Record`, a read, cannot reach). Since 0.13 they were not on the change.
+- c9eb661: A `unique by` write along a base's table edge (`write base-[:Companies]-> { unique by (Name) … }`, the base reached by `-[b:Bases WHERE b.Name == "…"]->`) updates the row it finds instead of failing with "cannot attach an existing Companies to Base". A row is in its base by being in one of the base's tables, so the update reports it attached already; a write off another base still fails by name.
+- Updated dependencies [4516899]
+- Updated dependencies [4bb86df]
+- Updated dependencies [c7004f6]
+  - @listen-fire/module-kit@0.14.0
+
 ## 0.13.0
 
 ### Minor Changes

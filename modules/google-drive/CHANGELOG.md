@@ -1,5 +1,14 @@
 # @listen-fire/google-drive
 
+## 0.12.9
+
+### Patch Changes
+
+- Updated dependencies [4516899]
+- Updated dependencies [4bb86df]
+- Updated dependencies [c7004f6]
+  - @listen-fire/module-kit@0.14.0
+
 ## 0.12.8
 
 ### Patch Changes

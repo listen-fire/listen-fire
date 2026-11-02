@@ -1,5 +1,16 @@
 # @listen-fire/module-kit
 
+## 0.14.0
+
+### Minor Changes
+
+- c7004f6: A poll's answer may say when the edge is next worth polling (`PollEdgeAnswer.pollAgainAt`, an ISO instant; adapter protocol 2.7): a host speaking 2.7 polls it then when that is sooner than its interval, never sooner than a second on. It is a host behaviour, so a module that answers it states no minor: an older host ignores the member and polls on its interval.
+
+### Patch Changes
+
+- 4516899: Each module says who acted where it builds an arrival (adapter protocol 2.7 `actor`): who posted, reacted or pressed in Slack, a Granola meeting's owner, a mail's sender, a Telegram or WhatsApp sender, the Attio member who made a change. A run reads `@actor_*` from it; `extractActor` and `getActorCandidates` read it from the run's trigger (`event.arrival.actor`), Slack still resolving the member's email through `users.info` and email still adding its forwarding relays. `module-kit` gains `firedActor(event)`.
+- 4bb86df: `firedRecordFields(event)`: the fields of the record that landed on the arrival a run was fired on, as its module put them on the landing; none for a run no arrival fired. A module's `extractActor` and `getActorCandidates` read the actor from these, since no 0.13 run's event carries a `payload`.
+
 ## 0.13.0
 
 ### Minor Changes

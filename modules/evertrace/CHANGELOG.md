@@ -1,5 +1,15 @@
 # @listen-fire/evertrace
 
+## 0.13.1
+
+### Patch Changes
+
+- 4516899: A run fired by a polled record walks its edges again: a Dealroom round's `Company` and `Investors`, an Evertrace list entry's `Signal` and a signal's `Experiences` and `Educations`. The arrival's landing carries the record as the provider sent it, with the named fields over it.
+- Updated dependencies [4516899]
+- Updated dependencies [4bb86df]
+- Updated dependencies [c7004f6]
+  - @listen-fire/module-kit@0.14.0
+
 ## 0.13.0
 
 ### Minor Changes
