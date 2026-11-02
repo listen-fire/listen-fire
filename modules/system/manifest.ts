@@ -8,14 +8,14 @@ import { DEFAULT_KIND, EVENTS_EDGE, KIND_FIELD, SYSTEM_ADAPTER_TYPE } from './ty
 
 export const SYSTEM_MANIFEST: AdapterManifest = {
   adapterType: SYSTEM_ADAPTER_TYPE,
-  displayName: 'Listen-Fire',
+  displayName: 'System',
   description:
-    'The host itself, as a source: a run failed or paused, a wait lost its record, a release was applied. Bundled with listen-fire, but connected like any module (`listen-fire connect @lf/system`, then ``sys = connect `@lf/system` ``); it needs no credentials.',
+    'The host running the program, as a source: a run failed or paused, a wait lost its record, a release was applied. Connect it with ``sys = connect `@lf/system` ``; it needs no credentials. Which kinds of event arrive depends on the host: it reports a kind only if it supplies the facts for it.',
   authoringHints:
-    'Every event arrives on `Events`; narrow it by `Kind` (`sys-[e:Events WHERE e.Kind == "Run Failed"]->`). Every event carries `Automation`, `Automation Id`, `Run Id`, `Version`, `Reason`, `Url` and `At`. A program is never told about its own listen’s failures.',
+    'Every event arrives on `Events`; narrow it by `Kind` (`sys-[e:Events WHERE e.Kind == "Run Failed"]->`). Every event carries `Automation`, `Automation Id`, `Run Id`, `Version`, `Reason`, `Url` and `At`. A program is never told about its own listen’s failures. A kind the host does not report never arrives, so a listen on it stays quiet.',
   handbookSection: SYSTEM_HANDBOOK_SECTION,
   triggerExpectation:
-    'Fires on the host’s own events, polled every minute by default: a run of another program ending failed (never a rehearsal), a wait whose record was deleted, a listen that could not judge an arrival, a release first run. The first poll sets the mark and emits nothing, so going live never replays past events.',
+    'Fires on the host’s own events, which it polls: a run of another program ending failed (never a rehearsal), a run paused, a wait whose record was deleted, a listen that could not judge an arrival, a release first run, a saved program with a validation issue or a deprecated language version. The host reports the kinds it has facts for. The first poll sets the mark and emits nothing, so going live never replays past events.',
   supportedTriggers: ['poll'],
   methods: ['listEntryPoints', 'describe', 'getFieldValue'],
   // A 0.12 `listen to sys { events: ["Run Failed", "Run Paused"] }` is

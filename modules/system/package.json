@@ -2,7 +2,7 @@
   "name": "@listen-fire/system",
   "license": "Apache-2.0",
   "version": "0.14.0",
-  "description": "The host itself as a source, as a module: a run failed or paused, a wait lost its record, a release was applied. Bundled with listen-fire, which hands it its facts over the records door; another host (lf-platform) hands in its own.",
+  "description": "The host itself as a source, as a module: a run failed or paused, a wait lost its record, a release was applied. The host that runs the program hands it its facts, so which kinds of event arrive depends on the host.",
   "engines": {
     "node": ">=22.23.4 <23"
   },

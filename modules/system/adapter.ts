@@ -51,7 +51,7 @@ const EVENTS_ENTRY: SchemaEntryPoint = {
 /** The host itself: nothing listed, one edge listened to. */
 const ROOT: SchemaTypeDescriptor = {
   typeId: META_RECORD_TYPE,
-  displayName: 'Listen-Fire',
+  displayName: 'System',
   description: 'The host itself. Nothing here can be listed: its events are delivered on `Events`, which a listen narrows by `Kind`.',
   fields: [],
   references: [
