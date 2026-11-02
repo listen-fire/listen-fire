@@ -372,7 +372,8 @@ impl SchemaView {
             if Js::is_true(position.get("undescribed")) {
                 continue;
             }
-            let fields = object(position.get("properties")).iter().map(|(field, type_)| (field.clone(), type_text(type_))).collect();
+            let properties = object(position.get("properties"));
+            let fields = properties.iter().map(|(field, type_)| (field.clone(), derived_enum(field, type_, &properties).unwrap_or_else(|| type_text(type_)))).collect();
             // A write-only edge is said under the writes.
             let edges = object(position.get("edges")).iter().map(|(edge_name, edge)| edge_of(edge_name, edge)).filter(|edge| !matches!(edge.access, EdgeAccess::WriteOnly)).collect();
             let pinned = position.get("pinnedProperties").and_then(Js::as_array).unwrap_or_default().iter().filter_map(Js::as_str).map(str::to_string).collect();
@@ -409,14 +410,17 @@ impl SchemaView {
         self.writes.is_empty()
     }
 
+    /// Where a walk or a listen starts: `Ticks -> Tick (listen only)`.
+    pub(crate) fn starts(&self) -> Vec<String> {
+        self.collections.iter().map(|edge| format!("{} -> {}{}", edge.name, edge.target, edge.access.mark())).collect()
+    }
+
     /// Where a walk or a listen starts, the record types and the writes, a blank line before each.
     pub(crate) fn lines(&self, out: &mut Vec<String>) {
         if !self.collections.is_empty() {
             out.push(String::new());
             out.push("reads: start a walk (or a listen, where marked) from the connection with".into());
-            for edge in &self.collections {
-                out.push(format!("  {} -> {}{}", edge.name, edge.target, edge.access.mark()));
-            }
+            out.extend(self.starts().into_iter().map(|start| format!("  {start}")));
         }
         if !self.records.is_empty() {
             out.push(String::new());
@@ -470,6 +474,32 @@ impl SchemaView {
             })).collect()),
         }
     }
+}
+
+/// An enum's options, when the type is one.
+fn enum_options(type_: &Js) -> Option<Vec<&str>> {
+    (type_.get("kind").and_then(Js::as_str) == Some("enum")).then(|| type_.get("options").and_then(Js::as_array).unwrap_or_default().iter().filter_map(Js::as_str).collect())
+}
+
+/// `enum(invoice.<Kind>)`: an enum field whose options are exactly another
+/// enum field's of the same record, each with one text before it (Stripe's
+/// `Type`, each `Kind` after `invoice.`), said by that field, so the options
+/// are listed once. The two option lists are compared, never read for meaning.
+fn derived_enum(field: &str, type_: &Js, properties: &Obj) -> Option<String> {
+    let options = enum_options(type_)?;
+    let first = options.first()?;
+    properties.iter().filter(|(other, _)| other.as_str() != field).find_map(|(other, other_type)| {
+        let theirs = enum_options(other_type)?;
+        if theirs.len() != options.len() {
+            return None;
+        }
+        theirs.iter().find_map(|their| {
+            let prefix = first.strip_suffix(their).filter(|p| !p.is_empty())?;
+            let derived = options.iter().all(|o| o.strip_prefix(prefix).is_some_and(|rest| theirs.contains(&rest)));
+            derived.then(|| format!("enum({prefix}<{other}>)"))
+        })
+    })
+    .filter(|derived| derived.len() < type_text(type_).len())
 }
 
 /// A field's type as a program spells it: `text`, `enum(open|paid)`, `list<text>`.
@@ -639,4 +669,30 @@ pub(crate) fn first_sentence(text: &str) -> String {
 /// What an uninstalled `@lf/<folder>` would be called as an external.
 fn external_name(reference: &str) -> String {
     reference.rsplit('/').next().unwrap_or(reference).chars().map(|c| if c.is_ascii_alphanumeric() || c == '_' { c } else { '_' }).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn view_of(properties: &str) -> Vec<String> {
+        let schema = Js::parse(format!(r#"{{"positions":{{"InvoiceChange":{{"properties":{properties},"edges":{{}}}}}}}}"#).as_bytes()).unwrap();
+        let mut out = Vec::new();
+        SchemaView::of(&schema).lines(&mut out);
+        out
+    }
+
+    #[test]
+    fn an_enum_that_is_another_enum_of_its_record_with_one_text_before_each_option_is_said_by_that_enum() {
+        let out = view_of(
+            r#"{"Kind":{"kind":"enum","options":["paid","payment_failed"]},"Type":{"kind":"enum","options":["invoice.paid","invoice.payment_failed"]},"Status":{"kind":"enum","options":["invoice.paid","other"]}}"#,
+        );
+        assert_eq!(out.last().unwrap(), "    fields: Kind enum(paid|payment_failed), Type enum(invoice.<Kind>), Status enum(invoice.paid|other)");
+    }
+
+    #[test]
+    fn an_enum_is_listed_where_saying_it_by_another_would_be_no_shorter() {
+        let out = view_of(r#"{"Kind":{"kind":"enum","options":["paid"]},"Type":{"kind":"enum","options":["invoice.paid"]}}"#);
+        assert_eq!(out.last().unwrap(), "    fields: Kind enum(paid), Type enum(invoice.paid)");
+    }
 }

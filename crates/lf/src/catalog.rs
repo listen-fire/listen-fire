@@ -324,11 +324,17 @@ pub fn catalog_text(catalog: &Js) -> String {
         }
     }
 
-    for (name, adapter) in adapters.iter().filter(|(name, _)| is_unit(name)) {
-        let Some(schema) = adapter.get("schemas").and_then(|s| s.get("")) else { continue };
+    // Every program has them, and the handbook's chapter on each has its
+    // record types with the listens written out, so here each is where it starts.
+    let units: Vec<(&String, Vec<String>)> =
+        adapters.iter().filter(|(name, _)| is_unit(name)).filter_map(|(name, adapter)| Some((name, crate::modules::SchemaView::of(adapter.get("schemas")?.get("")?).starts()))).collect();
+    if !units.is_empty() {
+        let chapters: Vec<String> = units.iter().map(|(name, _)| format!("system:{name}")).collect();
         out.push(String::new());
-        out.push(format!("{name}: always connected; a program names it with no connect"));
-        crate::modules::SchemaView::of(schema).lines(&mut out);
+        out.push(format!("always connected (a program names each with no connect; see handbook: {}):", chapters.join(", ")));
+        for (name, starts) in &units {
+            out.push(format!("  {name}: {}", starts.join(", ")));
+        }
     }
 
     let unconnected: Vec<String> = credentials
@@ -477,14 +483,8 @@ mod text_tests {
             "plugins (use: import { <name> } from plugins, then call it by position, settings last):",
             "  render(text, pageSize?): A PDF of the text.",
             "",
-            "manual: always connected; a program names it with no connect",
-            "",
-            "reads: start a walk (or a listen, where marked) from the connection with",
-            "  Invocations -> Invocation (listen only)",
-            "",
-            "record types (a name with a space is written in backticks):",
-            "  Invocation",
-            "    fields: Text text",
+            "always connected (a program names each with no connect; see handbook: system:manual):",
+            "  manual: Invocations -> Invocation (listen only)",
             "",
             "credentials no installed module describes (its module is not installed here, or does not declare that credential): crm_two (mcp)",
         ];
