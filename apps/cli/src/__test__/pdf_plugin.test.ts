@@ -53,7 +53,7 @@ function storedPdfs(dir: string): string[] {
 
 function runTrace(dir: string): Array<Record<string, unknown>> {
   const listed = lf(dir, 'runs').out.trim().split('\n')[0] ?? '';
-  const shown = JSON.parse(lf(dir, 'runs', 'show', listed.split(' ')[0] ?? '').out) as { run?: { trace?: Array<Record<string, unknown>> } };
+  const shown = JSON.parse(lf(dir, 'runs', 'show', listed.split(' ')[0] ?? '', '--json').out) as { run?: { trace?: Array<Record<string, unknown>> } };
   return shown.run?.trace ?? [];
 }
 

@@ -126,7 +126,7 @@ test('a failed payment posts the customer, the amount and Stripe’s reason to #
 
     const runs = await run(world.dir, 'runs');
     const id = runs.out.trim().split('\n').find((l) => l.includes('Payment Failed'))?.split(' ')[0] ?? '';
-    const shown = await run(world.dir, 'runs', 'show', id);
+    const shown = await run(world.dir, 'runs', 'show', id, '--json');
     assert.equal(shown.code, 0, shown.out);
     assert.equal((JSON.parse(shown.out) as { run?: { status?: string } }).run?.status, 'completed', shown.out);
     console.log(messages.join('\n'));

@@ -23,7 +23,7 @@ Keys are camelCase. A value that does not apply is `null`, never absent.
 
 ## `listen-fire catalog --json`
 
-The catalog snapshot (`{ "contractVersion", "adapters", … }`), as `listen-fire catalog` already prints it.
+The catalog snapshot (`{ "contractVersion", "adapters", … }`) the files are checked against. Without `--json`, `listen-fire catalog` prints text: each connection the files make, in the notation of `listen-fire modules show`.
 When credentials are missing: `{ "error", "missingCredentials": [diagnostic…] }`, exit 1.
 
 ## `listen-fire run <movement>`, `run --event`, `run --poll`, `run --webhook`, `resume [<run-id>]`
@@ -72,7 +72,7 @@ When credentials are missing: `{ "error", "missingCredentials": [diagnostic…] 
 - `parked`: what the run waits on now; empty unless `status` is `parked`.
 - `stranded`: each wait the run is parked on whose record was deleted, so nothing will arrive on it; empty unless `status` is `parked`. `key` is `null` for a record already gone when the wait opened. `at`: when the store found the wait parked on a deleted record ([stranded waits](contracts/stranded-waits.md)).
 - `attempts`: every attempt of the run, oldest first, the latest (the run's own `status`, `writes`, `error`) last. A run that was never rerun has one.
-- `listen-fire runs show <id>` without `--json` prints the same document, indented.
+- `listen-fire runs show <id>` without `--json` prints text: the status and error, the event once (each record that arrived, with the fields its record type declares), one line per write and per trace entry, what the run is parked on, and its attempts when there were several.
 
 ## `listen-fire runs rerun <run-id> [--force] --json`
 

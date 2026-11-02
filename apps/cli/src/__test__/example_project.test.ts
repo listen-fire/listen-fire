@@ -104,7 +104,7 @@ function onboard(company: <crm-[:Company]->>) {
 listen to crm-[:Company]-> fire onboard
 `,
   );
-  const event = { external: 'acme_crm', event: { arrivals: [{ edge: 'Company', identity: 'c-1', landing: { recordId: 'c-1', recordType: 'Company', fields: { id: 'c-1', Name: 'Vireo Robotics' } } }] } };
+  const event = { external: 'acme_crm', event: { arrivals: [{ edge: 'Company', identity: 'c-1', landing: { recordId: 'c-1', recordType: 'Company', fields: { id: 'c-1', Name: 'Vireo Robotics', hook_source: 'crm' } } }] } };
   writeFileSync(join(dir, 'events/company_landed.json'), JSON.stringify(event));
   const run = lf(dir, 'run', '--event', 'events/company_landed.json');
   assert.equal(run.code, 0, run.out);
@@ -123,6 +123,17 @@ listen to crm-[:Company]-> fire onboard
   ]);
   const listed = JSON.parse(lf(dir, 'runs', '--json').out) as { runs: Array<Record<string, unknown>> };
   assert.equal(listed.runs[0]?.finishedAt, finishedAt);
+
+  // As text, each fact once: the landing's typed fields (its raw
+  // `hook_source` left out: the module's Company declares no such field), one
+  // line per write.
+  const text = lf(dir, 'runs', 'show', runId);
+  assert.equal(text.code, 0, text.out);
+  assert.match(text.out, new RegExp(`^run ${runId}: companies:onboard completed$`, 'm'));
+  assert.match(text.out, /^event: an arrival on Company of acme_crm, occurred /m);
+  assert.match(text.out, /^ {2}landed Company c-1:\n {4}id: "c-1"\n {4}Name: "Vireo Robotics"$/m);
+  assert.doesNotMatch(text.out, /hook_source/);
+  assert.match(text.out, /^writes \(2\):\n {2}create acme_crm Company company-2: \{"Name":"Welcome Vireo Robotics"\}\n {2}update acme_crm Company c-1: \{"Name":"Onboarded Vireo Robotics"\}$/m);
 });
 
 test('listen-fire run --webhook refuses a delivery whose signature does not verify', () => {

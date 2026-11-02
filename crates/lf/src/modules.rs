@@ -52,18 +52,67 @@ pub async fn run(project: &Project, rest: &[String], json: bool) -> Result<i32, 
 /// Where a module's schema stands.
 enum Schema {
     /// Read from the module; no account was needed.
-    Described,
+    Described(SchemaView),
     /// Comes from the connected account, so it was not read.
     FromAccount,
     /// The module has no schema to read (a plugin module), or could not give one without a credential.
     Unread(String),
 }
 
+/// What a described schema offers a program: the edges a walk or a listen
+/// starts from, the record types, and what it writes. `modules show` prints
+/// a module's own; `listen-fire catalog` prints each connection's, live
+/// types included (crate::catalog::catalog_text).
+#[derive(Default)]
+pub(crate) struct SchemaView {
+    collections: Vec<Edge>,
+    records: Vec<Record>,
+    writes: Vec<Write>,
+}
+
+/// An edge from the connection or from a record, and how a program may follow it.
+struct Edge {
+    name: String,
+    target: String,
+    access: EdgeAccess,
+}
+
+/// What a program does with an edge: walk it, listen on it, or only write along it.
+#[derive(Clone, Copy)]
+enum EdgeAccess {
+    Read,
+    ReadAndListen,
+    ListenOnly,
+    WriteOnly,
+}
+
+impl EdgeAccess {
+    fn of(edge: &Js) -> EdgeAccess {
+        match (!Js::is_false(edge.get("readable")), Js::is_true(edge.get("listenable"))) {
+            (true, false) => EdgeAccess::Read,
+            (true, true) => EdgeAccess::ReadAndListen,
+            (false, true) => EdgeAccess::ListenOnly,
+            (false, false) => EdgeAccess::WriteOnly,
+        }
+    }
+
+    fn mark(self) -> &'static str {
+        match self {
+            EdgeAccess::Read => "",
+            EdgeAccess::ReadAndListen => " (listenable)",
+            EdgeAccess::ListenOnly => " (listen only)",
+            EdgeAccess::WriteOnly => " (write only)",
+        }
+    }
+}
+
 struct Record {
     name: String,
     description: Option<String>,
     fields: Vec<(String, String)>,
-    edges: Vec<(String, String)>,
+    edges: Vec<Edge>,
+    /// The fields a read's WHERE must set with `==`: the read's arguments (an MCP tool's).
+    pinned: Vec<String>,
 }
 
 /// A write: along an edge from a record, or from the connection's own collection.
@@ -90,9 +139,6 @@ struct Summary {
     /// `adapter`, `plugin`, or the slot a core module fills.
     kind: String,
     schema: Schema,
-    collections: Vec<(String, String)>,
-    records: Vec<Record>,
-    writes: Vec<Write>,
     triggers: Vec<String>,
     poll_seconds: Option<u64>,
     /// `name (kind): field, field?` lines, one credential each.
@@ -158,9 +204,6 @@ async fn read_module(project: &Project, reference: &str, external: &External, cr
         description: answer.get("description").and_then(Js::as_str).map(str::to_string),
         kind: if running.is_plugin() || answer.get("plugins").is_some() { "plugin".into() } else { "adapter".into() },
         schema: Schema::Unread("it declares no schema".into()),
-        collections: Vec::new(),
-        records: Vec::new(),
-        writes: Vec::new(),
         triggers: running.supported_triggers.clone(),
         poll_seconds: running.poll_interval_seconds,
         credentials: running.credential_declarations.iter().map(credential_line).collect(),
@@ -176,10 +219,7 @@ async fn read_module(project: &Project, reference: &str, external: &External, cr
         Schema::FromAccount
     } else {
         match describe_as(running, &Vec::new(), None, None).await {
-            Ok((_, schema)) => {
-                fill_from_schema(&mut summary, &schema);
-                Schema::Described
-            }
+            Ok((_, schema)) => Schema::Described(SchemaView::of(&schema)),
             Err(why) => Schema::Unread(format!("the module cannot describe itself without a credential ({})", last_clause(first_line(&why)))),
         }
     };
@@ -211,9 +251,6 @@ fn core_summary(reference: &str, module: &crate::core::CoreModule) -> Summary {
         description: None,
         kind: format!("{} slot", module.slot.name()),
         schema: Schema::Unread("a slot module has no records".into()),
-        collections: Vec::new(),
-        records: Vec::new(),
-        writes: Vec::new(),
         triggers: Vec::new(),
         poll_seconds: None,
         credentials: Vec::new(),
@@ -270,23 +307,27 @@ fn plugins_of(running: &RunningExternal) -> Vec<Plugin> {
     let namespace = running.external.manifest.name.clone();
     crate::externals::plugin_entries(running.plugins.as_ref())
         .into_iter()
-        .map(|(name, spec)| {
-            let required: Vec<&str> = spec.get("requiredArgs").and_then(Js::as_array).unwrap_or_default().iter().filter_map(Js::as_str).collect();
-            let args: Vec<String> = spec
-                .get("args")
-                .and_then(Js::as_array)
-                .unwrap_or_default()
-                .iter()
-                .filter_map(Js::as_str)
-                .map(|arg| if required.contains(&arg) { arg.to_string() } else { format!("{arg}?") })
-                .collect();
-            Plugin {
-                call: format!("{namespace}.{}({})", name.replace('-', "_"), args.join(", ")),
-                priced: Js::is_true(spec.get("priced")),
-                description: spec.get("description").and_then(Js::as_str).map(str::to_string),
-            }
+        .map(|(name, spec)| Plugin {
+            call: format!("{namespace}.{}", plugin_call(&name.replace('-', "_"), &spec)),
+            priced: Js::is_true(spec.get("priced")),
+            description: spec.get("description").and_then(Js::as_str).map(str::to_string),
         })
         .collect()
+}
+
+/// `render(text, pageSize?)`: a plugin called by `name`, each argument it
+/// takes, those it may go without marked `?`.
+pub(crate) fn plugin_call(name: &str, spec: &Js) -> String {
+    let required: Vec<&str> = spec.get("requiredArgs").and_then(Js::as_array).unwrap_or_default().iter().filter_map(Js::as_str).collect();
+    let args: Vec<String> = spec
+        .get("args")
+        .and_then(Js::as_array)
+        .unwrap_or_default()
+        .iter()
+        .filter_map(Js::as_str)
+        .map(|arg| if required.contains(&arg) { arg.to_string() } else { format!("{arg}?") })
+        .collect();
+    format!("{name}({})", args.join(", "))
 }
 
 /// What `connect --yes` cannot choose a default for. The webhook secret is generated when not given.
@@ -310,48 +351,123 @@ fn needs_of(running: &RunningExternal) -> Vec<String> {
 
 // ── The schema, as a program sees it ─────────────────────────────────────────
 
-fn fill_from_schema(summary: &mut Summary, schema: &Js) {
-    let object = |value: Option<&Js>| -> Obj {
-        match value {
-            Some(Js::Obj(o)) => o.clone(),
-            _ => Obj::new(),
-        }
-    };
-    let positions = object(schema.get("positions"));
-    let collections = object(schema.get("collections"));
-    summary.collections = collections.iter().filter_map(|(name, c)| Some((name.clone(), c.get("target")?.as_str()?.to_string()))).collect();
-    for (name, position) in &positions {
-        if Js::is_true(position.get("undescribed")) {
-            continue;
-        }
-        let fields = object(position.get("properties")).iter().map(|(field, type_)| (field.clone(), type_text(type_))).collect();
-        let edges = object(position.get("edges"))
-            .iter()
-            .filter(|(_, edge)| !Js::is_false(edge.get("readable")))
-            .map(|(edge_name, edge)| (edge_name.clone(), edge.get("target").and_then(Js::as_str).unwrap_or("(several)").to_string()))
-            .collect();
-        summary.records.push(Record { name: name.clone(), description: position.get("description").and_then(Js::as_str).map(str::to_string), fields, edges });
+fn object(value: Option<&Js>) -> Obj {
+    match value {
+        Some(Js::Obj(o)) => o.clone(),
+        _ => Obj::new(),
     }
+}
 
-    let shapes: Obj = object(schema.get("writableRoots")).into_iter().chain(object(schema.get("createShapes"))).collect();
-    let write_fields = |target: &str| -> Vec<(String, bool)> {
-        let Some(shape) = shapes.get(target) else { return Vec::new() };
-        let required: Vec<&str> = shape.get("requiredFields").and_then(Js::as_array).unwrap_or_default().iter().filter_map(Js::as_str).collect();
-        object(shape.get("fields")).keys().map(|f| (f.clone(), required.contains(&f.as_str()))).collect()
-    };
-    for (collection, target) in &summary.collections {
-        if object(schema.get("writableRoots")).contains_key(target) {
-            summary.writes.push(Write { along: format!("the connection's {collection}"), target: target.clone(), fields: write_fields(target) });
-        }
-    }
-    for (name, position) in &positions {
-        for (edge_name, edge) in object(position.get("edges")) {
-            if !Js::is_true(edge.get("writable")) {
+fn edge_of(name: &str, edge: &Js) -> Edge {
+    Edge { name: name.to_string(), target: edge.get("target").and_then(Js::as_str).unwrap_or("(several)").to_string(), access: EdgeAccess::of(edge) }
+}
+
+impl SchemaView {
+    /// The view of a described schema (`InstanceSchema`, docs/contracts/catalog-snapshot.md).
+    pub(crate) fn of(schema: &Js) -> SchemaView {
+        let positions = object(schema.get("positions"));
+        let collections: Vec<Edge> = object(schema.get("collections")).iter().filter(|(_, c)| c.get("target").and_then(Js::as_str).is_some()).map(|(name, c)| edge_of(name, c)).collect();
+        let mut records = Vec::new();
+        for (name, position) in &positions {
+            if Js::is_true(position.get("undescribed")) {
                 continue;
             }
-            let target = edge.get("target").and_then(Js::as_str).unwrap_or_default().to_string();
-            let write_only = if Js::is_false(edge.get("readable")) { ", write only" } else { "" };
-            summary.writes.push(Write { along: format!("{name}.{edge_name}{write_only}"), fields: write_fields(&target), target });
+            let fields = object(position.get("properties")).iter().map(|(field, type_)| (field.clone(), type_text(type_))).collect();
+            // A write-only edge is said under the writes.
+            let edges = object(position.get("edges")).iter().map(|(edge_name, edge)| edge_of(edge_name, edge)).filter(|edge| !matches!(edge.access, EdgeAccess::WriteOnly)).collect();
+            let pinned = position.get("pinnedProperties").and_then(Js::as_array).unwrap_or_default().iter().filter_map(Js::as_str).map(str::to_string).collect();
+            records.push(Record { name: name.clone(), description: position.get("description").and_then(Js::as_str).map(str::to_string), fields, edges, pinned });
+        }
+
+        let writable_roots = object(schema.get("writableRoots"));
+        let shapes: Obj = writable_roots.clone().into_iter().chain(object(schema.get("createShapes"))).collect();
+        let write_fields = |target: &str| -> Vec<(String, bool)> {
+            let Some(shape) = shapes.get(target) else { return Vec::new() };
+            let required: Vec<&str> = shape.get("requiredFields").and_then(Js::as_array).unwrap_or_default().iter().filter_map(Js::as_str).collect();
+            object(shape.get("fields")).keys().map(|f| (f.clone(), required.contains(&f.as_str()))).collect()
+        };
+        let mut writes = Vec::new();
+        for collection in &collections {
+            if writable_roots.contains_key(&collection.target) {
+                writes.push(Write { along: format!("the connection's {}", collection.name), target: collection.target.clone(), fields: write_fields(&collection.target) });
+            }
+        }
+        for (name, position) in &positions {
+            for (edge_name, edge) in object(position.get("edges")) {
+                if !Js::is_true(edge.get("writable")) {
+                    continue;
+                }
+                let target = edge.get("target").and_then(Js::as_str).unwrap_or_default().to_string();
+                let write_only = if Js::is_false(edge.get("readable")) { ", write only" } else { "" };
+                writes.push(Write { along: format!("{name}.{edge_name}{write_only}"), fields: write_fields(&target), target });
+            }
+        }
+        SchemaView { collections, records, writes }
+    }
+
+    fn read_only(&self) -> bool {
+        self.writes.is_empty()
+    }
+
+    /// Where a walk or a listen starts, the record types and the writes, a blank line before each.
+    pub(crate) fn lines(&self, out: &mut Vec<String>) {
+        if !self.collections.is_empty() {
+            out.push(String::new());
+            out.push("reads: start a walk (or a listen, where marked) from the connection with".into());
+            for edge in &self.collections {
+                out.push(format!("  {} -> {}{}", edge.name, edge.target, edge.access.mark()));
+            }
+        }
+        if !self.records.is_empty() {
+            out.push(String::new());
+            let pins = if self.records.iter().any(|r| !r.pinned.is_empty()) { "; pinned: the fields a read's WHERE must set with ==" } else { "" };
+            out.push(format!("record types (a name with a space is written in backticks{pins}):"));
+            for record in &self.records {
+                out.push(format!("  {}{}", record.name, record.description.as_deref().map(|d| format!(": {}", first_sentence(d))).unwrap_or_default()));
+                if !record.fields.is_empty() {
+                    out.push(format!("    fields: {}", record.fields.iter().map(|(n, t)| format!("{n} {t}")).collect::<Vec<_>>().join(", ")));
+                }
+                if !record.pinned.is_empty() {
+                    out.push(format!("    pinned: {}", record.pinned.join(", ")));
+                }
+                if !record.edges.is_empty() {
+                    out.push(format!("    edges: {}", record.edges.iter().map(|e| format!("{} -> {}{}", e.name, e.target, e.access.mark())).collect::<Vec<_>>().join(", ")));
+                }
+            }
+        }
+        if !self.writes.is_empty() {
+            out.push(String::new());
+            out.push("writes (a * is required):".into());
+            for write in &self.writes {
+                let fields: Vec<String> = write.fields.iter().map(|(n, required)| format!("{n}{}", if *required { "*" } else { "" })).collect();
+                out.push(format!("  a {} along {}: {}", write.target, write.along, if fields.is_empty() { "(no fields)".into() } else { fields.join(", ") }));
+            }
+        }
+    }
+
+    fn to_json(&self) -> Obj {
+        let edge = |e: &Edge| {
+            Js::Obj(obj! {
+                "name" => Js::str(&e.name),
+                "target" => Js::str(&e.target),
+                "readable" => Js::Bool(matches!(e.access, EdgeAccess::Read | EdgeAccess::ReadAndListen)),
+                "listenable" => Js::Bool(matches!(e.access, EdgeAccess::ReadAndListen | EdgeAccess::ListenOnly)),
+            })
+        };
+        obj! {
+            "collections" => Js::Arr(self.collections.iter().map(edge).collect()),
+            "records" => Js::Arr(self.records.iter().map(|r| Js::Obj(obj! {
+                "name" => Js::str(&r.name),
+                "description" => r.description.as_deref().map_or(Js::Null, Js::str),
+                "fields" => Js::Arr(r.fields.iter().map(|(n, t)| Js::Obj(obj! { "name" => Js::str(n), "type" => Js::str(t) })).collect()),
+                "pinned" => Js::strings(&r.pinned),
+                "edges" => Js::Arr(r.edges.iter().map(edge).collect()),
+            })).collect()),
+            "writes" => Js::Arr(self.writes.iter().map(|w| Js::Obj(obj! {
+                "along" => Js::str(&w.along),
+                "target" => Js::str(&w.target),
+                "fields" => Js::Arr(w.fields.iter().map(|(n, required)| Js::Obj(obj! { "name" => Js::str(n), "required" => Js::Bool(*required) })).collect()),
+            })).collect()),
         }
     }
 }
@@ -386,7 +502,7 @@ impl Summary {
     }
 
     fn read_only(&self) -> bool {
-        matches!(self.schema, Schema::Described) && self.writes.is_empty()
+        matches!(&self.schema, Schema::Described(view) if view.read_only())
     }
 
     fn to_text(&self) -> String {
@@ -406,43 +522,18 @@ impl Summary {
         }
 
         match &self.schema {
-            Schema::Described => {
+            Schema::Described(view) => {
                 line(String::new());
-                line(format!("access: {}", if self.read_only() { "read-only (it writes nothing)" } else { "reads and writes" }));
+                line(format!("access: {}", if view.read_only() { "read-only (it writes nothing)" } else { "reads and writes" }));
                 line("schema: the module's own; no account is needed to check against it".into());
-                if !self.collections.is_empty() {
-                    line(String::new());
-                    line("reads: start a walk from the connection with".into());
-                    for (collection, target) in &self.collections {
-                        line(format!("  {collection} -> {target}"));
-                    }
-                }
-                if !self.records.is_empty() {
-                    line(String::new());
-                    line("record types (a name with a space is written in backticks):".into());
-                    for record in &self.records {
-                        line(format!("  {}{}", record.name, record.description.as_deref().map(|d| format!(": {}", first_sentence(d))).unwrap_or_default()));
-                        if !record.fields.is_empty() {
-                            line(format!("    fields: {}", record.fields.iter().map(|(n, t)| format!("{n} {t}")).collect::<Vec<_>>().join(", ")));
-                        }
-                        if !record.edges.is_empty() {
-                            line(format!("    edges: {}", record.edges.iter().map(|(n, t)| format!("{n} -> {t}")).collect::<Vec<_>>().join(", ")));
-                        }
-                    }
-                }
-                if !self.writes.is_empty() {
-                    line(String::new());
-                    line("writes (a * is required):".into());
-                    for write in &self.writes {
-                        let fields: Vec<String> = write.fields.iter().map(|(n, required)| format!("{n}{}", if *required { "*" } else { "" })).collect();
-                        line(format!("  a {} along {}: {}", write.target, write.along, if fields.is_empty() { "(no fields)".into() } else { fields.join(", ") }));
-                    }
-                }
+                let mut lines = Vec::new();
+                view.lines(&mut lines);
+                lines.into_iter().for_each(&mut line);
             }
             Schema::FromAccount => {
                 line(String::new());
                 line("schema: comes from the connected account (its tables, fields and the like), so it cannot be read here without one".into());
-                line(format!("  to see it: listen-fire credential add --module {} <credential>, import it in a movement, then listen-fire catalog", self.module_name()));
+                line(format!("  to see it: listen-fire credential add --module {} <credential>, connect it in a movement (c = connect {} using <credential>), then listen-fire catalog", self.module_name(), self.connect_name));
             }
             Schema::Unread(_) if self.kind == "plugin" || self.is_slot() => {}
             Schema::Unread(why) => {
@@ -508,31 +599,21 @@ impl Summary {
     }
 
     fn to_json(&self) -> String {
-        let schema = match &self.schema {
-            Schema::Described => obj! { "source" => Js::str("module") },
-            Schema::FromAccount => obj! { "source" => Js::str("account") },
-            Schema::Unread(why) => obj! { "source" => Js::str("unread"), "why" => Js::str(why) },
+        let (schema, view) = match &self.schema {
+            Schema::Described(view) => (obj! { "source" => Js::str("module") }, view.to_json()),
+            Schema::FromAccount => (obj! { "source" => Js::str("account") }, SchemaView::default().to_json()),
+            Schema::Unread(why) => (obj! { "source" => Js::str("unread"), "why" => Js::str(why) }, SchemaView::default().to_json()),
         };
-        let pairs = |items: &[(String, String)], a: &str, b: &str| Js::Arr(items.iter().map(|(x, y)| Js::Obj(obj! { a => Js::str(x), b => Js::str(y) })).collect());
-        let doc = obj! {
+        let mut doc = obj! {
             "module" => Js::str(&self.reference),
             "kind" => Js::str(&self.kind),
             "description" => self.description.as_deref().map_or(Js::Null, Js::str),
             "installedAs" => self.installed_as.as_deref().map_or(Js::Null, Js::str),
             "readOnly" => Js::Bool(self.read_only()),
             "schema" => Js::Obj(schema),
-            "collections" => pairs(&self.collections, "name", "target"),
-            "records" => Js::Arr(self.records.iter().map(|r| Js::Obj(obj! {
-                "name" => Js::str(&r.name),
-                "description" => r.description.as_deref().map_or(Js::Null, Js::str),
-                "fields" => pairs(&r.fields, "name", "type"),
-                "edges" => pairs(&r.edges, "name", "target"),
-            })).collect()),
-            "writes" => Js::Arr(self.writes.iter().map(|w| Js::Obj(obj! {
-                "along" => Js::str(&w.along),
-                "target" => Js::str(&w.target),
-                "fields" => Js::Arr(w.fields.iter().map(|(n, required)| Js::Obj(obj! { "name" => Js::str(n), "required" => Js::Bool(*required) })).collect()),
-            })).collect()),
+        };
+        doc.extend(view);
+        doc.extend(obj! {
             "listens" => Js::Obj(obj! {
                 "triggers" => Js::strings(&self.triggers),
                 "pollSeconds" => self.poll_seconds.map_or(Js::Null, |s| Js::Num(s.into())),
@@ -546,7 +627,7 @@ impl Summary {
             })).collect()),
             "connectNeeds" => Js::strings(&self.needs),
             "protocolMinor" => self.protocol_minor.map_or(Js::Null, |m| Js::Num(m.into())),
-        };
+        });
         Js::Obj(doc).to_json()
     }
 }

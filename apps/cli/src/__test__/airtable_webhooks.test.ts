@@ -675,7 +675,7 @@ test('a row a change holds spreads into a map, read by the field names, whether 
       await until(() => interviews() === 1, server.lines);
       const runId = /^run (\S+) hiring:schedule_interview completed$/.exec(server.lines.find((l) => /^run \S+ hiring:schedule_interview completed$/.test(l)) ?? '')?.[1];
       assert.ok(runId !== undefined);
-      assert.match(lfSync(dir, 'runs', 'show', runId).out, /"writes": 1/);
+      assert.match(lfSync(dir, 'runs', 'show', runId, '--json').out, /"writes":1/);
       assert.match(await written(), /"fldIFrom":"Applied"/, 'it read Stage off the map spread from the row before');
       assert.match(await written(), /"fldIChanged":"Ada"/, 'it read Name off the map spread from the row the edit left');
 
@@ -769,7 +769,7 @@ test('a change names the fields it touched and its base, table and row ids, a de
       await server.stop();
     }
     const listed = JSON.parse(lfSync(dir, 'runs', '--json').out) as { runs: Array<{ runId: string }> };
-    const returned = listed.runs.map((r) => lfSync(dir, 'runs', 'show', r.runId).out).join('\n');
+    const returned = listed.runs.map((r) => lfSync(dir, 'runs', 'show', r.runId, '--json').out).join('\n');
     assert.match(returned, /updated recADA in tblCAND01 of appHIRE01: .*Email.*Stage/, returned);
     assert.match(returned, /deleted recBOB in tblCAND01 of appHIRE01: /, returned);
   } finally {

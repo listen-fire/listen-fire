@@ -161,7 +161,7 @@ test("a message's record carries only the email's own fields: Mailgun's signing 
   assert.match(fired.out, /returned/);
   const runId = /run ([0-9a-f-]{36})/.exec(fired.out)?.[1];
   assert.ok(runId, fired.out);
-  const shown = lf(dir, 'runs', 'show', runId);
+  const shown = lf(dir, 'runs', 'show', runId, '--json');
   assert.equal(shown.code, 0, shown.out);
   const arrival = (JSON.parse(shown.out) as { run: { event: { arrival: { landing: { fields: Record<string, unknown> } } } } }).run.event.arrival;
   assert.equal(arrival.landing.fields['subject'], 'Hello');

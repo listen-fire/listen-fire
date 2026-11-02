@@ -81,7 +81,7 @@ test('the github-triage example: checks clean, refuses the wrong field, posts on
     assert.deepEqual((await fakes.posted()).at(-1), '#general GitHub needs you:\n• acme/api: Webhook retries double-charge on timeout (mention) https://github.com/acme/api/issues/57');
 
     const latest = /^(\S+) /.exec((await lf(dir, ['runs'])).out)?.[1] ?? '';
-    const record = JSON.parse((await lf(dir, ['runs', 'show', latest])).out) as { run?: { costMicrodollars?: number; event?: { adapterType?: string } } };
+    const record = JSON.parse((await lf(dir, ['runs', 'show', latest, '--json'])).out) as { run?: { costMicrodollars?: number; event?: { adapterType?: string } } };
     assert.equal(record.run?.event?.adapterType, 'cron');
     assert.equal(record.run?.costMicrodollars, 0, 'no model, no cost');
   } finally {

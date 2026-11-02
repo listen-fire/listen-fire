@@ -54,9 +54,9 @@ const companyArrival = (id: string, name: string) => ({
 
 /** The pipeline a run was fired for, as `runs show` prints its event. */
 function pipelineOf(dir: string, runId: string): string {
-  const shown = lf(dir, 'runs', 'show', runId);
+  const shown = lf(dir, 'runs', 'show', runId, '--json');
   assert.equal(shown.code, 0, shown.out);
-  return /"pipelineInputId": "([^"]+)"/.exec(shown.out)?.[1] ?? assert.fail(shown.out);
+  return /"pipelineInputId":"([^"]+)"/.exec(shown.out)?.[1] ?? assert.fail(shown.out);
 }
 
 /** Resolves once `holds` is true, checked every 100ms, or rejects after `ms`. */
@@ -94,11 +94,11 @@ test('a pushed arrival fires a listen on the edge it landed on, its parameter bo
     // settings form, and never this one.
     const runs = runsOf(dir);
     assert.equal(runs.length, 1, serving.lines.join('\n'));
-    const shown = lf(dir, 'runs', 'show', runs[0]!.runId);
+    const shown = lf(dir, 'runs', 'show', runs[0]!.runId, '--json');
     assert.equal(shown.code, 0, shown.out);
-    assert.match(shown.out, /"triggerType": "arrival"/);
-    assert.match(shown.out, /"edge": "Company"/);
-    assert.match(shown.out, /"Name": "Osprey"/);
+    assert.match(shown.out, /"triggerType":"arrival"/);
+    assert.match(shown.out, /"edge":"Company"/);
+    assert.match(shown.out, /"Name":"Osprey"/);
     // Without LF_LOG=debug an arrival the WHERE refuses runs nothing and says nothing.
     await post('/dev/companies', { Name: 'Ignored' });
     await post('/dev/companies', { Name: 'Heron' });

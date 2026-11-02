@@ -20,6 +20,12 @@ named in [`RELEASING.md`](RELEASING.md).
 
 <!-- add merged PRs here -->
 
+### Changed
+
+- **`listen-fire catalog` prints text; `--json` prints the snapshot.** The text is each connection the movements make, in the notation of `listen-fire modules show`: its record types with their fields, edges and writes, its live types included (an MCP server's tools, a CRM's fields), and the `connect` line that makes it. It is about a seventh of the JSON (11,325 characters against 81,967 for a project connecting Stripe, Gmail, Slack and an MCP server). A script that read `listen-fire catalog` as JSON passes `--json`.
+- **`listen-fire runs show <run-id>` prints text; `--json` prints the document.** The text says the run's status and error, the event once (each record that arrived, with the fields its record type declares), one line per write and per trace entry, what the run is parked on, and its attempts when there were several. A script that read the indented JSON passes `--json`.
+- **`listen-fire modules show` marks the edges a listen starts on** (`(listenable)`, `(listen only)`), shows the edges only listened to (Stripe's `Changes`), and names the fields a read must pin (an MCP tool's arguments).
+
 ## [0.14.2] - 2026-11-02
 
 A patch release of the 0.14 line: it reads the same pins as 0.14.0 (every `0.14.x`). Airtable listens narrowed to a base or table work on every host.

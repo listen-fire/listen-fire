@@ -237,7 +237,7 @@ test('a store that cannot keep a write fails the run that made it', async () => 
     await until(() => runsOf(dir).length === 1 && settled(runsOf(dir)), 'the run settled');
     const [run] = runsOf(dir);
     assert.equal(run!.status, 'failed', serving.lines.join('\n'));
-    const failed = lf(dir, 'runs', 'show', run!.runId);
+    const failed = lf(dir, 'runs', 'show', run!.runId, '--json');
     assert.match(failed.out, /in the write ledger failed after the write was sent: .*writes\.record is not implemented/);
   } finally {
     await serving.stop();

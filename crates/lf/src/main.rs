@@ -8,7 +8,7 @@
 //!   listen-fire run --poll <movement>            poll now the polled sources of the listens that fire it
 //!   listen-fire resume [<run-id>]                step a parked run's every leaf now, or drain what is due in every parked run
 //!   listen-fire upgrade [--check] [--all]        rewrite the movement files into the language of this release
-//!   listen-fire runs [show <run-id>]             the runs, most recent first; one run in full
+//!   listen-fire runs [show <run-id>]             the runs, most recent first; one run: its status, error, event, writes and trace
 //!   listen-fire runs rerun <run-id> [--force]    run a failed run again as its next attempt
 //!   listen-fire deliveries [show <id>]           the kept deliveries; one in full
 //!   listen-fire listens replay <file>:<movement> --delivery <id>   put a kept delivery through one listen again
@@ -16,7 +16,7 @@
 //!   listen-fire drain [--until-idle] [--max-seconds N]  a worker over the work queue (scale from zero)
 //!   listen-fire serve [--port N] [--doors-only]  the inbound doors and the work drain (--doors-only: no drain)
 //!   listen-fire cancel <run-id> [--reason <text>]
-//!   listen-fire catalog [--dir <project>]        the catalog snapshot `check` reads, as JSON
+//!   listen-fire catalog [--dir <project>]        each connection as a program reads, writes and listens to it; --json: the snapshot `check` reads
 //!   listen-fire lsp [--dir <project>]            the language server, over stdio (src/lsp.rs)
 //!   listen-fire modules [show <module>]          the modules this listen-fire can install; one module's summary (src/modules.rs)
 //!   listen-fire connect [<module>]               set a module up (src/connect.rs)
@@ -144,6 +144,7 @@ mod listens_cmd;
 mod resolve;
 mod routing;
 mod run_host;
+mod run_show;
 mod runs;
 mod schema;
 mod secret_stores;
@@ -199,12 +200,12 @@ const USAGE: &str = "usage: listen-fire <init|check|catalog|lsp|run|resume|runs|
        listen-fire --version
   init      scaffold a starter project in the folder (default: the current one): lf.yaml, a movement, .gitignore
   check     every diagnostic the project's movement files have (as `listen-fire check`)
-  catalog   the catalog snapshot the files are checked against, as JSON
+  catalog   each connection the files make, as a program reads, writes and listens to it: its record types with their fields, edges and writes, in the notation of `modules show`, its live types included (--json: the catalog snapshot the files are checked against)
   lsp       the language server (LSP over stdin/stdout): diagnostics, completion, hover, definitions and fixes for the movement files
   run       run <movement>: one manual invocation, to the `listen to manual-[:Invocations]-> fire <movement>` listens (--text: the Invocation's Text); --event: judge the event file's arrivals against the listens on their edges and run each; --poll <movement>: poll now, once, each polled edge a listen that fires it is on, once for every listen sharing the poll
   resume    step every parked leaf of one run now; with no run, drain the due work and what is due in every parked run (a timer not yet come stays parked)
   upgrade   rewrite the movement files by the fixes that keep their meaning, and move the pin once none is left to fix by hand and no warning says a rewrite may have changed what a program does (--all: every fix offered, and the pin moved past those warnings once you have checked them; --check: print the diff, write nothing); exits 1 while the pin is held
-  runs      the runs in the state file, most recent first (as `listen-fire runs`); `runs show <run-id>`: one run, its event, trace, park and attempts; `runs rerun <run-id>`: run a failed run again as its next attempt, with its own event and the movement as the project holds it now (so a fix to the movement takes effect), from the start; refused unless the run's latest attempt failed, while another listen-fire holds the run, and when the failed attempt already committed writes (they are listed; --force reruns it anyway, making them again)
+  runs      the runs in the state file, most recent first (as `listen-fire runs`); `runs show <run-id>`: one run, its status, error, event, writes, trace, park and attempts (--json: the whole document); `runs rerun <run-id>`: run a failed run again as its next attempt, with its own event and the movement as the project holds it now (so a fix to the movement takes effect), from the start; refused unless the run's latest attempt failed, while another listen-fire holds the run, and when the failed attempt already committed writes (they are listed; --force reruns it anyway, making them again)
   listens   one line per listen on a traversal: how each hop's filter is honoured (on arrival, or resolved by listing), what it watches and when it last resolved, and whether it is ok, failing (LISTEN_SCOPE_LIMIT, LISTEN_RESOLVE_FAILED) or paused; `listens resume <file>:<movement>`: let a paused listen fire again; `listens replay <file>:<movement> --delivery <id>` (or `--event <id>`, an Arrival Not Judged event's Event Id): read the kept delivery's request again (its module's lookups made afresh, its signature not checked again: it is listen-fire's own capture; a polled delivery's kept page is judged again, the module asked nothing) and put the arrivals the delivery brought through that listen alone, its other listens left as they are; one that ran it before runs nothing unless --force; one that still cannot judge it is reported again, as the next attempt, and exits 1
   deliveries  the deliveries the doors kept, most recent first, at most 50 (--subscription: one subscription's; --since: received at or after an instant, or <n>h or <n>d ago); `deliveries show <id>`: one, its events and runs, and whether it keeps the request it was received as (--request prints that request, which may hold personal data; kept deliveries.retainDays days); put one through a listen again: `listens replay <file>:<movement> --delivery <id>` (a failed run: listen-fire runs rerun <run-id>)
   --json    check, catalog, run, resume, runs, deliveries, cancel, modules, connect, credential list: one JSON document (docs/lf-json.md); a failure is {\"error\": …}
@@ -450,7 +451,8 @@ async fn run(argv: Vec<String>) -> Result<i32, String> {
         "check" => check::run(&load()?, args.json, &mut out).await,
         "catalog" => match check::open_checking(&load()?).await? {
             check::Opened::Ready(checking) => {
-                writeln!(out, "{}", checking.catalog.to_json()).map_err(|e| e.to_string())?;
+                let shown = if args.json { checking.catalog.to_json() } else { catalog::catalog_text(&checking.catalog) };
+                writeln!(out, "{shown}").map_err(|e| e.to_string())?;
                 Ok(0)
             }
             check::Opened::MissingCredentials(missing) => {
@@ -557,8 +559,7 @@ async fn run(argv: Vec<String>) -> Result<i32, String> {
                 if args.json {
                     return lfjson::emit(&mut out, &doc, 0);
                 }
-                writeln!(out, "{}", serde_json::to_string_pretty(&doc).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
-                return Ok(0);
+                return run_show::command(&project, &doc, &mut out).await;
             }
             let rows = store.runs(50).map_err(|e| e.to_string())?;
             if args.json {
