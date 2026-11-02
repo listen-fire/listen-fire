@@ -200,7 +200,8 @@ pub struct CoreChoice {
     pub store: CoreModule,
     pub files: CoreModule,
     pub limiter: CoreModule,
-    /// None: no guard runs (the loop breaker caps chains either way).
+    /// The retired loop guard slot's module, if lf.yaml still names one:
+    /// listen-fire starts none (crate::loop_guard::notice_retired).
     pub loop_guard: Option<CoreModule>,
     /// None: a module asking for a page is refused by name.
     pub browser: Option<CoreModule>,
@@ -315,9 +316,8 @@ pub fn required<'a>(settings: &'a BTreeMap<String, String>, module: &CoreModule,
 /// A module's setup, run by `listen-fire connect` once its settings are written: what
 /// it did, line by line.
 pub fn set_up(project: &Project, module: &CoreModule, settings: &BTreeMap<String, String>) -> Result<Vec<String>, String> {
-    if let (Some(process), Slot::LoopGuard) = (&module.process, module.slot) {
-        crate::guard_module::ProcessGuard::start(&module.name, process, settings)?;
-        return Ok(vec![format!("{} answered as a loop guard", module.name)]);
+    if module.slot == Slot::LoopGuard {
+        return Ok(vec![crate::loop_guard::retired(&module.name)]);
     }
     if let (Some(process), Slot::Limiter) = (&module.process, module.slot) {
         crate::limiter_module::ProcessLimiter::start(&module.name, process, settings)?;
@@ -356,10 +356,6 @@ pub fn set_up(project: &Project, module: &CoreModule, settings: &BTreeMap<String
             let path = sqlite_path(project, settings)?;
             crate::store::Store::open(&path).map_err(|e| format!("{}: {e}", path.display()))?;
             Ok(vec![format!("the state file is {}", path.display())])
-        }
-        FINGERPRINT_GUARD => {
-            crate::loop_guard::FingerprintGuard::open(settings, &project.root, &project.lf_dir)?;
-            Ok(vec![format!("the guard keeps its memory {}", if settings.contains_key("url") { "in the Postgres database" } else { "in a file in the project's .lf folder" })])
         }
         _ => Ok(Vec::new()),
     }

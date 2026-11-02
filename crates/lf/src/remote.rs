@@ -109,9 +109,6 @@ pub struct Externals<'s> {
     pub credentials: &'s Credentials,
     pub documents: &'s Documents,
     pub tenant: &'s str,
-    /// The loopGuard slot's module, if one is named: record writes are read
-    /// back for it.
-    pub loop_guard: Option<&'s dyn crate::loop_guard::LoopGuard>,
 }
 
 /// A call's failure, as the engine is answered with it (`AdapterCallError`).
@@ -200,9 +197,6 @@ pub struct SegmentAdapters<'s> {
     minted: RefCell<HashSet<String>>,
     /// The writes a rehearsed instance captured (`CapturedWrite`), in order.
     pub captured: RefCell<Vec<Js>>,
-    /// The record writes made to sources that can echo them, read back for
-    /// the loop guard (crate::loop_guard).
-    pub wrote: RefCell<Vec<crate::loop_guard::Wrote>>,
     /// Every record write the system took, as a run's history lists a write
     /// (`{ adapter, recordType, recordId, action, committed }`): what a
     /// segment that then failed had already done.
@@ -227,7 +221,6 @@ impl<'s> SegmentAdapters<'s> {
             calls: Cell::new(0),
             minted: RefCell::new(HashSet::new()),
             captured: RefCell::new(Vec::new()),
-            wrote: RefCell::new(Vec::new()),
             committed: RefCell::new(Vec::new()),
             ledger: None,
         }
@@ -470,7 +463,6 @@ impl<'s> SegmentAdapters<'s> {
         let mut kept = Ok(());
         if matches!(method, "createRecord" | "updateRecord" | "deleteRecord") {
             kept = self.note_sent(&adapter_type, &plain, &answer, &sent_at);
-            self.note_write(&instance, &plain, &answer).await;
         }
         if let Some(action) = committed_action(method)
             && answer.get("notFound").is_none()
@@ -502,30 +494,6 @@ impl<'s> SegmentAdapters<'s> {
             return ledger.keep(crate::loop_breaker::LedgerRecord { adapter, record_type, external_id }, at);
         }
         Ok(())
-    }
-
-    /// A record write to a source that can echo it back (it sends webhooks
-    /// or is polled), with a loop guard in its slot: the record read back as
-    /// the write left it, for the guard (crate::loop_guard). A source that
-    /// can not read a record back is not read, and a failed read is reported
-    /// and leaves the guard untold.
-    async fn note_write(&self, instance: &Instance, plain: &Js, answer: &Js) {
-        let running = self.running(instance);
-        if self.externals.loop_guard.is_none() || (running.inbound.is_none() && running.poll_interval_seconds.is_none()) || !self.has(instance, "readRecord") || answer.get("notFound").is_some() {
-            return;
-        }
-        let Some(record_type) = plain.get("recordType").and_then(Js::as_str) else { return };
-        let Some(external_id) = answer.get("externalId").or_else(|| plain.get("externalId")).and_then(Js::as_str) else { return };
-        let params = Js::Obj(obj! { "recordType" => Js::str(record_type), "externalId" => Js::str(external_id) });
-        match self.rpc(instance, "readRecord", params).await {
-            Ok(record) => self.wrote.borrow_mut().push(crate::loop_guard::Wrote {
-                adapter: running.external.manifest.name.clone(),
-                record_type: record_type.to_string(),
-                external_id: external_id.to_string(),
-                record,
-            }),
-            Err(failure) => eprintln!("listen-fire: {}: reading {record_type} {external_id} back after writing it, for the loop guard: {}", running.external.manifest.name, failure.message()),
-        }
     }
 
     /// `describe`, remembered per type for the instance (a failure is not).

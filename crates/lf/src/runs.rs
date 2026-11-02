@@ -15,7 +15,6 @@ use indexmap::IndexMap;
 use crate::catalog::{ConnectionSchemas, catalog_of};
 use crate::check::{LOCAL_TENANT, check_parsed, describe_external, missing_line};
 use crate::documents::Documents;
-use crate::loop_guard::{LoopGuard, Wrote};
 use crate::externals::{External, Reach, RunningExternal, needed_externals, rpc_in, scan_externals, start_externals};
 use crate::module_hosts::{Hold, Keep, ModuleProcess};
 use movement_engine::executor::join_all;
@@ -251,8 +250,6 @@ pub struct Session {
     /// The work this session's drains take (`listen-fire drain --kinds`): all of it,
     /// unless a pool is named.
     pub pool: crate::drain::Pool,
-    /// The loopGuard slot's module; None unless lf.yaml names one.
-    loop_guard: Option<std::sync::Arc<dyn LoopGuard>>,
     /// The session's claims on the slots' module processes it started.
     _slot_holds: Vec<Hold>,
     /// When this session's drain last looked for lost runs.
@@ -341,7 +338,7 @@ pub async fn open_session(project: Project, opening: &Opening<'_>) -> Result<Ses
     let externals = needed_externals(scan_externals(&project)?, &parsed, registered);
     // A run's segment starts from a copy of its file's parse, kept for the process.
     movement_engine::program::keep_parses(KEPT_PARSES);
-    let loop_guard = crate::loop_guard::of_project(&project, credentials)?;
+    crate::loop_guard::notice_retired(&project);
     crate::wake::install(crate::wake::of_project(&project, credentials)?);
     // Before any call: the manifest calls below ask it too.
     crate::limiter::install(crate::limiter::of_project(&project, credentials)?);
@@ -422,7 +419,6 @@ pub async fn open_session(project: Project, opening: &Opening<'_>) -> Result<Ses
         user,
         ephemeral_dir,
         pool: Default::default(),
-        loop_guard,
         _slot_holds,
         swept_at: Default::default(),
         watch_pause,
@@ -830,7 +826,7 @@ impl Session {
     }
 
     pub fn externals_in<'a>(&'a self, set: &'a FileSet, secrets: &'a Secrets) -> Externals<'a> {
-        Externals { project: &self.project, running: &set.running, credentials: secrets.credentials(), documents: &self.documents, tenant: LOCAL_TENANT, loop_guard: self.loop_guard.as_deref() }
+        Externals { project: &self.project, running: &set.running, credentials: secrets.credentials(), documents: &self.documents, tenant: LOCAL_TENANT }
     }
 
     fn due_by(&self) -> String {
@@ -1649,7 +1645,6 @@ impl Session {
             cost_cap_microdollars: self.project.cost_cap_microdollars,
         };
         let ran = run_segment(&host, input).await;
-        self.remember_writes(run_id, &host.adapters.wrote.borrow());
         let committed = host.adapters.committed.take();
         let ran = self.end_segment(&host, ran, &committed, completing)?;
         Ok((ran, committed))
@@ -1753,22 +1748,6 @@ impl Session {
         match completing {
             None => run_quiescent(&*self.store, run_id),
             Some(leaf) => run_complete_without(&*self.store, run_id, leaf),
-        }
-    }
-
-    /// The record writes a segment made, told to the loop guard for its
-    /// movement's listens (crate::loop_guard), whether or not the segment
-    /// then failed: the writes were made. Failing to tell it is reported,
-    /// and the run goes on.
-    fn remember_writes(&self, run_id: &str, wrote: &[Wrote]) {
-        let (Some(guard), false) = (&self.loop_guard, wrote.is_empty()) else { return };
-        let remembering = || -> Result<(), String> {
-            let row = self.store.run(run_id).map_err(|e| e.to_string())?.ok_or_else(|| format!("no run {run_id}"))?;
-            let writer = format!("listen:{}:{}", row.file, row.movement);
-            wrote.iter().try_for_each(|one| guard.record_write(one, &writer))
-        };
-        if let Err(message) = remembering() {
-            eprintln!("listen-fire: telling the loop guard run {run_id}'s writes: {message}");
         }
     }
 

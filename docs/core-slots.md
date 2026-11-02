@@ -16,7 +16,6 @@ core:
 | `store` | where run state lives: runs, parks, waits, work to drain | `@lf/sqlite-store` (`.lf/state.db`) | `@lf/postgres-store` |
 | `files` | where documents a run stores are kept | `@lf/local-files` (`.lf/files/`) | |
 | `limiter` | keeps calls to modules and models inside the providers' limits | `@lf/memory-limiter` (in listen-fire's own process) | |
-| `loopGuard` | told of each record write a run makes | none: the slot is empty | `@lf/fingerprint-guard` (opt in) |
 | `browser` | a real page a module drives: a gated deck, a viewer that draws with script ([browser-slot.md](contracts/browser-slot.md)) | none: listen-fire has no browser, and a module asking for a page is refused by name | none in listen-fire; the platform's api image fills it with `@lf/chromium` |
 | `wake` | told when work is due, so whatever starts listen-fire's workers starts one then ([wake-slot.md](contracts/wake-slot.md)) | none: nobody is told, and work waits for a scheduled `listen-fire drain` | none in listen-fire; `@listen-fire/wake-cloud-tasks` starts a Cloud Run job through Google Cloud Tasks ([its README](../modules/wake-cloud-tasks/README.md)) |
 | `ocr` | the text of a scanned PDF or an image, for `extract(…)`, `File.read` and a plugin's `ctx.ocr` ([ocr-slot.md](contracts/ocr-slot.md)) | none: a file with no text layer is unreadable, saying the slot is empty | none in listen-fire; `@listen-fire/document-ai` (Google Document AI) and `@listen-fire/models` on Gemini fill it |
@@ -103,18 +102,7 @@ Every movement file listen-fire reads goes through the movements slot. The wire 
 
 ## The loop guard
 
-A run that writes to the source it listens to hears its own write come back. listen-fire breaks such loops itself, guard or none: an arrival on a record a run wrote at most `loopWindow` before continues that run's chain, and the listen whose arrival would make a chain longer than `loopDepth` runs is paused, by name (`lf.yaml`; the handbook's listeners chapter).
-
-The `loopGuard` slot is still named as before:
-
-```yaml
-core:
-  loopGuard: "@lf/fingerprint-guard"
-```
-
-- listen-fire tells the guard of each record write a run makes, and asks it nothing: the loop breaker above decides. The slot's `guard.isEcho` is retired.
-- `@lf/fingerprint-guard` keeps its memory in a file of its own (`.lf/guard.db`), or a Postgres database every worker shares (`url` setting, `lf_guard` schema). It is not in the store slot.
-- The wire a guard module of your own speaks: [loop-guard-slot.md](contracts/loop-guard-slot.md).
+The `loopGuard` slot is retired. A run that writes to the source it listens to hears its own write come back, and listen-fire breaks such loops itself: an arrival on a record a run wrote at most `loopWindow` before continues that run's chain, and the listen whose arrival would make a chain longer than `loopDepth` runs is paused, by name (`lf.yaml`; the handbook's listeners chapter). listen-fire starts no guard an `lf.yaml` still names, and says so as it starts: remove `core.loopGuard` ([loop-guard-slot.md](contracts/loop-guard-slot.md)).
 
 ## The wake
 

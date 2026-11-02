@@ -1,18 +1,12 @@
-//! The loop guard slot (docs/contracts/loop-guard-slot.md): a module told of
-//! each record write a run makes. Empty unless lf.yaml's `core:` names one.
+//! The loop guard slot (docs/contracts/loop-guard-slot.md), retired: a run
+//! host starts no guard, and a project that still names one in lf.yaml's
+//! `core:` is told so once as listen-fire starts (`notice_retired`).
+//! listen-fire's loop breaker (crate::loop_breaker) caps every chain of
+//! writes and arrivals instead.
 //!
-//! The host's part is one moment. After a run writes a record to a source
-//! that can echo it (one that sends webhooks or is polled, and can read a
-//! record back), it reads the record back and tells the guard
-//! (`record_write`). Nothing in listen-fire asks the guard anything: the
-//! loop breaker (crate::loop_breaker) caps every chain of writes and
-//! arrivals, and the slot's `guard.isEcho` is retired.
-//!
-//! `@lf/fingerprint-guard`, the built-in, remembers a hash of the record as
-//! the write left it for an hour, per record and writing movement. Its memory
-//! is a file of its own (`.lf/guard.db`), or a Postgres database every
-//! listen-fire worker shares (its `lf_guard` schema); nothing of it is in the
-//! store slot.
+//! What stays until the slot is removed is the slot's contract tooling:
+//! `@lf/fingerprint-guard` and a guard module served as modules
+//! (crate::contract_guard), so the contract suite still holds them.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -53,7 +47,21 @@ pub fn fingerprint(record: &Js) -> String {
     Sha256::digest(record.to_json().as_bytes()).iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// The project's loop guard, if its slot is filled.
+/// What listen-fire says of a loop guard lf.yaml names: it starts none.
+pub fn retired(name: &str) -> String {
+    format!("lf.yaml's core.loopGuard names {name}, but the loop guard slot is retired: listen-fire starts no guard, and its loop breaker (lf.yaml's loopWindow and loopDepth) replaces it. Remove core.loopGuard from lf.yaml.")
+}
+
+/// Tell the operator, once per process, that the guard lf.yaml names is not started.
+pub fn notice_retired(project: &crate::project::Project) {
+    static TOLD: std::sync::Once = std::sync::Once::new();
+    if let Some(module) = &project.core.loop_guard {
+        TOLD.call_once(|| eprintln!("listen-fire: {}", retired(&module.name)));
+    }
+}
+
+/// The project's loop guard, if its slot is filled: started only to serve it
+/// to the contract suite (`listen-fire --contract-guard-slot`).
 pub fn of_project(project: &crate::project::Project, credentials: &crate::secrets::Credentials) -> Result<Option<std::sync::Arc<dyn LoopGuard>>, String> {
     let Some(module) = &project.core.loop_guard else { return Ok(None) };
     let settings = crate::core::settings_of(credentials, module);

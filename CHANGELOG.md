@@ -35,6 +35,10 @@ named in [`RELEASING.md`](RELEASING.md).
   - The editor completes an adapter after `connect `, by its package name where it has one, and hover and go-to-definition answer for `connect`'s adapter and credential.
   - The handbook, the docs, the examples and the authoring MCP's guidance show only the form with no import. Their programs that connected the `manual` or `cron` unit now listen to the unit by name.
 
+### Deprecated
+
+- **The loop guard slot is retired.** A project whose `lf.yaml` names one (`core: { loopGuard: … }`) runs as before, but listen-fire starts no guard: it prints one notice naming it as it starts, and never calls `guard.open` or `guard.recordWrite`. It also no longer reads each record back after a write to hand it to the guard, which saves one `readRecord` call per write. listen-fire's loop breaker (`loopWindow`, `loopDepth`) already caps every chain of writes and arrivals, and nothing read what a guard remembered. Remove `core.loopGuard` from `lf.yaml`; 0.14.0 refuses it ([loop-guard-slot.md](docs/contracts/loop-guard-slot.md)).
+
 ### Removed
 
 - **The loop guard slot's `guard.isEcho` is retired** (within adapter protocol 2; no version moves). listen-fire stopped calling it in 0.13, when the loop breaker replaced echo suppression. Now listen-fire's built-in guard, `@lf/fingerprint-guard`, no longer answers it (`listen-fire --contract-guard` refuses it as `method_not_implemented`), and the slot's contract suite holds a guard to `guard.recordWrite` alone. A guard module that still offers `guard.isEcho` loads as before and is never asked ([loop-guard-slot.md](docs/contracts/loop-guard-slot.md)).
