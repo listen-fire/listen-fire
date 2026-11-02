@@ -50,7 +50,7 @@ export const TS_EXCEPT: readonly FrontEntry[] = [
   {
     anchor: 'statements',
     title: 'Statements',
-    text: 'Comments start with `#`; no semicolons. A name is bound once, `name = value`, with no `let` or `const`.',
+    text: 'Comments start with `#`; no semicolons. A name is bound once, `name = value`, with no `let` or `const`. These start statements, never names: `await`, `callback`, `delete`, `edge`, `else`, `ERROR`, `export`, `extract`, `function`, `if`, `import`, `link`, `listen`, `movement`, `refresh`, `return`, `run`, `shape`, `unlink`, `write`.',
   },
   {
     anchor: 'operators',
@@ -66,13 +66,12 @@ export const TS_EXCEPT: readonly FrontEntry[] = [
   {
     anchor: 'types',
     title: 'Types',
-    text: 'A type wears angle brackets: `<text>`, `<number>`, `<boolean>`, `<date>`, `<file>`, `<Lead>`, `<inbox-[:Emails]->>`. A closure parameter needs one unless a built-in supplies it: `(n: <number>) => n * 2`.',
+    text: 'A type wears angle brackets: `<text>`, `<number>`, `<date>`, `<Lead>`, `<inbox-[:Emails]->>`. A closure parameter needs one unless a built-in supplies it: `(n: <number>) => n * 2`.',
   },
   {
     anchor: 'functions-not-methods',
     title: 'Functions, not methods',
     text: 'No methods: a dot reads a field, or a namespace\'s function (`Text.upper(s)`). Core functions are unqualified (`map`, `count`, `first`, `coalesce`).',
-    example: { body: 'words = count(Text.split(Text.trim(m.Subject), " "))' },
   },
   {
     anchor: 'calls',
@@ -83,14 +82,14 @@ export const TS_EXCEPT: readonly FrontEntry[] = [
     anchor: 'no-loops',
     title: 'No loops',
     text: 'No `for` or `while`. A block after a path runs once per record reached, and collects what it `return`s. `map`, `filter` and `reduce` iterate lists.',
-    example: { body: 'names = m-[a:Attachments]-> { return a.Name }\nlisted = Text.join(names, ", ")' },
+    example: { body: 'names = m-[a:Attachments]-> { return a.Name }' },
   },
   {
     anchor: 'maybe-absent',
     title: 'Absent, not undefined',
     text: 'No `undefined` or `??`. What may be missing (`first`, `only`, `xs[i]`, `extractOne`, a named `match`) is `T | absent`. `x?.F` reads through it, absent when `x` is; `x.F` and arithmetic are refused until narrowed: `if (x == null) { fail("…") }`, `coalesce(x, fallback)`, `Field ?: x`.',
     example: {
-      body: 'co = only(crm-[c:Companies WHERE c.Name == m.Subject]->)\nif (co == null) { fail("no company ${m.Subject}") }\nseen = match crm-[:People]-> { unique by (Email), Email: m.From }\nif (seen != null) { link seen -[:Company]-> co }',
+      body: 'co = only(crm-[c:Companies WHERE c.Name == m.Subject]->)\nif (co == null) { fail("no company ${m.Subject}") }',
     },
   },
   {
@@ -102,9 +101,6 @@ export const TS_EXCEPT: readonly FrontEntry[] = [
     anchor: 'immutable-values',
     title: 'Only the graph changes',
     text: 'Values never change (no `x.field = …`); build a record with `graph<Shape> { … }`. Systems change only via `write`, `link`, `unlink`, `delete`.',
-    example: {
-      program: 'node Lead {\n  Name: <text>\n}\nfunction `Lead Of`(m: <inbox-[:Emails]->>) {\n  return graph<Lead> { Name: m.From }\n}',
-    },
   },
   {
     anchor: 'await',
@@ -118,15 +114,15 @@ export const CONCEPTS: readonly FrontEntry[] = [
   {
     anchor: 'systems',
     title: 'Connect each system once',
-    text: 'Connect a system once, naming its adapter and the stored connection it signs in with (``crm = connect `@lf/attio` using acme``); neither is imported. An email listen needs a `key`, the address mail goes to.',
+    text: 'Connect a system once, naming its adapter and the stored connection it signs in with (``crm = connect `@lf/attio` using acme``); neither is imported. A change\'s record may be missing: test it. A channel found by name takes its post inside its block.',
     example: {
-      file: 'inbox = connect `@lf/email`\ncrm = connect `@lf/attio` using acme\n\nfunction `Log Sender`(m: <inbox-[:Emails]->>) {\n  write crm-[:People]-> { unique by (Email), Email: m.From, Name: m.From }\n}\n\nlisten to inbox-[e:Emails WHERE e.Key == "senders"]-> fire `Log Sender`',
+      file: 'crm = connect `@lf/attio` using acme\nmail = connect `@lf/gmail` using team_mail\nchat = connect `@lf/slack` using team_chat\n\nfunction `Renamed`(c: <crm-[:CompanyChange]->>) {\n  co = only(c-[:Company]->)\n  if (co == null) { fail("no company") }\n  write mail-[:Messages]-> { To: ["ops@example.com"], Subject: "Renamed", Body: co.Name }\n  chat-[ch:Channels WHERE ch.Name == "general"]-> {\n    write ch-[:Messages]-> { Message: co.Name }\n  }\n}\n\nlisten to crm-[:Companies]->-[c:Changes WHERE c.Field == "Name"]-> fire `Renamed`',
     },
   },
   {
     anchor: 'graph-and-paths',
     title: 'Systems are graphs; paths are values',
-    text: '`crm-[:Companies]->` is a path to its records; `-[c:Companies WHERE c.Name == n]->` filters the hop. A `listen` line fires a function with the event\'s record as its one parameter.',
+    text: '`crm-[:Companies]->` is a path to its records; `-[c:Companies WHERE c.Name == n]->` filters the hop. A `listen` fires a function whose one parameter is the record it lands on, typed by its record type (`<crm-[:CompanyChange]->>`), not by the walk.',
   },
   {
     anchor: 'identity',
@@ -141,7 +137,7 @@ export const CONCEPTS: readonly FrontEntry[] = [
     title: 'Extraction is a function backed by a model',
     text: 'A `node` declaration is a type and a schema; its descriptions are the model\'s instructions. `extract(content, Shape, settings)` returns a list, `extractOne` one record or absent.',
     example: {
-      program: 'node Company: "the company this email is about" {\n  Name: <text> "its name"\n}\nfunction `File Company`(m: <inbox-[:Emails]->>) {\n  co = extractOne([m.Body, m.Subject], Company, { tier: "careful" })\n  if (co == null) { fail("no company") }\n  write crm-[:Companies]-> { unique by (Name), Name: co.Name }\n}',
+      program: 'node Company: "the company this email is about" {\n  Name: <text> "its name"\n}\nfunction `File Company`(m: <inbox-[:Emails]->>) {\n  co = extractOne([m.Body, m.Subject], Company)\n  if (co == null) { fail("no company") }\n}',
     },
   },
   {

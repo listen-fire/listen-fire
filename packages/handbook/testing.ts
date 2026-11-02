@@ -70,6 +70,7 @@ const CREDENTIAL_ADAPTERS: Record<string, string> = {
   main_crm: 'attio',
   acme_slack: 'slack',
   team_chat: 'slack',
+  team_mail: 'gmail',
   team_workspace: 'slack',
   team_telegram: 'telegram',
   team_whatsapp: 'whatsapp',
@@ -92,6 +93,7 @@ const CAPTURED_PACKAGES: Record<string, string> = {
   system: '@lf/system',
   github: '@lf/github',
   forms: '@lf/forms',
+  gmail: '@lf/gmail',
 };
 
 /** The snapshot a run of any example would be handed. */
