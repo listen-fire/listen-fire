@@ -58,6 +58,10 @@ named in [`RELEASING.md`](RELEASING.md).
 
 - **`triggerEventOf` leaves the engine package's `public/inbound`.** It built the 0.12 trigger, which no 0.13 host makes, and was deprecated in 0.13.1. Build a run's event with `arrivalTriggerOf`.
 
+- **An Affinity opportunity list's change `Field` is an enum of the list's columns.** A listen on `` `List Entry — <opportunity list>` ``'s `Changes` naming a `Field` that is not one of its columns is refused (`MOV_ENUM_UNKNOWN_VALUE`), as on every other list.
+  - Why: 0.13 typed it as text, as the list's columns were not on its record type, so a misspelled column checked clean and never ran.
+  - The fix, by hand: name one of the list's columns, as the refusal lists them. `listen-fire upgrade` rewrites nothing.
+
 ## [0.13.1] - 2026-11-02
 
 A patch release of the 0.13 line: it reads the same pins as 0.13.0 (every `0.13.x`) and changes the meaning of no program that checks under 0.13.0. It mainly fixes what 0.13.0 stopped passing from a module to a run: who acted (Slack, email, Telegram, WhatsApp, Granola and Attio reported nobody, so a host that runs only registered senders dropped their runs), the record a fired record links to (Dealroom, Evertrace), Affinity's changed values and Airtable's ids. It also makes schedules fire on time, lets `connect` name a module without importing it, and stops `listen-fire upgrade` moving a pin past a rewrite that may change behaviour. Adapter protocol 2.7 adds `pollAgainAt` and an arrival's `actor`; a host that ignores them behaves as 0.13.0.
