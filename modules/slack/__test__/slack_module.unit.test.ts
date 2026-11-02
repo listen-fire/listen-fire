@@ -47,9 +47,17 @@ function fakeSlack(): { fetch: typeof fetch; calls: Call[] } {
   return { fetch, calls };
 }
 
+/** The files `files.info` answers for: F1 shared in #deals and, in a thread,
+ *  in a private channel; F0 in no conversation. */
+const FILES: Record<string, unknown> = {
+  F1: { ok: true, file: { id: 'F1', shares: { public: { C1: [{ ts: '1700.1', channel_name: 'deals' }] }, private: { G2: [{ ts: '1700.3', thread_ts: '1700.2' }] } } } },
+  F0: { ok: true, file: { id: 'F0' } },
+};
+
 /** A Slack Web API over HTTP, as the module's client reaches it: the
  *  channels it names (`conversations.info`), the app's bot user
- *  (`auth.test`), and every method called, in order. */
+ *  (`auth.test`), the files it shares (`files.info`), and every method
+ *  called, in order. */
 async function slackApi(
   channels: Record<string, string>,
   faults: Map<string, 'down' | 'limited' | 'hangs'> = new Map(),
@@ -71,6 +79,7 @@ async function slackApi(
       const name = channels[id];
       const answer =
         method === 'auth.test' ? { ok: true, user_id: 'UBOT', bot_id: 'B1' }
+        : method === 'files.info' ? (FILES[form.get('file') ?? ''] ?? { ok: false, error: 'file_not_found' })
         : method !== 'conversations.info' ? { ok: true }
         : name === undefined ? { ok: false, error: 'channel_not_found' }
         : { ok: true, channel: { id, name } };
@@ -321,9 +330,34 @@ describe('@lf/slack', () => {
           },
         ],
       });
-      // A reaction on a file is no message's.
-      const onFile = { ...event, item: { type: 'file', file: 'F1' } };
-      await expect(adapter.preprocessInbound?.({ raw: { type: 'event_callback', event: onFile } })).resolves.toEqual({ events: [] });
+    } finally {
+      await api.close();
+    }
+  });
+
+  it('a reaction on a file arrives on the Reactions of each message sharing it, as a reaction on that message does', async () => {
+    const faults = new Map<string, 'down'>();
+    const api = await slackApi({ C1: 'deals', G2: 'board' }, faults);
+    try {
+      const { adapter } = load({ credential: credential({ accessToken: 'xoxb-file-reactions', baseUrl: api.baseUrl }) });
+      const event = { type: 'reaction_added', user: 'U2', reaction: 'eyes', item: { type: 'file', file: 'F1' }, item_user: 'U1', event_ts: '1700000000.000200' };
+      const read = await adapter.preprocessInbound?.({ raw: { type: 'event_callback', event_id: 'Ev9', event } });
+      expect(
+        read?.arrivals?.map((a) =>
+          'landing' in a ? { edge: a.edge, key: a.key, identity: a.identity, emoji: a.landing.fields['Emoji'], item: a.landing.fields['item'], channel: a.parents?.[0]?.fields['Name'], about: a.about } : a,
+        ),
+      ).toEqual([
+        // `item` names the message too, so the reaction's `Channel` and `Message` read it.
+        { edge: 'Reactions', key: 'C1:1700.1', identity: 'C1:1700.1:U2:eyes:1700000000.000200', emoji: 'eyes', item: { type: 'file', file: 'F1', channel: 'C1', ts: '1700.1' }, channel: 'deals', about: { recordType: 'Message', externalId: 'C1:1700.1' } },
+        { edge: 'Reactions', key: 'G2:1700.3', identity: 'G2:1700.3:U2:eyes:1700000000.000200', emoji: 'eyes', item: { type: 'file', file: 'F1', channel: 'G2', ts: '1700.3' }, channel: 'board', about: { recordType: 'Message', externalId: 'G2:1700.3' } },
+      ]);
+      // A file in no conversation is on no message.
+      await expect(adapter.preprocessInbound?.({ raw: { type: 'event_callback', event: { ...event, item: { type: 'file', file: 'F0' } } } })).resolves.toEqual({ events: [] });
+      // Slack not answering leaves no message to place it on: the delivery fails, by name, and Slack sends it again.
+      faults.set('files.info', 'down');
+      await expect(adapter.preprocessInbound?.({ raw: { type: 'event_callback', event: { ...event, item: { type: 'file', file: 'F9' } } } })).rejects.toThrow(
+        'slack: a reaction on file F9 could not be placed on the messages sharing it: Slack did not answer files.info',
+      );
     } finally {
       await api.close();
     }

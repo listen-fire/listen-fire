@@ -130,6 +130,7 @@ listen to chat-[ch:Channels WHERE ch.Name IN ["deals"]]->-[m:Messages WHERE m.\`
 - \`Mentions App\` is true when the message @-mentions the app — the usual way to run on Slack, since many workspaces send the app only the messages that mention it.
 - A thread reply is not one of a channel's \`Messages\`: it is its thread's \`Replies\`, heard in the channels you name with \`chat-[ch:Channels WHERE ch.Name == "deals"]->-[:Messages]->-[:Replies]->\`.
 - A reply or a reaction arrives with its channel but not the message it is under, so a listen on \`Replies\` or \`Reactions\` narrows by channel only; a filter on that message is refused while you write it.
+- A reaction on a file arrives on the \`Reactions\` of each message that shares the file, as a reaction on that message.
 
 ### a-poll-that-keeps-answering
 

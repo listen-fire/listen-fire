@@ -75,6 +75,8 @@ const slackInnerEventSchema = z
         type: z.string().optional(),
         channel: z.string().optional(),
         ts: z.string().optional(),
+        // A reaction on a file names the file, not a message.
+        file: z.string().optional(),
       })
       .passthrough()
       .optional(),
@@ -281,6 +283,26 @@ function slackChannelRecord(id: string, name: string | null): AwaitLanding {
 export interface SlackArrivalLookups {
   channelName(channelId: string): Promise<string | null>;
   botUserId(): Promise<string | null>;
+  /** The messages that share a file (`files.info`'s `shares`): none for a
+   *  file in no conversation, null when Slack could not say. */
+  fileShares(fileId: string): Promise<SlackMessageAt[] | null>;
+}
+
+/** A message by where it is: its channel and its `ts`. */
+export interface SlackMessageAt {
+  channel: string;
+  ts: string;
+}
+
+const fileSharesSchema = z.record(z.string(), z.array(z.object({ ts: z.string() }).passthrough()));
+
+/** The messages a `files.info` file names in its `shares`, public and
+ *  private, each conversation's in the order Slack lists them. */
+export function slackFileShares(file: unknown): SlackMessageAt[] {
+  const shares = z.object({ shares: z.object({ public: fileSharesSchema.optional(), private: fileSharesSchema.optional() }).optional() }).safeParse(file);
+  if (!shares.success) return [];
+  const { public: open, private: closed } = shares.data.shares ?? {};
+  return [open, closed].flatMap((byChannel) => Object.entries(byChannel ?? {}).flatMap(([channel, posts]) => posts.map(({ ts }) => ({ channel, ts }))));
 }
 
 const slackTextObject = z.object({ text: z.string().optional() }).passthrough();
@@ -414,33 +436,50 @@ async function interactionArrival(press: z.infer<typeof slackBlockActionsSchema>
   };
 }
 
-/** A reaction added to a message, as one arrival on its `Reactions`. */
+/** A reaction added to a message, as one arrival on its `Reactions`. A
+ *  reaction on a file arrives on the `Reactions` of each message that shares
+ *  the file, as a reaction on one of those messages does. */
 async function reactionArrival(event: z.infer<typeof slackInnerEventSchema>, lookups: SlackArrivalLookups): Promise<Arrival[]> {
-  const item = event.item;
-  if (item?.type !== 'message' || item.channel === undefined || item.ts === undefined || event.reaction === undefined) return [];
-  const channel = item.channel;
-  const key = slackMessageKey(channel, item.ts);
+  const { item, reaction } = event;
+  if (item === undefined || reaction === undefined) return [];
+  if (item.type === 'message' && item.channel !== undefined && item.ts !== undefined) {
+    return [await messageReactionArrival({ event, reaction, on: { channel: item.channel, ts: item.ts }, lookups })];
+  }
+  if (item.type === 'file' && item.file !== undefined) {
+    const shares = await lookups.fileShares(item.file);
+    // Its key is the message it is on: no arrival can be placed without the
+    // shares, and Slack sends a delivery it saw fail again.
+    if (shares === null) throw new Error(`slack: a reaction on file ${item.file} could not be placed on the messages sharing it: Slack did not answer files.info`);
+    return Promise.all(shares.map((on) => messageReactionArrival({ event, reaction, on, lookups })));
+  }
+  return [];
+}
+
+async function messageReactionArrival(input: { event: z.infer<typeof slackInnerEventSchema>; reaction: string; on: SlackMessageAt; lookups: SlackArrivalLookups }): Promise<Arrival> {
+  const { event, reaction, on: message, lookups } = input;
+  const { channel } = message;
+  const key = slackMessageKey(channel, message.ts);
   const occurredAt = isoInstantFromSlackTs(event.event_ts);
-  return [
-    {
-      edge: SLACK_REACTIONS_EDGE_NAME,
-      key,
-      // A reaction taken off and put back is another reaction: its event's
-      // own time tells them apart, and a retried delivery repeats it.
-      identity: `${key}:${event.user ?? ''}:${event.reaction}:${event.event_ts ?? ''}`,
-      landing: {
-        // The id a run's own reaction write is handed, so the host matches
-        // a reaction it caused to its write.
-        recordId: `reaction:${key}:${event.reaction}`,
-        recordType: SLACK_REACTION_TYPE_NAME,
-        fields: { ...event, Emoji: event.reaction, Channel: channel, Reactor: event.user ?? null },
-      },
-      parents: [slackChannelRecord(channel, await lookups.channelName(channel))],
-      about: { recordType: SLACK_MESSAGE_TYPE_NAME, externalId: key },
-      ...slackActorOf(event.user),
-      ...(occurredAt !== null ? { occurredAt } : {}),
+  return {
+    edge: SLACK_REACTIONS_EDGE_NAME,
+    key,
+    // A reaction taken off and put back is another reaction: its event's
+    // own time tells them apart, and a retried delivery repeats it.
+    identity: `${key}:${event.user ?? ''}:${reaction}:${event.event_ts ?? ''}`,
+    landing: {
+      // The id a run's own reaction write is handed, so the host matches
+      // a reaction it caused to its write.
+      recordId: `reaction:${key}:${reaction}`,
+      recordType: SLACK_REACTION_TYPE_NAME,
+      // `item` names the message, as a reaction's `Channel` and `Message`
+      // read it: for a file's, the message sharing it, beside the file.
+      fields: { ...event, item: { ...event.item, channel, ts: message.ts }, Emoji: reaction, Channel: channel, Reactor: event.user ?? null },
     },
-  ];
+    parents: [slackChannelRecord(channel, await lookups.channelName(channel))],
+    about: { recordType: SLACK_MESSAGE_TYPE_NAME, externalId: key },
+    ...slackActorOf(event.user),
+    ...(occurredAt !== null ? { occurredAt } : {}),
+  };
 }
 
 /** What one Events API event says arrived: a top-level message on its

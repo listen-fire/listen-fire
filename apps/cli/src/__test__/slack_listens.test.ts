@@ -258,6 +258,41 @@ test('a message in #deals fires a channel-filtered listen, attributed to its sen
   }
 });
 
+test('a reaction on a file fires a Reactions listen on the message in #deals that shares it, not the one in #random', async () => {
+  const world = await slackWorld(`${HEADER}
+function seen(r: <chat-[:Reaction]->>) {
+  return "seen \${r.Emoji} by \${r.Reactor} in \${r.Channel}"
+}
+
+listen to chat-[ch:Channels WHERE ch.Name == "deals"]->-[:Messages]->-[:Reactions]-> fire seen
+`);
+  try {
+    await seedSlack(world.channels, [
+      { entity_type: 'channel', id: 'C0DEALS', data: { id: 'C0DEALS', name: 'deals', is_private: false, is_member: true } },
+      { entity_type: 'channel', id: 'C0RANDOM', data: { id: 'C0RANDOM', name: 'random', is_private: false, is_member: true } },
+      { entity_type: 'file', id: 'F0DECK', data: { name: 'deck.pdf', content: 'deck', shares: { public: { C0DEALS: [{ ts: '1700000000.000100' }], C0RANDOM: [{ ts: '1700000000.000200' }] } } } },
+    ]);
+    const checked = lfSync(world.dir, 'check');
+    assert.equal(checked.code, 0, checked.out);
+    const serving = await served(world.dir);
+    try {
+      const reaction = eventCallback({ type: 'reaction_added', user: 'U002', reaction: 'eyes', item: { type: 'file', file: 'F0DECK' }, item_user: 'U001', event_ts: '1700000100.000100' });
+      const delivered = await deliver(serving, reaction, 'application/json');
+      assert.ok(delivered.status >= 200 && delivered.status < 300, delivered.body);
+      await until(() => completed(serving, 'seen') === 1, serving.lines);
+      await new Promise((settle) => setTimeout(settle, 500));
+      assert.equal(completed(serving, 'seen'), 1, 'the share in #random runs nothing');
+    } finally {
+      await serving.stop();
+    }
+    const listed = JSON.parse(lfSync(world.dir, 'runs', '--json').out) as { runs: Array<{ runId: string }> };
+    const returned = listed.runs.map((r) => lfSync(world.dir, 'runs', 'show', r.runId).out).join('\n');
+    assert.match(returned, /seen eyes by U002 in C0DEALS/);
+  } finally {
+    await world.close();
+  }
+});
+
 test('in a Slack outage a message is still taken: a listen filtering its channel cannot be judged and is noted once, one that does not runs', async () => {
   const world = await slackWorld(`${HEADER}
 function heard(m: <chat-[:Message]->>) {

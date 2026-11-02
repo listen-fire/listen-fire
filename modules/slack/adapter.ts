@@ -78,11 +78,13 @@ import {
   SLACK_REPLIES_EDGE_NAME,
   isoInstantFromSlackTs,
   slackArrivals,
+  slackFileShares,
   slackMentionsApp,
   slackMessageKey,
   slackTopicOfBlocks,
   type SlackActionData,
   type SlackInteractionData,
+  type SlackMessageAt,
 } from './inbound';
 import { SLACK_MANIFEST } from './manifest';
 import { SLACK_MESSAGE_FUNCTION } from './compose';
@@ -357,6 +359,7 @@ export class SlackAdapter extends BaseAdapter {
     const arrivals = await slackArrivals(input.raw, {
       channelName: (channelId) => this.resolveChannelName(channelId),
       botUserId: () => this.botUserId(),
+      fileShares: (fileId) => this.fileShares(fileId),
     });
     return { events: [], ...(arrivals.length > 0 ? { arrivals } : {}) };
   }
@@ -1457,6 +1460,14 @@ export class SlackAdapter extends BaseAdapter {
     const info = await this.lookup(`channel ${channelId}'s name (conversations.info)`, (client) => client.lookups.conversations.info({ channel: channelId }));
     const record = info?.channel ? normalizeChannel(info.channel as Record<string, unknown>) : null;
     return record?.name ?? null;
+  }
+
+  /** The messages that share a file, as a reaction on it is placed on them:
+   *  read with `files.info` through the bounded lookup client; null when it
+   *  cannot be read. */
+  private async fileShares(fileId: string): Promise<SlackMessageAt[] | null> {
+    const info = await this.lookup(`file ${fileId}'s shares (files.info, a reaction on it)`, (client) => client.lookups.files.info({ file: fileId }));
+    return info?.ok === true ? slackFileShares(info.file) : null;
   }
 
   /** One of a delivery's lookups, bounded by the lookup client: null, said

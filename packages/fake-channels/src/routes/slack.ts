@@ -59,6 +59,8 @@ function slackFile(id: string, data: Record<string, unknown>, base: string): Rec
     size: fileBytes(data).length,
     url_private: url,
     url_private_download: url,
+    // The messages that share it, by conversation, as seeded.
+    ...(data.shares !== undefined ? { shares: data.shares } : {}),
   };
 }
 
