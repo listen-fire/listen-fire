@@ -1,9 +1,9 @@
 // `lazy` is retired in 0.14 for a closure: `tables = () => s-[t:Tables]->`,
 // read as `tables()`. A project written with `lazy` is refused by
-// `listen-fire check` (MOV_LAZY_RETIRED); `listen-fire upgrade --all` rewrites
-// each `lazy` (a binding to a closure and its reads to calls, a returned walk
-// without it, a node's entry without it), the rewritten project checks clean,
-// and its run returns what the `lazy` project's run returned under 0.13.
+// `listen-fire check` and by `listen-fire upgrade`, even with `--all`
+// (MOV_LAZY_RETIRED, naming the closure to write), and nothing is rewritten:
+// the author replaces each `lazy` by hand. The closures they write check
+// clean, and the run returns what the `lazy` project's run returned under 0.13.
 
 import assert from 'node:assert/strict';
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -89,6 +89,18 @@ function lz(run: <manual-[:Invocations]->>) {
 listen to manual-[:Invocations]-> fire lz
 `;
 
+/** LAZY with each `lazy` replaced by hand. */
+const CLOSURES = LAZY.replace('return lazy s-', 'return s-')
+  .replace('tables = lazy s-', 'tables = () => s-')
+  .replace('count(tables)', 'count(tables())')
+  .replace('names = tables.Name', 'names = tables().Name')
+  .replace('past = tables-', 'past = tables()-')
+  .replace('count(tables-', 'count(tables()-')
+  .replace('labelled = lazy s-[t:Tables]-> node { label: t.Name }', 'labelled = () => {\n    return s-[t:Tables]-> {\n      return node { label: t.Name }\n    }\n  }')
+  .replace('labelled.label', 'labelled().label')
+  .replace('${tables.Name}', '${tables().Name}')
+  .replace('tabs: lazy s-', 'tabs: s-');
+
 /** What the run of LAZY returned under 0.13 (listen-fire at c9fe6ec6f0). */
 const RETURNED_UNDER_0_13 = {
   n: 2,
@@ -112,27 +124,23 @@ function storeProject(): string {
   return dir;
 }
 
-test('lazy is refused, upgraded to closures that check clean, and the run returns what it did', () => {
+test('lazy is refused by check and upgrade, by name, and the closures written by hand run as it did', () => {
   const dir = storeProject();
   const refused = lf(dir, 'check');
   assert.equal(refused.code, 1, refused.out);
   assert.equal((refused.out.match(/ error MOV_LAZY_RETIRED /g) ?? []).length, 4, refused.out);
-  assert.match(refused.out, /Write `tables = \(\) => s-\[t:Tables\]->` and read it as `tables\(\)`; `listen-fire upgrade` rewrites it/);
+  assert.match(refused.out, /replace it by hand with a closure, `tables = \(\) => s-\[t:Tables\]->`, read as `tables\(\)`/);
 
-  // Without --all, the node's entry is listed and holds the pin.
-  const safe = lf(dir, 'upgrade', '--check');
-  assert.equal(safe.code, 1, safe.out);
-  assert.match(safe.out, /MOV_LAZY_RETIRED .*no node entry walks again at each read/);
-  assert.match(safe.out, /fix \(not applied, may change meaning; --all applies it\): "tabs: "/);
+  for (const args of [['upgrade'], ['upgrade', '--all']]) {
+    const upgraded = lf(dir, ...args);
+    assert.equal(upgraded.code, 1, upgraded.out);
+    assert.equal((upgraded.out.match(/ error MOV_LAZY_RETIRED .*\(`listen-fire upgrade` does not rewrite it\)/g) ?? []).length, 4, upgraded.out);
+    assert.doesNotMatch(upgraded.out, /fix \(not applied/, upgraded.out);
+    assert.match(upgraded.out, /1 file\(s\), 0 rewritten, 4 left to change by hand/, upgraded.out);
+    assert.equal(readFileSync(join(dir, 'movements/lz.mvt'), 'utf8'), LAZY);
+  }
 
-  const upgraded = lf(dir, 'upgrade', '--all');
-  assert.equal(upgraded.code, 0, upgraded.out);
-  const rewritten = readFileSync(join(dir, 'movements/lz.mvt'), 'utf8');
-  assert.doesNotMatch(rewritten, /\blazy\b/, rewritten);
-  assert.match(rewritten, /tables = \(\) => s-\[t:Tables\]->\n  n = count\(tables\(\)\)\n  names = tables\(\)\.Name\n/, rewritten);
-  assert.match(rewritten, / {2}return s-\[t:Tables\]->\n/, rewritten);
-  assert.match(rewritten, /g = node \{ tabs: s-\[t:Tables\]->, label: "x" \}/, rewritten);
-
+  writeFileSync(join(dir, 'movements/lz.mvt'), CLOSURES);
   const checked = lf(dir, 'check');
   assert.equal(checked.code, 0, checked.out);
   assert.match(checked.out, /1 file\(s\), 0 error\(s\)/);

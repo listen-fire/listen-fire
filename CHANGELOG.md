@@ -43,12 +43,8 @@ named in [`RELEASING.md`](RELEASING.md).
 
 - **`lazy` is retired for a closure.** `people = () => crm-[:People]->`, read as `people()`, walks again at every call, as `people = lazy crm-[:People]->` walked again at every read. `x = lazy …`, `return lazy …` and a node entry `files: lazy …` are each refused where they are written (`MOV_LAZY_RETIRED`). Introduced by 0.14.0, a new compatibility key, since 0.13 accepts them.
   - Why: a closure already says "run this when it is read", and its call says where. `lazy` was a second spelling of it, with rules of its own about where it could be read.
-  - `listen-fire upgrade` rewrites `x = lazy W` to `x = () => W` and each read of `x` to `x()`, wherever the call reads the same: in an expression and at a walk's root. A mapped walk (`lazy W node { … }`) becomes a closure whose block returns the walk's block. `return lazy W` becomes `return W`: a returned walk already ran where it was returned.
-  - Rewritten only under `--all`, because the meaning changes:
-    - `y = x`: after the rewrite `y` holds what the walk landed on when `y` was bound, where before each read of `y` walked again.
-    - A node entry `files: lazy W` becomes `files: W`: the walk runs once, when the node is built, where before it ran at every read of `files`. No node entry walks at each read now; to keep that, bind a closure beside the node.
-  - No rewrite where `x` is passed to a function (`f(x)`): the function's parameter held the kept walk as its record, and a parameter takes no list a call returns. Walk inside the function instead.
-  - The upgrade checks each rewrite again before writing it, and writes none that would leave an error the file did not have.
+  - Replace each `lazy` by hand: `x = lazy W` with `x = () => W`, each read of `x` with `x()`; `return lazy W` with `return W`; a node entry `files: lazy W` with a closure bound beside the node (no node entry walks again at each read), or with `files: W` to keep what the walk lands on when the node is built. The refusal names the closure to write.
+  - `listen-fire upgrade` rewrites none of it, even with `--all`, and leaves the pin where it is until each is replaced. A closure's call reads differently from a kept walk where the name is bound whole to another name or passed to a function, so only the author knows which meaning was wanted.
 
 ## [0.13.1] - 2026-11-02
 
