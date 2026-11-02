@@ -102,7 +102,7 @@ test('narrowed to a Person first, the read checks clean and runs, and a field bo
   const dir = crmProject(`  texts = map(c-[:Spaces]->-[:Subjects]->-[:Notes]->, (n) => { return n.Text })
   moods = c-[:Spaces]->-[s:Subjects]-> {
     if (s is <c-[:Person]->>) {
-      return only(s-[:Notes]->).Mood
+      return only(s-[:Notes]->)?.Mood
     }
     return "-"
   }
@@ -158,9 +158,9 @@ test('a note narrowed with is reads its own fields: a landing, a union parameter
   ofCompany = only(c-[:Spaces]->-[s:Subjects WHERE s.Id == "c1"]->-[:Notes]->)
   picked = count(inBlock) > 5 ? ofPerson : ofCompany
   if (picked is <c-[:Memo]->>) {
-    return { inBlock: inBlock, viaParam: viaParam, picked: picked.Mood }
+    return { inBlock: inBlock, viaParam: viaParam, picked: picked?.Mood }
   } else {
-    return { inBlock: inBlock, viaParam: viaParam, picked: picked.Tone }
+    return { inBlock: inBlock, viaParam: viaParam, picked: picked?.Tone }
   }`,
     functions,
   );
