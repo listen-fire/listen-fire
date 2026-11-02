@@ -142,8 +142,16 @@ export function inProcessHost(options: InProcessHostOptions = {}): EngineHost {
         return actingPrincipalOf(await resolve({
           teamId: segments.facts(segmentId).teamId,
           ...(triggerId !== undefined ? { triggerId } : {}),
-          getCandidates: () =>
-            table.answer({ segmentId, instance, method: 'getActorCandidates', args: { event } }),
+          // The module's own candidates where it offers them (an API lookup,
+          // a mail's relays); else who acted on the arrival, as its module
+          // said at the door (adapter protocol 2.7).
+          getCandidates: async () => {
+            if (table.offers({ segmentId, instance, method: 'getActorCandidates' })) {
+              return table.answer({ segmentId, instance, method: 'getActorCandidates', args: { event } });
+            }
+            const actor = event.arrival?.actor;
+            return actor === undefined ? [] : [{ identity: actor, source: 'originator' as const }];
+          },
         }));
       },
     },

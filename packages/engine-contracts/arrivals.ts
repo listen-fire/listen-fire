@@ -6,6 +6,8 @@
 // arrived on which key (`arrivals` on its acceptance, or the `wake` door).
 // No run identity crosses into the module.
 
+import type { ActorIdentity } from './adapter';
+
 /** A record a run waits on: the id its write answered, the data it
  *  carried (Slack keys a thread by the channel in it, not by its id), and its
  *  record type, as the module names it, wherever the host knows it (2.6). A
@@ -63,8 +65,14 @@ export type Arrival =
       takenApplied?: boolean;
       /** When it happened at its provider (an ISO instant), where the
        *  provider says: a host measures from it whether a run's write caused
-       *  it, however late a poll finds it (2.6). */
+       *  it, however late a poll finds it (2.6), and the run it fires
+       *  stamps its writes with it (2.7). */
       occurredAt?: string;
+      /** Who acted, where the provider says: the member who posted, the
+       *  sender of the mail, the owner of the meeting (2.7). The run's
+       *  `@actor_*` reads it, and a host resolves the acting user from it;
+       *  set at the door, so nothing after it needs the raw event. */
+      actor?: ActorIdentity;
     }
   | { edge: string; key: string; gone: true };
 

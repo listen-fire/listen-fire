@@ -226,6 +226,7 @@ fn arrival() -> S {
             opt("notFor", S::NonEmptyStr),
             opt("takenApplied", S::Bool),
             opt("occurredAt", S::NonEmptyStr),
+            opt("actor", actor_identity()),
         ]),
         obj(vec![req("edge", S::NonEmptyStr), req("key", S::NonEmptyStr), req("gone", S::LiteralTrue)]),
     ])
@@ -557,6 +558,15 @@ mod tests {
             let arrival = format!(r#"{{"edge":"Company","identity":"c1","landing":{{"fields":{{}}}},{wrong}}}"#);
             assert!(check("preprocessInbound", "acme", &js(&format!(r#"{{"events":[],"arrivals":[{arrival}]}}"#))).is_err(), "{wrong}");
         }
+    }
+
+    #[test]
+    fn a_2_7_arrival_may_say_who_acted() {
+        let arrival = r#"{"edge":"Messages","key":"C1","identity":"C1:1.0","landing":{"fields":{}},"actor":{"identifier":"U1","scheme":"opaque","label":"U1"}}"#;
+        let read = check("preprocessInbound", "slack", &js(&format!(r#"{{"events":[],"arrivals":[{arrival}]}}"#))).unwrap();
+        assert_eq!(read.get("arrivals").map(Js::to_json), Some(format!("[{arrival}]")));
+        let unschemed = r#"{"edge":"Messages","identity":"m","landing":{"fields":{}},"actor":{"identifier":"U1"}}"#;
+        assert!(check("preprocessInbound", "slack", &js(&format!(r#"{{"events":[],"arrivals":[{unschemed}]}}"#))).is_err(), "an actor states its scheme");
     }
 
     #[test]

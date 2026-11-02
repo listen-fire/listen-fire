@@ -35,8 +35,13 @@ pub struct ArrivalIn {
     /// Its module applied the listen's taken filter before reporting it.
     pub taken_applied: bool,
     /// When it happened at its provider, as its module says (an ISO
-    /// instant): what the loop breaker measures from (crate::loop_breaker).
+    /// instant): what the loop breaker measures from (crate::loop_breaker),
+    /// and what its run's writes are stamped with.
     pub occurred_at: Option<String>,
+    /// Who acted, as its module says at the door (adapter protocol 2.7):
+    /// `{ identifier, scheme, email?, name?, label? }`, what the run's
+    /// `@actor_*` reads.
+    pub actor: Option<Js>,
 }
 
 impl ArrivalIn {
@@ -81,6 +86,9 @@ impl ArrivalIn {
             out.insert("takenApplied".into(), Js::Bool(true));
         }
         text(&mut out, "occurredAt", &self.occurred_at);
+        if let Some(actor) = &self.actor {
+            out.insert("actor".into(), actor.clone());
+        }
         Js::Obj(out)
     }
 }
@@ -116,7 +124,7 @@ fn arrival_of(index: usize, item: &Js) -> Result<ArrivalIn, String> {
     let named = |key: &str| item.get(key).and_then(Js::as_str).filter(|text| !text.is_empty()).map(str::to_string);
     let edge = named("edge").ok_or_else(|| format!("arrival {index} names no edge"))?;
     let key = named("key");
-    let bare = ArrivalIn { edge, key, identity: None, version: None, landing: None, gone: false, parents: Vec::new(), about: None, not_for: None, taken_applied: false, occurred_at: None };
+    let bare = ArrivalIn { edge, key, identity: None, version: None, landing: None, gone: false, parents: Vec::new(), about: None, not_for: None, taken_applied: false, occurred_at: None, actor: None };
     if Js::is_true(item.get("gone")) {
         if bare.key.is_none() {
             return Err(format!("arrival {index} on '{}' is gone but names no key", bare.edge));
@@ -143,6 +151,11 @@ fn arrival_of(index: usize, item: &Js) -> Result<ArrivalIn, String> {
         Some(Js::Str(at)) if crate::units::ms_of(at).is_some() => Some(at.clone()),
         Some(_) => return Err(format!("arrival {index} on '{edge}': its occurredAt is not an ISO instant")),
     };
+    let actor = match item.get("actor") {
+        None => None,
+        Some(actor) if actor.get("identifier").and_then(Js::as_str).is_some_and(|id| !id.is_empty()) && actor.get("scheme").and_then(Js::as_str).is_some() => Some(actor.clone()),
+        Some(_) => return Err(format!("arrival {index} on '{edge}': its actor names no identifier and scheme")),
+    };
     Ok(ArrivalIn {
         identity: Some(identity),
         version,
@@ -152,6 +165,7 @@ fn arrival_of(index: usize, item: &Js) -> Result<ArrivalIn, String> {
         not_for,
         taken_applied: Js::is_true(item.get("takenApplied")),
         occurred_at,
+        actor,
         ..bare
     })
 }
@@ -188,7 +202,7 @@ mod tests {
             r#"{"arrivals":[{"edge":"Comments","key":"thread:c1","identity":"k1","version":"2","landing":{"fields":{"Text":"hi"}}},{"edge":"Comments","key":"thread:c2","gone":true}]}"#,
         ))
         .unwrap();
-        let bare = ArrivalIn { edge: "Comments".into(), key: None, identity: None, version: None, landing: None, gone: false, parents: Vec::new(), about: None, not_for: None, taken_applied: false, occurred_at: None };
+        let bare = ArrivalIn { edge: "Comments".into(), key: None, identity: None, version: None, landing: None, gone: false, parents: Vec::new(), about: None, not_for: None, taken_applied: false, occurred_at: None, actor: None };
         assert_eq!(
             read,
             vec![

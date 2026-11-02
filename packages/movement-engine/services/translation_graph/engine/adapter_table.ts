@@ -225,6 +225,11 @@ class SegmentInstances {
     return matching.length === 1 ? matching[0]?.adapter : undefined;
   }
 
+  /** The instance resolved as `id`, if it was. */
+  found(id: string): Adapter | undefined {
+    return this.byId.get(id);
+  }
+
   instance(id: string): Adapter {
     const adapter = this.byId.get(id);
     if (adapter === undefined) {
@@ -275,6 +280,8 @@ export interface AdapterTable extends HostAdapters {
   /** A call the host makes itself (the acting-user lookup asks the source
    *  instance for the event's actors): its result, or its failure thrown. */
   answer<M extends AdapterMethod>(input: AdapterCall<M>): Promise<AdapterCallMap[M]['result']>;
+  /** Whether an instance the segment holds offers `method`. */
+  offers(input: { segmentId: string; instance: string; method: AdapterMethod }): boolean;
   /** Forget a segment's instances once the segment has closed. */
   closeSegment(segmentId: string): void;
   /** The instances a segment holds, as a file's owner is found among them. */
@@ -348,6 +355,10 @@ export function adapterTable(options: {
       });
     },
     call,
+    offers({ segmentId, instance, method }) {
+      const adapter = instances.get(segmentId)?.found(instance);
+      return adapter !== undefined && typeof Reflect.get(adapter, method) === 'function';
+    },
     async answer(input) {
       const answered = await call(input);
       if ('error' in answered) throw new Error(answered.error.message);

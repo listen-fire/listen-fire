@@ -94,3 +94,44 @@ describe('the in-process host and a credential a run names', () => {
     ).rejects.toThrow('EngineHost.files.resolveFileText not provided: this host has no file-text module, so it cannot read the file "deck.pdf"');
   });
 });
+
+describe('the in-process host and who acted on an arrival', () => {
+  const arrived = {
+    pipelineInputId: 'listen:chat:answer',
+    adapterType: 'crm',
+    triggerType: 'arrival' as const,
+    arrival: {
+      adapterType: 'crm',
+      edge: 'Notes',
+      landing: { recordId: 'n1', fields: {} },
+      actor: { identifier: 'ada@acme.example', scheme: 'email' as const, email: 'ada@acme.example' },
+    },
+    occurredAt: '2026-11-02T08:00:00.000Z',
+  };
+
+  async function candidatesFor(adapter: Adapter): Promise<unknown> {
+    let seen: unknown;
+    const host = inProcessHost({
+      adapters: { resolve: () => adapter },
+      lookup: {
+        resolveActingUser: async ({ getCandidates }) => {
+          seen = await getCandidates();
+          return null;
+        },
+      },
+    });
+    const segmentId = await segmentFor(host, ACME);
+    const { instance } = await host.adapters.resolve({ adapterType: 'crm', role: 'source', segmentId });
+    await host.lookup.resolveActingUser({ segmentId, instance, event: arrived });
+    return seen;
+  }
+
+  it("resolves the acting user from the arrival's actor when the module offers no candidates of its own", async () => {
+    expect(await candidatesFor(crm())).toEqual([{ identity: arrived.arrival.actor, source: 'originator' }]);
+  });
+
+  it("asks the module for its candidates where it offers them (an API lookup, a mail's relays)", async () => {
+    const relayed = [{ identity: { identifier: 'ops@acme.example', scheme: 'email' as const }, source: 'relay' as const }];
+    expect(await candidatesFor({ ...crm(), getActorCandidates: async () => relayed })).toEqual(relayed);
+  });
+});

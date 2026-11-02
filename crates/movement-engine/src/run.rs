@@ -2079,8 +2079,15 @@ impl Run<'_> {
         }
     }
 
+    /// Who acted on the arrival that fired the run, as its module said at the
+    /// door (adapter protocol 2.7); undefined when it names no one.
+    fn arrival_actor(&self) -> Js {
+        event_get(&event_get(&self.event, "arrival"), "actor")
+    }
+
     /// `resolveMovementActingUser`: asked of the host once per segment,
-    /// through the source when it lists `getActorCandidates`; a throw is no
+    /// through the source when it lists `getActorCandidates` or the arrival
+    /// names who acted (the host resolves the user from it); a throw is no
     /// user.
     async fn acting_user(&self) -> Result<Js, Failure> {
         if let Some(cached) = self.acting_user.borrow().clone() {
@@ -2088,7 +2095,7 @@ impl Run<'_> {
         }
         let source = self.source.borrow().clone();
         let resolved = match source {
-            Some(source) if source.instance.has("getActorCandidates") => {
+            Some(source) if source.instance.has("getActorCandidates") || self.arrival_actor().truthy() => {
                 let trigger = event_get(&self.event, "triggerEntryId");
                 let trigger_id = trigger.truthy().then(|| trigger.to_js_string());
                 let request = host::lookup::resolve_acting_user(self.segment(), trigger_id.as_deref(), &source.instance, self.encode(&self.event)?);
@@ -2108,14 +2115,18 @@ impl Run<'_> {
         Ok(resolved)
     }
 
-    /// `resolveMovementActor`: the source adapter's `extractActor` of the
-    /// event, once per segment; a failure is no actor.
+    /// `resolveMovementActor`: who acted on the arrival, as its module said
+    /// at the door; else the source adapter's `extractActor` of the event (a
+    /// module that names no actor on its arrivals), once per segment; a
+    /// failure is no actor.
     async fn actor(&self) -> Result<Js, Failure> {
         if let Some(cached) = self.actor.borrow().clone() {
             return Ok(cached);
         }
+        let named = self.arrival_actor();
         let source = self.source.borrow().clone();
         let resolved = match source {
+            _ if named.truthy() => named,
             Some(source) if source.instance.has("extractActor") => {
                 match self.call_adapter(&source.instance, "extractActor", env::object_of(vec![("event", self.event.clone())])).await {
                     Ok(actor) => actor,
@@ -3156,6 +3167,40 @@ mod tests {
         let (done, seen) = drive_input(input, plain_host(json!({})));
         assert_eq!(done["result"]["returned"], json!(["o", [["id", "pay_1"], ["more", 1201.0]]]), "{done}");
         assert!(seen.iter().all(|r| r.family != "adapters"), "no adapter is asked: {:?}", seen.iter().map(|r| (r.family, r.method.clone())).collect::<Vec<_>>());
+    }
+
+    /// A run fired by an arrival reads who acted from the arrival, as its
+    /// module said at the door (adapter protocol 2.7): `@actor_*` asks the
+    /// module nothing, and `@user_*` asks the host, which resolves the user
+    /// from it, though the module offers no `getActorCandidates`.
+    #[test]
+    fn a_run_fired_by_an_arrival_reads_who_acted_from_it() {
+        let source = "import { email } from adapters\ninbox = connect email\nfunction m(msg: <inbox-[:message]->>) {\n  return { id: @actor_id, email: @actor_email, name: @actor_name, user: @user_email }\n}";
+        let fired = |actor: Option<Json>| {
+            let mut arrival = vec![json!(["adapterType", "email"]), json!(["edge", "message"]), json!(["landing", ["o", [["recordId", "m1"], ["fields", ["o", [["subject", "Hi"]]]]]]])];
+            if let Some(actor) = actor {
+                arrival.push(json!(["actor", actor]));
+            }
+            let mut input = segment_input(source, json!(["o", []]), &[]);
+            input["event"] = env::encode_plain(&env::decode(&json!(["o", [["pipelineInputId", "p"], ["adapterType", "email"], ["triggerType", "arrival"], ["arrival", ["o", arrival]]]])).unwrap());
+            input["recordsReturned"] = json!(true);
+            let host = |request: &PendingRequest| match (request.family, request.method.as_str()) {
+                ("adapters", "resolve") => json!({ "value": { "instance": "i1", "adapterType": "email", "methods": [] } }),
+                ("lookup", "resolveActingUser") => json!({ "value": wire(json!({ "principal": { "id": "u1" }, "email": "ada@acme.example" })) }),
+                _ => plain_host(json!({}))(request),
+            };
+            drive_input(input, host)
+        };
+        let (done, seen) = fired(Some(json!(["o", [["identifier", "ada@acme.example"], ["scheme", "email"], ["name", "Ada"]]])));
+        assert_eq!(
+            done["result"]["returned"],
+            json!(["o", [["id", "ada@acme.example"], ["email", "ada@acme.example"], ["name", "Ada"], ["user", "ada@acme.example"]]]),
+            "{done}"
+        );
+        assert!(seen.iter().all(|r| r.family != "adapters" || r.method != "call"), "the module is asked nothing");
+        let (unnamed, seen) = fired(None);
+        assert_eq!(unnamed["result"]["returned"], json!(["o", [["id", null], ["email", null], ["name", null], ["user", null]]]), "{unnamed}");
+        assert!(seen.iter().all(|r| r.family != "lookup"), "no actor and no candidates: the host is not asked");
     }
 
     /// A host that records what the movement returned gets it in the

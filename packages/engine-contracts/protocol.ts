@@ -360,9 +360,17 @@ export const WireTriggerEvent = z.object({
   /** The source's own id for the occurrence, carried from the event that
    *  made this one (`WireDiscriminableEvent.idempotencyKey`). */
   idempotencyKey: z.string().optional(),
-  /** What fired a listen on a traversal (`triggerType: 'arrival'`, 2.6). */
+  /** What fired a listen on a traversal (`triggerType: 'arrival'`, 2.6),
+   *  what it is about and who acted (2.7). */
   arrival: z
-    .object({ adapterType: z.string(), edge: z.string(), landing: WireTriggerLanding, parents: z.array(WireTriggerLanding.nullable()).optional() })
+    .object({
+      adapterType: z.string(),
+      edge: z.string(),
+      landing: WireTriggerLanding,
+      parents: z.array(WireTriggerLanding.nullable()).optional(),
+      about: z.object({ recordType: z.string(), externalId: z.string() }).optional(),
+      actor: z.lazy(() => WireActorIdentity).optional(),
+    })
     .optional(),
 });
 export type WireTriggerEventShape = z.infer<typeof WireTriggerEvent>;
@@ -1289,6 +1297,9 @@ export const WireArrival = z.union([
     notFor: z.string().min(1).optional(),
     takenApplied: z.boolean().optional(),
     occurredAt: z.string().min(1).optional(),
+    /** Who acted (2.7): the run's `@actor_*`, and what a host resolves the
+     *  acting user from. */
+    actor: WireActorIdentity.optional(),
   }),
   z.object({ edge: z.string().min(1), key: z.string().min(1), gone: z.literal(true) }),
 ]);

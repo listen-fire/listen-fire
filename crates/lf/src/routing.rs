@@ -387,7 +387,10 @@ fn json_of(value: &Js) -> Json {
 
 /// The arrival a listen on a traversal fires on, as its run is handed it:
 /// the engine binds the fired function's parameter to `arrival.landing`, as
-/// a wait binds what lands on its edge.
+/// a wait binds what lands on its edge. What it is about and who acted ride
+/// with it, and the run is stamped with when it happened at its provider
+/// (now, when its module names no time), so its writes say when the change
+/// they follow happened (conformance/arrival-triggers.json).
 pub fn arrival_trigger_of(pipeline_input_id: &str, adapter_type: &str, arrival: &ArrivalIn, now: &str) -> Js {
     let mut landed = Obj::new();
     landed.insert("adapterType".into(), Js::str(adapter_type));
@@ -396,12 +399,19 @@ pub fn arrival_trigger_of(pipeline_input_id: &str, adapter_type: &str, arrival: 
     if !arrival.parents.is_empty() {
         landed.insert("parents".into(), Js::Arr(arrival.parents.clone()));
     }
+    if let Some(about) = &arrival.about {
+        landed.insert("about".into(), about.clone());
+    }
+    if let Some(actor) = &arrival.actor {
+        landed.insert("actor".into(), actor.clone());
+    }
+    let occurred = arrival.occurred_at.as_deref().and_then(crate::units::ms_of).map(crate::units::iso_of);
     let mut out = Obj::new();
     out.insert("pipelineInputId".into(), Js::str(pipeline_input_id));
     out.insert("adapterType".into(), Js::str(adapter_type));
     out.insert("triggerType".into(), Js::str("arrival"));
     out.insert("arrival".into(), Js::Obj(landed));
-    out.insert("occurredAt".into(), Js::str(now));
+    out.insert("occurredAt".into(), Js::str(occurred.as_deref().unwrap_or(now)));
     Js::Obj(out)
 }
 
@@ -587,13 +597,20 @@ mod tests {
         assert_eq!(on_edge, [("welcome", Some(Verdict::Fires)), ("note", None)], "the listen it is not for is not judged, so nothing is said of it");
     }
 
+    /// The event the TypeScript host hands the same arrival's run
+    /// (movement-engine `arrivalTriggerOf`): one table, read by both.
     #[test]
-    fn an_arrival_is_handed_to_its_run_as_the_landing_it_carries() {
-        let arrival = company(r#"{"id":"company-1","Name":"Osprey"}"#);
-        assert_eq!(
-            arrival_trigger_of("listen:crm:welcome", "acme_crm", &arrival, "2026-10-31T00:00:00.000Z").to_json(),
-            r#"{"pipelineInputId":"listen:crm:welcome","adapterType":"acme_crm","triggerType":"arrival","arrival":{"adapterType":"acme_crm","edge":"Company","landing":{"recordId":"company-1","recordType":"Company","fields":{"id":"company-1","Name":"Osprey"}}},"occurredAt":"2026-10-31T00:00:00.000Z"}"#
-        );
+    fn an_arrival_is_handed_to_its_run_as_the_shared_table_of_triggers_says() {
+        let table: Json = serde_json::from_str(include_str!("../../../packages/engine-contracts/conformance/arrival-triggers.json")).unwrap();
+        let cases = table["cases"].as_array().unwrap();
+        assert!(!cases.is_empty());
+        for case in cases {
+            let text = |key: &str| case[key].as_str().unwrap().to_string();
+            let reported = js(&serde_json::json!({ "arrivals": [case["arrival"]] }).to_string());
+            let arrival = crate::arrivals::arrivals_of(&reported).unwrap().remove(0);
+            let trigger = arrival_trigger_of(&text("pipelineInputId"), &text("adapterType"), &arrival, &text("now"));
+            assert_eq!(json_of(&trigger), case["trigger"], "{}", text("name"));
+        }
     }
 
     /// The pipelines the TypeScript host names the same listens by

@@ -1620,6 +1620,7 @@ pub(crate) mod tests {
             not_for: None,
             taken_applied: false,
             occurred_at: None,
+            actor: None,
         };
         let webhooks = r#"{"edge-b1":{"edge":"Comments","scope":"b1","secret":"s3cret"},"edge-b9":{"edge":"Comments","scope":"b9","secret":"s3cret"}}"#;
         let fields = std::collections::BTreeMap::from([("edge_subscriptions".to_string(), webhooks.to_string())]);

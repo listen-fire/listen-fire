@@ -6,7 +6,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { listenPlanSchema, type Arrival, type ListenPlan } from 'engine-contracts';
+import { WireArrival, listenPlanSchema, triggerEventSchema, type Arrival, type ListenPlan } from 'engine-contracts';
 import { z } from 'zod';
 
 import { parsePinned } from '../../../movement_engine/program_check';
@@ -18,6 +18,12 @@ const pipelines = z
     cases: z.array(z.object({ case: z.string(), file: z.string(), plan: listenPlanSchema, credential: z.string().nullable(), args: z.array(z.tuple([z.string(), z.string()])), pipeline: z.string() })),
   })
   .parse(JSON.parse(readFileSync(join(__dirname, '../../../../../engine-contracts/conformance/listen-pipelines.json'), 'utf8')));
+
+const triggers = z
+  .object({
+    cases: z.array(z.object({ name: z.string(), pipelineInputId: z.string(), adapterType: z.string(), now: z.string(), arrival: WireArrival, trigger: triggerEventSchema })),
+  })
+  .parse(JSON.parse(readFileSync(join(__dirname, '../../../../../engine-contracts/conformance/arrival-triggers.json'), 'utf8')));
 
 describe('the pipeline a listen on a traversal is named by', () => {
   it.each(pipelines.cases)('$case', ({ file, plan, credential, args, pipeline }) => {
@@ -159,14 +165,8 @@ describe('which listens an arrival is judged against', () => {
     expect(listenFires(listen, note('keep', { notFor: 'listen:notes:copy:11111111' }), delivered, 0)).toEqual({ fires: true });
   });
 
-  it('hands the run what landed, and the records it carries, as its trigger', () => {
-    const arrived = { edge: 'Notes', identity: 'n1', landing: { recordId: 'n1', fields: { Title: 'keep' } }, parents: [{ fields: { Name: 'Book' } }] };
-    expect(arrivalTriggerOf({ pipelineInputId: listen.pipeline, adapterType: 'notes', arrival: arrived, now: new Date('2026-10-31T00:00:00.000Z') })).toEqual({
-      pipelineInputId: listen.pipeline,
-      adapterType: 'notes',
-      triggerType: 'arrival',
-      arrival: { adapterType: 'notes', edge: 'Notes', landing: { recordId: 'n1', fields: { Title: 'keep' } }, parents: [{ fields: { Name: 'Book' } }] },
-      occurredAt: '2026-10-31T00:00:00.000Z',
-    });
+  it.each(triggers.cases)('hands the run the arrival as listen-fire does: $name', ({ pipelineInputId, adapterType, now, arrival, trigger }) => {
+    if ('gone' in arrival) throw new Error('a gone arrival fires no run');
+    expect(arrivalTriggerOf({ pipelineInputId, adapterType, arrival, now: new Date(now) })).toEqual(trigger);
   });
 });

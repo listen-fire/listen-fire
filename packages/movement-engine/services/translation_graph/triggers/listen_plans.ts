@@ -298,15 +298,27 @@ export function arrivalReceiptKey(arrival: Exclude<Arrival, { gone: true }>): st
 }
 
 /** The event a run fired by an arrival is handed: what landed on the
- *  listen's last edge, which its function's parameter binds, and what it
- *  carries (crates/lf/src/routing.rs `arrival_trigger_of`). */
+ *  listen's last edge, which its function's parameter binds, what it carries,
+ *  what it is about and who acted; stamped with when it happened at its
+ *  provider, else `now`, so the run's writes say when the change they follow
+ *  happened (crates/lf/src/routing.rs `arrival_trigger_of`; both read
+ *  engine-contracts/conformance/arrival-triggers.json). */
 export function arrivalTriggerOf(input: { pipelineInputId: string; adapterType: string; arrival: Exclude<Arrival, { gone: true }>; now: Date }): TriggerEvent {
   const { adapterType, arrival } = input;
+  const occurred = arrival.occurredAt === undefined ? undefined : new Date(arrival.occurredAt);
+  const occurredAt = occurred !== undefined && !Number.isNaN(occurred.getTime()) ? occurred : input.now;
   return {
     pipelineInputId: input.pipelineInputId,
     adapterType,
     triggerType: 'arrival',
-    arrival: { adapterType, edge: arrival.edge, landing: arrival.landing, ...(arrival.parents !== undefined && arrival.parents.length > 0 ? { parents: arrival.parents } : {}) },
-    occurredAt: input.now.toISOString(),
+    arrival: {
+      adapterType,
+      edge: arrival.edge,
+      landing: arrival.landing,
+      ...(arrival.parents !== undefined && arrival.parents.length > 0 ? { parents: arrival.parents } : {}),
+      ...(arrival.about !== undefined ? { about: arrival.about } : {}),
+      ...(arrival.actor !== undefined ? { actor: arrival.actor } : {}),
+    },
+    occurredAt: occurredAt.toISOString(),
   };
 }

@@ -1,0 +1,51 @@
+{
+  "about": "The event a host hands the run an arrival fires: the landing, its carried parents, what it is about and who acted (adapter protocol 2.7), under the arrival's edge; stamped with when it happened at its provider, as an ISO instant, or with the host's now when the arrival names no time. listen-fire (crates/lf/src/routing.rs arrival_trigger_of) and the TypeScript host (movement-engine triggers/listen_plans.ts arrivalTriggerOf, which the embed and lf-platform build runs with) both read this table, so a run reads the same event on either host.",
+  "cases": [
+    {
+      "name": "a bare landing, stamped with the host's now",
+      "pipelineInputId": "listen:crm:welcome",
+      "adapterType": "acme_crm",
+      "now": "2026-10-31T00:00:00.000Z",
+      "arrival": { "edge": "Company", "identity": "company-1", "landing": { "recordId": "company-1", "recordType": "Company", "fields": { "id": "company-1", "Name": "Osprey" } } },
+      "trigger": {
+        "pipelineInputId": "listen:crm:welcome",
+        "adapterType": "acme_crm",
+        "triggerType": "arrival",
+        "arrival": { "adapterType": "acme_crm", "edge": "Company", "landing": { "recordId": "company-1", "recordType": "Company", "fields": { "id": "company-1", "Name": "Osprey" } } },
+        "occurredAt": "2026-10-31T00:00:00.000Z"
+      }
+    },
+    {
+      "name": "a reply carrying its channel, about its message, by a member, when it happened",
+      "pipelineInputId": "listen:chat:answer",
+      "adapterType": "slack",
+      "now": "2026-11-02T12:00:00.000Z",
+      "arrival": {
+        "edge": "Replies",
+        "key": "C1:1700000000.000100",
+        "identity": "C1:1700000050.000200",
+        "version": "1",
+        "landing": { "recordId": "C1:1700000050.000200", "recordType": "Message", "fields": { "text": "on it", "user": "U1" } },
+        "parents": [{ "recordId": "C1", "recordType": "Channel", "fields": { "Name": "deals" } }, null],
+        "about": { "recordType": "Message", "externalId": "C1:1700000000.000100" },
+        "occurredAt": "2023-11-14T22:14:10+00:00",
+        "actor": { "identifier": "U1", "scheme": "opaque", "label": "U1" },
+        "takenApplied": true
+      },
+      "trigger": {
+        "pipelineInputId": "listen:chat:answer",
+        "adapterType": "slack",
+        "triggerType": "arrival",
+        "arrival": {
+          "adapterType": "slack",
+          "edge": "Replies",
+          "landing": { "recordId": "C1:1700000050.000200", "recordType": "Message", "fields": { "text": "on it", "user": "U1" } },
+          "parents": [{ "recordId": "C1", "recordType": "Channel", "fields": { "Name": "deals" } }, null],
+          "about": { "recordType": "Message", "externalId": "C1:1700000000.000100" },
+          "actor": { "identifier": "U1", "scheme": "opaque", "label": "U1" }
+        },
+        "occurredAt": "2023-11-14T22:14:10.000Z"
+      }
+    }
+  ]
+}

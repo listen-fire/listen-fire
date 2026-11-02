@@ -608,6 +608,7 @@ mod tests {
             not_for: None,
             taken_applied: false,
             occurred_at: Some(iso_at(failed_at)),
+            actor: None,
         };
         let since = iso_at(crate::loop_breaker::since_of(&arrival, 20_000, crate::limiter::now_ms()));
         let chain = crate::loop_breaker::chain_of(&*store, &crate::loop_breaker::records_of("system", &arrival, "Event"), &since).unwrap();
