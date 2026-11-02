@@ -20,6 +20,10 @@ named in [`RELEASING.md`](RELEASING.md).
 
 <!-- add merged PRs here -->
 
+## [0.14.2] - 2026-11-02
+
+A patch release of the 0.14 line: it reads the same pins as 0.14.0 (every `0.14.x`). Airtable listens narrowed to a base or table work on every host.
+
 ### Changed
 
 - **An Airtable change carries its base and table, so any host judges a listen narrowed by them from the change alone.** `@lf/airtable` reads the base's and its tables' names from Airtable's meta API at the door and keeps them a minute, so a rename is carried within a minute with no schema webhook, and each change's `parents` hold a `Base` and a `Table` with `Id` and `Name`. The judge now judges an earlier hop against the record a change carries for it, even where `listen-fire` also lists that hop's members, so a host that lists none (the embedded host, the hosted product) accepts `listen to at-[b:Bases WHERE b.Name == "Hiring"]->-[t:Tables WHERE t.Name == "Deals"]->-[c:Changes]-> fire onDeal`. It reads each hop's carried record by its record type where the record in its place is of another type, so a change, which carries its base on every connection, judges a listen on a connection positioned at the base (`hiring-[t:Tables WHERE t.Name == "Deals"]->-[c:Changes]->`) by the table it carries: `listen-fire` lists no tables for that listen and registers no webhook on the base's schema.
@@ -3008,7 +3012,8 @@ Releases before v0.11 are kept one file per minor line, newest first:
 - [v0.2.x](docs/changelog/v0.2.md) (v0.2.0)
 - [v0.1.x](docs/changelog/v0.1.md) (v0.1.0 to v0.1.2)
 
-[Unreleased]: https://github.com/listen-fire/listen-fire/compare/v0.14.1...HEAD
+[Unreleased]: https://github.com/listen-fire/listen-fire/compare/v0.14.2...HEAD
+[0.14.2]: https://github.com/listen-fire/listen-fire/compare/v0.14.1...v0.14.2
 [0.14.1]: https://github.com/listen-fire/listen-fire/compare/v0.14.0...v0.14.1
 [0.14.0]: https://github.com/listen-fire/listen-fire/compare/v0.13.1...v0.14.0
 [0.13.1]: https://github.com/listen-fire/listen-fire/compare/v0.13.0...v0.13.1

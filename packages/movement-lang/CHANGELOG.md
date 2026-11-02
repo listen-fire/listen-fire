@@ -1,5 +1,11 @@
 # @listen-fire/movement-lang
 
+## 0.14.2
+
+### Patch Changes
+
+- The listen judge reads a listed hop's record from the arrival when the plan says the edge carries it, finding a carried parent by its record type.
+
 ## 0.14.1
 
 No changes in this release.
