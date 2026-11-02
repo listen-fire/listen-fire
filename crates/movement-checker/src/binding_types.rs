@@ -82,7 +82,7 @@ impl Checker<'_> {
     pub(crate) fn declare_presence(&mut self, proofs: &[PresenceProof], scope: ScopeId, into: ScopeId) {
         let entries: Vec<_> = {
             let env = self.typing_env(scope);
-            proofs.iter().filter_map(|proof| Some((into, env.entry_of(proof)?, proof.clone()))).collect()
+            proofs.iter().filter_map(|proof| env.entry_of(proof).map(|(entry, about)| (into, entry, about))).collect()
         };
         self.proven_entries.extend(entries);
         self.narrow_declared(proofs, scope, into);

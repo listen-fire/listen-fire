@@ -197,14 +197,15 @@ struct Ctx {
 
 const TOP: Ctx = Ctx { edge_props: false };
 
-/// The name a field read (`x.F`, `c.Current.Stage`) starts at.
-fn member_root(e: &MExpr) -> Option<&Name> {
+/// The name a field read or a literal index read starts at (`x.F`,
+/// `c.Current.Stage`, `l[1]`, `d["a"].Stage`).
+fn read_root(e: &MExpr) -> Option<&Name> {
     match e {
         MExpr::Member { object, .. } => match object.as_ref() {
             MExpr::Name { name, .. } => Some(name),
-            inner => member_root(inner),
+            inner => read_root(inner),
         },
-        _ => None,
+        _ => crate::surface::canonical::literal_index(e),
     }
 }
 
@@ -1116,12 +1117,12 @@ impl Lowering {
                 None => Ok(exists),
             };
         }
-        // `EXISTS(x.Field)` asks a VALUE's presence: `x.Field != null`, read
-        // as the same read is outside it.
+        // `EXISTS(x.Field)` and `EXISTS(l[1])` ask a VALUE's presence:
+        // `x.Field != null`, read as the same read is outside it.
         if predicate.is_some() {
             return refuse("EXISTS(… WHERE …) needs a traversal path — a value has nothing to filter");
         }
-        if let Some(name) = member_root(walk)
+        if let Some(name) = read_root(walk)
             && name.text.to_lowercase() != "edge"
         {
             return Ok(present(self.lower(walk, ctx)?));

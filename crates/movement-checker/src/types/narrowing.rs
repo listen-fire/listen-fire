@@ -121,7 +121,13 @@ fn presence_subject(expr: &Expression) -> Option<PresenceProof> {
         return Some(PresenceProof::Field { root, property });
     }
     if let Some((root, index)) = entry_read(expr) {
-        return Some(PresenceProof::Entry { root: root.to_string(), index: index.clone() });
+        let root = root.to_string();
+        // `d["a"]` is the member `d.a`, one entry however it is spelled, as
+        // TypeScript narrows `d["a"]` and `d.a` alike.
+        return Some(match index {
+            StaticValue::String(property) => PresenceProof::Field { root, property: property.clone() },
+            index => PresenceProof::Entry { root, index: index.clone() },
+        });
     }
     let name = match expr {
         Expression::EdgeProperty { property_type_id, .. } => Some(property_type_id.as_str()),

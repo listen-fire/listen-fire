@@ -2,9 +2,10 @@
 //! (MOV_ABSENT_REQUIRED), whatever the value is: a graph record a walk may
 //! not find, a nested call's or an index's result, a held record. `x?.F`
 //! reads it, absent when `x` is; narrowing (`exists(x)`, `x != null`,
-//! `x?.F != null`) proves it there, and a test of `l[1]` proves every later
-//! `l[1]` (a name at a literal index), never a call's result. The refusal's
-//! fix is `?.`, safe: the two read alike.
+//! `x?.F != null`) proves it there, and a test of `l[1]` (`l[1] != null`,
+//! `exists(l[1])`) proves every later `l[1]` (a name at a literal index),
+//! never a call's result. A map's member is one entry, `d.a` or `d["a"]`.
+//! The refusal's fix is `?.`, safe: the two read alike.
 
 use movement_checker::CheckOptions;
 use movement_parser::catalog::types::CatalogSnapshot;
@@ -138,4 +139,53 @@ fn the_fix_is_optional_chaining_and_checks_clean() {
     assert!(after.contains("return [t?.Name, u?.Name, t?.Topic, only(at-[:Tables]->)?.Name, l[1]?.Name]"), "{after}");
     let body = after.split("function go() {\n").nth(1).unwrap().trim_end_matches("\n}");
     assert_eq!(check(body), Vec::<String>::new());
+}
+
+#[test]
+fn exists_of_an_index_read_narrows_it() {
+    for clean in [
+        format!("{L}  if (exists(l[1])) {{\n    return l[1].Name\n  }}\n  return \"none\""),
+        format!("{L}  return exists(l[1]) && l[1].Name == \"a\""),
+        format!("{L}  return !exists(l[1]) || l[1].Name == \"a\""),
+        format!("{L}  if (!exists(l[1])) {{ fail(\"none\") }}\n  return l[1].Name"),
+        format!("{D}  return exists(d[\"a\"]) && d[\"a\"].Name == \"a\""),
+        format!("{D}  if (exists(d[\"a\"])) {{\n    return d[\"a\"].Name\n  }}\n  return \"none\""),
+    ] {
+        assert_eq!(check(&clean), Vec::<String>::new(), "{clean}");
+    }
+    for refused in [
+        format!("{L}  return exists(l[0]) && l[1].Name == \"a\""),
+        format!("{L}  return exists(l[1]) || l[1].Name == \"a\""),
+        format!("{L}  if (exists(l[1])) {{ fail(\"none\") }}\n  return l[1].Name"),
+    ] {
+        let found = check(&refused);
+        assert!(found.len() == 1 && found[0].starts_with("MOV_ABSENT_REQUIRED"), "{refused}: {found:?}");
+    }
+}
+
+/// `d.a` and `d["a"]` read one member, as TypeScript narrows both spellings
+/// of one property alike.
+#[test]
+fn a_map_member_is_one_entry_however_it_is_spelled() {
+    for clean in [
+        format!("{D}  if (d[\"a\"] != null) {{\n    return d.a.Name\n  }}\n  return \"none\""),
+        format!("{D}  if (exists(d.a)) {{\n    return d[\"a\"].Name\n  }}\n  return \"none\""),
+        format!("{D}  return d.a != null && d[\"a\"].Name == \"a\""),
+        format!("{D}  return exists(d[\"a\"]) && d.a.Name == \"a\""),
+        format!("{D}  return d[\"a\"] == null || d.a.Name == \"a\""),
+        format!("{D}  if (d.a == null) {{ fail(\"none\") }}\n  return d[\"a\"].Name"),
+        format!("{D}  if (d[\"a\"] == null) {{ fail(\"none\") }}\n  return d.a.Name"),
+    ] {
+        assert_eq!(check(&clean), Vec::<String>::new(), "{clean}");
+    }
+    const D2: &str = "  d = {a: only(at-[:Tables]->), b: only(at-[:Tables]->)}\n";
+    for refused in [
+        format!("{D2}  if (d[\"b\"] != null) {{\n    return d.a.Name\n  }}\n  return \"none\""),
+        format!("{D2}  if (exists(d.b)) {{\n    return d[\"a\"].Name\n  }}\n  return \"none\""),
+        format!("{D2}  return d.b != null && d[\"a\"].Name == \"a\""),
+        format!("{D2}  return d[\"b\"] != null && d.a.Name == \"a\""),
+    ] {
+        let found = check(&refused);
+        assert!(found.len() == 1 && found[0].starts_with("MOV_ABSENT_REQUIRED"), "{refused}: {found:?}");
+    }
 }

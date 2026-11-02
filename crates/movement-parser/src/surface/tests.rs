@@ -248,8 +248,15 @@ fn presence_and_walks() {
     let in_where = "at-[c:Changes WHERE exists(c.Previous) AND c.Previous.Stage == \"x\"]->";
     assert!(findings(in_where).is_empty(), "{:?}", findings(in_where));
     assert_eq!(lowered(in_where), lowered("at-[c:Changes WHERE c.Previous != null AND c.Previous.Stage == \"x\"]->"));
+    // From 0.14 a name read at a literal index too, and a field read off one.
+    for (value, test) in [("exists(l[1])", "l[1] != null"), ("exists(d[\"a\"])", "d[\"a\"] != null"), ("exists(l[1].Stage)", "l[1].Stage != null")] {
+        assert!(findings(value).is_empty(), "{value}: {:?}", findings(value));
+        assert_eq!(lowered(value), lowered(test), "{value}");
+    }
     // Anything else is no value read: its presence is written `!= null`.
     assert_eq!(upgraded("exists(f(x))"), "f(x) != null");
+    assert_eq!(upgraded("exists(f(x)[1])"), "f(x)[1] != null");
+    assert_eq!(upgraded("exists(l[i])"), "l[i] != null");
     // Inside walk brackets nothing is respelled: CAPS words, AND, any case.
     let walk = "crm-[c:Companies WHERE c.Categories == \"Customer\" AND LOWER(c.Name) CONTAINS \"x\" ORDER BY c.`Created At` DESC LIMIT 10]->";
     assert!(findings(walk).is_empty(), "{:?}", findings(walk));

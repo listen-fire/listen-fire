@@ -66,11 +66,16 @@ impl ScopeEnv<'_> {
         Some(EntryRead { name: symbol.name.clone(), declared: symbol.span, index: index.clone() })
     }
 
-    /// The entry a proof is about: written (`l[1] != null`) or hoisted.
-    pub fn entry_of(&self, proof: &PresenceProof) -> Option<EntryRead> {
+    /// The entry a proof is about, written (`l[1] != null`, `d.a != null`,
+    /// the member `d["a"]`) or hoisted, and the proof restated about it.
+    pub fn entry_of(&self, proof: &PresenceProof) -> Option<(EntryRead, PresenceProof)> {
         match proof {
-            PresenceProof::Entry { root, index } => self.entry_read(root, index),
-            other => self.entry_reads.get(other.root()).map(|(entry, _)| entry.clone()),
+            PresenceProof::Entry { root, index } => Some((self.entry_read(root, index)?, proof.clone())),
+            PresenceProof::Field { root, property } if !self.entry_reads.contains_key(root) => {
+                let index = StaticValue::String(property.clone());
+                Some((self.entry_read(root, &index)?, PresenceProof::Entry { root: root.clone(), index }))
+            }
+            other => self.entry_reads.get(other.root()).map(|(entry, _)| (entry.clone(), other.clone())),
         }
     }
 }
@@ -133,7 +138,7 @@ impl TypeEnv for ScopeEnv<'_> {
     }
 
     fn same_entry(&self, proof: &PresenceProof) -> Vec<PresenceProof> {
-        let Some(entry) = self.entry_of(proof) else { return Vec::new() };
+        let Some((entry, proof)) = self.entry_of(proof) else { return Vec::new() };
         self.entry_reads.iter().filter(|(name, (read, _))| *read == entry && name.as_str() != proof.root()).map(|(name, _)| proof.about(name)).collect()
     }
 
