@@ -141,6 +141,26 @@ test('a webhook delivery fires a listen whose function types its parameter by th
   }
 });
 
+test('a function over one of several payload nodes is fired by a listen stating either, and runs', async () => {
+  const dir = await webhookProject();
+  const settled = PAYMENTS.replace(
+    'listen to forms-[:Requests]-><Payment> fire `Payment Failed`',
+    'node Refund {\n  id: <text>\n  refund: <text>\n}\n\nfunction settled(e: <Payment | Refund>) {\n  write crm-[:Company]-> { Name: "settled ${e.id}" }\n}\n\nlisten to forms-[:Requests]-><Payment> fire settled\nlisten to forms-[:Requests]-><Refund> fire settled',
+  );
+  writeFileSync(join(dir, 'movements/payments.mvt'), settled);
+  const check = await lf(dir, ['check']).done;
+  assert.equal(check.code, 0, check.out);
+  const serving = await served(dir);
+  try {
+    const url = (await serving.waitFor(/^webhook FormsHook: /)).replace(/^webhook FormsHook: /, '');
+    assert.equal((await post(url, '{"id":"pay_7","amount":3}')).status, 202);
+    assert.equal((await post(url, '{"id":"re_1","refund":"late"}')).status, 202);
+    assert.deepEqual(companies(dir), ['settled pay_7', 'settled re_1'], serving.lines.join('\n'));
+  } finally {
+    await serving.stop();
+  }
+});
+
 test('the same signed Stripe delivery posted twice runs once; the repeat is answered 2xx as a duplicate', async () => {
   const dir = await webhookProject();
   const serving = await served(dir);

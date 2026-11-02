@@ -498,7 +498,10 @@ impl Checker<'_> {
         let Some(type_) = &written[0].type_ else { return };
         // What lands is a record of the connection the listen is on, and the
         // run is seeded on the one connection its parameter's type names.
+        // A listen that states its landing's node fires with that node,
+        // held to the parameter below.
         if let ParamTypeRef::Union(union) = type_
+            && landing.is_none()
             && let Some(other) = union.members.iter().find(|member| member.graph != statement.instance)
         {
             let message = format!(

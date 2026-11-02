@@ -125,3 +125,21 @@ fn a_stated_landing_names_a_node_the_program_declares() {
         ["MOV_UNKNOWN_TYPE_NAME 18:33-18:39 what lands is a record, not the value type '<text>' — declare the fields it carries: `node Payment { amount: <number> }`, then `-[:…]-><Payment>`"]
     );
 }
+
+/// A function over one of several nodes (`<Payment | Refund>`) is fired by a
+/// listen stating any node one member takes, as TypeScript's `Payment |
+/// Refund` takes a Payment. Each member is a node: the run holds the payload
+/// as a value, and a record member could never be seeded from it. Before,
+/// such a listen was refused as naming another connection, and an imported
+/// function of that type checked clean and failed every run.
+#[test]
+fn a_parameter_of_one_of_several_nodes_takes_a_stated_node_one_member_takes() {
+    let union = "function settled(e: <Payment | Refund>) { return 1 }\n";
+    assert_eq!(check(&format!("{union}listen to hooks-[:Requests]-><Payment> fire settled\nlisten to forms-[:Submissions]-><Refund> fire settled\n")), Vec::<String>::new());
+    let narrower = check(&format!("{union}listen to hooks-[:Requests]-><Paid> fire settled\n"));
+    assert_eq!(narrower.len(), 1, "{narrower:#?}");
+    assert!(narrower[0].contains("'settled' takes 'e: <Payment | Refund>', but this listener fires with its declared payload 'Paid', and no member of the union takes it"), "a Paid lacks a Payment's amount and a Refund's reason: {narrower:#?}");
+    assert_eq!(check("function settled(e: <Refund | Paid>) { return 1 }\nlisten to hooks-[:Requests]-><Payment> fire settled\n"), Vec::<String>::new(), "a Payment fits a Paid");
+    let record = check("function settled(e: <Payment | crm-[:Company]->>) { return 1 }\nlisten to hooks-[:Requests]-><Payment> fire settled\n");
+    assert_eq!(record, ["MOV_LISTEN_PARAM_MISMATCH 19:1-19:52 'settled' takes 'e: <Payment | crm-[:Company]->>', but this listener fires with its declared payload 'Payment', a value, and '<crm-[:Company]->>' is a record type — every member of the union is a declared node"]);
+}

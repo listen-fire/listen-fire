@@ -931,6 +931,13 @@ impl Run<'_> {
             // arrives is one of them, and says which by its own record type,
             // so the entry is seeded on their connection with no type of its
             // own. Its members on different connections name no one source.
+            // One of several declared nodes (`<Payment | Refund>`): the event
+            // is the payload the listen states, held as a value, as for one.
+            Some(ParamTypeRef::Union(union))
+                if union.members.iter().all(|member| member.hops_raw.is_none() && matches!(file.resolve(&member.graph), Some(Binding::Shape(_)))) =>
+            {
+                &union.members[0]
+            }
             Some(ParamTypeRef::Union(union)) => {
                 let graph = &union.members[0].graph;
                 if union.members.iter().any(|member| member.graph != *graph) {

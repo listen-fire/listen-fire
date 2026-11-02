@@ -71,6 +71,11 @@ named in [`RELEASING.md`](RELEASING.md).
 
 - **The loop guard slot's `guard.isEcho` is retired** (within adapter protocol 2; no version moves). listen-fire stopped calling it in 0.13, when the loop breaker replaced echo suppression. Now listen-fire's built-in guard, `@lf/fingerprint-guard`, no longer answers it (`listen-fire --contract-guard` refuses it as `method_not_implemented`), and the slot's contract suite holds a guard to `guard.recordWrite` alone. A guard module that still offers `guard.isEcho` loads as before and is never asked ([loop-guard-slot.md](docs/contracts/loop-guard-slot.md)).
 
+### Fixed
+
+- **A function over one of several payload nodes runs.** `function settled(e: <Payment | Refund>)`, fired by `listen to hooks-[:Requests]-><Payment> fire settled`, takes the stated Payment, as TypeScript's `Payment | Refund` takes a Payment. Before, the check refused it as naming another connection, and a run of it failed (`MOVENG_UNSUPPORTED`) wherever the check did not see the function's type.
+  - The stated node must fit some member (`MOV_LISTEN_PARAM_MISMATCH` otherwise), and every member is a declared node: the run holds the payload as a value, so a record member is refused where the listen names the function.
+
 ## [0.13.0] - 2026-11-02
 
 A new compatibility key: waiting and listening become traversals, and callbacks retire.

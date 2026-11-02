@@ -254,7 +254,49 @@ impl Checker<'_> {
     /// (`hooks-[:Requests]-><Payment>`) fires its function with that node:
     /// the parameter is checked against it as a parameter is against its
     /// argument, field by field.
+    /// A parameter of one of several nodes (`<Payment | Refund>`) takes the
+    /// node where one of them does, as TypeScript's `Payment | Refund` takes a
+    /// Payment.
     pub(super) fn check_listen_payload_param(&mut self, payload: SymbolId, param: &MovementParam, type_: &ParamTypeRef, decl_scope: ScopeId, statement: &ListenDeclaration) {
+        if let ParamTypeRef::Union(union) = type_ {
+            let node = |checker: &Self, member: &movement_parser::ast::TypeRef| {
+                member.hops_raw.is_none()
+                    && matches!(checker.scopes.resolve(decl_scope, &member.graph), Resolution::Found(id) if checker.declared_node(id).is_some())
+            };
+            // The run holds the payload as a value: a record member could
+            // never be seeded from it.
+            if let Some(record) = union.members.iter().find(|member| !node(self, member)) {
+                let payload = self.declared_node(payload).map(|d| d.instance.name.clone()).unwrap_or_default();
+                let message = format!(
+                    "'{}' takes '{}: <{}>', but this listener fires with its declared payload '{payload}', a value, and '<{}>' is a record type — every member of the union is a declared node",
+                    statement.movement,
+                    param.name,
+                    spell_param_type(type_),
+                    spell_param_type(&ParamTypeRef::Name(record.clone()))
+                );
+                self.report(codes::LISTEN_PARAM_MISMATCH, message, statement.span);
+                return;
+            }
+            let fits = union.members.iter().any(|member| {
+                let before = self.diagnostics.len();
+                self.check_listen_payload_param(payload, param, &ParamTypeRef::Name(member.clone()), decl_scope, statement);
+                let refused = self.diagnostics.split_off(before);
+                refused.is_empty()
+            });
+            if !fits {
+                let payload = self.declared_node(payload).map(|d| d.instance.name.clone()).unwrap_or_default();
+                let message = format!(
+                    "'{}' takes '{}: <{}>', but this listener fires with its declared payload '{payload}', and no member of the union takes it — add it as a member: '<{} | {}>'",
+                    statement.movement,
+                    param.name,
+                    spell_param_type(type_),
+                    spell_name(&payload),
+                    spell_param_type(type_)
+                );
+                self.report(codes::LISTEN_PARAM_MISMATCH, message, statement.span);
+            }
+            return;
+        }
         let Some(payload) = self.declared_node(payload).map(|d| d.instance.clone()) else { return };
         let declared = match type_ {
             ParamTypeRef::Name(declared) if declared.hops_raw.is_none() => match self.scopes.resolve(decl_scope, &declared.graph) {
