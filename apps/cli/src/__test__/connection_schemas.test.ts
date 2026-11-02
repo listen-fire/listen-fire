@@ -72,3 +72,19 @@ test('a field only another connection of the same module has is refused at check
   assert.match(check.out, /MOV_WRITE_UNKNOWN_FIELD/);
   assert.match(check.out, /Title/);
 });
+
+test('catalog describes the credential no file imports; one the module refuses fails the catalog by name, and check still asks nothing of it', () => {
+  const dir = notesProject('  write alpha-[:Note]-> { Title: company.Name }');
+  const catalog = lf(dir, 'catalog');
+  assert.equal(catalog.code, 1, catalog.out);
+  assert.match(catalog.out, /schema with credential "gone_notes"/);
+
+  const secretsPath = join(dir, '.lf/secrets.yaml');
+  const secrets = parse(readFileSync(secretsPath, 'utf8')) as Record<string, unknown>;
+  secrets.gone_notes = { module: 'notes', credential: 'workspace', workspace: 'beta' };
+  writeFileSync(secretsPath, stringify(secrets), { mode: 0o600 });
+  const held = lf(dir, 'catalog');
+  assert.equal(held.code, 0, held.out);
+  for (const name of ['acme', 'alpha_notes', 'beta_notes', 'gone_notes']) assert.match(held.out, new RegExp(`^connection ${name}: `, 'm'));
+  assert.match(held.out, /^connection gone_notes: .*\n(.*\n)+?.*a Note along the connection's Note: Heading$/m, 'a connection no file names is typed by its own describe');
+});

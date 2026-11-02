@@ -260,12 +260,13 @@ fn adapter_snapshot_of(adapter: AdapterDeclarations) -> Js {
 
 // ── The catalog as text ──────────────────────────────────────────────────────
 
-/// `listen-fire catalog` without `--json`: each connection the files make, as
-/// a program reads, writes and listens to it, in the notation `listen-fire
-/// modules show` prints a module in (crate::modules::SchemaView), from the
-/// schema the catalog holds for it, so its live types (an MCP server's tools, a
-/// CRM's fields) are there. Then the plugins the files import, the units every
-/// program has, and the credentials no file connects yet.
+/// `listen-fire catalog` without `--json`: each connection the project holds
+/// (a program connecting it or not), as a program reads, writes and listens to
+/// it, in the notation `listen-fire modules show` prints a module in
+/// (crate::modules::SchemaView), from the schema the catalog holds for it, so
+/// its live types (an MCP server's tools, a CRM's fields) are there. Then the
+/// plugins the files import, the units every program has, and the credentials
+/// no installed module describes.
 pub fn catalog_text(catalog: &Js) -> String {
     let adapters = match catalog.get("adapters") {
         Some(Js::Obj(adapters)) => adapters.clone(),
@@ -276,7 +277,7 @@ pub fn catalog_text(catalog: &Js) -> String {
         _ => Obj::new(),
     };
     let mut out = vec![
-        "each connection the project's programs make, as a program reads, writes and listens to it (listen-fire catalog --json: the whole snapshot)".to_string(),
+        "each connection the project holds, as a program reads, writes and listens to it (listen-fire catalog --json: the whole snapshot)".to_string(),
         "a record type is named one hop off its connection: a parameter holding a Message of connection c is typed <c-[:Message]->>".to_string(),
     ];
     let is_unit = |name: &str| movement_parser::version::RUN_HOST_UNITS.contains(&name);
@@ -343,7 +344,7 @@ pub fn catalog_text(catalog: &Js) -> String {
         .collect();
     if !unconnected.is_empty() {
         out.push(String::new());
-        out.push(format!("credentials no program connects yet (connect one in a movement to see its types): {}", unconnected.join(", ")));
+        out.push(format!("credentials no installed module describes (its module is not installed here, or does not declare that credential): {}", unconnected.join(", ")));
     }
     out.join("\n")
 }
@@ -414,7 +415,7 @@ mod text_tests {
     use super::*;
 
     #[test]
-    fn the_text_is_each_connection_as_modules_show_spells_a_module_with_its_live_types_the_units_and_what_is_not_connected() {
+    fn the_text_is_each_connection_as_modules_show_spells_a_module_with_its_live_types_the_units_and_what_no_module_describes() {
         let catalog = Js::parse(
             br#"{"contractVersion":3,
             "adapters":{
@@ -433,7 +434,7 @@ mod text_tests {
         .unwrap();
         let text = catalog_text(&catalog);
         let expected = [
-            "each connection the project's programs make, as a program reads, writes and listens to it (listen-fire catalog --json: the whole snapshot)",
+            "each connection the project holds, as a program reads, writes and listens to it (listen-fire catalog --json: the whole snapshot)",
             "a record type is named one hop off its connection: a parameter holding a Message of connection c is typed <c-[:Message]->>",
             "",
             "connection crm: `@lf/mcp`",
@@ -485,7 +486,7 @@ mod text_tests {
             "  Invocation",
             "    fields: Text text",
             "",
-            "credentials no program connects yet (connect one in a movement to see its types): crm_two (mcp)",
+            "credentials no installed module describes (its module is not installed here, or does not declare that credential): crm_two (mcp)",
         ];
         assert_eq!(text, expected.join("\n"));
         assert!(!text.contains("listenSettingsBecome") && !text.contains("Bases"), "no retired 0.12 mapping in the text");

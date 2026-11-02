@@ -23,7 +23,7 @@ Keys are camelCase. A value that does not apply is `null`, never absent.
 
 ## `listen-fire catalog --json`
 
-The catalog snapshot (`{ "contractVersion", "adapters", … }`) the files are checked against. Without `--json`, `listen-fire catalog` prints text: each connection the files make, in the notation of `listen-fire modules show`.
+The catalog snapshot (`{ "contractVersion", "adapters", … }`) the files are checked against, with a schema for every connection the project holds (each installed module, each credential bound to it), whether a movement connects it or not. Without `--json`, `listen-fire catalog` prints text: each of those connections, in the notation of `listen-fire modules show`.
 When credentials are missing: `{ "error", "missingCredentials": [diagnostic…] }`, exit 1.
 
 ## `listen-fire run <movement>`, `run --event`, `run --poll`, `run --webhook`, `resume [<run-id>]`

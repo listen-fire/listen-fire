@@ -62,9 +62,9 @@ listen-fire modules show <module>    # what one reads, writes and listens to, re
 listen-fire connect <module>         # installs it and asks for its server secret, webhook secret and OAuth app
 ```
 
-Read `modules show` before writing a program against a module. It lists the record types a program can read with their fields and edges, whether the module writes anything (`@lf/stripe` is read-only), the events a `listen` can name, and the credential it needs. A module whose schema comes from your own account (Airtable's tables, a spreadsheet's tabs) says so instead: its records show only once a credential is added and a movement connects it (`listen-fire catalog`).
+Read `modules show` before writing a program against a module. It lists the record types a program can read with their fields and edges, whether the module writes anything (`@lf/stripe` is read-only), the events a `listen` can name, and the credential it needs. A module whose schema comes from your own account (Airtable's tables, a spreadsheet's tabs) says so instead: its records show only once a credential is added (`listen-fire catalog`).
 
-`listen-fire catalog` prints the same notation for each connection the project's movements make, its live types included (an MCP server's tools, a CRM's fields), with the `connect` line that makes it. `--json` prints the catalog snapshot `listen-fire check` reads. A bare `listen-fire connect` prints the same list as `listen-fire modules`.
+`listen-fire catalog` prints the same notation for each connection the project holds (every credential bound to an installed module), whether a movement connects it yet or not, its live types included (an MCP server's tools, a CRM's fields), with the `connect` line that makes it. `--json` prints the catalog snapshot `listen-fire check` reads. A bare `listen-fire connect` prints the same list as `listen-fire modules`.
 
 `listen-fire connect <module> --yes` asks nothing, so it works without a terminal. Each answer comes from a flag (`--setting <name>=<value>`, `--client-id`, `--client-secret`, `--redirect-port`, `--server-secret`, `--webhook-secret`) or from its default (a webhook secret is generated). When an answer has neither, the command names the flag it needs and writes nothing; `modules show` lists them under `set up`.
 

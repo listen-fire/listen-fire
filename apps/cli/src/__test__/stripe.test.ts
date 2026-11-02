@@ -13,7 +13,7 @@
 
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { test } from 'node:test';
@@ -190,6 +190,38 @@ test('listen-fire check types the program against Stripe: a field an invoice lac
     assert.match(onCustomers.out, /invoice\.paid/);
     console.log([wrongField, wrongType, chargeKind, onCustomers].map((c) => c.out.trim()).join('\n---\n'));
     assert.deepEqual(world.stripe.requests, [], 'checking reads nothing from Stripe');
+  } finally {
+    await world.close();
+  }
+});
+
+test('listen-fire catalog describes every connection the project holds: with no movement, and with one that connects two of them', async () => {
+  const world = await paymentsWorld();
+  try {
+    const connections = ['stripe_account', 'crm', 'billing_mail', 'team_slack'];
+    const described = (out: string) => {
+      for (const name of connections) assert.match(out, new RegExp(`^connection ${name}: `, 'm'), `${name} is described`);
+      assert.match(out, /^use: c = connect `@lf\/stripe` using stripe_account$/m, 'a connection no movement uses still shows the line that connects it');
+      assert.match(out, /^use: c = connect `@lf\/mcp` using crm$/m);
+      assert.match(out, /^ {2}find_customer_by_email\b/m, 'the CRM server\'s own tools are there');
+      assert.doesNotMatch(out, /no installed module describes/, 'nothing held is left undescribed');
+    };
+
+    rmSync(join(world.dir, 'movements/hello.mvt'));
+    const empty = await run(world.dir, 'catalog');
+    assert.equal(empty.code, 0, empty.out);
+    described(empty.out);
+    const emptyJson = JSON.parse((await run(world.dir, 'catalog', '--json')).out);
+    assert.deepEqual(Object.keys(emptyJson.adapters.stripe.schemas), ['stripe_account'], '--json keeps its shape and holds the unused connection too');
+
+    writeFileSync(join(world.dir, 'movements/two.mvt'), 'import { stripe, slack } from adapters\nimport { stripe_account, team_slack } from credentials\n\npay = connect stripe using stripe_account\nchat = connect slack using team_slack\n');
+    const partly = await run(world.dir, 'catalog');
+    assert.equal(partly.code, 0, partly.out);
+    described(partly.out);
+    assert.equal(partly.out, empty.out, 'what a movement connects changes nothing about what is described');
+
+    const checked = await run(world.dir, 'check');
+    assert.equal(checked.code, 0, checked.out);
   } finally {
     await world.close();
   }

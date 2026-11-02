@@ -358,6 +358,14 @@ impl Imported {
     pub fn contains(&self, credential: &str) -> bool {
         self.credentials.contains(credential)
     }
+
+    /// Every credential the project holds, named or not: what describing the
+    /// whole project reads (`listen-fire catalog`), where a check reads only
+    /// the credentials its files name.
+    pub fn holding(mut self, credentials: &Credentials) -> Imported {
+        self.credentials.extend(credentials.iter().map(|c| c.name.clone()));
+        self
+    }
 }
 
 /// The credentials the files name (after `using` in a `connect`, or in an

@@ -200,7 +200,7 @@ const USAGE: &str = "usage: listen-fire <init|check|catalog|lsp|run|resume|runs|
        listen-fire --version
   init      scaffold a starter project in the folder (default: the current one): lf.yaml, a movement, .gitignore
   check     every diagnostic the project's movement files have (as `listen-fire check`)
-  catalog   each connection the files make, as a program reads, writes and listens to it: its record types with their fields, edges and writes, in the notation of `modules show`, its live types included (--json: the catalog snapshot the files are checked against)
+  catalog   each connection the project holds, as a program reads, writes and listens to it: its record types with their fields, edges and writes, in the notation of `modules show`, its live types included (--json: the catalog snapshot the files are checked against)
   lsp       the language server (LSP over stdin/stdout): diagnostics, completion, hover, definitions and fixes for the movement files
   run       run <movement>: one manual invocation, to the `listen to manual-[:Invocations]-> fire <movement>` listens (--text: the Invocation's Text); --event: judge the event file's arrivals against the listens on their edges and run each; --poll <movement>: poll now, once, each polled edge a listen that fires it is on, once for every listen sharing the poll
   resume    step every parked leaf of one run now; with no run, drain the due work and what is due in every parked run (a timer not yet come stays parked)
@@ -449,7 +449,7 @@ async fn run(argv: Vec<String>) -> Result<i32, String> {
     match command.as_str() {
         "init" => init::run(&args.rest.first().map(PathBuf::from).unwrap_or_else(|| args.dir.clone()), &mut out),
         "check" => check::run(&load()?, args.json, &mut out).await,
-        "catalog" => match check::open_checking(&load()?).await? {
+        "catalog" => match check::open_checking_in(&load()?, check::Scope::Held).await? {
             check::Opened::Ready(checking) => {
                 let shown = if args.json { checking.catalog.to_json() } else { catalog::catalog_text(&checking.catalog) };
                 writeln!(out, "{shown}").map_err(|e| e.to_string())?;

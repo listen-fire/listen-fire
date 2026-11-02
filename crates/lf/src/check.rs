@@ -20,7 +20,7 @@ use serde_json::json;
 
 use crate::catalog::{ConnectionSchemas, Described, catalog_of, connections_of};
 use crate::member_walk::{Walk, Walker, position_arg_options};
-use crate::externals::{RunningExternal, needed_externals, rpc_in, scan_externals, start_externals};
+use crate::externals::{External, RunningExternal, needed_externals, rpc_in, scan_externals, start_externals};
 use crate::json::Js;
 use crate::project::Project;
 use crate::refinements::{InstanceChain, Refining, refine_instance_schema};
@@ -113,6 +113,19 @@ pub struct Checking {
     /// Each external's connections as described, by its name: what
     /// `catalog_with` narrows further.
     schemas: IndexMap<String, ConnectionSchemas>,
+    scope: Scope,
+}
+
+/// Which connections are described.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Scope {
+    /// Those the files make: a credential bound but never named is never
+    /// asked, so a server it names that is down fails no check.
+    Used,
+    /// Every one the project holds (each installed adapter, each credential
+    /// bound to it), named by a file or not: what an author with no program
+    /// yet reads to see what can be connected.
+    Held,
 }
 
 pub enum Opened {
@@ -122,6 +135,10 @@ pub enum Opened {
 }
 
 pub async fn open_checking(project: &Project) -> Result<Opened, String> {
+    open_checking_in(project, Scope::Used).await
+}
+
+pub async fn open_checking_in(project: &Project, scope: Scope) -> Result<Opened, String> {
     let env: Vec<(String, String)> = std::env::vars().collect();
     let secrets = Secrets::open(project, &env)?;
     let credentials = secrets.credentials();
@@ -133,9 +150,10 @@ pub async fn open_checking(project: &Project) -> Result<Opened, String> {
     }
     // A check starts only what the files import: a third-party graph is
     // read live, so its module runs for the check.
-    let externals = needed_externals(scan_externals(project)?, &parsed, |_| false);
+    let held = |e: &External| scope == Scope::Held && e.manifest.kind != "plugin";
+    let externals = needed_externals(scan_externals(project)?, &parsed, held);
     let running: Vec<Rc<RunningExternal>> = start_externals(project, &externals, credentials, LOCAL_TENANT).await?.into_iter().map(Rc::new).collect();
-    let imported = imported_credentials(&parsed);
+    let imported = imported_in(scope, imported_credentials(&parsed), credentials);
     let mut schemas = IndexMap::new();
     for r in running.iter().filter(|r| !r.is_plugin()) {
         schemas.insert(r.external.manifest.name.clone(), describe_external(r, credentials, &imported, ConnectionSchemas::new()).await?);
@@ -143,7 +161,14 @@ pub async fn open_checking(project: &Project) -> Result<Opened, String> {
     // Scanned again after the externals start: one may have written a movement file.
     let files = scan_movements(project)?;
     let catalog = catalog_of(&running, &schemas, credentials, &files);
-    Ok(Opened::Ready(Checking { files, catalog, _running: running, secrets, schemas }))
+    Ok(Opened::Ready(Checking { files, catalog, _running: running, secrets, schemas, scope }))
+}
+
+fn imported_in(scope: Scope, imported: Imported, credentials: &Credentials) -> Imported {
+    match scope {
+        Scope::Used => imported,
+        Scope::Held => imported.holding(credentials),
+    }
 }
 
 /// The catalog the files check against, each connection narrowed by the
@@ -151,8 +176,8 @@ pub async fn open_checking(project: &Project) -> Result<Opened, String> {
 /// will become (an upgrade's rewrite) needs to check as it will.
 pub async fn catalog_with(checking: &mut Checking, walked: &[MovementFile]) -> Result<Js, String> {
     let sources: Vec<MovementFile> = checking.files.iter().chain(walked).cloned().collect();
-    let imported = imported_credentials(&Parsed::each(&sources, &[]));
     let credentials = checking.secrets.credentials();
+    let imported = imported_in(checking.scope, imported_credentials(&Parsed::each(&sources, &[])), credentials);
     for running in checking._running.iter().filter(|r| !r.is_plugin()) {
         let name = running.external.manifest.name.clone();
         let known = checking.schemas.shift_remove(&name).unwrap_or_else(ConnectionSchemas::new);
