@@ -2,7 +2,7 @@
 // `listenPlanSchema` reads: the wire, end to end through the wasm.
 import { callCheckAnswer } from 'movement-lang/wasm/loader';
 
-import { listenPlanSchema, planArrivalSchema, verdictSchema } from '../listen_plan';
+import { lastEdgeOf, listenPlanSchema, memberPlans, planArrivalSchema, verdictSchema } from '../listen_plan';
 
 const CATALOG = {
   adapters: {
@@ -66,7 +66,7 @@ describe('a listen plan on the check answer', () => {
     expect(plan?.hops[2]?.checked).toMatchObject({ type: 'compare', op: 'neq' });
   });
 
-  it('is one plan per member of a union a hop lands on, each naming the union', () => {
+  it('is one plan for a listen through a union, holding each member’s traversal, each naming the union', () => {
     const catalog = {
       adapters: {
         crm: {
@@ -93,17 +93,40 @@ describe('a listen plan on the check answer', () => {
     const reply = callCheckAnswer(source, JSON.stringify(catalog), {});
     if (!reply.ok || !isRecord(reply.json)) throw new Error(`no check answer: ${JSON.stringify(reply.json)}`);
     expect(reply.json.diagnostics).toEqual([]);
-    const plans = listenPlanSchema.array().parse(reply.json.listens);
-    expect(plans.map((plan) => plan.hops.map((h) => [h.edge, h.from, h.to, h.memberOf]))).toEqual([
+    const [plan, ...others] = listenPlanSchema.array().parse(reply.json.listens);
+    expect(others).toEqual([]);
+    if (plan === undefined) throw new Error('no plan');
+    expect(plan.hops).toEqual([]);
+    expect(lastEdgeOf(plan)).toBe('Notes');
+    expect(memberPlans(plan).map((member) => [member.movement, member.carries, member.hops.map((h) => [h.edge, h.from, h.to, h.memberOf])])).toEqual([
       [
-        ['Subjects', '', 'Person', 'Subject'],
-        ['Notes', 'Person', 'Note', undefined],
+        'f',
+        ['Subjects'],
+        [
+          ['Subjects', '', 'Person', 'Subject'],
+          ['Notes', 'Person', 'Note', undefined],
+        ],
       ],
       [
-        ['Subjects', '', 'Company', 'Subject'],
-        ['Notes', 'Company', 'Note', undefined],
+        'f',
+        ['Subjects'],
+        [
+          ['Subjects', '', 'Company', 'Subject'],
+          ['Notes', 'Company', 'Note', undefined],
+        ],
       ],
     ]);
+    expect(memberPlans(plan).every((member) => member.members === undefined)).toBe(true);
+  });
+
+  it('holds its hops or its members’ hops, never both and never neither', () => {
+    const hop = { edge: 'E', from: '', to: 'T', judged: 'arrival' };
+    const plan = { movement: 'f', connection: 'c', adapter: 'a' };
+    expect(listenPlanSchema.safeParse({ ...plan, hops: [hop] }).success).toBe(true);
+    expect(listenPlanSchema.safeParse({ ...plan, hops: [], members: [{ hops: [hop] }] }).success).toBe(true);
+    expect(listenPlanSchema.safeParse({ ...plan, hops: [] }).success).toBe(false);
+    expect(listenPlanSchema.safeParse({ ...plan, hops: [hop], members: [{ hops: [hop] }] }).success).toBe(false);
+    expect(listenPlanSchema.safeParse({ ...plan, hops: [], carries: ['X'], members: [{ hops: [hop] }] }).success).toBe(false);
   });
 
   it('is absent from an answer with no listen on a traversal', () => {

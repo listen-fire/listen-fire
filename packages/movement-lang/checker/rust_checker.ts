@@ -121,18 +121,14 @@ export interface LinkData {
 }
 
 /** The check as the engine's `check.program` request is answered: every
- *  diagnostic, the import link, the checker's stamps, a plan per listen a
- *  `listen to <traversal>` that checked clean comes to (absent when there is
- *  none), as JSON: the engine reads them (`listenPlansOf`); and where each
- *  `listen to <traversal>` that does not check is written (absent when there
- *  is none). One statement can come to several plans, one per member of a
- *  union, so only `unwatched` says which statements nothing fires. */
+ *  diagnostic, the import link, the checker's stamps, and a plan per
+ *  `listen to <traversal>` that checked clean (absent when there is none),
+ *  as JSON: the engine reads them (`listenPlansOf`). */
 export interface CheckAnswer {
   diagnostics: Diagnostic[];
   link?: LinkData;
   stamps: Stamp[];
   listens?: unknown[];
-  unwatched?: Span[];
 }
 
 /** `checkSourceInRust` as data (crates/movement-checker/src/answer.rs). */
@@ -150,7 +146,6 @@ export function checkAnswerInRust(source: string, snapshot: CatalogSnapshot, opt
     stamps: json.stamps.map(stampOf),
     ...(json.link !== undefined ? { link: linkOf(json.link) } : {}),
     ...(Array.isArray(json.listens) ? { listens: json.listens } : {}),
-    ...(Array.isArray(json.unwatched) ? { unwatched: json.unwatched.map(spanOf) } : {}),
   };
 }
 

@@ -66,14 +66,12 @@ pub struct FileSet {
     parsed: Vec<Rc<Parsed>>,
     pub catalog: Js,
     pub listens: Vec<Listen>,
-    /// The heads each listen with an earlier hop the host resolves watches
-    /// now, by its pipeline (crate::resolve): none for one never resolved,
-    /// or suspended.
-    heads: RefCell<BTreeMap<String, Vec<String>>>,
-    /// The records each listen's hops reported per record hang off, by its
-    /// pipeline and the hop's edge (crate::resolve `Resolution::parents`):
-    /// the edge is watched under each.
-    parents: RefCell<BTreeMap<String, BTreeMap<String, Vec<String>>>>,
+    /// What each listen with an earlier hop the host resolves is watched
+    /// under now, by its pipeline (crate::resolve): its heads, none for one
+    /// never resolved, or suspended; the records its hops reported per record
+    /// hang off, by the hop's edge, each of which that edge is watched under;
+    /// and, for a listen over a union, each member's.
+    watching: RefCell<BTreeMap<String, crate::resolve::Resolution>>,
     pub running: Vec<Rc<RunningExternal>>,
     schemas: IndexMap<String, ConnectionSchemas>,
     /// The set's claims on its externals' processes: a worker's keep them
@@ -113,40 +111,50 @@ impl FileSet {
         self.files.iter().find(|f| f.name == name).unwrap_or_else(|| panic!("no file {name} in the set its listen was read from"))
     }
 
-    /// The scopes a listen on a traversal is watched in: the heads its
+    /// Whether an arrival under the record `key` is the listen's to judge:
+    /// one with no hop the host resolves watches every record; one that has
+    /// watches its heads, and a listen over a union whatever any member
+    /// watches.
+    pub fn watches_under(&self, listen: &Listen, key: &Option<String>) -> bool {
+        let watches = |member: usize, plan: &movement_parser::listen_plan::ListenPlan| !crate::edge_polls::resolves_plan(plan) || self.member_heads(listen, member, plan).contains(key);
+        listen.plan.member_plans().iter().enumerate().any(|(member, plan)| watches(member, plan))
+    }
+
+    /// The scopes one traversal of a listen on a traversal (its own, or
+    /// member `member`'s of a union, `plan`) is watched in: the heads its
     /// resolved hops matched, or the whole connection (`None`) for one with
     /// no hop the host resolves.
-    pub fn heads(&self, listen: &Listen) -> Vec<Option<String>> {
-        if !crate::edge_polls::resolves(listen) {
+    pub fn member_heads(&self, listen: &Listen, member: usize, plan: &movement_parser::listen_plan::ListenPlan) -> Vec<Option<String>> {
+        if !crate::edge_polls::resolves_plan(plan) {
             return vec![None];
         }
-        self.heads.borrow().get(&listen.pipeline()).into_iter().flatten().cloned().map(Some).collect()
+        self.member_watching(listen, member).heads.into_iter().map(Some).collect()
     }
 
-    /// Watch the listen's last edge under `heads` from now (crate::resolve):
-    /// whether they are not those it was watched under.
-    pub fn watch(&self, listen: &Listen, heads: Vec<String>) -> bool {
-        self.heads.borrow_mut().insert(listen.pipeline(), heads.clone()).is_none_or(|before| before != heads)
+    /// The records the hop on `edge` of one traversal of the listen hangs
+    /// off, which that edge is watched under for it (crate::resolve
+    /// `reported_per_record`).
+    pub fn parents(&self, listen: &Listen, member: usize, edge: &str) -> Vec<Option<String>> {
+        self.member_watching(listen, member).parents.remove(edge).unwrap_or_default().into_iter().map(Some).collect()
     }
 
-    /// The records the listen's hop on `edge` hangs off, which that edge is
-    /// watched under for it (crate::resolve `reported_per_record`).
-    pub fn parents(&self, listen: &Listen, edge: &str) -> Vec<Option<String>> {
-        self.parents.borrow().get(&listen.pipeline()).and_then(|parents| parents.get(edge)).into_iter().flatten().cloned().map(Some).collect()
+    fn member_watching(&self, listen: &Listen, member: usize) -> crate::resolve::Watching {
+        self.watching.borrow().get(&listen.pipeline()).map(|kept| kept.watching(&listen.plan, member)).unwrap_or_default()
     }
 
-    /// Every hop of the listen reported per record, by its edge, with the
-    /// records it is watched under.
-    pub fn all_parents(&self, listen: &Listen) -> BTreeMap<String, Vec<String>> {
-        self.parents.borrow().get(&listen.pipeline()).cloned().unwrap_or_default()
+    /// What the listen is watched under, its heads and parents and its
+    /// members': to tell whether a resolve moved them.
+    pub fn watched(&self, listen: &Listen) -> (Vec<String>, BTreeMap<String, Vec<String>>, Vec<crate::resolve::Watching>) {
+        let kept = self.watching.borrow().get(&listen.pipeline()).cloned().unwrap_or_default();
+        (kept.heads, kept.parents, kept.members)
     }
 
-    /// Watch the listen's hops reported per record under `parents` from now:
-    /// whether they are not those they were watched under.
-    pub fn watch_parents(&self, listen: &Listen, parents: BTreeMap<String, Vec<String>>) -> bool {
-        self.parents.borrow_mut().insert(listen.pipeline(), parents.clone()).is_none_or(|before| before != parents)
+    /// Watch the listen from now under what `resolution` lists
+    /// (crate::resolve): whether that is not what it was watched under.
+    pub fn watch(&self, listen: &Listen, resolution: &crate::resolve::Resolution) -> bool {
+        let kept = crate::resolve::Resolution { resolved_at: None, failure: None, ..resolution.clone() };
+        self.watching.borrow_mut().insert(listen.pipeline(), kept.clone()).is_none_or(|before| before != kept)
     }
-
 }
 
 /// What a session is opened for, which its module processes follow.
@@ -401,7 +409,7 @@ pub async fn open_session(project: Project, opening: &Opening<'_>) -> Result<Ses
     }
     let user = local_identity(&project.user, |k| std::env::var(k).ok());
     let _holds = hold_all(&running, role.keep());
-    let file_set = Rc::new(FileSet { files, parsed, catalog, listens, heads: Default::default(), parents: Default::default(), running, schemas, _holds });
+    let file_set = Rc::new(FileSet { files, parsed, catalog, listens, watching: Default::default(), running, schemas, _holds });
     let set = file_set.clone();
     // What the records door reads, and keeps its facts in the write ledger for
     // as long as a writer's own are kept.
@@ -634,7 +642,8 @@ pub struct Fired {
 /// with (mail sent to a key no listen names): with its values of the owned
 /// fields those WHEREs compare, the ones only its module reads.
 fn unmatched_line(adapter: &str, arrival: &ArrivalIn, skipped: &[&Listen]) -> String {
-    let compared: BTreeSet<&str> = skipped.iter().filter_map(|l| l.plan.hops.last()).flat_map(|hop| hop.owned.iter().map(String::as_str)).collect();
+    let owned = |listen: &Listen| listen.plan.member_plans().iter().filter_map(|plan| plan.hops.last()).flat_map(|hop| hop.owned.clone()).collect::<Vec<_>>();
+    let compared: BTreeSet<String> = skipped.iter().flat_map(|l| owned(l)).collect();
     let fields = arrival.landing.as_ref().and_then(|landing| landing.get("fields"));
     let held: Vec<String> = compared.iter().filter_map(|field| fields?.get(field).map(|value| format!("its {field} is {}", value.to_json()))).collect();
     let about = if held.is_empty() { String::new() } else { format!(" ({})", held.join(", ")) };
@@ -922,7 +931,7 @@ impl Session {
                 let named = format!("{}:{}", file.name, listen.movement_name);
                 // A listen whose earlier hops the host resolves is watched
                 // under its heads alone.
-                if crate::edge_polls::resolves(listen) && !set.heads(listen).contains(&arrival.key) {
+                if !set.watches_under(listen, &arrival.key) {
                     crate::log::debug(|| format!("{named}: the arrival {identity} on {} is under no record it watches: it runs nothing", arrival.edge));
                     continue;
                 }
@@ -1094,7 +1103,11 @@ impl Session {
     /// other store read does: a loop breaker that is silently off is worse
     /// than a delivery that is tried again.
     fn chain_before(&self, adapter: &str, listen: &Listen, arrival: &ArrivalIn) -> Result<Vec<String>, String> {
-        let landing_type = listen.plan.hops.last().map(|hop| hop.to.as_str()).unwrap_or_default();
+        // Over a union, what lands is of the type the member it fired under
+        // lands on: the type the landing states, when one member's does.
+        let landings: Vec<String> = listen.plan.member_plans().iter().filter_map(|plan| plan.hops.last().map(|hop| hop.to.clone())).collect();
+        let stated = arrival.landing.as_ref().and_then(|landing| landing.get("recordType")).and_then(Js::as_str);
+        let landing_type = stated.filter(|stated| landings.iter().any(|to| to == stated)).or(landings.first().map(String::as_str)).unwrap_or_default();
         let records = crate::loop_breaker::records_of(adapter, arrival, landing_type);
         if records.is_empty() {
             return Ok(Vec::new());
@@ -1238,7 +1251,7 @@ impl Session {
     /// records its hops reported per record hang off. False:
     /// another process held it, and nothing was listed here.
     async fn re_resolve(&self, set: &FileSet, listen: &Listen) -> Result<bool, String> {
-        let before = (set.heads(listen), set.all_parents(listen));
+        let before = set.watched(listen);
         match crate::resolve::resolve(self, set, listen).await? {
             crate::resolve::Resolved::Elsewhere => return Ok(false),
             crate::resolve::Resolved::Kept(Some(line)) => eprintln!("listen-fire: {line}"),
@@ -1247,7 +1260,7 @@ impl Session {
         // A hop reported per record is subscribed to under each record it
         // hangs off, so parents that moved alone move webhooks too: a base
         // renamed into the WHERE with no table in it yet is watched for one.
-        if self.role.registers_webhooks() && (set.heads(listen), set.all_parents(listen)) != before {
+        if self.role.registers_webhooks() && set.watched(listen) != before {
             for line in crate::subscriptions::reconcile(self).await {
                 eprintln!("listen-fire: {line}");
             }
@@ -2478,7 +2491,7 @@ impl Session {
             return self.refuse(log, pairs, why);
         }
             let _holds = hold_all(&running, self.role.keep());
-        let taken = Rc::new(FileSet { files, parsed, catalog, listens, heads: Default::default(), parents: Default::default(), running, schemas, _holds });
+        let taken = Rc::new(FileSet { files, parsed, catalog, listens, watching: Default::default(), running, schemas, _holds });
         for line in crate::resolve::open(self, &taken, crate::resolve::Opening::Reloaded).await? {
             let _ = writeln!(log, "listen-fire: {line}");
         }

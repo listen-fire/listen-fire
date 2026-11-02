@@ -1,6 +1,12 @@
 // How a host watches one `listen to <traversal> fire f`: the checker writes
 // it on its answer (`listens`, crates/movement-parser/src/listen_plan.rs), and
 // both hosts read it instead of the listen's source.
+//
+// A listen through or onto a union is one listen, with one plan: its
+// traversal is planned once per member of each union it crosses (`members`),
+// each an ordinary single-typed traversal. The members are how a host
+// watches it; its identity, receipts, state and verdict on an arrival are
+// the one listen's.
 
 import { z } from 'zod';
 
@@ -20,10 +26,10 @@ export interface PlanHop {
   from: string;
   /** The record type it lands on. */
   to: string;
-  /** The union the hop's edge lands on, when this plan watches one member
-   *  of it (`to`): a listen over a union is one plan per member, and a host
-   *  keeps a listed hop's records only when they are of that member.
-   *  Absent when the edge lands on one record type. */
+  /** The union the hop's edge lands on, when the hop is one member's (`to`;
+   *  `ListenPlan.members`): a host keeps a listed hop's records only when
+   *  they are of that member. Absent when the edge lands on one record
+   *  type. */
   memberOf?: string;
   alias?: string;
   /** The part of its WHERE the edge's module takes, joined by AND. */
@@ -45,15 +51,45 @@ export interface ListenPlan {
   connection: string;
   /** That connection's module. */
   adapter: string;
-  /** Outermost first; the last is the listened edge. */
+  /** Outermost first; the last is the listened edge. Empty for a listen
+   *  through or onto a union, whose hops are each member's (`members`). */
   hops: PlanHop[];
   /** The earlier hops' edges whose records an arrival on the last edge
    *  carries, outermost first. Absent when it carries none. */
   carries?: string[];
+  /** A listen through or onto a union: its traversal once per member of
+   *  each union it crosses, two unions multiplying. Absent for any other
+   *  listen. */
+  members?: PlanMember[];
   /** The node the listen states its untyped landing is
    *  (`-[:Requests]-><Payment>`), by its name in the program: the host runs
    *  only what fits it. Absent when it states none. */
   landing?: string;
+}
+
+/** One member's traversal of a listen through or onto a union: every hop
+ *  lands on one record type. */
+export interface PlanMember {
+  /** Outermost first; the last is the listened edge. */
+  hops: PlanHop[];
+  /** As `ListenPlan.carries`, as this member's last edge declares them. */
+  carries?: string[];
+}
+
+/** The single-typed traversals a host watches a listen by: the plan itself,
+ *  or, for a listen over a union, one per member, each a plan of that
+ *  member's hops alone (`ListenPlan::member_plans`). Each is how the listen
+ *  is watched, never a listen of its own. */
+export function memberPlans(plan: ListenPlan): ListenPlan[] {
+  if (plan.members === undefined) return [plan];
+  const { members: _members, carries: _carries, ...shared } = plan;
+  return plan.members.map((member) => ({ ...shared, hops: member.hops, ...(member.carries !== undefined ? { carries: member.carries } : {}) }));
+}
+
+/** The edge a listen ends on, which each member's traversal ends on. */
+export function lastEdgeOf(plan: ListenPlan): string | undefined {
+  const hops = plan.members?.[0]?.hops ?? plan.hops;
+  return hops[hops.length - 1]?.edge;
 }
 
 export const planHopSchema: z.ZodType<PlanHop> = z
@@ -70,17 +106,28 @@ export const planHopSchema: z.ZodType<PlanHop> = z
   })
   .strict();
 
+const planMemberSchema: z.ZodType<PlanMember> = z
+  .object({
+    hops: z.array(planHopSchema).min(1),
+    carries: z.array(z.string()).optional(),
+  })
+  .strict();
+
 export const listenPlanSchema: z.ZodType<ListenPlan> = z
   .object({
     movement: z.string(),
     alias: z.string().optional(),
     connection: z.string(),
     adapter: z.string(),
-    hops: z.array(planHopSchema).min(1),
+    hops: z.array(planHopSchema),
     carries: z.array(z.string()).optional(),
+    members: z.array(planMemberSchema).min(1).optional(),
     landing: z.string().optional(),
   })
-  .strict();
+  .strict()
+  .refine((plan) => (plan.members === undefined ? plan.hops.length > 0 : plan.hops.length === 0 && plan.carries === undefined), {
+    message: "a plan's hops are its own, or, over a union, each member's: never both, never neither",
+  });
 
 /** One arrival on a listen's last edge, as the judge reads it
  *  (crates/movement-engine/src/listen_judge.rs). */

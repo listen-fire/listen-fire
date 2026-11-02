@@ -54,7 +54,7 @@ describe('the check', () => {
     expect(unsavedRefusal(unverified, validationOf(fileAs('Lead'), unverified))).toMatchObject({ errors: ['crm (timed out)'], message: expect.stringMatching(/could not be checked/) });
   });
 
-  it('counts the listens nothing fires by statement: one written over a union comes to a plan per member', () => {
+  it('counts a listen written over a union as one listen, with one plan', () => {
     const note: PositionSchema = { properties: { Text: 'text' }, edges: {} };
     const subject: PositionSchema = { properties: { Name: 'text' }, edges: { Notes: { target: 'Note', listenable: true, delivery: 'connection' } } };
     const snapshot: TenantCatalog['snapshot'] = {
@@ -80,7 +80,7 @@ function noted(n: <app-[:Note]->>) { return n.Text }
 listen to app-[:Subjects]->-[:Notes]-> fire noted
 listen to app-[:Subjects]->-[:Nowhere]-> fire noted
 `;
-    expect(listensOf(source, snapshot)).toEqual({ plans: [expect.objectContaining({ movement: 'noted' }), expect.objectContaining({ movement: 'noted' })], unwatched: 1 });
+    expect(listensOf(source, snapshot)).toEqual({ plans: [expect.objectContaining({ movement: 'noted', members: [expect.anything(), expect.anything()] })], written: 2 });
   });
 });
 

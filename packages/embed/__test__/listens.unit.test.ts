@@ -410,3 +410,94 @@ listen to stripe-[:Requests]-><Refund> fire refunded
     expect(await store.programs.list('acme')).toEqual([]);
   });
 });
+
+/** A desk whose subjects are each a Person or a Company, each owned by a
+ *  User, whose notes are announced. */
+function deskModule() {
+  const field = (name: string) => ({ fieldId: name, displayName: name, kind: 'string' as const, writable: false, required: false });
+  const owner = { fieldId: 'Owner', name: 'Owner', targetTypeId: 'User', cardinality: 'one' as const, direction: 'outgoing' as const, readable: true, writable: false };
+  const notes = { fieldId: 'Notes', name: 'Notes', targetTypeId: 'Note', cardinality: 'many' as const, direction: 'outgoing' as const, readable: false, listenable: true, delivery: 'connection' as const };
+  const create = (): Adapter => ({
+    adapterType: 'desk',
+    supportedTriggers: ['webhook'],
+    runtimeCapabilities: () => BASE_RUNTIME_CAPABILITIES,
+    listEntryPoints: async () => [
+      { typeId: 'Space', displayName: 'Space', collectionName: 'Spaces', readable: true, writable: false },
+      ...['Person', 'Company', 'User', 'Note'].map((typeId) => ({ typeId, displayName: typeId, readable: false, writable: false })),
+    ],
+    describe: async (typeId) => {
+      if (typeId === 'Space') return { typeId, displayName: 'Space', fields: [field('Id')], references: [{ fieldId: 'Subjects', name: 'Subjects', targetTypeId: 'Person', targetTypeIds: ['Person', 'Company'], cardinality: 'many' as const, direction: 'outgoing' as const, readable: true, writable: false }] };
+      if (typeId === 'Person' || typeId === 'Company') return { typeId, displayName: typeId, fields: [field('Name')], references: [owner] };
+      if (typeId === 'User') return { typeId, displayName: 'User', fields: [field('Id')], references: [notes] };
+      if (typeId === 'Note') return { typeId, displayName: 'Note', fields: [field('Text')], references: [] };
+      return null;
+    },
+    resolveEntity: async () => ({ candidates: [] }),
+    getFieldValue: async () => null,
+    getRelated: async () => [],
+    createRecord: async () => {
+      throw new Error('not used');
+    },
+    updateRecord: async () => {
+      throw new Error('not used');
+    },
+    deleteRecord: async () => {
+      throw new Error('not used');
+    },
+  });
+  return defineModule({
+    kind: 'adapter',
+    name: '@test/desk',
+    manifest: {
+      adapterType: 'desk',
+      displayName: 'Desk',
+      description: 'A desk.',
+      supportedTriggers: ['webhook'],
+      methods: ['listEntryPoints', 'describe', 'resolveEntity', 'getFieldValue', 'getRelated'],
+      declaredCredentials: ['desk'],
+      introspectedSchema: true,
+    },
+    credentials: [{ name: 'desk', kind: 'static', fields: [{ name: 'space' }] }],
+    create,
+  });
+}
+
+describe('a listen through a union on the embedded host', () => {
+  it('is one listen: saved as one, run once per arrival, and not judged once', async () => {
+    const warned: string[] = [];
+    const desk = deskModule();
+    const store = memoryEmbeddedHostStore();
+    const host = createEmbeddedHost({ modules: [desk], store, log: { warn: (message) => void warned.push(message) }, moduleHost: () => ({ validateResults: true }) });
+    await host.connect('acme', { name: 'main', module: desk, credential: { space: 'main' } });
+    const source = `import { desk } from adapters
+import { main } from credentials
+
+d = connect desk using main
+
+function noted(n: <d-[:Note]->>) {
+  return n.Text
+}
+
+listen to d-[:Spaces]->-[:Subjects]->-[:Owner]->-[:Notes]-> fire noted
+`;
+    expect(await host.save('acme', { name: 'notes', source })).toEqual({ saved: true, listens: 1 });
+    const [saved] = await store.programs.list('acme');
+    expect(saved?.listens).toHaveLength(1);
+    expect(saved?.listens[0]?.members?.map((member) => member.hops[1]?.to)).toEqual(['Company', 'Person']);
+
+    const note = (identity: string, recordType?: string): Arrival => ({ edge: 'Notes', key: 'user-1', identity, landing: { recordId: identity, ...(recordType !== undefined ? { recordType } : {}), fields: { Text: identity } } });
+    const { runs } = await host.dispatch('acme', { adapterType: 'desk', arrivals: [note('n1', 'Note')] });
+    expect(runs.map(({ movement, outcome }) => ({ movement, ok: outcome.ok }))).toEqual([{ movement: 'noted', ok: true }]);
+
+    const { runs: none, notJudged } = await host.dispatch('acme', { adapterType: 'desk', arrivals: [note('n2')] });
+    expect(none).toEqual([]);
+    expect(notJudged).toEqual([
+      expect.objectContaining({
+        program: 'notes',
+        movement: 'noted',
+        pipeline: listenPipeline({ file: 'notes', plan: saved?.listens[0] ?? { movement: '', connection: '', adapter: '', hops: [] }, credentialName: 'main' }),
+        reason: "the arrival desk reported on Notes does not say its record type, so it cannot be told from another record type's Notes (this listen's lands on Note)",
+      }),
+    ]);
+  });
+});

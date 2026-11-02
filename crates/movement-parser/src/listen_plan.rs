@@ -1,6 +1,14 @@
 //! How a host watches one `listen to <traversal> fire f`: the checker writes
 //! it, and both hosts read it instead of the listen's source.
+//!
+//! A listen through or onto a union is one listen, with one plan: its
+//! traversal is planned once per member of each union it crosses
+//! (`members`), each an ordinary single-typed traversal, as TypeScript
+//! distributes over a union. The members are how a host watches it;
+//! everything a person or a tool sees of it (its identity, its receipts, its
+//! state, its verdict on an arrival) is the one listen's.
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
@@ -20,13 +28,19 @@ pub struct ListenPlan {
     pub connection: String,
     /// That connection's module.
     pub adapter: String,
-    /// Outermost first; the last is the listened edge.
+    /// Outermost first; the last is the listened edge. Empty for a listen
+    /// through or onto a union, whose hops are each member's (`members`).
     pub hops: Vec<PlanHop>,
     /// The earlier hops' edges whose records an arrival on the last edge
     /// carries, outermost first, as its module declares them: the parents an
     /// arrival hands the judge.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub carries: Vec<String>,
+    /// A listen through or onto a union: its traversal once per member of
+    /// each union it crosses, in the catalog's order of members, two unions
+    /// multiplying. Absent for any other listen.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub members: Vec<PlanMember>,
     /// The node the listen states its untyped landing is
     /// (`-[:Requests]-><Payment>`), by its name in the program: the host
     /// runs only what fits it.
@@ -34,17 +48,55 @@ pub struct ListenPlan {
     pub landing: Option<String>,
 }
 
+/// One member's traversal of a listen through or onto a union: every hop
+/// lands on one record type, and a hop whose edge lands on the union says so
+/// (`PlanHop::member_of`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlanMember {
+    /// Outermost first; the last is the listened edge.
+    pub hops: Vec<PlanHop>,
+    /// As `ListenPlan::carries`, as this member's last edge declares them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub carries: Vec<String>,
+}
+
 impl ListenPlan {
     /// What makes two listens one: the plan, each hop's alias read as its
     /// place among the hops (`m` and `n` name one hop alike), and without the
     /// lane's name, which names a listen but is not what it listens to, as for
     /// the settings form. The checker refuses a second listen of one identity;
-    /// a host names each listen's receipts by it.
+    /// a host names each listen's receipts by it. A listen over a union has
+    /// one identity, of its members together.
     pub fn identity(&self) -> String {
-        let places: HashMap<&str, String> = self.hops.iter().enumerate().filter_map(|(i, hop)| hop.alias.as_deref().map(|a| (a, format!("#{i}")))).collect();
+        let hops = self.members.first().map_or(self.hops.as_slice(), |member| member.hops.as_slice());
+        let places: HashMap<&str, String> = hops.iter().enumerate().filter_map(|(i, hop)| hop.alias.as_deref().map(|a| (a, format!("#{i}")))).collect();
         let mut json = serde_json::to_value(ListenPlan { alias: None, ..self.clone() }).expect("a plan is always JSON");
         read_aliases_as_places(&mut json, &places);
         json.to_string()
+    }
+
+    /// The single-typed traversals a host watches the listen by: the plan
+    /// itself, or, for a listen over a union, one per member, each a plan of
+    /// that member's hops alone. Each is how the listen is watched, never a
+    /// listen of its own: it is named, kept and judged as the listen.
+    pub fn member_plans(&self) -> Vec<Cow<'_, ListenPlan>> {
+        if self.members.is_empty() {
+            return vec![Cow::Borrowed(self)];
+        }
+        let plan = |member: &PlanMember| ListenPlan { hops: member.hops.clone(), carries: member.carries.clone(), members: Vec::new(), ..self.clone() };
+        self.members.iter().map(|member| Cow::Owned(plan(member))).collect()
+    }
+
+    /// The edge the listen ends on, which each member's traversal ends on.
+    pub fn last_edge(&self) -> Option<&str> {
+        let hops = self.members.first().map_or(self.hops.as_slice(), |member| member.hops.as_slice());
+        hops.last().map(|hop| hop.edge.as_str())
+    }
+
+    /// How many hops the listen has, as each member's traversal has.
+    pub fn hop_count(&self) -> usize {
+        self.members.first().map_or(self.hops.len(), |member| member.hops.len())
     }
 }
 
@@ -81,9 +133,9 @@ pub struct PlanHop {
     pub from: String,
     /// The record type it lands on.
     pub to: String,
-    /// The union the hop's edge lands on, when this plan watches one member
-    /// of it (`to`): a listen over a union is one plan per member, and the
-    /// host keeps a listed hop's records only when they are of that member.
+    /// The union the hop's edge lands on, when the hop is one member's
+    /// (`to`; `ListenPlan::members`): the host keeps a listed hop's records
+    /// only when they are of that member.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub member_of: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

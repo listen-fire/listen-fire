@@ -7,7 +7,7 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { LANGUAGE_SEARCH_KINDS } from '@listen-fire/handbook';
-import type { ListenPlan } from 'engine-contracts';
+import { memberPlans, type ListenPlan } from 'engine-contracts';
 import type { CatalogSnapshot } from 'movement-lang';
 import { z } from 'zod';
 
@@ -89,7 +89,7 @@ function listenersView(plans: readonly ListenPlan[]) {
   return plans.map((plan) => ({
     system: plan.adapter,
     connection: plan.connection,
-    on: plan.hops.map((hop) => hop.edge).join(' -> '),
+    on: (memberPlans(plan)[0]?.hops ?? []).map((hop) => hop.edge).join(' -> '),
     movement: plan.movement,
     ...(plan.alias !== undefined ? { lane: plan.alias } : {}),
   }));
@@ -135,7 +135,7 @@ async function saveChecked(
     remaining = validation.diagnostics;
   }
   const listens = listensOf(input.source, snapshot);
-  const unplanned = listens?.unwatched ?? 0;
+  const unplanned = listens === null ? 0 : listens.written - listens.plans.length;
   const warnings: string[] =
     listens === null
       ? ['The text does not parse, so it declares no listens: it will not fire until a readable text is saved.']

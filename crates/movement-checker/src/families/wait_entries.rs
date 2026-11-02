@@ -134,7 +134,7 @@ impl Checker<'_> {
     /// several listens holds what each carries.
     pub(crate) fn stamp_carried_awaits(&mut self, program: &Program, plans: &[ListenPlan]) {
         let mut on_params: Vec<(Span, BTreeMap<String, BTreeSet<String>>)> = Vec::new();
-        for plan in plans {
+        for plan in plans.iter().flat_map(ListenPlan::member_plans) {
             let fired = program.statements.iter().find_map(|s| match s {
                 Statement::Movement(declared) if declared.name == plan.movement => declared.params.first(),
                 _ => None,
@@ -170,7 +170,7 @@ impl Checker<'_> {
     /// not at the arrival, as for a record no listen carries.
     pub(crate) fn report_carried_waits_counted_from_the_walk(&mut self) {
         let mut told = Vec::new();
-        for (span, plan) in self.listens.written_plans() {
+        for (span, plan) in self.listens.written_plans().iter().flat_map(|(span, plan)| plan.member_plans().into_iter().map(move |plan| (span, plan))) {
             for carried in &plan.carries {
                 let landings: Vec<&str> = plan.hops.iter().filter(|hop| &hop.edge == carried).map(|hop| hop.to.as_str()).collect();
                 if landings.len() < 2 {
@@ -197,7 +197,7 @@ impl Checker<'_> {
                 ));
             }
         }
-        // A listen over a union is one plan per member, each told alike.
+        // A listen over a union is watched once per member, each told alike.
         let mut said: Vec<(Span, String)> = Vec::new();
         for told in told {
             if !said.contains(&told) {

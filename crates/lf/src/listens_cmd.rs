@@ -10,7 +10,7 @@ use movement_checker::families::names::spell_name;
 use movement_parser::listen_plan::{HopJudged, ListenPlan};
 
 use crate::json::Js;
-use crate::resolve::{ListenState, counted, position_of};
+use crate::resolve::{ListenState, Resolution, counted, watched_count};
 use crate::routing::Listen;
 use crate::runs::{FileSet, Session};
 
@@ -77,21 +77,32 @@ fn line(set: &FileSet, listen: &Listen, state: Option<&ListenState>, cadence: Ca
     let plan = &listen.plan;
     let alias = plan.alias.as_ref().map(|a| format!(" as \"{a}\"")).unwrap_or_default();
     let path = path_of(plan);
-    let judged: Vec<&str> = plan
-        .hops
-        .iter()
-        .map(|hop| match hop.judged {
-            HopJudged::Arrival => "arrival",
-            HopJudged::Resolved => "resolved",
-            HopJudged::None => "unfiltered",
+    let members = plan.member_plans();
+    // Each hop as each member's traversal judges it, said once where they
+    // agree (`resolved/arrival` where they do not).
+    let judged: Vec<String> = (0..plan.hop_count())
+        .map(|i| {
+            let mut said: Vec<&str> = Vec::new();
+            for hop in members.iter().filter_map(|member| member.hops.get(i)) {
+                let judged = match hop.judged {
+                    HopJudged::Arrival => "arrival",
+                    HopJudged::Resolved => "resolved",
+                    HopJudged::None => "unfiltered",
+                };
+                if !said.contains(&judged) {
+                    said.push(judged);
+                }
+            }
+            said.join("/")
         })
         .collect();
     let resolved = state.map(|state| &state.resolution);
+    let never = Resolution::default();
     let watching = match (crate::edge_polls::resolves(listen), resolved.and_then(|r| r.resolved_at.as_deref())) {
         (false, _) => format!("watching all of {}", plan.connection),
-        (true, None) => format!("watching {}, never resolved", counted(resolved.map_or(0, |r| r.heads.len()), &position_of(listen))),
+        (true, None) => format!("watching {}, never resolved", watched_count(listen, resolved.unwrap_or(&never))),
         (true, Some(at)) => {
-            let heads = counted(resolved.map_or(0, |r| r.heads.len()), &position_of(listen));
+            let heads = watched_count(listen, resolved.unwrap_or(&never));
             match cadence {
                 Cadence::Kept => format!("watching {heads}, resolved {}", ago(at, now_ms)),
                 Cadence::AtOpenOnly => format!("watching {heads}, resolved at open only ({})", ago(at, now_ms)),
@@ -119,12 +130,22 @@ fn line(set: &FileSet, listen: &Listen, state: Option<&ListenState>, cadence: Ca
 }
 
 /// The listen's traversal as its plan holds it, each hop's WHERE whole
-/// (`f-[b:Boards WHERE b.Name == "Ops"]->-[n:Notes]->`).
+/// (`f-[b:Boards WHERE b.Name == "Ops"]->-[n:Notes]->`); past a hop onto a
+/// union, the members it is watched for (`-[:Subjects]-><Person | Company>`).
 fn path_of(plan: &ListenPlan) -> String {
-    let hops = plan.hops.iter().map(|hop| {
+    let members = plan.member_plans();
+    let Some(first) = members.first() else { return spell_name(&plan.connection) };
+    let hops = first.hops.iter().enumerate().map(|(i, hop)| {
         let alias = hop.alias.as_deref();
         let filter = hop.filter().map(|filter| format!(" WHERE {}", spell(&filter, alias))).unwrap_or_default();
-        format!("-[{}:{}{filter}]->", alias.map(spell_name).unwrap_or_default(), spell_name(&hop.edge))
+        let mut landings: Vec<&str> = Vec::new();
+        for to in members.iter().filter_map(|member| member.hops.get(i)).filter(|hop| hop.member_of.is_some()).map(|hop| hop.to.as_str()) {
+            if !landings.contains(&to) {
+                landings.push(to);
+            }
+        }
+        let onto = if landings.is_empty() { String::new() } else { format!("<{}>", landings.join(" | ")) };
+        format!("-[{}:{}{filter}]->{onto}", alias.map(spell_name).unwrap_or_default(), spell_name(&hop.edge))
     });
     format!("{}{}", spell_name(&plan.connection), hops.collect::<String>())
 }
@@ -132,16 +153,19 @@ fn path_of(plan: &ListenPlan) -> String {
 /// Whether the loop breaker can match the listen's arrivals to the writes
 /// that caused them (crate::loop_breaker): its edge declares `attributes`
 /// (each names the record it is about), or what it lands on is a record a
-/// write to its module makes.
+/// write to its module makes. Over a union, under every member.
 fn attributable(set: &FileSet, listen: &Listen) -> bool {
-    let Some(last) = listen.plan.hops.last() else { return false };
-    if crate::edge_polls::hop_schema(set, listen, last).is_some_and(|edge| Js::is_true(edge.get("attributes"))) {
-        return true;
-    }
     let schemas = set.catalog.get("adapters").and_then(|a| a.get(&listen.adapter)).and_then(|a| a.get("schemas"));
-    let Some(Js::Obj(schemas)) = schemas else { return false };
-    let written = |schema: &Js| ["writableRoots", "createShapes"].iter().any(|key| schema.get(key).and_then(|types| types.get(&last.to)).is_some());
-    schemas.values().any(written)
+    let attributed = |plan: &ListenPlan| {
+        let Some(last) = plan.hops.last() else { return false };
+        if crate::edge_polls::hop_schema(set, listen, last).is_some_and(|edge| Js::is_true(edge.get("attributes"))) {
+            return true;
+        }
+        let Some(Js::Obj(schemas)) = schemas else { return false };
+        let written = |schema: &Js| ["writableRoots", "createShapes"].iter().any(|key| schema.get(key).and_then(|types| types.get(&last.to)).is_some());
+        schemas.values().any(written)
+    };
+    listen.plan.member_plans().iter().all(|plan| attributed(plan))
 }
 
 /// Whether the module reads a record back (`readRecord`), so the engine

@@ -266,7 +266,8 @@ impl<R: Reader> LfDoors<'_, R> {
                     let at = head_of(HandedAt::Trigger(index), head);
                     owed.extend(awaits.own.iter().map(|edge| (run_id.clone(), edge.as_str(), caller, index, at)));
                 }
-                for (place, (parent, edges)) in arrival.parents.iter().zip(&awaits.carried).enumerate() {
+                for (place, parent) in arrival.parents.iter().enumerate() {
+                    let Some(edges) = parent.get("recordType").and_then(Js::as_str).and_then(|record_type| awaits.carried.get(record_type)) else { continue };
                     let Some(head) = head_of_landing(parent) else { continue };
                     let at = head_of(HandedAt::Carried(index, place), head);
                     owed.extend(edges.iter().map(|edge| (run_id.clone(), edge.as_str(), caller, index, at)));

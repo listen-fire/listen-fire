@@ -693,7 +693,7 @@ mod tests {
         assert_eq!(store.listen_state(&pipeline).unwrap().map(|s| s.resolution.resolved_at), Some(None), "held, never resolved");
         // The records a hop reported per record hangs off are kept beside the heads.
         let parents = std::collections::BTreeMap::from([("Tables".to_string(), vec!["appA".to_string(), "appB".to_string()]), ("Views".to_string(), Vec::new())]);
-        let resolved = Resolution { heads: vec!["b1".into(), "b2".into()], resolved_at: Some("2026-10-31T09:00:00.000Z".into()), failure: None, parents };
+        let resolved = Resolution { heads: vec!["b1".into(), "b2".into()], resolved_at: Some("2026-10-31T09:00:00.000Z".into()), failure: None, parents, members: Vec::new() };
         // A pause lands while the resolve reads: the resolve keeps it.
         store.set_listen_paused(&pipeline, Some("LISTEN_LOOP: …")).unwrap();
         assert!(store.save_listen_resolution(&pipeline, &token, &resolved).unwrap());

@@ -216,9 +216,7 @@ pub struct Answer {
     /// How the host watches each `listen to <traversal>`, in source order.
     pub listens: Vec<movement_parser::listen_plan::ListenPlan>,
     /// Where each `listen to <traversal>` the check refuses is written: it
-    /// has no plan, so no host watches it. One statement can plan several
-    /// listens (one per member of a union), so these, not a count of plans,
-    /// say which statements nothing fires.
+    /// has no plan, so no host watches it (never sent).
     pub unwatched: Vec<movement_parser::ast::Span>,
     pub unplaced: Vec<String>,
 }
@@ -232,9 +230,6 @@ impl Answer {
         }
         if !self.listens.is_empty() {
             answer["listens"] = serde_json::to_value(&self.listens).expect("a plan is always JSON");
-        }
-        if !self.unwatched.is_empty() {
-            answer["unwatched"] = serde_json::to_value(&self.unwatched).expect("a span is always JSON");
         }
         answer
     }

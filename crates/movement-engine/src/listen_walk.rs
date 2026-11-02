@@ -170,11 +170,11 @@ fn record_of(position: &Js) -> String {
     }
 }
 
-/// Whether a record `hop` lands on is one its plan watches: on a hop planned
-/// for one member of a union (`memberOf`), only a record of that member's
-/// type is, since the union's other members each have a plan of their own.
-/// A record that states no type is no member's, or every member's plan
-/// would watch it.
+/// Whether a record `hop` lands on is one its traversal watches: on a hop
+/// of one member's traversal of a union (`memberOf`), only a record of that
+/// member's type is, since the union's other members each have a traversal
+/// of their own. A record that states no type is no member's, or every
+/// member's traversal would watch it.
 fn of_member(hop: &PlanHop, position: &Js) -> bool {
     hop.member_of.is_none() || crate::traverse::record_type(position).is_some_and(|stated| stated == hop.to)
 }

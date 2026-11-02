@@ -214,7 +214,7 @@ async fn replay_through(session: &Session, set: &FileSet, listen: &Listen, row: 
     }
     // A listen whose earlier hops the host resolves runs only what lands
     // under the records it watches now: --force cannot run the rest.
-    if crate::edge_polls::resolves(listen) && landed.iter().all(|arrival| !set.heads(listen).contains(&arrival.key)) {
+    if landed.iter().all(|arrival| !set.watches_under(listen, &arrival.key)) {
         writeln!(out, "{named}: delivery {} brought nothing under a record it watches now: nothing to replay", row.id).map_err(io)?;
         return Ok(0);
     }

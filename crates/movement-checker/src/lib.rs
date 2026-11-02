@@ -128,7 +128,7 @@ pub fn check_json(source: &str, catalog_json: &str, options: CheckOptions) -> se
     }
 }
 
-/// `checkAnswer` as JSON: `{diagnostics, stamps, link?, listens?, unwatched?}` (crate::answer), or
+/// `checkAnswer` as JSON: `{diagnostics, stamps, link?}` (crate::answer), or
 /// `{error}` for a source that does not parse or a catalog that does not
 /// load. What a host answers the engine's `check.program` with.
 pub fn check_answer_json(source: &str, catalog_json: &str, options: CheckOptions) -> serde_json::Value {

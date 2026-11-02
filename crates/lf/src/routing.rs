@@ -2,7 +2,7 @@
 //! the project's files is the routing table, each as the checker plans it,
 //! and the arrival a run it fires is handed.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use std::rc::Rc;
 
@@ -60,10 +60,10 @@ pub type FieldIds = HashMap<String, serde_json::Map<String, Json>>;
 pub struct TriggerAwaits {
     /// Off the trigger itself (`opensWaits`).
     pub own: Vec<String>,
-    /// Off each record the arrival carries, aligned to its `parents` (the
-    /// plan's `carries`): the edges awaited off the record type its carried
-    /// hop lands on (`carriedAwaits`).
-    pub carried: Vec<Vec<String>>,
+    /// Off each record the arrival carries, by the record type it states
+    /// (`carriedAwaits`): an arrival that fires carries each record of the
+    /// type its hop lands on, whichever member of a union it is under.
+    pub carried: BTreeMap<String, Vec<String>>,
 }
 
 impl Listen {
@@ -99,7 +99,7 @@ impl Listen {
 
     /// Whether it is a listen on a traversal of `adapter` whose last edge is `edge`.
     pub fn is_on(&self, adapter: &str, edge: &str) -> bool {
-        self.adapter == adapter && self.plan.hops.last().is_some_and(|hop| hop.edge == edge)
+        self.adapter == adapter && self.plan.last_edge() == Some(edge)
     }
 
     /// Whether an arrival on `edge` of `adapter` is this listen's: it fires on
@@ -108,7 +108,7 @@ impl Listen {
     /// heads again (crate::resolve).
     pub fn hears_of(&self, adapter: &str, edge: &str) -> bool {
         self.is_on(adapter, edge)
-            || (self.adapter == adapter && self.plan.hops.iter().any(|hop| hop.judged == HopJudged::Resolved && hop.edge == edge))
+            || (self.adapter == adapter && self.plan.member_plans().iter().any(|plan| plan.hops.iter().any(|hop| hop.judged == HopJudged::Resolved && hop.edge == edge)))
     }
 
     /// Whether `arrival`, delivered for `credential`, fires this listen at
@@ -127,7 +127,7 @@ impl Listen {
             Some(ArrivedRecord { record_type: record.get("recordType").and_then(Js::as_str).map(str::to_string), fields, unknown })
         };
         let Some(landing) = arrival.landing.as_ref().and_then(arrived) else {
-            return Some(Verdict::Skips { hop: plan.hops.len().saturating_sub(1), reason: None });
+            return Some(Verdict::Skips { hop: plan.hop_count().saturating_sub(1), reason: None });
         };
         let planned = PlanArrival {
             edge: arrival.edge.clone(),
@@ -282,23 +282,15 @@ fn plans_of(file: &crate::sources::Parsed, program: &movement_parser::ast::Progr
 /// The edges the check stamps on the parameter of the function `plan` fires,
 /// declared in `program`, where a run of it enters its trigger
 /// (`/statements/<index>/params/0`): those awaited off the trigger, and off
-/// each record type its arrival carries, aligned to the plan's `carries` by
-/// the type each carried hop lands on.
+/// each record type its arrival carries, by that type.
 fn trigger_awaits_of(program: &movement_parser::ast::Program, stamps: &[serde_json::Value], plan: &ListenPlan) -> TriggerAwaits {
     let Some(index) = program.statements.iter().position(|s| matches!(s, Statement::Movement(declared) if declared.name == plan.movement)) else { return TriggerAwaits::default() };
     let path = format!("/statements/{index}/params/0");
     let on_param = || stamps.iter().filter(|stamp| stamp.get("file").is_none() && stamp.get("path").and_then(serde_json::Value::as_str) == Some(path.as_str()));
     let edges = |edges: &serde_json::Value| edges.as_array().map(|edges| edges.iter().filter_map(|e| e.as_str().map(str::to_string)).collect::<Vec<_>>());
     let own = on_param().find_map(|stamp| edges(stamp.get("opensWaits")?)).unwrap_or_default();
-    let by_type = on_param().find_map(|stamp| stamp.get("carriedAwaits"));
-    let carried = plan
-        .carries
-        .iter()
-        .map(|carried| {
-            let landed = plan.hops.iter().find(|hop| &hop.edge == carried).map(|hop| hop.to.as_str());
-            landed.and_then(|to| by_type?.get(to)).and_then(edges).unwrap_or_default()
-        })
-        .collect();
+    let by_type = on_param().find_map(|stamp| stamp.get("carriedAwaits")?.as_object());
+    let carried = by_type.into_iter().flatten().filter_map(|(record_type, awaited)| Some((record_type.clone(), edges(awaited)?))).collect();
     TriggerAwaits { own, carried }
 }
 

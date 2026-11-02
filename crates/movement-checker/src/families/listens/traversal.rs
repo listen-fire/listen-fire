@@ -5,9 +5,10 @@
 //! the last (judged on each arrival, or by listing the hop's members).
 //!
 //! A listen through or onto a union is planned once per member, as
-//! TypeScript distributes over a union: each member's plan is an ordinary
-//! one, checked against that member's own edges, and two unions on one path
-//! multiply.
+//! TypeScript distributes over a union: each member's traversal is an
+//! ordinary one, checked against that member's own edges, and two unions on
+//! one path multiply. It is still one listen, with one plan holding its
+//! members' traversals.
 //!
 //! Codes: MOV_LISTEN_EDGE_NOT_LISTENABLE, MOV_LISTEN_HOP_NOT_ITERABLE,
 //! MOV_LISTEN_UNWATCHABLE, MOV_LISTEN_IMPURE_WHERE, and
@@ -17,7 +18,7 @@
 
 use movement_parser::ast::{ListenDeclaration, PathHead, PathRoot, TypeRef};
 use movement_parser::catalog::types::{CollectionSchema, Delivery, EdgeSchema, InstanceSchema, PositionSchema};
-use movement_parser::listen_plan::{HopJudged, ListenPlan, PlanHop};
+use movement_parser::listen_plan::{HopJudged, ListenPlan, PlanHop, PlanMember};
 use movement_parser::lowering::expression::{EdgeStep, Expression, LogicalOp, TraversalStep};
 
 use crate::checker::Checker;
@@ -137,10 +138,10 @@ impl Checker<'_> {
         self.diagnostics.extend(walked.into_iter().filter(|d| d.code != codes::AWAIT_IMPURE_WHERE));
         let landing = statement.landing.as_ref().and_then(|stated| self.landing_node(stated, scope));
         let stated = landing.and(statement.landing.as_ref()).map(|stated| stated.graph.clone());
-        let plans: Option<Vec<ListenPlan>> = instance
+        let plan: Option<ListenPlan> = instance
             .as_ref()
             .and_then(|instance| self.plan_listen(statement, path, instance, &steps, scope))
-            .map(|plans| plans.into_iter().map(|plan| ListenPlan { landing: stated.clone(), ..plan }).collect());
+            .map(|plan| ListenPlan { landing: stated.clone(), ..plan });
         if let Some(walk) = &walk {
             // Past a union whose members land on different record types the
             // walk types nothing: what lands is one of each member's landings.
@@ -163,14 +164,11 @@ impl Checker<'_> {
             }
             self.check_listen_fires(statement, path, &steps, Landed { landed, members: &members }, landing, scope);
         }
-        // Each member's plan is its own listen; the listen as written is a
-        // duplicate when any of them is another listen's.
-        let identities: std::collections::BTreeSet<String> = match &plans {
-            Some(plans) => plans.iter().map(ListenPlan::identity).collect(),
-            None => std::iter::once(format!("{}::{}", spell_path_head(path), statement.movement)).collect(),
+        let identity = match &plan {
+            Some(plan) => plan.identity(),
+            None => format!("{}::{}", spell_path_head(path), statement.movement),
         };
-        let fresh: Vec<bool> = identities.into_iter().map(|identity| self.listens.identities.insert(format!("path::{identity}"))).collect();
-        if fresh.contains(&false) {
+        if !self.listens.identities.insert(format!("path::{identity}")) {
             self.report(
                 codes::LISTEN_DUPLICATE,
                 format!("Duplicate listener — an identical 'listen to {}' already fires '{}'", spell_path_head(path), statement.movement),
@@ -201,7 +199,7 @@ impl Checker<'_> {
         // checks clean is watched: one with no plan says why where it is
         // written, never checks clean and then never fires.
         let clean = self.diagnostics[before.min(self.diagnostics.len())..].iter().all(|d| d.severity.is_some());
-        if clean && plans.is_none() {
+        if clean && plan.is_none() {
             match &instance {
                 Some(described) if !described.schema.collections.is_empty() => {
                     let message = format!("listen-fire can't plan how to watch 'listen to {}' — this is a gap in the checker, so please report it with this program", spell_path_head(path));
@@ -216,8 +214,8 @@ impl Checker<'_> {
                 }
             }
         }
-        match plans.filter(|_| clean) {
-            Some(plans) => self.listens.plans.extend(plans.into_iter().map(|plan| (statement.span, plan))),
+        match plan.filter(|_| clean) {
+            Some(plan) => self.listens.plans.push((statement.span, plan)),
             None => self.listens.unwatched.push(statement.span),
         }
     }
@@ -245,9 +243,9 @@ impl Checker<'_> {
 
     /// The hops as the connection's module declares them, once per member
     /// of each union they land on, each refused where a listen cannot take
-    /// it, and a plan per member when every hop of every member can be
-    /// watched.
-    fn plan_listen(&mut self, statement: &ListenDeclaration, path: &PathHead, instance: &Instance, steps: &[EdgeStep], scope: ScopeId) -> Option<Vec<ListenPlan>> {
+    /// it, and the listen's one plan when every hop of every member can be
+    /// watched: a listen over a union holds each member's hops.
+    fn plan_listen(&mut self, statement: &ListenDeclaration, path: &PathHead, instance: &Instance, steps: &[EdgeStep], scope: ScopeId) -> Option<ListenPlan> {
         // The walk reported the edge it does not know.
         let members = declared_hops(&instance.schema, steps)?;
         let before = self.diagnostics.len();
@@ -265,10 +263,10 @@ impl Checker<'_> {
                 watchable = false;
             }
         }
-        let planned: Option<Vec<ListenPlan>> = match watchable {
+        let planned: Option<ListenPlan> = match watchable {
             true => {
                 let plans: Vec<Option<ListenPlan>> = members.iter().map(|hops| self.plan_member(statement, path, instance, hops)).collect();
-                plans.into_iter().collect()
+                plans.into_iter().collect::<Option<Vec<ListenPlan>>>().and_then(one_listen)
             }
             false => None,
         };
@@ -376,6 +374,7 @@ impl Checker<'_> {
             adapter: module.to_string(),
             hops: planned,
             carries: carries.to_vec(),
+            members: Vec::new(),
             landing: None,
         })
     }
@@ -597,6 +596,19 @@ fn member_landings(instance: &InstanceRef, path: &PathHead, steps: &[EdgeStep]) 
         })
         .collect();
     landings.unwrap_or_default()
+}
+
+/// The one plan of a listen planned once per member: the member's own where
+/// its hops cross no union, else one holding each member's hops. None for
+/// no member.
+fn one_listen(mut plans: Vec<ListenPlan>) -> Option<ListenPlan> {
+    let crosses_a_union = plans.iter().any(|plan| plan.hops.iter().any(|hop| hop.member_of.is_some()));
+    if !crosses_a_union {
+        return (plans.len() == 1).then(|| plans.pop()).flatten();
+    }
+    let members = plans.iter_mut().map(|plan| PlanMember { hops: std::mem::take(&mut plan.hops), carries: std::mem::take(&mut plan.carries) }).collect();
+    let first = plans.into_iter().next()?;
+    Some(ListenPlan { members, ..first })
 }
 
 /// Each hop's edge as the schema declares it, from the connection down: one

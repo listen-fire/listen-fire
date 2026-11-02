@@ -10,7 +10,7 @@
 
 import { createHash } from 'node:crypto';
 
-import { listenPlanSchema, verdictSchema } from 'engine-contracts';
+import { lastEdgeOf, listenPlanSchema, verdictSchema } from 'engine-contracts';
 import { RUN_HOST_UNITS, callJudgeArrival, callLandingMisfits, callLandingNode, callListenIdentity, entryPositionKeyOf, instanceSchemaKey, unwrapCredentialArg } from 'movement-lang';
 import { z } from 'zod';
 
@@ -185,7 +185,7 @@ export function plannedListensOf(input: { file: string; program: Program; plans:
  */
 export function listenFires(listen: PlannedListen, arrival: Arrival, delivery: { adapterType: string; credentialName?: string }, nowMs: number): Verdict | null {
   const { plan } = listen;
-  if ('gone' in arrival || plan.adapter !== delivery.adapterType || plan.hops[plan.hops.length - 1]?.edge !== arrival.edge) return null;
+  if ('gone' in arrival || plan.adapter !== delivery.adapterType || lastEdgeOf(plan) !== arrival.edge) return null;
   if (!listenHearsCredential(listen.credentialName, delivery.credentialName) || arrival.notFor === listen.pipeline) return null;
   return judgeArrival(
     plan,
@@ -264,10 +264,12 @@ function arrivedRecord(landing: AwaitLanding): ArrivedRecord {
 
 /** The edges a fired function waits on off the records its run is handed at
  *  delivery: off the trigger itself (`own`), and off each record the
- *  arrival carries, aligned to its `parents` (`carried`). */
+ *  arrival carries, by the record type it states (`carried`): an arrival
+ *  that fires carries each record of the type its hop lands on, whichever
+ *  member of a union it is under. */
 export interface TriggerAwaits {
   own: string[];
-  carried: string[][];
+  carried: Readonly<Record<string, readonly string[]>>;
 }
 
 /** The edges the check stamps on the parameter of the function `plan` fires,
@@ -275,21 +277,16 @@ export interface TriggerAwaits {
  *  the waits a delivery opens for the run as it is kept
  *  (crates/lf/src/routing.rs `trigger_awaits_of`). Those awaited off the
  *  trigger (`opensWaits`), and off each record type the arrival carries
- *  (`carriedAwaits`), aligned to the plan's `carries` by the type each
- *  carried hop lands on. `stamps` is the check's of `program`. */
+ *  (`carriedAwaits`), by that type. `stamps` is the check's of `program`. */
 export function triggerAwaitsOf(input: { program: Program; stamps: CheckAnswer['stamps']; plan: ListenPlan }): TriggerAwaits {
   const { plan } = input;
   const index = input.program.statements.findIndex((statement) => statement.kind === 'movement' && statement.name === plan.movement);
-  if (index === -1) return { own: [], carried: [] };
+  if (index === -1) return { own: [], carried: {} };
   const path = `/statements/${index}/params/0`;
   const onParam = input.stamps.filter((stamp) => stamp.file === undefined && stamp.path === path);
   // The parameter's one stamp of each, as listen-fire reads them (`trigger_awaits_of`).
   const own = onParam.flatMap((stamp) => ('opensWaits' in stamp ? [[...stamp.opensWaits]] : []))[0] ?? [];
-  const byType = onParam.flatMap((stamp) => ('carriedAwaits' in stamp ? [stamp.carriedAwaits] : []))[0] ?? {};
-  const carried = (plan.carries ?? []).map((edge) => {
-    const landed = plan.hops.find((hop) => hop.edge === edge)?.to;
-    return landed === undefined ? [] : [...(byType[landed] ?? [])];
-  });
+  const carried = onParam.flatMap((stamp) => ('carriedAwaits' in stamp ? [stamp.carriedAwaits] : []))[0] ?? {};
   return { own, carried };
 }
 

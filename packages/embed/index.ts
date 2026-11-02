@@ -14,7 +14,7 @@
 
 import { createHash, randomUUID } from 'node:crypto';
 
-import { WireArrival, listenPlanSchema, tenantIdOf, type Arrival, type AwaitHead, type AwaitLanding, type ListenPlan, type RunInput, type SegmentLimits } from 'engine-contracts';
+import { WireArrival, listenPlanSchema, memberPlans, tenantIdOf, type Arrival, type AwaitHead, type AwaitLanding, type ListenPlan, type RunInput, type SegmentLimits } from 'engine-contracts';
 import {
   adapterInProcess,
   inProcessValidationDefault,
@@ -571,7 +571,11 @@ export function createEmbeddedHost(options: EmbeddedHostOptions): EmbeddedHost {
       const awaits = triggerAwaitsOf({ program: run.program, stamps, plan: run.listen.plan });
       const handed: Array<[string, AwaitHead | undefined, readonly string[]]> = [
         [`${run.index}`, headOf(run.arrival.landing), awaits.own],
-        ...awaits.carried.map((edges, place): [string, AwaitHead | undefined, readonly string[]] => [`${run.index}:${place}`, headOf(run.arrival.parents?.[place] ?? null), edges]),
+        ...(run.arrival.parents ?? []).map((parent, place): [string, AwaitHead | undefined, readonly string[]] => [
+          `${run.index}:${place}`,
+          headOf(parent),
+          (parent?.recordType !== undefined ? awaits.carried[parent.recordType] : undefined) ?? [],
+        ]),
       ];
       for (const [at, head, edges] of handed) {
         if (head === undefined) continue;
@@ -1263,7 +1267,7 @@ function headOf(landing: AwaitLanding | null): AwaitHead | undefined {
  *  arrival cannot be judged by (a `resolved` hop): judged here with that hop
  *  unjudged, it would fire under every member. */
 function unfiredHere(plan: ListenPlan): string[] {
-  const resolved = plan.hops.filter((hop) => hop.judged === 'resolved').map((hop) => hop.edge);
+  const resolved = [...new Set(memberPlans(plan).flatMap((member) => member.hops.filter((hop) => hop.judged === 'resolved').map((hop) => hop.edge)))];
   if (resolved.length === 0) return [];
   return [
     `the listen that fires ${plan.movement} filters ${resolved.map((edge) => `\`${edge}\``).join(', ')} by a WHERE its module's arrivals do not carry the record for: only listen-fire lists those members to judge it, and this host would fire under every one. Filter that hop on the landing's fields instead, or run the listen on listen-fire`,

@@ -1,5 +1,5 @@
 {
-  "about": "Whether an arrival fires a listen, by its plan's filters. Each plan is the checker's answer for its listen's source against `catalog` (both runners check that it still is). Only hops judged on arrival are judged, each against the record the arrival carries for it: `landing` for the last hop, `parents` (aligned to the plan's `carries`) for earlier ones. Each record states its `recordType`, which must be the record type its hop lands on (`to`): one edge name may hang off several record types (`pay`'s Customer and Invoice each have `Changes`), and a record of another type skips at its hop, the landing judged first; a record that states none is undecided. A hop's checked part is always evaluated; its taken part too, unless `takenApplied` says the module applied it. `now` is the instant WITHIN measures from. The verdict is `{fires: true}`, `{skips: n}` (the hop whose filter fails, outermost 0; with a `reason` when the record carried for that hop is of another record type, so no filter was read), or `{undecided: reason}` (the host logs it and runs nothing). Held by listen-fire's Rust (crates/movement-engine/src/listen_judge.rs, judge_arrival), the engine's TypeScript (judgeArrival, through the wasm) and the hosted product. A read on through a record a field holds (`c.Current.Stage`) reads that field of the landing, then the member of what it holds; a record absent reads its members absent. The checker has the listen test a record present before it reads through it (`exists(c.Current) AND c.Current.Stage == …`), and an operand of AND or OR is read only when the operands before it leave the answer open, so a read the test guards is never read on an absent record. A record may name the fields its module could not read (`unknown`): a part of the filter reading one is undecided, whatever `fields` holds for it, never read as absent; AND, OR and NOT are three-valued, so an OR one side holds holds and an AND one side fails fails, in either order; a hop that fails still decides.",
+  "about": "Whether an arrival fires a listen, by its plan's filters. Each plan is the checker's answer for its listen's source against `catalog` (both runners check that it still is). Only hops judged on arrival are judged, each against the record the arrival carries for it: `landing` for the last hop, `parents` (aligned to the plan's `carries`) for earlier ones. Each record states its `recordType`, which must be the record type its hop lands on (`to`): one edge name may hang off several record types (`pay`'s Customer and Invoice each have `Changes`), and a record of another type skips at its hop, the landing judged first; a record that states none is undecided. A hop's checked part is always evaluated; its taken part too, unless `takenApplied` says the module applied it. `now` is the instant WITHIN measures from. The verdict is `{fires: true}`, `{skips: n}` (the hop whose filter fails, outermost 0; with a `reason` when the record carried for that hop is of another record type, so no filter was read), or `{undecided: reason}` (the host logs it and runs nothing). A listen through or onto a union is one plan holding each member's traversal (`members`), judged once: it fires when one member's does, a record of another member's type being that member's to decide; it is undecided when one member cannot tell; it skips when every member does, by a filter when one member's record types matched, else by type, naming every member's. Held by listen-fire's Rust (crates/movement-engine/src/listen_judge.rs, judge_arrival), the engine's TypeScript (judgeArrival, through the wasm) and the hosted product. A read on through a record a field holds (`c.Current.Stage`) reads that field of the landing, then the member of what it holds; a record absent reads its members absent. The checker has the listen test a record present before it reads through it (`exists(c.Current) AND c.Current.Stage == …`), and an operand of AND or OR is read only when the operands before it leave the answer open, so a read the test guards is never read on an absent record. A record may name the fields its module could not read (`unknown`): a part of the filter reading one is undecided, whatever `fields` holds for it, never read as absent; AND, OR and NOT are three-valued, so an OR one side holds holds and an AND one side fails fails, in either order; a hop that fails still decides.",
   "catalog": {
     "adapters": {
       "chat": {
@@ -399,6 +399,28 @@
                 }
               }
             },
+            "writableRoots": {}
+          }
+        }
+      },
+      "crm": {
+        "canFire": false,
+        "constructionArgs": [],
+        "schemas": {
+          "": {
+            "positions": {
+              "Person": {
+                "properties": { "Name": "text" },
+                "edges": { "Notes": { "target": "Note", "listenable": true, "identity": "Id", "delivery": "connection", "carries": ["Subjects"] } }
+              },
+              "Company": {
+                "properties": { "Name": "text" },
+                "edges": { "Notes": { "target": "Note", "listenable": true, "identity": "Id", "delivery": "connection", "carries": ["Subjects"] } }
+              },
+              "Note": { "properties": { "Id": "text", "Text": "text" }, "edges": {} }
+            },
+            "unions": { "Subject": ["Person", "Company"] },
+            "collections": { "Subjects": { "target": "Subject" } },
             "writableRoots": {}
           }
         }
@@ -1612,6 +1634,113 @@
         ],
         "movement": "neither"
       }
+    },
+    "subjects": {
+      "source": "import { crm as crm_module } from adapters; crm = connect crm_module\nfunction noted(n: <crm-[:Note]->>) { return n.Text }\nlisten to crm-[s:Subjects WHERE s.Name == \"Acme\"]->-[n:Notes WHERE n.Text != \"skip\"]-> fire noted\n",
+      "plan": {
+        "adapter": "crm",
+        "connection": "crm",
+        "hops": [],
+        "members": [
+          {
+            "carries": [
+              "Subjects"
+            ],
+            "hops": [
+              {
+                "alias": "s",
+                "checked": {
+                  "left": {
+                    "fieldOnly": true,
+                    "propertyTypeId": "Name",
+                    "type": "edge_property"
+                  },
+                  "op": "eq",
+                  "right": {
+                    "type": "static",
+                    "value": "Acme"
+                  },
+                  "type": "compare"
+                },
+                "edge": "Subjects",
+                "from": "",
+                "judged": "arrival",
+                "memberOf": "Subject",
+                "to": "Person"
+              },
+              {
+                "alias": "n",
+                "checked": {
+                  "left": {
+                    "fieldOnly": true,
+                    "propertyTypeId": "Text",
+                    "type": "edge_property"
+                  },
+                  "op": "neq",
+                  "right": {
+                    "type": "static",
+                    "value": "skip"
+                  },
+                  "type": "compare"
+                },
+                "edge": "Notes",
+                "from": "Person",
+                "judged": "arrival",
+                "to": "Note"
+              }
+            ]
+          },
+          {
+            "carries": [
+              "Subjects"
+            ],
+            "hops": [
+              {
+                "alias": "s",
+                "checked": {
+                  "left": {
+                    "fieldOnly": true,
+                    "propertyTypeId": "Name",
+                    "type": "edge_property"
+                  },
+                  "op": "eq",
+                  "right": {
+                    "type": "static",
+                    "value": "Acme"
+                  },
+                  "type": "compare"
+                },
+                "edge": "Subjects",
+                "from": "",
+                "judged": "arrival",
+                "memberOf": "Subject",
+                "to": "Company"
+              },
+              {
+                "alias": "n",
+                "checked": {
+                  "left": {
+                    "fieldOnly": true,
+                    "propertyTypeId": "Text",
+                    "type": "edge_property"
+                  },
+                  "op": "neq",
+                  "right": {
+                    "type": "static",
+                    "value": "skip"
+                  },
+                  "type": "compare"
+                },
+                "edge": "Notes",
+                "from": "Company",
+                "judged": "arrival",
+                "to": "Note"
+              }
+            ]
+          }
+        ],
+        "movement": "noted"
+      }
     }
   },
   "cases": [
@@ -1678,6 +1807,12 @@
     {"case": "an OR one side holds fires though its other side could not be read, that side second", "plan": "either", "arrival": {"edge": "Changes", "key": "tblCAND01", "landing": {"recordType": "Change", "fields": {"Kind": "created"}, "unknown": ["Id"]}}, "now": "2026-10-31T10:00:00Z", "verdict": {"fires": true}},
     {"case": "an OR no side holds, one side unread, is undecided", "plan": "either", "arrival": {"edge": "Changes", "key": "tblCAND01", "landing": {"recordType": "Change", "fields": {"Id": "2:recB"}, "unknown": ["Kind"]}}, "now": "2026-10-31T10:00:00Z", "verdict": {"undecided": "rows could not read Kind of the arrival on Changes, which this listen's filter reads"}},
     {"case": "an AND one side fails fails though its other side could not be read, in either order", "plan": "neither", "arrival": {"edge": "Changes", "key": "tblCAND01", "landing": {"recordType": "Change", "fields": {"Kind": "created"}, "unknown": ["Id"]}}, "now": "2026-10-31T10:00:00Z", "verdict": {"skips": 1}},
-    {"case": "an AND one side fails fails though its other side could not be read, the unread field the other", "plan": "neither", "arrival": {"edge": "Changes", "key": "tblCAND01", "landing": {"recordType": "Change", "fields": {"Id": "z"}, "unknown": ["Kind"]}}, "now": "2026-10-31T10:00:00Z", "verdict": {"skips": 1}}
+    {"case": "an AND one side fails fails though its other side could not be read, the unread field the other", "plan": "neither", "arrival": {"edge": "Changes", "key": "tblCAND01", "landing": {"recordType": "Change", "fields": {"Id": "z"}, "unknown": ["Kind"]}}, "now": "2026-10-31T10:00:00Z", "verdict": {"skips": 1}},
+    {"case": "a listen through a union: a note under a Person fires, judged by the Person's traversal", "plan": "subjects", "arrival": {"edge": "Notes", "key": "p1", "landing": {"recordType": "Note", "fields": {"Id": "n1", "Text": "hi"}}, "parents": [{"recordType": "Person", "fields": {"Name": "Acme"}}]}, "now": "2026-10-31T10:00:00Z", "verdict": {"fires": true}},
+    {"case": "a listen through a union: a note under a Company fires the same listen, judged by the Company's", "plan": "subjects", "arrival": {"edge": "Notes", "key": "c1", "landing": {"recordType": "Note", "fields": {"Id": "n2", "Text": "hi"}}, "parents": [{"recordType": "Company", "fields": {"Name": "Acme"}}]}, "now": "2026-10-31T10:00:00Z", "verdict": {"fires": true}},
+    {"case": "a listen through a union: a note under a Company of another name skips at Subjects by the filter, not by type", "plan": "subjects", "arrival": {"edge": "Notes", "key": "c2", "landing": {"recordType": "Note", "fields": {"Id": "n3", "Text": "hi"}}, "parents": [{"recordType": "Company", "fields": {"Name": "Other"}}]}, "now": "2026-10-31T10:00:00Z", "verdict": {"skips": 0}},
+    {"case": "a listen through a union: a note the filter on Notes refuses skips at Notes", "plan": "subjects", "arrival": {"edge": "Notes", "key": "p1", "landing": {"recordType": "Note", "fields": {"Id": "n4", "Text": "skip"}}, "parents": [{"recordType": "Person", "fields": {"Name": "Acme"}}]}, "now": "2026-10-31T10:00:00Z", "verdict": {"skips": 1}},
+    {"case": "a listen through a union: a note under a record of no member's type skips by type, naming every member", "plan": "subjects", "arrival": {"edge": "Notes", "key": "l1", "landing": {"recordType": "Note", "fields": {"Id": "n5", "Text": "hi"}}, "parents": [{"recordType": "Lead", "fields": {"Name": "Acme"}}]}, "now": "2026-10-31T10:00:00Z", "verdict": {"skips": 0, "reason": "the Subjects record it carries has record type Lead, not Person or Company, which this listen's Subjects lands on"}},
+    {"case": "a listen through a union: a note whose subject states no record type is undecided, once, naming every member", "plan": "subjects", "arrival": {"edge": "Notes", "key": "p1", "landing": {"recordType": "Note", "fields": {"Id": "n6", "Text": "hi"}}, "parents": [{"fields": {"Name": "Acme"}}]}, "now": "2026-10-31T10:00:00Z", "verdict": {"undecided": "the arrival crm reported on Notes carries a Subjects record that does not say its record type (this listen's Subjects lands on Person or Company)"}}
   ]
 }

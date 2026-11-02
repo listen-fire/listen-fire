@@ -122,28 +122,68 @@ pub fn named_fields(fields: &Json, field_ids: &serde_json::Map<String, Json>) ->
 
 /// Whether `arrival` fires the listen `plan` describes, `now_ms` (epoch ms)
 /// the instant `WITHIN` measures from.
+///
+/// A listen through or onto a union is judged once, as an OR of its
+/// members' traversals: it fires when one member's does, and a record of
+/// another member's type is that member's to decide, never a skip of the
+/// listen. Otherwise it is undecided when one member cannot tell, and skips
+/// when every member does: by a filter, when one member's records were of
+/// its types; else by type, naming every member's.
 pub fn judge_arrival(plan: &ListenPlan, arrival: &PlanArrival, now_ms: f64) -> Verdict {
+    if plan.members.is_empty() {
+        return judge_traversal(plan, plan, arrival, now_ms);
+    }
+    let verdicts: Vec<Verdict> = plan.member_plans().iter().map(|member| judge_traversal(plan, member, arrival, now_ms)).collect();
+    let by_type = |verdict: &Verdict| matches!(verdict, Verdict::Skips { reason: Some(_), .. });
+    if let Some(decided) = verdicts.iter().find(|v| **v == Verdict::Fires).or_else(|| verdicts.iter().find(|v| matches!(v, Verdict::Undecided { .. }))).or_else(|| verdicts.iter().find(|v| !by_type(v))) {
+        return decided.clone();
+    }
+    let hops: Vec<usize> = verdicts.iter().filter_map(|v| if let Verdict::Skips { hop, .. } = v { Some(*hop) } else { None }).collect();
+    let Some(&hop) = hops.first() else { return Verdict::Undecided { reason: format!("the listen firing '{}' has no member to judge an arrival by", plan.movement) } };
+    let reason = match (hops.iter().all(|h| *h == hop), stated_at(plan, arrival, hop)) {
+        (true, Some(stated)) => another_type(plan, &arrival.edge, hop, stated),
+        _ => {
+            let mut reasons: Vec<String> = Vec::new();
+            for verdict in verdicts {
+                if let Verdict::Skips { reason: Some(reason), .. } = verdict
+                    && !reasons.contains(&reason)
+                {
+                    reasons.push(reason);
+                }
+            }
+            reasons.join("; ")
+        }
+    };
+    Verdict::Skips { hop, reason: Some(reason) }
+}
+
+/// The record type the record an arrival carries for hop `i` states.
+fn stated_at<'a>(plan: &ListenPlan, arrival: &'a PlanArrival, i: usize) -> Option<&'a str> {
+    let member = plan.member_plans().into_iter().next()?;
+    let record = if i + 1 == member.hops.len() { Some(&arrival.landing) } else { carried_record(&member, arrival, i) };
+    record?.record_type.as_deref()
+}
+
+/// The record an arrival carries for earlier hop `i`: an edge crossed twice
+/// (a folder in a folder) is carried twice, and the k-th hop on a name reads
+/// the k-th carried record of it.
+fn carried_record<'a>(plan: &ListenPlan, arrival: &'a PlanArrival, i: usize) -> Option<&'a ArrivedRecord> {
+    let hop = &plan.hops[i];
+    let nth = plan.hops[..i].iter().filter(|earlier| earlier.edge == hop.edge).count();
+    let at = plan.carries.iter().enumerate().filter(|(_, edge)| **edge == hop.edge).nth(nth)?.0;
+    arrival.parents.get(at)?.as_ref()
+}
+
+/// Whether `arrival` fires one traversal of the listen `whole`: `plan`, the
+/// listen's own or one member's.
+fn judge_traversal(whole: &ListenPlan, plan: &ListenPlan, arrival: &PlanArrival, now_ms: f64) -> Verdict {
     let Some(last) = plan.hops.len().checked_sub(1) else {
         return Verdict::Undecided { reason: format!("the listen firing '{}' has no hops to judge an arrival by", plan.movement) };
     };
     if arrival.edge != plan.hops[last].edge {
         return Verdict::Skips { hop: last, reason: None };
     }
-    let carried: Vec<Option<&ArrivedRecord>> = plan
-        .hops
-        .iter()
-        .enumerate()
-        .map(|(i, hop)| {
-            if i == last {
-                return Some(&arrival.landing);
-            }
-            // An edge crossed twice (a folder in a folder) is carried twice:
-            // the k-th hop on a name reads the k-th carried record of it.
-            let nth = plan.hops[..i].iter().filter(|earlier| earlier.edge == hop.edge).count();
-            let at = plan.carries.iter().enumerate().filter(|(_, edge)| **edge == hop.edge).nth(nth)?.0;
-            arrival.parents.get(at)?.as_ref()
-        })
-        .collect();
+    let carried: Vec<Option<&ArrivedRecord>> = (0..plan.hops.len()).map(|i| if i == last { Some(&arrival.landing) } else { carried_record(plan, arrival, i) }).collect();
     let mut undecided = None;
     // The landing first: an arrival on another record type's edge of the
     // same name is not this listen's, whatever it carries.
@@ -152,7 +192,7 @@ pub fn judge_arrival(plan: &ListenPlan, arrival: &PlanArrival, now_ms: f64) -> V
             Some(stated) if *stated == plan.hops[i].to => {}
             Some(stated) => return Verdict::Skips { hop: i, reason: Some(another_type(plan, &arrival.edge, i, stated)) },
             None => {
-                undecided.get_or_insert_with(|| untyped(plan, &arrival.edge, i));
+                undecided.get_or_insert_with(|| untyped(whole, &arrival.edge, i));
             }
         }
     }
@@ -175,11 +215,12 @@ pub fn judge_arrival(plan: &ListenPlan, arrival: &PlanArrival, now_ms: f64) -> V
 /// judged: it cannot be told from an arrival on another record type's edge
 /// of the same name.
 fn untyped(plan: &ListenPlan, edge: &str, i: usize) -> String {
-    let (module, hop) = (&plan.adapter, &plan.hops[i]);
-    if i + 1 == plan.hops.len() {
-        format!("the arrival {module} reported on {edge} does not say its record type, so it cannot be told from another record type's {edge} (this listen's lands on {})", hop.to)
+    let module = &plan.adapter;
+    let (hop_edge, lands) = landings_at(plan, i);
+    if i + 1 == plan.hop_count() {
+        format!("the arrival {module} reported on {edge} does not say its record type, so it cannot be told from another record type's {edge} (this listen's lands on {lands})")
     } else {
-        format!("the arrival {module} reported on {edge} carries a {} record that does not say its record type (this listen's {} lands on {})", hop.edge, hop.edge, hop.to)
+        format!("the arrival {module} reported on {edge} carries a {hop_edge} record that does not say its record type (this listen's {hop_edge} lands on {lands})")
     }
 }
 
@@ -187,12 +228,27 @@ fn untyped(plan: &ListenPlan, edge: &str, i: usize) -> String {
 /// skips: it is another record type's edge of the same name, whatever its
 /// fields.
 fn another_type(plan: &ListenPlan, edge: &str, i: usize, stated: &str) -> String {
-    let hop = &plan.hops[i];
-    if i + 1 == plan.hops.len() {
-        format!("it has record type {stated}, not {}, which this listen's {edge} lands on", hop.to)
+    let (hop_edge, lands) = landings_at(plan, i);
+    if i + 1 == plan.hop_count() {
+        format!("it has record type {stated}, not {lands}, which this listen's {edge} lands on")
     } else {
-        format!("the {} record it carries has record type {stated}, not {}, which this listen's {} lands on", hop.edge, hop.to, hop.edge)
+        format!("the {hop_edge} record it carries has record type {stated}, not {lands}, which this listen's {hop_edge} lands on")
     }
+}
+
+/// Hop `i`'s edge, and the record types it lands on, said: one, or, for a
+/// listen over a union, each member's (`Person or Company`).
+fn landings_at(plan: &ListenPlan, i: usize) -> (String, String) {
+    let mut edge = String::new();
+    let mut lands: Vec<String> = Vec::new();
+    for member in plan.member_plans() {
+        let Some(hop) = member.hops.get(i) else { continue };
+        edge.clone_from(&hop.edge);
+        if !lands.contains(&hop.to) {
+            lands.push(hop.to.clone());
+        }
+    }
+    (edge, lands.join(" or "))
 }
 
 enum Judged {
@@ -455,11 +511,11 @@ mod tests {
         }
     }
 
-    /// A listen through or onto a union is one plan per member, and an
-    /// arrival states one record type: exactly one member's plan fires, and
-    /// the other skips by type, whatever the record's fields.
+    /// A listen through or onto a union is one listen, judged once: the
+    /// member whose record types the arrival states decides, and a record of
+    /// no member's type skips, naming every member's.
     #[test]
-    fn an_arrival_fires_one_member_plan_of_a_listen_over_a_union() {
+    fn an_arrival_is_judged_once_by_the_member_it_is_of() {
         let catalog = CatalogSnapshot::load(
             r#"{"adapters":{"crm":{"canFire":false,"constructionArgs":[],"schemas":{"":{"positions":{
                 "Person":{"properties":{"Name":"text"},"edges":{"Notes":{"target":"Note","listenable":true,"delivery":"connection","carries":["Subjects"]}}},
@@ -478,20 +534,33 @@ mod tests {
             answer.listens
         };
         let record = |record_type: &str, fields: Json| ArrivedRecord { record_type: Some(record_type.into()), fields, unknown: Vec::new() };
-        let verdicts = |plans: &[ListenPlan], arrival: &PlanArrival| plans.iter().map(|plan| serde_json::to_value(judge_arrival(plan, arrival, 0.0)).unwrap()).collect::<Vec<_>>();
+        let verdict = |plans: &[ListenPlan], arrival: &PlanArrival| {
+            assert_eq!(plans.len(), 1, "one listen, one plan");
+            serde_json::to_value(judge_arrival(&plans[0], arrival, 0.0)).unwrap()
+        };
 
         // Onto a union: the landing's own type.
         let onto = plans("listen to crm-[t:Things WHERE t.Name == \"Ann\"]-> fire g\n");
-        assert_eq!(onto.iter().map(|p| p.hops[0].to.as_str()).collect::<Vec<_>>(), ["Person", "Company"]);
-        let person = PlanArrival { edge: "Things".into(), key: None, landing: record("Person", json!({"Name": "Ann"})), parents: Vec::new(), taken_applied: false };
-        assert_eq!(verdicts(&onto, &person), [json!({"fires": true}), json!({"skips": 0, "reason": "it has record type Person, not Company, which this listen's Things lands on"})]);
+        assert_eq!(onto[0].members.iter().map(|m| m.hops[0].to.as_str()).collect::<Vec<_>>(), ["Person", "Company"]);
+        let thing = |record_type: &str, name: &str| PlanArrival { edge: "Things".into(), key: None, landing: record(record_type, json!({"Name": name})), parents: Vec::new(), taken_applied: false };
+        assert_eq!(verdict(&onto, &thing("Person", "Ann")), json!({"fires": true}));
+        assert_eq!(verdict(&onto, &thing("Company", "Ann")), json!({"fires": true}));
+        assert_eq!(verdict(&onto, &thing("Company", "Bo")), json!({"skips": 0}), "the member it is of judges its filter");
+        assert_eq!(verdict(&onto, &thing("Lead", "Ann")), json!({"skips": 0, "reason": "it has record type Lead, not Person or Company, which this listen's Things lands on"}));
+        let untyped = PlanArrival { landing: ArrivedRecord { record_type: None, fields: json!({"Name": "Ann"}), unknown: Vec::new() }, ..thing("Person", "Ann") };
+        assert_eq!(
+            verdict(&onto, &untyped),
+            json!({"undecided": "the arrival crm reported on Things does not say its record type, so it cannot be told from another record type's Things (this listen's lands on Person or Company)"})
+        );
 
         // Through a union: the parent the arrival carries.
         let through = plans("listen to crm-[:Subjects]->-[:Notes]-> fire f\n");
         let note = |parent: &str| PlanArrival { edge: "Notes".into(), key: None, landing: record("Note", json!({"Text": "hi"})), parents: vec![Some(record(parent, json!({"Name": "Acme"})))], taken_applied: false };
+        assert_eq!(verdict(&through, &note("Company")), json!({"fires": true}));
+        assert_eq!(verdict(&through, &note("Person")), json!({"fires": true}));
         assert_eq!(
-            verdicts(&through, &note("Company")),
-            [json!({"skips": 0, "reason": "the Subjects record it carries has record type Company, not Person, which this listen's Subjects lands on"}), json!({"fires": true})]
+            verdict(&through, &note("Lead")),
+            json!({"skips": 0, "reason": "the Subjects record it carries has record type Lead, not Person or Company, which this listen's Subjects lands on"})
         );
     }
 

@@ -446,29 +446,38 @@ fn check_unions(source: &str) -> (usize, Vec<String>) {
     (plans.len(), errors)
 }
 
-/// Each plan's hops, spelled `from-[:edge]->to`, with `(of Union)` where a
-/// hop's edge lands on a union and the plan watches one member of it.
+/// Each traversal a host watches the plans by (each plan's own, or each of
+/// its members'), spelled `from-[:edge]->to`, with `(of Union)` where a
+/// hop's edge lands on a union and the traversal is one member's.
 fn spelled_hops(plans: &[ListenPlan]) -> Vec<String> {
     plans
         .iter()
+        .flat_map(ListenPlan::member_plans)
         .map(|plan| plan.hops.iter().map(|h| format!("{}-[:{}]->{}{}", h.from, h.edge, h.to, h.member_of.as_ref().map(|u| format!(" (of {u})")).unwrap_or_default())).collect::<Vec<_>>().join(" "))
         .collect()
 }
 
-/// A listen through or onto a union is one listen per member, as TypeScript
-/// distributes over a union: each member's plan watches that member alone,
-/// so an arrival, of one member, fires one of them.
+/// A listen through or onto a union is one listen, with one plan, planned
+/// once per member as TypeScript distributes over a union: each member's
+/// traversal watches that member alone.
 #[test]
-fn a_listen_through_or_onto_a_union_is_one_listen_per_member() {
+fn a_listen_through_or_onto_a_union_is_one_listen_planned_per_member() {
     let (plans, errors) = answer_unions("listen to crm-[:Subjects]->-[:Notes]-> fire f\n");
     assert_eq!(errors, Vec::<String>::new());
+    assert_eq!(plans.len(), 1, "one listen, one plan");
     assert_eq!(spelled_hops(&plans), ["-[:Subjects]->Person (of Subject) Person-[:Notes]->Note", "-[:Subjects]->Company (of Subject) Company-[:Notes]->Note"]);
-    assert_eq!(serde_json::to_value(&plans[0].hops[0]).unwrap(), json!({ "edge": "Subjects", "from": "", "to": "Person", "memberOf": "Subject", "judged": "none" }));
+    let wire = serde_json::to_value(&plans[0]).unwrap();
+    assert_eq!(wire["hops"], json!([]), "a listen over a union has no hops of its own: {wire}");
+    assert_eq!(wire["members"][0]["hops"][0], json!({ "edge": "Subjects", "from": "", "to": "Person", "memberOf": "Subject", "judged": "none" }));
+    assert_eq!(wire["members"][1]["carries"], json!(["Subjects"]), "each member carries as its own edge declares");
     // Onto a union: each member's WHERE is split against that member.
     let (plans, errors) = answer_unions("listen to crm-[t:Things WHERE t.Name == \"x\"]-> fire g\n");
     assert_eq!(errors, Vec::<String>::new());
     assert_eq!(spelled_hops(&plans), ["-[:Things]->Person (of Subject)", "-[:Things]->Company (of Subject)"]);
-    assert_eq!(spell(plans[1].hops[0].checked.as_ref().unwrap(), Some("t")), "t.Name == \"x\"");
+    assert_eq!(spell(plans[0].members[1].hops[0].checked.as_ref().unwrap(), Some("t")), "t.Name == \"x\"");
+    // Its identity is one, with each hop's alias read as its place.
+    let renamed = answer_unions("listen to crm-[u:Things WHERE u.Name == \"x\"]-> fire g\n").0;
+    assert_eq!(plans[0].identity(), renamed[0].identity());
     // Two unions on one path multiply.
     let (plans, errors) = answer_unions("listen to crm-[:Subjects]->-[:Links]->-[:Notes]-> fire f\n");
     assert_eq!(errors, Vec::<String>::new());
@@ -487,7 +496,7 @@ fn a_listen_through_or_onto_a_union_is_one_listen_per_member() {
     assert_eq!(check_unions("listen to crm-[w:People WHERE w.Name == \"x\"]-> fire p\n"), (1, Vec::<String>::new()));
 }
 
-/// Each member's plan is checked against that member's own edge, and a
+/// Each member's traversal is checked against that member's own edge, and a
 /// member whose edge a listen cannot take is refused by name: the listen as
 /// written is then not watched for any member.
 #[test]
@@ -498,12 +507,24 @@ fn a_member_whose_edge_announces_nothing_is_refused_by_name() {
     );
 }
 
-/// The listen as written is a duplicate of another when its member plans
-/// are, said once; its own member plans are distinct listens.
+/// A listen over a union written twice is one duplicate, said once.
 #[test]
 fn a_listen_over_a_union_written_twice_is_one_duplicate() {
     let (count, errors) = check_unions("listen to crm-[:Subjects]->-[:Notes]-> fire f\nlisten to crm-[:Subjects]->-[:Notes]-> fire f\n");
-    assert_eq!((count, errors.iter().map(|e| e.split(' ').next().unwrap()).collect::<Vec<_>>()), (2, vec!["MOV_LISTEN_DUPLICATE"]));
+    assert_eq!((count, errors.iter().map(|e| e.split(' ').next().unwrap()).collect::<Vec<_>>()), (1, vec!["MOV_LISTEN_DUPLICATE"]));
+}
+
+/// A plan with no union is what it was before a plan could hold members,
+/// byte for byte, so an unchanged program keeps its listens' identities, and
+/// with them their receipts and state.
+#[test]
+fn a_plan_over_no_union_keeps_its_identity() {
+    let (plans, errors) = answer_unions("listen to crm-[w:People WHERE w.Name == \"x\"]-> fire p\n");
+    assert_eq!(errors, Vec::<String>::new());
+    assert_eq!(
+        plans[0].identity(),
+        r##"{"adapter":"crm","connection":"crm","hops":[{"alias":"#0","checked":{"left":{"fieldOnly":true,"propertyTypeId":"Name","type":"edge_property"},"op":"eq","right":{"type":"static","value":"x"},"type":"compare"},"edge":"People","from":"","judged":"arrival","to":"Person"}],"movement":"p"}"##
+    );
 }
 
 /// An edge only some members declare is refused as TypeScript refuses a
@@ -567,7 +588,7 @@ fn the_missing_listen_hint_ends_on_an_edge() {
 fn the_parameter_accepts_what_lands_under_every_member() {
     let listen = |function: &str| check_unions(&format!("{function}\nlisten to crm-[:Subjects]->-[:Jots]-> fire h\n"));
     // Typed by a union of the landings: accepted.
-    assert_eq!(listen("function h(w: <crm-[:Writings]->>) { return w.Text }"), (2, Vec::<String>::new()));
+    assert_eq!(listen("function h(w: <crm-[:Writings]->>) { return w.Text }"), (1, Vec::<String>::new()));
     assert_eq!(
         listen("function h(w: <crm-[:Memo]->>) { return w.Text }"),
         (0, vec!["MOV_LISTEN_PARAM_MISMATCH 'h' takes 'w: <crm-[:Memo]->>', but a listen over a union fires with what lands under every member, and 'crm-[:Subjects]-><Company>-[:Jots]->' lands crm.Remark — the parameter's type must accept it".to_string()])
