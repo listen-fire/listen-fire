@@ -27,6 +27,7 @@ import {
   RELEASE_APPLIED,
   RUN_FAILED,
   RUN_PAUSED,
+  SYSTEM_ADAPTER_TYPE,
   SYSTEM_EVENT_KINDS,
   WAIT_LOST_ITS_RECORD,
   type SystemEventFields,
@@ -249,12 +250,12 @@ export async function pollSystemEvents(records: SystemRecords, input: PollEdgeIn
 }
 
 /** Whether the arrival a listen could not judge is itself one of this
- *  module's `Arrival Not Judged` events (its record is the event, its id one
- *  this module minted). It is never reported in turn: two listens on `Events`
+ *  module's `Arrival Not Judged` events: it landed on this module's `Events`
+ *  with that `Kind`. It is never reported in turn: two listens on `Events`
  *  that cannot judge such events would report each other's without end, once
  *  a poll, and no run would ever start for the loop breaker to count. */
 function isUnjudgedReport(unjudged: UnjudgedArrival): boolean {
-  return unjudged.edge === EVENTS_EDGE && (unjudged.recordId ?? '').startsWith(`${ARRIVAL_NOT_JUDGED.id}:`);
+  return unjudged.adapter === SYSTEM_ADAPTER_TYPE && unjudged.edge === EVENTS_EDGE && unjudged.landing?.fields[KIND_FIELD] === ARRIVAL_NOT_JUDGED.name;
 }
 
 /** The index of the first row past `until`, else the length. */

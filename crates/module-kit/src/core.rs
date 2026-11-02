@@ -351,7 +351,8 @@ pub struct UnjudgedAfter {
 
 /// A listen that could not judge an arrival (`unjudged.list`): the listen by
 /// its pipeline, the arrival by its receipt key, its file and movement, the
-/// kept delivery it came in, its edge and record, why, the run whose write
+/// kept delivery it came in, its edge, the module it came from and the
+/// record, what landed as its module reported it, why, the run whose write
 /// caused it, when, and which attempt at judging it (0 as delivered, one
 /// more per replay).
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -365,7 +366,12 @@ pub struct UnjudgedArrival {
     pub delivery_id: Option<String>,
     pub edge: String,
     #[serde(default)]
+    pub adapter: Option<String>,
+    #[serde(default)]
     pub record_id: Option<String>,
+    /// `{ recordId?, recordType?, fields }`, as kept by `unjudged.note`.
+    #[serde(default)]
+    pub landing: Option<Js>,
     pub reason: String,
     #[serde(default)]
     pub cause: Option<String>,
@@ -806,7 +812,11 @@ slot! {
             delivery_id: Option<String>,
             edge: String,
             #[serde(default)]
+            adapter: Option<String>,
+            #[serde(default)]
             record_id: Option<String>,
+            #[serde(default)]
+            landing: Option<Js>,
             reason: String,
             #[serde(default)]
             cause: Option<String>,

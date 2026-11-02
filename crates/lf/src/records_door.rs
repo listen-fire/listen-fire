@@ -83,8 +83,15 @@ pub struct UnjudgedArrival {
     /// The kept delivery it came in; None for one kept as no delivery.
     pub delivery_id: Option<String>,
     pub edge: String,
+    /// The module it arrived from, by its adapter type; None when a store
+    /// kept none (one written before a fact kept it).
+    pub adapter: Option<String>,
     /// The record that landed, when it names one.
     pub record_id: Option<String>,
+    /// What landed, as its module reported it (`{ recordId?, recordType?,
+    /// fields }`): what a module recognises its own landings by (`@lf/system`
+    /// its own `Arrival Not Judged` events). None when a store kept none.
+    pub landing: Option<Js>,
     /// Why the listen could not judge it, as the judge said.
     pub reason: String,
     /// The run whose write caused the arrival (crate::loop_breaker), when
@@ -124,7 +131,9 @@ impl UnjudgedArrival {
             "movement" => Js::str(&self.movement),
             "deliveryId" => opt(&self.delivery_id),
             "edge" => Js::str(&self.edge),
+            "adapter" => opt(&self.adapter),
             "recordId" => opt(&self.record_id),
+            "landing" => self.landing.clone().unwrap_or(Js::Null),
             "reason" => Js::str(&self.reason),
             "cause" => opt(&self.cause),
             "at" => Js::str(&self.at),
@@ -153,7 +162,9 @@ impl UnjudgedArrival {
             movement: text("movement")?,
             delivery_id: opt("deliveryId")?,
             edge: text("edge")?,
+            adapter: opt("adapter")?,
             record_id: opt("recordId")?,
+            landing: landing_of(value.get("landing"))?,
             reason: text("reason")?,
             cause: opt("cause")?,
             at: text("at")?,
@@ -162,6 +173,16 @@ impl UnjudgedArrival {
                 _ => return None,
             },
         })
+    }
+}
+
+/// A kept fact's `landing` off the wire: absent or null is none, an object
+/// is one, anything else is no fact.
+pub fn landing_of(value: Option<&Js>) -> Option<Option<Js>> {
+    match value {
+        None | Some(Js::Null) => Some(None),
+        Some(landing @ Js::Obj(_)) => Some(Some(landing.clone())),
+        Some(_) => None,
     }
 }
 
@@ -418,15 +439,15 @@ impl Store {
     pub(crate) fn insert_unjudged_in(db: &rusqlite::Connection, fact: &UnjudgedArrival) -> Result<bool> {
         let at = crate::store::canonical_iso(&fact.at)?;
         Ok(db.execute(
-            "insert into arrival_unjudged (pipeline, arrival, file, movement, delivery_id, edge, record_id, reason, cause, noted_at, attempt) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) on conflict do nothing",
-            rusqlite::params![fact.pipeline, fact.arrival, fact.file, fact.movement, fact.delivery_id, fact.edge, fact.record_id, fact.reason, fact.cause, at, fact.attempt],
+            "insert into arrival_unjudged (pipeline, arrival, file, movement, delivery_id, edge, adapter, record_id, landing, reason, cause, noted_at, attempt) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) on conflict do nothing",
+            rusqlite::params![fact.pipeline, fact.arrival, fact.file, fact.movement, fact.delivery_id, fact.edge, fact.adapter, fact.record_id, fact.landing.as_ref().map(Js::to_json), fact.reason, fact.cause, at, fact.attempt],
         )? == 1)
     }
 
     /// The unjudged arrivals of `page`, oldest first (ties by listen, then
     /// arrival, then attempt).
     pub fn unjudged_arrivals(&self, page: &UnjudgedPage<'_>) -> Result<Vec<UnjudgedArrival>> {
-        const COLUMNS: &str = "select pipeline, arrival, file, movement, delivery_id, edge, record_id, reason, cause, noted_at, attempt from arrival_unjudged where (?1 is null or pipeline = ?1)";
+        const COLUMNS: &str = "select pipeline, arrival, file, movement, delivery_id, edge, adapter, record_id, landing, reason, cause, noted_at, attempt from arrival_unjudged where (?1 is null or pipeline = ?1)";
         const ORDER: &str = "order by noted_at, pipeline, arrival, attempt limit ?2";
         let row = |r: &rusqlite::Row<'_>| {
             Ok(UnjudgedArrival {
@@ -436,11 +457,16 @@ impl Store {
                 movement: r.get(3)?,
                 delivery_id: r.get(4)?,
                 edge: r.get(5)?,
-                record_id: r.get(6)?,
-                reason: r.get(7)?,
-                cause: r.get(8)?,
-                at: r.get(9)?,
-                attempt: r.get(10)?,
+                adapter: r.get(6)?,
+                record_id: r.get(7)?,
+                landing: r
+                    .get::<_, Option<String>>(8)?
+                    .map(|text| Js::parse(text.as_bytes()).map_err(|e| rusqlite::Error::FromSqlConversionFailure(8, rusqlite::types::Type::Text, e.to_string().into())))
+                    .transpose()?,
+                reason: r.get(9)?,
+                cause: r.get(10)?,
+                at: r.get(11)?,
+                attempt: r.get(12)?,
             })
         };
         Ok(match &page.after {
@@ -596,7 +622,9 @@ mod tests {
             movement: "heard".into(),
             delivery_id: Some("delivery-1".into()),
             edge: "Messages".into(),
+            adapter: Some("slack".into()),
             record_id: Some("C1:1700.1".into()),
+            landing: Some(Js::parse(br#"{"recordId":"C1:1700.1","recordType":"Message","fields":{"Message":"hi","Channel":"C1"}}"#).unwrap()),
             reason: "slack could not read Name of the Channels record the arrival carries, which this listen's filter reads".into(),
             cause: cause.map(str::to_string),
             at: iso_at(at),
@@ -679,6 +707,32 @@ mod tests {
     #[test]
     fn unjudged_arrivals_are_kept_in_the_state_file() {
         an_unjudged_arrival_is_kept_once_per_listen_and_read_after_a_mark_its_cause_kept_in_the_ledger(state_file());
+    }
+
+    /// A state file written before a fact kept what landed and the module
+    /// it came from: the facts it kept read as keeping neither, and a new
+    /// one keeps both.
+    #[test]
+    fn a_state_file_written_before_facts_kept_their_landing_keeps_its_facts() {
+        let dir = std::env::temp_dir().join(format!("lf-records-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("state.db");
+        rusqlite::Connection::open(&path)
+            .unwrap()
+            .execute_batch(
+                "create table arrival_unjudged (pipeline text not null, arrival text not null, file text not null, movement text not null,
+                   delivery_id text, edge text not null, record_id text, reason text not null, cause text, noted_at text not null,
+                   attempt integer not null, primary key (pipeline, arrival, attempt));
+                 insert into arrival_unjudged values ('listen:old', 'Messages:C1:C1:1:', 'chat', 'heard', null, 'Messages', 'C1:1', 'why', null, '2026-11-01T00:00:00.000Z', 0);",
+            )
+            .unwrap();
+        let store: Rc<dyn RunHostStore> = Rc::new(Store::open(&path).unwrap());
+        let read = |pipeline: &str| store.unjudged_arrivals(&UnjudgedPage { after: None, pipeline: Some(pipeline), limit: 10 }).unwrap();
+        let old = read("listen:old");
+        assert_eq!((old.len(), old[0].adapter.as_deref(), old[0].landing.as_ref()), (1, None, None));
+        let new = unjudged("listen:new", "Messages:C1:C1:2:", t0(), None);
+        assert!(store.note_unjudged(&new, "2026-01-01T00:00:00.000Z").unwrap());
+        assert_eq!(read("listen:new"), [new]);
     }
 
     #[cfg(feature = "postgres")]

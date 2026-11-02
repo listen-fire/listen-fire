@@ -157,6 +157,7 @@ const MIGRATIONS: &[(i32, &str)] = &[
     (14, include_str!("pg_store_schema_14.sql")),
     (15, include_str!("pg_store_schema_15.sql")),
     (16, include_str!("pg_store_schema_16.sql")),
+    (17, include_str!("pg_store_schema_17.sql")),
 ];
 
 /// The advisory lock the migrations run under: "lf-store" as a number.
@@ -320,10 +321,25 @@ impl PgStore {
     /// before: whether it is new.
     fn insert_unjudged(&self, fact: &UnjudgedArrival) -> Result<bool> {
         let kept = self.execute(
-            "insert into lf.arrival_unjudged (team_id, pipeline, arrival, file, movement, delivery_id, edge, record_id, reason, cause, noted_at, attempt)
-             values ($1::text::uuid, $2::text, $3::text, $4::text, $5::text, $6::text, $7::text, $8::text, $9::text, $10::text, date_trunc('milliseconds', $11::text::timestamptz), $12::int4)
+            "insert into lf.arrival_unjudged (team_id, pipeline, arrival, file, movement, delivery_id, edge, record_id, reason, cause, noted_at, attempt, adapter, landing)
+             values ($1::text::uuid, $2::text, $3::text, $4::text, $5::text, $6::text, $7::text, $8::text, $9::text, $10::text, date_trunc('milliseconds', $11::text::timestamptz), $12::int4, $13::text, $14::text::jsonb)
              on conflict do nothing",
-            &[&self.tenant, &fact.pipeline, &fact.arrival, &fact.file, &fact.movement, &fact.delivery_id, &fact.edge, &fact.record_id, &fact.reason, &fact.cause, &fact.at, &i32::try_from(fact.attempt).unwrap_or(i32::MAX)],
+            &[
+                &self.tenant,
+                &fact.pipeline,
+                &fact.arrival,
+                &fact.file,
+                &fact.movement,
+                &fact.delivery_id,
+                &fact.edge,
+                &fact.record_id,
+                &fact.reason,
+                &fact.cause,
+                &fact.at,
+                &i32::try_from(fact.attempt).unwrap_or(i32::MAX),
+                &fact.adapter,
+                &fact.landing.as_ref().map(Js::to_json),
+            ],
         )?;
         Ok(kept == 1)
     }
@@ -1617,7 +1633,7 @@ impl RunHostStore for PgStore {
         const COLUMNS: &str = concat!(
             "select pipeline, arrival, file, movement, delivery_id, edge, record_id, reason, cause, ",
             iso!("noted_at"),
-            ", attempt from lf.arrival_unjudged where team_id = $1::text::uuid and ($2::text is null or pipeline = $2::text)"
+            ", attempt, adapter, landing::text from lf.arrival_unjudged where team_id = $1::text::uuid and ($2::text is null or pipeline = $2::text)"
         );
         const ORDER: &str = "order by noted_at, pipeline, arrival, attempt limit $3::int8";
         let rows = match &page.after {
@@ -1627,22 +1643,25 @@ impl RunHostStore for PgStore {
                 &[&self.tenant, &page.pipeline, &page.limit, &after.at, &after.pipeline, &after.arrival, &i32::try_from(after.attempt).unwrap_or(i32::MAX)],
             )?,
         };
-        Ok(rows
-            .iter()
-            .map(|r| UnjudgedArrival {
-                pipeline: r.get(0),
-                arrival: r.get(1),
-                file: r.get(2),
-                movement: r.get(3),
-                delivery_id: r.get(4),
-                edge: r.get(5),
-                record_id: r.get(6),
-                reason: r.get(7),
-                cause: r.get(8),
-                at: r.get(9),
-                attempt: u32::try_from(r.get::<_, i32>(10)).unwrap_or_default(),
+        rows.iter()
+            .map(|r| {
+                Ok(UnjudgedArrival {
+                    pipeline: r.get(0),
+                    arrival: r.get(1),
+                    file: r.get(2),
+                    movement: r.get(3),
+                    delivery_id: r.get(4),
+                    edge: r.get(5),
+                    record_id: r.get(6),
+                    reason: r.get(7),
+                    cause: r.get(8),
+                    at: r.get(9),
+                    attempt: u32::try_from(r.get::<_, i32>(10)).unwrap_or_default(),
+                    adapter: r.get(11),
+                    landing: r.get::<_, Option<&str>>(12).map(parse_text).transpose()?,
+                })
             })
-            .collect())
+            .collect()
     }
 
     /// The receipt first: a duplicate (its external id kept at its

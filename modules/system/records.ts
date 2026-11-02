@@ -72,6 +72,13 @@ export interface StrandedWait {
   at: string;
 }
 
+/** What landed on an arrival a listen could not judge. */
+export interface UnjudgedLanding {
+  recordId?: string;
+  recordType?: string;
+  fields: Record<string, unknown>;
+}
+
 /** A listen that could not judge an arrival (its WHERE reads what the
  *  arrival's module could not read), kept once per listen, arrival and
  *  attempt. */
@@ -84,7 +91,13 @@ export interface UnjudgedArrival {
   /** The kept delivery it came in; null when the host kept none. */
   deliveryId: string | null;
   edge: string;
+  /** The module it arrived from, by its adapter type; null when the host
+   *  kept none. */
+  adapter: string | null;
   recordId: string | null;
+  /** What landed, as its module reported it; null when the host kept none.
+   *  This module knows its own `Arrival Not Judged` events by it. */
+  landing: UnjudgedLanding | null;
   reason: string;
   /** The run whose write caused the arrival, when one did: the event is
    *  about it, so a run the event fires continues its chain. */
@@ -154,7 +167,10 @@ const DoorUnjudged = z.object({
   movement: z.string(),
   deliveryId: z.string().nullable(),
   edge: z.string(),
+  // A host that keeps neither tells no module its own landings.
+  adapter: z.string().nullable().default(null),
   recordId: z.string().nullable(),
+  landing: z.object({ recordId: z.string().optional(), recordType: z.string().optional(), fields: z.record(z.string(), z.unknown()) }).nullable().default(null),
   reason: z.string(),
   cause: z.string().nullable(),
   at: z.string(),
@@ -202,7 +218,9 @@ export function recordsOverHostDoor(ctx: Pick<ModuleContext, 'records'>): System
         automation: { id: `${row.file}:${row.movement}`, name: row.movement },
         deliveryId: row.deliveryId,
         edge: row.edge,
+        adapter: row.adapter,
         recordId: row.recordId,
+        landing: row.landing,
         reason: row.reason,
         cause: row.cause,
         at: row.at,

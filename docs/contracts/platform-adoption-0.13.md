@@ -18,16 +18,16 @@ The hosted store serves the methods `listen-fire` calls on a store module
   - Parking takes a team id.
   - `writes.record` and `writes.depth`: the loop breaker's ledger.
   - `listens.states`, `listens.claimResolve`, `listens.saveResolution`, `listens.setPaused` and `listens.hold`.
-  - `unjudged.note` (with `attempt`) and `unjudged.list` (with `pipeline`).
+  - `unjudged.note` (with `attempt`, `adapter` and `landing`) and `unjudged.list` (with `pipeline`, answering `adapter` and `landing`).
   - `work.completeKey`: a row its caller ran itself, deleted unless a live claim holds it; completing a `fire_event` row drops the waits its delivery opened for runs that never started.
   - `inbound.delivery`: a kept delivery with its events and its request.
   - `inbound.sweepDeliveries`: forgets the settled deliveries received before a time, and the request of every delivery that old.
   - `runs.failed`, `releases.note` and `releases.list`, which the records door reads ([system-events.md](system-events.md#the-records-door)).
   - `callbacks.*`, `correlations.*` and `records.closeRun` are no longer called.
-- **Migrations.** `@lf/postgres-store` migrations 10 to 16 are 0.13's.
+- **Migrations.** `@lf/postgres-store` migrations 10 to 17 are 0.13's.
   - 10 drops the callback and correlation tables: a run parked on a callback under 0.12 cannot resume.
   - 13 was amended on this branch before release: a delivery's `source` may be `poll`. A database that applied an earlier branch build of 13 lacks it.
-  - 15 serves the records door (failed runs, releases) and a wait's `recordId`; 16 keeps the unjudged arrivals.
+  - 15 serves the records door (failed runs, releases) and a wait's `recordId`; 16 keeps the unjudged arrivals; 17 keeps each one's `adapter` and `landing`.
 - **A wait on a record already gone.** `waits.open`'s `key` may be `null` (or absent), for a record gone before the run waited on it. A store that requires a key fails such a run.
 - **The re-send window.** `waits.log`, and `inbound.keepDelivery`'s `arrivals`, take `resendWindowMs`. The store keeps each arrival's identity apart from its log entry for that window, so a re-send after the sweep forgot the entry is still a repeat.
 - **Waits outlive a deleted run.** Migration 13 drops the foreign key from waits to runs. A wait its run opened is live while the run exists, so a host whose retention deletes run rows deletes their waits with them; otherwise each pins the arrival sweep for its record.
@@ -36,7 +36,7 @@ The hosted store serves the methods `listen-fire` calls on a store module
   - It may carry `unjudged`, the listens that could not judge the delivery's arrivals, kept in the same write as `unjudged.note` keeps each: a poll moves its cursor and keeps those facts together.
   - Each `fire_event` row it queues carries its delivery's `arrivalMark` in its payload; `conformance/store-waits.json`'s `claimRow` step checks it.
 - **Receipts by team.** `runs.start`, `events.claim` and `events.startRun` take `teamId`, as `waits.*`, `work.enqueue` and `parks.commitSegment` do. A receipt is its team's: the same listen and key under another team is another receipt. Tenant reads (`runs.get`, settle) must be scoped by team too.
-- **`Arrival Not Judged` facts.** Keep one wherever the host's judge answers `{ undecided }`: once per listen, arrival and attempt, with the listen's pipeline, the delivery, the arrival's receipt key, edge, record, reason, the causing run, the time and the attempt ([system-events.md](system-events.md#arrival-not-judged)).
+- **`Arrival Not Judged` facts.** Keep one wherever the host's judge answers `{ undecided }`: once per listen, arrival and attempt, with the listen's pipeline, the delivery, the arrival's receipt key, edge, the module it came from, record, what landed (the landing as its module reported it), reason, the causing run, the time and the attempt ([system-events.md](system-events.md#arrival-not-judged)). Keep the landing: `@lf/system` knows a report about its own `Arrival Not Judged` event by its `Kind`, and without it two listens on `Events` that cannot judge such events report each other's, once a poll.
 - **Captured requests.** Keep each delivery's request beside its receipt: its body and query string without the fields its module names in `inbound.redactFields`, only the headers its module names in `inbound.captureHeaders` (a header whose name holds `authorization`, `cookie`, `signature`, `secret`, `token`, `key`, `auth`, `hmac` or `password` is refused), and the ids of the arrivals it brought. The body is otherwise kept as received, so it may hold whatever the provider puts in it. Keep it for the delivery's retention and show it only to a person who asks ([adapter-protocol.md](adapter-protocol.md#declared-inbound-signatures)).
 
 ## Adapter protocol 2.6
@@ -68,7 +68,7 @@ The host speaks 2.0 to 2.6 ([adapter-protocol.md](adapter-protocol.md#minors-of-
 - **Catalog cache.** Key a cached catalog by the release that built it: one built before `fieldIds` maps no field, and its email listens stay silent until it is rebuilt.
 - **Pipeline ids.** Name a listen as `listen-fire` does, `listen:<file>:<movement>:<digest>` (`listenPipeline`; `conformance/listen-pipelines.json`). `notFor` and the receipts key on it.
 - **Dispatch.** `@listen-fire/embed` takes a delivery as one call, `dispatch(tenant, { adapterType, connection?, arrivals })`, kept in one store write; `arrive` is gone. `SavedProgram.listens` holds each listen's plan.
-  - It answers `{ runs, notJudged }`: each arrival a listen could not judge, with the listen's pipeline, the arrival, the reason and the delivery. Keep those as `Arrival Not Judged` facts.
+  - It answers `{ runs, notJudged }`: each arrival a listen could not judge, with the listen's pipeline, the arrival, its module (`adapterType`), what landed (`landing`), the reason and the delivery. Keep those as `Arrival Not Judged` facts, the landing with them.
   - It throws, naming why, for a delivery it cannot route: a module the host lacks, a connection the tenant does not hold, an arrival that does not parse, or a keyless arrival on an edge that is no root.
   - It clears the waits of a run that ends in its first segment, and abandons those of one that fails there, as `listen-fire` does.
 - **Rust embedding.** `embed::listens(source, &catalog, version)` answers each listen's plan, and `Listen::judge(&arrival, now_ms)` decides an arrival by it; route by the plan, never by the edge alone.

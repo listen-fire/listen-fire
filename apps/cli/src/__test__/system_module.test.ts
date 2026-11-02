@@ -209,10 +209,20 @@ test('in a Slack outage of auth.test the message is taken; the listen reading Me
     await until(() => ran(serving, 'every') === 1, serving.lines);
     const line = await serving.waitFor(/noted saw Arrival Not Judged/, 30_000);
 
-    const facts = query<{ pipeline: string; arrival: string; delivery_id: string; record_id: string; reason: string }>(world.dir, 'select pipeline, arrival, delivery_id, record_id, reason from arrival_unjudged');
+    const facts = query<{ pipeline: string; arrival: string; delivery_id: string; adapter: string; record_id: string; landing: string; reason: string }>(
+      world.dir,
+      'select pipeline, arrival, delivery_id, adapter, record_id, landing, reason from arrival_unjudged',
+    );
     assert.equal(facts.length, 1, JSON.stringify(facts));
     const [fact] = facts;
     assert.match(fact.pipeline, /^listen:slack:asked:[0-9a-f]{8}$/);
+    // What landed is kept as its module reported it, with the module it came
+    // from: what a module knows its own landings by.
+    assert.equal(fact.adapter, 'slack');
+    const landing = JSON.parse(fact.landing) as { recordId: string; recordType: string; fields: Record<string, unknown> };
+    assert.equal(landing.recordId, fact.record_id);
+    assert.equal(landing.recordType, 'Message');
+    assert.match(JSON.stringify(landing.fields), /hi <@UBOT>/);
     assert.equal(fact.reason, "slack could not read Mentions App of the arrival on Messages, which this listen's filter reads");
     const kept = query<{ id: string }>(world.dir, `select id from delivery where id = '${fact.delivery_id}'`);
     assert.equal(kept.length, 1, 'the delivery it names is kept, for a replay');

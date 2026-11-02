@@ -243,8 +243,14 @@ export interface ArrivalNotJudged {
   /** The arrival, as its receipt names it (`arrivalReceiptKey`). */
   arrival: string;
   edge: string;
+  /** The module it arrived from. */
+  adapterType: string;
   identity: string;
   recordId?: string;
+  /** What landed, as its module reported it: keep it with the fact, so a
+   *  module knows its own landings (`@lf/system` its own `Arrival Not
+   *  Judged` events, by their `Kind`). */
+  landing: Exclude<Arrival, { gone: true }>['landing'];
   /** Why the listen's judge could not decide it. */
   reason: string;
   /** The delivery it came in, as this host's store keeps it. */
@@ -781,8 +787,10 @@ export function createEmbeddedHost(options: EmbeddedHostOptions): EmbeddedHost {
                 pipeline: listen.pipeline,
                 arrival: arrivalReceiptKey(arrival),
                 edge: arrival.edge,
+                adapterType: delivery.adapterType,
                 identity: arrival.identity,
                 ...(arrival.landing.recordId !== undefined ? { recordId: arrival.landing.recordId } : {}),
+                landing: arrival.landing,
                 reason: verdict.undecided,
               });
               continue;

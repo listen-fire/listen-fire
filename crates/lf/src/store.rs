@@ -113,7 +113,9 @@ create table if not exists arrival_unjudged (
   movement text not null,
   delivery_id text,
   edge text not null,
+  adapter text,
   record_id text,
+  landing text,
   reason text not null,
   cause text,
   noted_at text not null,
@@ -765,6 +767,17 @@ impl Store {
             .collect::<rusqlite::Result<Vec<_>>>()?;
         if !delivery_columns.iter().any(|c| c == "request") {
             db.execute_batch("alter table delivery add column request text")?;
+        }
+        // Added to a state file written before a fact kept what landed and
+        // the module it came from (0.13.0).
+        let unjudged_columns = db
+            .prepare("select name from pragma_table_info('arrival_unjudged')")?
+            .query_map([], |r| r.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        for column in ["adapter", "landing"] {
+            if !unjudged_columns.iter().any(|c| c == column) {
+                db.execute_batch(&format!("alter table arrival_unjudged add column {column} text"))?;
+            }
         }
         // Callbacks and the waits keyed by a correlation retired at 0.13: a
         // run parked on one cannot resume on this release, and the work rows
