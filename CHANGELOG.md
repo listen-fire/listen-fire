@@ -77,11 +77,11 @@ named in [`RELEASING.md`](RELEASING.md).
 
 - **The loop guard slot is retired.** A project whose `lf.yaml` names one (`core: { loopGuard: … }`) runs as before, but listen-fire starts no guard: it prints one notice naming it as it starts, and never calls `guard.open` or `guard.recordWrite`. It also no longer reads each record back after a write to hand it to the guard, which saves one `readRecord` call per write. listen-fire's loop breaker (`loopWindow`, `loopDepth`) already caps every chain of writes and arrivals, and nothing read what a guard remembered. Remove `core.loopGuard` from `lf.yaml`; 0.14.0 refuses it ([loop-guard-slot.md](docs/contracts/loop-guard-slot.md)).
 
+- **`triggerEventOf`** in the engine package's `public/inbound` is deprecated. It builds the 0.12 trigger, which no 0.13 host makes; build a run's event with `arrivalTriggerOf`. 0.14.0 removes it.
+
 ### Removed
 
 - **The loop guard slot's `guard.isEcho` is retired** (within adapter protocol 2; no version moves). listen-fire stopped calling it in 0.13, when the loop breaker replaced echo suppression. Now listen-fire's built-in guard, `@lf/fingerprint-guard`, no longer answers it (`listen-fire --contract-guard` refuses it as `method_not_implemented`), and the slot's contract suite holds a guard to `guard.recordWrite` alone. A guard module that still offers `guard.isEcho` loads as before and is never asked ([loop-guard-slot.md](docs/contracts/loop-guard-slot.md)).
-
-- **`triggerEventOf`** leaves the engine package's `public/inbound`. It built the 0.12 trigger, which no 0.13 host makes; build a run's event with `arrivalTriggerOf`.
 
 ### Fixed
 
