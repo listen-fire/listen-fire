@@ -1,5 +1,11 @@
 # @listen-fire/forms
 
+## 0.13.2
+
+### Patch Changes
+
+- 6040ec1: The handbook section keeps the handbook's prose rules: no `for each` or "ask" in prose. The WhatsApp button example connects with `using`, a credential, so it checks.
+
 ## 0.13.1
 
 ### Patch Changes

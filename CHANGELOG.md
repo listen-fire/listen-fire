@@ -20,6 +20,17 @@ named in [`RELEASING.md`](RELEASING.md).
 
 <!-- add merged PRs here -->
 
+## [0.14.1] - 2026-11-02
+
+A patch release of the 0.14 line: it reads the same pins as 0.14.0 (every `0.14.x`) and changes the meaning of no program.
+
+### Fixed
+
+- **The module handbook sections keep the handbook's prose rules, and their example programs are checked.** The Slack, Telegram, WhatsApp, Forms and Webhook sections are reworded, the WhatsApp button example names its credential (`connect `@lf/whatsapp` using team_whatsapp`), and the handbook's own tests now run the prose and example checks over every module section, so a host that runs them sees nothing new.
+- **The knowledge-graph handbook fixture describes each record type's `Changes` edge**, as a 0.13 host's graph module declares it.
+- **`RemoteAdapter.preprocessInbound` is typed as the wire answers it** (`{ events, arrivals?, checkpoint? }`), and the engine-contracts `Adapter` type takes an edge's subscription inputs (adapter protocol 2.6).
+- Tests read the release's compatibility key, so a version bump no longer breaks them.
+
 ## [0.14.0] - 2026-11-02
 
 A new compatibility key. A field is never read through a value that may be missing: write `?.`, or test it with `exists` first. A walk off a union lands on one of its members, narrowed with `is`. `lazy` and the loop guard slot are retired. **Which pins it reads:** `0.14.x` only; a project or automation pinned to `0.13.x` is refused by name ("validate it under 0.14.0 and upgrade it"). **To upgrade:** run `listen-fire upgrade`; it rewrites the reads it can, holds the pin on anything you must change by hand (`lazy`, a configured loop guard) and lists each. Let runs paused under 0.13 holding a `lazy` walk finish first.
@@ -2989,7 +3000,8 @@ Releases before v0.11 are kept one file per minor line, newest first:
 - [v0.2.x](docs/changelog/v0.2.md) (v0.2.0)
 - [v0.1.x](docs/changelog/v0.1.md) (v0.1.0 to v0.1.2)
 
-[Unreleased]: https://github.com/listen-fire/listen-fire/compare/v0.14.0...HEAD
+[Unreleased]: https://github.com/listen-fire/listen-fire/compare/v0.14.1...HEAD
+[0.14.1]: https://github.com/listen-fire/listen-fire/compare/v0.14.0...v0.14.1
 [0.14.0]: https://github.com/listen-fire/listen-fire/compare/v0.13.1...v0.14.0
 [0.13.1]: https://github.com/listen-fire/listen-fire/compare/v0.13.0...v0.13.1
 [0.13.0]: https://github.com/listen-fire/listen-fire/compare/v0.12.13...v0.13.0

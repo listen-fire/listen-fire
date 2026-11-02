@@ -1,5 +1,11 @@
 # @listen-fire/engine
 
+## 0.14.1
+
+### Patch Changes
+
+- 0817092: `RemoteAdapter.preprocessInbound` is typed as what the wire answers, `{ events, arrivals?, checkpoint? }`, not only the 0.12 events. `engine-contracts` exports the answer as `PreprocessedInbound`, and `Adapter.preprocessInbound` returns it.
+
 ## 0.14.0
 
 ### Minor Changes
