@@ -257,18 +257,20 @@ function computedField(
   return undefined;
 }
 
-/** A round's fields as an arrival's landing carries them, by the names a
- *  program reads them by and by the ids a filter may name, for the host to
- *  judge a listen's WHERE. */
+/** A round's fields as an arrival's landing carries them: the round as
+ *  Dealroom sent it, which its edges read (`Company` its `company`,
+ *  `Investors` its `investors`), and over it the names a program reads them
+ *  by and the ids a filter may name, for the host to judge a listen's WHERE. */
 export function roundFields(round: DealroomFundingRound): Record<string, unknown> {
   const data: Record<string, unknown> = { ...round };
   const fields = describeDealroomType(DEALROOM_FUNDING_ROUND_TYPE_ID)?.fields ?? [];
-  return Object.fromEntries(
+  const named = Object.fromEntries(
     fields.flatMap((field) => {
       const value = computedField(DEALROOM_FUNDING_ROUND_TYPE_ID, field.fieldId, data) ?? data[field.fieldId] ?? null;
       return [[field.displayName, value], [field.fieldId, value]];
     }),
   );
+  return { ...data, ...named };
 }
 
 export class DealroomAdapter extends BaseAdapter implements Adapter {

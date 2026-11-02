@@ -172,14 +172,16 @@ function entryKey(data: Record<string, unknown>): string | null {
   return typeof listId === 'string' && typeof id === 'string' ? encodeListEntryId({ listId, entryId: id }) : null;
 }
 
-/** A record's fields by the names a program reads them by and by the ids a
- *  filter may name, as an arrival's landing carries them for the host to judge
- *  a listen's WHERE. `record` may carry what only the poll knows (the search or
- *  the list name it was found under). */
+/** A record's fields as an arrival's landing carries them: the record as
+ *  Evertrace sent it, which its edges read (an entry's `Signal` its `signal`
+ *  or `signalId`, a signal's `Experiences` and `Educations` its arrays), and
+ *  over it the names a program reads them by and the ids a filter may name,
+ *  for the host to judge a listen's WHERE. `record` may carry what only the
+ *  poll knows (the search or the list name it was found under). */
 export function landingFields(typeId: string, record: object): Record<string, unknown> {
   const data: Record<string, unknown> = { ...record };
   const fields = describeEvertraceType(typeId)?.fields ?? [];
-  return Object.fromEntries(
+  const named = Object.fromEntries(
     fields.flatMap((field) => {
       const computed =
         typeId === EVERTRACE_SIGNAL_TYPE_ID
@@ -192,6 +194,7 @@ export function landingFields(typeId: string, record: object): Record<string, un
       return [[field.displayName, value], [field.fieldId, value]];
     }),
   );
+  return { ...data, ...named };
 }
 
 export class EvertraceAdapter extends BaseAdapter implements Adapter {

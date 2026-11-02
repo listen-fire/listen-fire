@@ -1692,3 +1692,32 @@ describe('pollEvertrace — List Entries', () => {
     expect(forSignals.listListEntries).not.toHaveBeenCalled();
   });
 });
+
+describe('the edges off a polled record, as a run fired on it walks them', () => {
+  // As the engine seeds a fired function's parameter: the landing's own fields.
+  const fired = async (edge: 'Signals' | 'List Entries', client: EvertraceApiClient, recordType: string) => {
+    const { arrivals } = await pollEvertrace(client, { edge, cursor: { createdAfter: CREATED_AT - 1 } }, { log });
+    const arrival = arrivals[0];
+    if (arrival === undefined || !('landing' in arrival)) throw new Error('the record arrives');
+    return at(recordType, arrival.identity, arrival.landing.fields);
+  };
+
+  it("a polled signal's landing carries its experiences and educations", async () => {
+    const position = await fired('Signals', fakeClient(), 'Signal');
+    const adapter = adapterWith(fakeClient());
+    const experiences = await adapter.getRelated({ position, fieldId: 'Experiences', direction: 'outgoing' });
+    expect(experiences.map((r) => (positionData(r.position) as { id: string }).id)).toEqual(['exp-1', 'exp-2']);
+    const educations = await adapter.getRelated({ position, fieldId: 'Educations', direction: 'outgoing' });
+    expect(educations).toHaveLength(signal().educations?.length ?? 0);
+    expect(educations.length).toBeGreaterThan(0);
+  });
+
+  it("a polled list entry's landing carries its signal, which its Signal edge fetches", async () => {
+    const getSignal = jest.fn(async () => signal());
+    const position = await fired('List Entries', fakeClient(), 'List Entry');
+    const adapter = adapterWith(fakeClient({ getSignal }));
+    const signals = await adapter.getRelated({ position, fieldId: 'Signal', direction: 'outgoing' });
+    expect(getSignal).toHaveBeenCalledWith('sig-1');
+    expect(signals.map((r) => r.position.recordType)).toEqual(['Signal']);
+  });
+});

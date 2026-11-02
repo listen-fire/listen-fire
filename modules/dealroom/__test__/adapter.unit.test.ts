@@ -917,6 +917,20 @@ describe('pollDealroom', () => {
     expect(searchFundingRounds).not.toHaveBeenCalled();
   });
 
+  it("a polled round's landing carries what its edges read: a run fired on it walks to its Company and its Investors", async () => {
+    const searchFundingRounds = jest.fn(async () => page([round({ created_utc: '2026-09-10 09:00:00' })]));
+    const { arrivals } = await poll(fakeClient({ searchFundingRounds }), { cursor: { createdAfter: CREATED_MS - 1 } });
+    const arrival = arrivals[0];
+    if (arrival === undefined || !('landing' in arrival)) throw new Error('the round arrives');
+    // As the engine seeds a fired function's parameter: the landing's own fields.
+    const fired = at('Funding Round', '401', arrival.landing.fields);
+    const adapter = adapterWith(fakeClient());
+    const company = await adapter.getRelated({ position: fired, fieldId: 'Company', direction: 'outgoing' });
+    expect(company.map((r) => positionRecordId(r.position))).toEqual(['101']);
+    const investors = await adapter.getRelated({ position: fired, fieldId: 'Investors', direction: 'outgoing' });
+    expect(investors.map((r) => positionRecordId(r.position))).toEqual(['401:201']);
+  });
+
   it('a later poll delivers each round on Funding Rounds, oldest first, about its company, and advances the cursor', async () => {
     const older = round({ id: 401, created_utc: '2026-09-10 08:00:00' });
     const newer = round({ id: 402, created_utc: '2026-09-10 09:00:00' });
