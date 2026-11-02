@@ -29,7 +29,6 @@ use crate::families::names::spell_name;
 use crate::families::walks::{alias_reads, is_pure_predicate};
 use crate::scope::{Resolution, ScopeId, SymbolId, SymbolKind};
 use crate::types::position::{Instance, InstanceRef, Position, describe_position, display_name_of, position_ref_in, positions_match};
-use crate::types::unions::join_positions;
 
 /// One hop of the traversal, as its module declares it.
 #[derive(Clone, Copy)]
@@ -143,14 +142,14 @@ impl Checker<'_> {
             .and_then(|instance| self.plan_listen(statement, path, instance, &steps, scope))
             .map(|plan| ListenPlan { landing: stated.clone(), ..plan });
         if let Some(walk) = &walk {
+            let landed = walk.landed.as_ref().map(present);
             // Past a union whose members land on different record types the
-            // walk types nothing: what lands is one of each member's landings.
-            let members = match (&instance, &walk.landed) {
-                (Some(instance), None) => member_landings(instance, path, &steps),
+            // walk lands one of them; the parameter check names each member's
+            // traversal.
+            let members = match (&instance, landed) {
+                (Some(instance), Some(Position::OneOf(_))) => member_landings(instance, path, &steps),
                 _ => Vec::new(),
             };
-            let joined = join_positions(&members.iter().map(|m| &m.landing).collect::<Vec<_>>()).map(|joined| joined.position);
-            let landed = walk.landed.as_ref().map(present).or(joined.as_ref());
             if let (Some(stated), Some(landed)) = (&statement.landing, landed)
                 && !untyped(landed)
             {

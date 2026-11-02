@@ -246,6 +246,11 @@ pub const AWAIT_REQUIRED: &str = "MOV_AWAIT_REQUIRED";
 pub const AWAIT_IMPURE_WHERE: &str = "MOV_AWAIT_IMPURE_WHERE";
 pub const ABSENT_REQUIRED: &str = "MOV_ABSENT_REQUIRED";
 pub const UNKNOWN_PROPERTY: &str = "MOV_UNKNOWN_PROPERTY";
+/// From 0.14: a read, walk or write only some of the records an edge off a
+/// union lands on offer (`crm-[:Subjects]->-[n:Notes]-> { x = n.Mood }`,
+/// where a Person's `Notes` land on a Memo and a Company's on a Remark).
+/// 0.13 typed nothing there and checked it clean.
+pub const UNION_MEMBER_ONLY: &str = "MOV_UNION_MEMBER_ONLY";
 pub const READ_THROUGH_FIELD: &str = "MOV_READ_THROUGH_FIELD";
 pub const WALK_OFF_HELD_RECORD: &str = "MOV_WALK_OFF_HELD_RECORD";
 pub const WALK_ROOT_NOT_RECORD: &str = "MOV_WALK_ROOT_NOT_RECORD";

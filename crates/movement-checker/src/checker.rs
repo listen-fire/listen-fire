@@ -1165,7 +1165,17 @@ impl<'c> Checker<'c> {
                 let everywhere = each.iter().all(|others| others.iter().any(|other| key(other) == key(d)));
                 let mut d = d.clone();
                 if !everywhere {
-                    d.message = format!("{} (this may be {union}, and a write to it is held to every one of them)", d.message.strip_suffix('.').unwrap_or(&d.message));
+                    let offering = |member: &Position| {
+                        by_member.members.iter().zip(&each).any(|(m, said)| std::ptr::eq(m, member) && !said.iter().any(|other| key(other) == key(&d)))
+                    };
+                    let said = d.message.strip_suffix('.').unwrap_or(&d.message).to_string();
+                    d.message = match crate::types::union_walk::member_only(&by_member.members, offering) {
+                        Some(crate::types::union_walk::MemberOnly { since, narrowing }) => {
+                            d.code = crate::codes::UNION_MEMBER_ONLY.to_string();
+                            format!("{said} ({since}, and a write to it is held to every one of them. Narrow the record you walk from first: {narrowing})")
+                        }
+                        None => format!("{said} (this may be {union}, and a write to it is held to every one of them)"),
+                    };
                 }
                 self.diagnostics.push(d);
             }

@@ -6,6 +6,7 @@
 //! - `field`: value types (`Ty`) — absence, unions, tuples, equality, fit, spelling.
 //! - `position`: where a record stands (`Position`), closures, edge landings, property reads.
 //! - `narrowing`: what a condition proves present.
+//! - `union_walk`: what an edge off a union lands on, where its members' edges land apart.
 //! - `pinned_member`: the member of a discriminated type a hop's WHERE pins.
 //! - `stdlib`: built-in signatures.
 //! - `infer`: `Typing`, which types an expression against a `TypeEnv`.
@@ -21,6 +22,7 @@ pub mod pinned_member;
 pub mod position;
 pub mod scope_env;
 pub mod stdlib;
+pub mod union_walk;
 pub mod unions;
 
 pub use field::Ty;

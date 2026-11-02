@@ -27,6 +27,7 @@ use super::field::*;
 use super::narrowing::{PresenceProof, exists_subject, is_position_terminal, negative_presence_proofs, presence_proofs};
 use super::unions::{join_field_types, join_positions, joined_under, one_record_of};
 use super::pinned_member::pinned_member;
+use super::union_walk::{MemberOnly, member_only};
 use super::position::{EdgeLanding, Position, describe_position, edge_landing, position_ref_in, refine_selected, unselected_members, instance_of_ref, lookup_property_type, narrow_present, narrow_present_node};
 use super::stdlib::{bare_coercer_returns, movement_meta_key_type, stdlib_function_by_id};
 
@@ -300,13 +301,14 @@ impl<'a> Typing<'a> {
     /// `probeEach`: one step (a field read, an edge hop) off every record a
     /// `OneOf` may be — what every member offers, or a refusal naming the
     /// member that does not offer it. The first refusal among a member's
-    /// reports is the union's, said of that member; anything that is no
-    /// refusal (a warning) is said as it was.
+    /// reports is the union's, said of that member under its own code or
+    /// the one `refusal` gives; anything that is no refusal (a warning) is
+    /// said as it was.
     fn probe_each<T>(
         &mut self,
         members: &[Position],
         mut step: impl FnMut(&mut Self, &Position) -> Option<T>,
-        refusal: impl Fn(&Position, &str) -> String,
+        refusal: impl Fn(&Position, &str) -> (Option<&'static str>, String),
     ) -> Option<Vec<Option<T>>> {
         let mut answers = Vec::new();
         for member in members {
@@ -314,8 +316,8 @@ impl<'a> Typing<'a> {
             let answer = step(self, member);
             let gathered = self.diagnostics.split_off(before);
             if let Some(refused) = gathered.iter().find(|d| d.is_error()) {
-                let message = refusal(member, refused.message.strip_suffix('.').unwrap_or(&refused.message));
-                self.report(&refused.code.clone(), message);
+                let (code, message) = refusal(member, refused.message.strip_suffix('.').unwrap_or(&refused.message));
+                self.report(code.unwrap_or(&refused.code.clone()), message);
                 return None;
             }
             self.diagnostics.extend(gathered);
@@ -386,11 +388,22 @@ impl<'a> Typing<'a> {
     fn step_every_member(&mut self, members: &[Position], edge: &EdgeStep) -> Option<Position> {
         let union = describe_position(&Position::OneOf(members.to_vec()));
         let name = edge.edge_type_id.clone();
-        let landings = self.probe_each(members, |t, member| t.step_edge(Some(member), edge).0, |member, refused| {
-            format!(
-                "'-[:{name}]->' can't be walked here: this may be {union}, and it walks only what every one of them has — {} refuses it ({refused}). Walk it where you know which record you hold",
-                describe_position(member)
-            )
+        let past_union = member_only(members, |member| !matches!(edge_landing(member, &name), EdgeLanding::Unknown { .. }));
+        let landings = self.probe_each(members, |t, member| t.step_edge(Some(member), edge).0, |member, refused| match &past_union {
+            Some(MemberOnly { since, narrowing }) => (
+                Some(codes::UNION_MEMBER_ONLY),
+                format!(
+                    "'-[:{name}]->' can't be walked here: {since}, and it walks only what every one of them has — {} refuses it ({refused}). Narrow the record you walk from first ({narrowing}), or walk what every one of them has",
+                    describe_position(member)
+                ),
+            ),
+            None => (
+                None,
+                format!(
+                    "'-[:{name}]->' can't be walked here: this may be {union}, and it walks only what every one of them has — {} refuses it ({refused}). Walk it where you know which record you hold",
+                    describe_position(member)
+                ),
+            ),
         })?;
         let landings: Vec<Position> = landings.into_iter().collect::<Option<_>>()?;
         join_positions(&landings.iter().collect::<Vec<_>>()).map(|joined| joined.position)
@@ -400,11 +413,22 @@ impl<'a> Typing<'a> {
     /// member's field, joined.
     fn read_every_member(&mut self, members: &[Position], property: &str) -> Option<Ty> {
         let union = describe_position(&Position::OneOf(members.to_vec()));
-        let types = self.probe_each(members, |t, member| t.read_property(Some(member), property), |member, refused| {
-            format!(
-                "'{property}' can't be read here: this may be {union}, and it reads only what every one of them has — {} refuses it ({refused}). Read it where you know which record you hold",
-                describe_position(member)
-            )
+        let past_union = member_only(members, |member| lookup_property_type(Some(member), property).is_some());
+        let types = self.probe_each(members, |t, member| t.read_property(Some(member), property), |member, refused| match &past_union {
+            Some(MemberOnly { since, narrowing }) => (
+                Some(codes::UNION_MEMBER_ONLY),
+                format!(
+                    "'{property}' can't be read here: {since}, and it reads only what every one of them has — {} refuses it ({refused}). Narrow the record you walk from first ({narrowing}), or read what every one of them has",
+                    describe_position(member)
+                ),
+            ),
+            None => (
+                None,
+                format!(
+                    "'{property}' can't be read here: this may be {union}, and it reads only what every one of them has — {} refuses it ({refused}). Read it where you know which record you hold",
+                    describe_position(member)
+                ),
+            ),
         })?;
         let types: Vec<Ty> = types.into_iter().collect::<Option<_>>()?;
         join_field_types(&types)
