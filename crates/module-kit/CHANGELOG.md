@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Breaking (listen-fire 0.14.0): the `LoopGuard` slot and `Host::loop_guard` are removed with the loop guard slot, which listen-fire 0.14 refuses by name: its loop breaker replaces it (docs/core-slots.md).
+
 ## 0.13.0 - 2026-11-02
 
 - Breaking: the `LoopGuard` trait loses `is_echo`, with `Echo` and `CurrentRecord`: the loop guard slot retired `guard.isEcho`, which listen-fire stopped calling in 0.13 (docs/contracts/loop-guard-slot.md). A guard built on the kit drops its `is_echo` to compile; one still serving the method over the wire is never asked.

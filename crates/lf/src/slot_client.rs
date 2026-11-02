@@ -2,8 +2,8 @@
 //! protocol 2's HTTP (crate::module_transport): one POST per method, the
 //! envelope `{ ok, result }` or `{ ok: false, error }`, the install's
 //! declared settings carried on every request. The slots' families are
-//! called synchronously (the run host's store, the limiter, the loop guard
-//! all answer before the caller goes on), so the calls are made on a thread
+//! called synchronously (the run host's store and the limiter answer before
+//! the caller goes on), so the calls are made on a thread
 //! of their own with its own runtime and the caller waits for the answer, as
 //! it waited on a database.
 //!
@@ -64,8 +64,8 @@ impl SlotError {
 type Job = (String, String, mpsc::Sender<Result<Js, SlotError>>);
 
 /// One slot module process reached from this thread: its slot (`kind`: the
-/// slot's name, `loop guard` for the loop guard's), its process, and the
-/// module as its client reaches it, so a session can read its manifest.
+/// slot's name), its process, and the module as its client reaches it, so
+/// a session can read its manifest.
 #[derive(Clone)]
 pub struct SlotProcess {
     pub kind: String,
@@ -211,11 +211,9 @@ impl SlotClient {
                 (Target::Process { process, token }, None)
             }
         };
-        // The loop guard's kind reads as words in messages; its slot is `loopGuard`.
-        let slot = if kind == "loop guard" { "loopGuard" } else { kind };
         let standing = Standing {
             name: name.to_string(),
-            slot: slot.to_string(),
+            slot: kind.to_string(),
             dir: process.dir.clone(),
             manifest_body: request_body("manifest", Obj::new(), &declared),
             manifest: tokio::sync::OnceCell::new(),

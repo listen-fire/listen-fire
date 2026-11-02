@@ -231,6 +231,9 @@ fn validate(manifest: &ExternalManifest) -> Result<(), String> {
         return Err(format!("kind: expected \"adapter\", \"plugin\" or \"core\", got \"{}\"", manifest.kind));
     }
     if manifest.kind == CORE_KIND {
+        if manifest.slot.as_deref() == Some(crate::core::RETIRED_LOOP_GUARD) {
+            return Err(format!("slot: loopGuard: {}", crate::core::loop_guard_retired()));
+        }
         let slots: Vec<&str> = crate::core::Slot::ALL.iter().map(|s| s.name()).collect();
         if manifest.slot.as_deref().and_then(crate::core::Slot::of).is_none() {
             return Err(format!("slot: a core module names the slot it fills ({})", slots.join(", ")));

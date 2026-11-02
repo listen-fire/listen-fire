@@ -34,6 +34,8 @@ named in [`RELEASING.md`](RELEASING.md).
   - The language server completes field names after `?.` as after `.`, and after a field holding a record (`c.Previous?.`).
   - `listen-fire upgrade`'s warning about a wait's captured value names a read as written (`founder?.Email`).
 
+- **The loop guard slot is removed.** `listen-fire check` and every command that opens a project refuse an `lf.yaml` naming `core.loopGuard`, and a core module whose `lf-external.yaml` or manifest says `slot: loopGuard`, by name: "the loop guard slot is retired: remove it; the loop breaker (lf.yaml's loopWindow and loopDepth) replaces it". Why: listen-fire stopped calling a guard in the release before, nothing read what one remembered, and the loop breaker caps every chain. Gone with it: `@lf/fingerprint-guard`, `listen-fire --contract-guard` and `--contract-guard-slot`, the slot's contract suite, `loopGuard` from `CORE_SLOTS` (`engine-contracts`), and module-kit's `LoopGuard`. To upgrade: delete `core.loopGuard` from `lf.yaml`, and any guard module from the externals folder.
+
 ## [0.13.1] - 2026-11-02
 
 A patch release of the 0.13 line: it reads the same pins as 0.13.0 (every `0.13.x`) and changes the meaning of no program that checks under 0.13.0. It mainly fixes what 0.13.0 stopped passing from a module to a run: who acted (Slack, email, Telegram, WhatsApp, Granola and Attio reported nobody, so a host that runs only registered senders dropped their runs), the record a fired record links to (Dealroom, Evertrace), Affinity's changed values and Airtable's ids. It also makes schedules fire on time, lets `connect` name a module without importing it, and stops `listen-fire upgrade` moving a pin past a rewrite that may change behaviour. Adapter protocol 2.7 adds `pollAgainAt` and an arrival's `actor`; a host that ignores them behaves as 0.13.0.
@@ -95,13 +97,13 @@ A patch release of the 0.13 line: it reads the same pins as 0.13.0 (every `0.13.
 
 ### Deprecated
 
-- **The loop guard slot is retired.** A project whose `lf.yaml` names one (`core: { loopGuard: … }`) runs as before, but listen-fire starts no guard: it prints one notice naming it as it starts, and never calls `guard.open` or `guard.recordWrite`. It also no longer reads each record back after a write to hand it to the guard, which saves one `readRecord` call per write. listen-fire's loop breaker (`loopWindow`, `loopDepth`) already caps every chain of writes and arrivals, and nothing read what a guard remembered. Remove `core.loopGuard` from `lf.yaml`; 0.14.0 refuses it ([loop-guard-slot.md](docs/contracts/loop-guard-slot.md)).
+- **The loop guard slot is retired.** A project whose `lf.yaml` names one (`core: { loopGuard: … }`) runs as before, but listen-fire starts no guard: it prints one notice naming it as it starts, and never calls `guard.open` or `guard.recordWrite`. It also no longer reads each record back after a write to hand it to the guard, which saves one `readRecord` call per write. listen-fire's loop breaker (`loopWindow`, `loopDepth`) already caps every chain of writes and arrivals, and nothing read what a guard remembered. Remove `core.loopGuard` from `lf.yaml`; 0.14.0 refuses it.
 
 - **`triggerEventOf`** in the engine package's `public/inbound` is deprecated. It builds the 0.12 trigger, which no 0.13 host makes; build a run's event with `arrivalTriggerOf`. 0.14.0 removes it.
 
 ### Removed
 
-- **The loop guard slot's `guard.isEcho` is retired** (within adapter protocol 2; no version moves). listen-fire stopped calling it in 0.13, when the loop breaker replaced echo suppression. Now listen-fire's built-in guard, `@lf/fingerprint-guard`, no longer answers it (`listen-fire --contract-guard` refuses it as `method_not_implemented`), and the slot's contract suite holds a guard to `guard.recordWrite` alone. A guard module that still offers `guard.isEcho` loads as before and is never asked ([loop-guard-slot.md](docs/contracts/loop-guard-slot.md)).
+- **The loop guard slot's `guard.isEcho` is retired** (within adapter protocol 2; no version moves). listen-fire stopped calling it in 0.13, when the loop breaker replaced echo suppression. Now listen-fire's built-in guard, `@lf/fingerprint-guard`, no longer answers it (`listen-fire --contract-guard` refuses it as `method_not_implemented`), and the slot's contract suite holds a guard to `guard.recordWrite` alone. A guard module that still offers `guard.isEcho` loads as before and is never asked.
 
 ### Fixed
 
