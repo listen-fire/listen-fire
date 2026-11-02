@@ -3,6 +3,7 @@
 - [`getting-started-lf.md`](getting-started-lf.md): running movements from a project folder with the `listen-fire` command. [`core-slots.md`](core-slots.md): the modules `lf.yaml`'s `core:` chooses (models, judge, store, files). [`embedding.md`](embedding.md): running the engine inside your own product.
 - [`editor-zed.md`](editor-zed.md): highlighting and the language server for `.mvt` files in the Zed editor.
 - [`contracts/`](contracts/README.md): the versioned contracts the movement core speaks, with an index of the versions each release supports and deprecates. The catalog snapshot, the parked run state, the host families (the boundary between the engine and the code that runs it, and the entry points), the adapter protocol a remote adapter serves, and the language versions.
+- [`language/migrating-to-0.14.md`](language/migrating-to-0.14.md): moving a project pinned to 0.13 onto 0.14: a field read through a value that may be missing is written `?.`, a walk off a union is read for what its records have or narrowed with `is`, `lazy` is a closure, and the loop guard slot is gone.
 - [`language/migrating-to-0.13.md`](language/migrating-to-0.13.md): moving a project pinned to 0.12 onto 0.13: callbacks give way to buttons and forms, `await first(x)` is `await x`, and a wait keeps the values it read.
 - [`language/migrating-to-0.12.md`](language/migrating-to-0.12.md): migrating an automation written before 0.12 (the integer versions 1–4); upgrading one is the platform's.
 

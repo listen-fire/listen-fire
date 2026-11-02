@@ -22,6 +22,8 @@ named in [`RELEASING.md`](RELEASING.md).
 
 ### Breaking (0.14.0)
 
+Guide: [`docs/language/migrating-to-0.14.md`](docs/language/migrating-to-0.14.md), with each change before and after, and what `listen-fire upgrade` rewrites or leaves to you.
+
 - **A field is never read with `.` through a value that may be missing, wherever the value comes from**, as TypeScript refuses `x.F` under strict null checks where `x` may be undefined. 0.13 refused it through a change's row and a map member. 0.14 refuses it too through a graph record that may be missing (`t = only(…)`, `first(…)`, a named `match`, then `t.Name`), through a call's result (`only(…).F`) and through an index read (`l[1].F`, `d["a"].F`), with `MOV_ABSENT_REQUIRED`. In 0.13 these read absent and checked clean, so a lookup that found nothing went unseen.
   - `x?.F` is added. It reads a field through a value that may be missing, and is absent when the value is, so `x?.F == null` holds then. It runs exactly as `x.F` ran in 0.13.
   - Narrowing still proves a value present: `exists(x)`, `x != null`, an `if`, a guard clause. `x?.F != null` proves `x` present too.
