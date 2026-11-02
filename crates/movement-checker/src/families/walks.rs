@@ -530,6 +530,12 @@ pub(crate) fn report_meaning_changed(typing: &mut Typing, position: &Position, p
     if movement_parser::version::standing(&pin, &changed.release) != movement_parser::version::Standing::OlderKey {
         return;
     }
+    // A comparison with values its module says kept their meaning reads the same under both releases.
+    if let (Some(compared), Some(unchanged)) = (&typing.compared_with, &changed.unchanged_values)
+        && compared.iter().all(|value| unchanged.contains(value))
+    {
+        return;
+    }
     let message = format!("'{property}' changed meaning in {}: {}. Under {pin} it held what it held then: check this read before moving the pin", changed.release, changed.note);
     let mut note = crate::diagnostic::Diagnostic::error(codes::FIELD_MEANING_CHANGED, message, typing.span);
     note.severity = Some(Severity::Warning);

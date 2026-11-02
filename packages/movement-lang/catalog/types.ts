@@ -864,8 +864,10 @@ export interface PositionSchema {
   fieldIds?: Record<string, string>;
   /** The fields whose meaning its module changed in a release, by name: a
    *  check for an upgrade from before that release warns where a program
-   *  reads one (gmail's `Labels`, ids before 0.13 and names since). */
-  changedFields?: Record<string, { release: string; note: string }>;
+   *  reads one (gmail's `Labels`, ids before 0.13 and names since).
+   *  `unchangedValues`: the values whose meaning did not change; a comparison
+   *  with literals all among them is not warned. */
+  changedFields?: Record<string, { release: string; note: string; unchangedValues?: string[] }>;
 }
 
 

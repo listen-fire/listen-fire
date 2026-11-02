@@ -11,6 +11,17 @@ import type { GmailMessageRecord } from './mime';
 /** Gmail's own labels, which every mailbox has and no person made. */
 const SYSTEM_LABELS = new Set(['INBOX', 'UNREAD', 'STARRED', 'IMPORTANT', 'SENT', 'DRAFT', 'SPAM', 'TRASH', 'CHAT']);
 
+/** Every name `isSystemLabel` accepts, listed (the `CATEGORY_` tabs are the five Gmail has): the
+ *  values whose meaning 0.13 left as it was, which the schema declares to the checker. */
+export const SYSTEM_LABEL_NAMES: string[] = [
+  ...SYSTEM_LABELS,
+  'CATEGORY_PERSONAL',
+  'CATEGORY_SOCIAL',
+  'CATEGORY_PROMOTIONS',
+  'CATEGORY_UPDATES',
+  'CATEGORY_FORUMS',
+];
+
 export function isSystemLabel(id: string): boolean {
   return SYSTEM_LABELS.has(id) || id.startsWith('CATEGORY_');
 }

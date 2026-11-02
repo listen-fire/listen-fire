@@ -16,6 +16,7 @@ import type { EdgeCapability } from 'engine-contracts/expression/expression';
 import type { SchemaEntryPoint, SchemaFieldDescriptor, SchemaTypeDescriptor } from 'movement-engine/public/catalog';
 
 import { META_RECORD_TYPE } from 'movement-engine/public/catalog';
+import { SYSTEM_LABEL_NAMES } from './label_names';
 import {
   GMAIL_ATTACHMENT_DISPLAY_NAME,
   GMAIL_ATTACHMENT_TYPE_ID,
@@ -270,7 +271,7 @@ const MESSAGE_DESCRIPTOR: SchemaTypeDescriptor = {
     { fieldId: 'bodyText', displayName: 'Plain Body', kind: 'string', writable: false, required: false, description: 'The plain-text alternative exactly as it arrived, or nothing when the message was HTML only. Read-only — `Body` is what a send sets.' },
     { fieldId: 'bodyHtml', displayName: 'HTML Body', kind: 'string', writable: true, required: false, description: 'The HTML alternative. Set it alongside `Body` on a send and the message goes out as both, so a reader that cannot show HTML still sees the text.' },
     { fieldId: GMAIL_MESSAGE_FILES_FIELD, displayName: GMAIL_MESSAGE_FILES_FIELD_NAME, kind: 'file', cardinality: 'many', writable: true, readable: false, required: false, description: 'Files to attach to a message being sent — a list of file values the run already holds (an attachment read off another message, a document a movement produced). Send-side only: the files on a RECEIVED message are on its `Attachments` edge.' },
-    { fieldId: 'labels', displayName: 'Labels', kind: 'string', cardinality: 'many', writable: false, required: false, description: 'Label names — a user label as the mailbox calls it (Deals), Gmail’s own in capitals (INBOX, UNREAD, IMPORTANT), in a walk and in a listen alike. A WHERE reaches the search as `label:`, and an OR of `CONTAINS` hears mail carrying any of them (`m.Labels CONTAINS "Deals" OR m.Labels CONTAINS "Hiring"`). This connection can read them and can never set one.', capability: { filterOperators: ['eq', 'in', 'contains', 'containsAny'] }, changedIn: { release: '0.13.0', note: 'it holds label names (`Deals`) where it held label ids (`Label_12`); Gmail’s own labels (`INBOX`, `UNREAD`) are spelled as before' } },
+    { fieldId: 'labels', displayName: 'Labels', kind: 'string', cardinality: 'many', writable: false, required: false, description: 'Label names — a user label as the mailbox calls it (Deals), Gmail’s own in capitals (INBOX, UNREAD, IMPORTANT), in a walk and in a listen alike. A WHERE reaches the search as `label:`, and an OR of `CONTAINS` hears mail carrying any of them (`m.Labels CONTAINS "Deals" OR m.Labels CONTAINS "Hiring"`). This connection can read them and can never set one.', capability: { filterOperators: ['eq', 'in', 'contains', 'containsAny'] }, changedIn: { release: '0.13.0', note: 'it holds label names (`Deals`) where it held label ids (`Label_12`); Gmail’s own labels (`INBOX`, `UNREAD`) are spelled as before', unchangedValues: SYSTEM_LABEL_NAMES } },
     { fieldId: 'hasAttachments', displayName: 'Has Attachments', kind: 'boolean', writable: false, required: false, description: 'Whether walking `Attachments` would find anything — true without fetching a single byte.' },
     QUERY_FIELD,
   ],

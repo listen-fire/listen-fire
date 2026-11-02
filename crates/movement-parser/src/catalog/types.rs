@@ -505,6 +505,12 @@ pub struct ChangedField {
     pub release: String,
     /// What changed, as the warning says it.
     pub note: String,
+    /// The values the field is compared with whose meaning did not change
+    /// (the mailbox's own labels: `INBOX`, `UNREAD`, ...). A comparison of the
+    /// field with literals that are all among them is not warned; the checker
+    /// compares the literal with this set and reads nothing into its spelling.
+    #[serde(default, rename = "unchangedValues", skip_serializing_if = "Option::is_none")]
+    pub unchanged_values: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

@@ -877,8 +877,11 @@ export const schemaFieldDescriptorSchema = z.object({
   mayBeAbsent: z.boolean().optional(),
   /** The release that changed what the field holds, and how, as a check for
    *  an upgrade from before it warns where a program reads it (gmail's
-   *  `Labels`: label ids before 0.13, names since). */
-  changedIn: z.object({ release: z.string().min(1), note: z.string().min(1) }).optional(),
+   *  `Labels`: label ids before 0.13, names since). `unchangedValues` are
+   *  the values a program may compare the field with that mean what they
+   *  meant before (the mailbox's own labels): a comparison with literals all
+   *  among them is not warned. */
+  changedIn: z.object({ release: z.string().min(1), note: z.string().min(1), unchangedValues: z.array(z.string().min(1)).optional() }).optional(),
 }).superRefine((field, ctx) => {
   if ((field.kind === 'owned') !== (field.owned !== undefined)) {
     ctx.addIssue({

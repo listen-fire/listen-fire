@@ -155,7 +155,7 @@ interface PositionSchema {
   description?: string;                           // the adapter's words for the type (its describe's, else its entry point's, `description`); shown, never checked
   fieldDocs?: Record<string, string>;             // the adapter's words for each field it described, readable or write-only, by name
   fieldIds?: Record<string, string>;              // the id its module keys each readable field by, by name, only where the two differ: a host reads an arrival's fields by name before judging it
-  changedFields?: Record<string, { release: string; note: string }>; // the fields whose meaning their module changed in a release: a check for an upgrade from before it warns (MOV_FIELD_MEANING_CHANGED) where a program reads one
+  changedFields?: Record<string, { release: string; note: string; unchangedValues?: string[] }>; // the fields whose meaning their module changed in a release: a check for an upgrade from before it warns (MOV_FIELD_MEANING_CHANGED) where a program reads one, unless it compares the field only with literals among `unchangedValues` (the values that mean what they meant before)
 }
 
 interface WritableRootSchema {

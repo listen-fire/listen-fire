@@ -585,7 +585,7 @@ export function instanceSchemaFromDescriptors(input: {
     /** Every described field's words, readable or write-only: the position's. */
     const positionFieldDocs: Record<string, string> = {};
     const fieldIds: Record<string, string> = {};
-    const changedFields: Record<string, { release: string; note: string }> = {};
+    const changedFields: Record<string, { release: string; note: string; unchangedValues?: string[] }> = {};
     /** Writable field id → the surface name it projected to — what an
      *  UNTAGGED write union's variants (declared in field ids) map through. */
     const writeFieldNameById = new Map<string, string>();

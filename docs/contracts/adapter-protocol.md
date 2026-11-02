@@ -407,8 +407,12 @@ reads every declaration from it, the listen declarations included.
   Any field may declare `changedIn` (`{ "release": "0.13.0", "note": "…" }`):
   a release of yours changed what the field holds (gmail's `Labels`: label
   names where they were ids), so a check for an upgrade from before that
-  release warns (`MOV_FIELD_MEANING_CHANGED`) wherever a program reads it,
-  and the pin stays until the author has checked each read and confirmed the
+  release warns (`MOV_FIELD_MEANING_CHANGED`) wherever a program reads it.
+  `changedIn.unchangedValues` (optional, a list of strings) names the values
+  that mean what they always did (gmail's own labels, `INBOX`, `UNREAD`, …):
+  a comparison of the field with literals that are all among them
+  (`==`, `!=`, `CONTAINS`, `IN`) is not warned, and the checker only compares
+  the literal with the list. The pin stays until the author has checked each read and confirmed the
   upgrade (`--all`). A field with any other `kind` is silently dropped, and the
   type's position is then left open: automations may read any field name
   off it unchecked. Add `"cardinality": "many"` for a list.

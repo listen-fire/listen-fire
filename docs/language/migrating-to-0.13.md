@@ -302,6 +302,7 @@ Each entry shows a 0.12 listen, the 0.13 listen `listen-fire upgrade` writes for
 - A label added to a message already there is its own arrival, on `Labelings`. Labels are compared by name (`Deals`), never by id.
 - A label removed and added again fires again, where 0.12 fired once, so `listen-fire upgrade` applies this rewrite only under `--all`.
 - `Labels` holds label names where it held ids: a 0.12 program that reads it is warned where it does (`MOV_FIELD_MEANING_CHANGED`), and the pin stays until you have checked each read and run `listen-fire upgrade --all`.
+  - A comparison with Gmail's own labels (`INBOX`, `UNREAD`, …) is not warned: they are spelled as before.
   - A 0.12 listen on a custom label's id (`labels: ["Label_12"]`) is rewritten to compare that id with names, so it would never fire: write the label's name (`Deals`) before moving the pin.
 
 #### `@lf/granola`

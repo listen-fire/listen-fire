@@ -16,7 +16,7 @@ use movement_parser::ast::Span;
 use movement_parser::surface::phrase::spell_word;
 use movement_parser::catalog::types::EdgeSchema;
 use movement_parser::lowering::expression::{
-    AggregationFunction, EdgeStep, Expression, ListElement, LogicalOp, ObjectMember, StaticValue, TraversalStep,
+    AggregationFunction, EdgeStep, Expression, FilterOperator, ListElement, LogicalOp, ObjectMember, StaticValue, TraversalStep,
 };
 
 use crate::codes;
@@ -188,6 +188,11 @@ pub struct Typing<'a> {
     read_types: HashMap<usize, Option<Ty>>,
     exact_types: HashMap<usize, Option<Ty>>,
     bare_names: HashMap<usize, String>,
+    /// The literals the field being read is compared with, while the left side
+    /// of a comparison against literals is typed: a read of a field whose
+    /// meaning changed is not warned when the literals are values it says did
+    /// not change (`ChangedField::unchanged_values`).
+    pub(crate) compared_with: Option<Vec<String>>,
     /// Each traversal's own walk: its order and last edge (`walkOrderings`).
     walk_orderings: HashMap<usize, (CollectionOrder, Option<String>)>,
     /// Where each traversal landed (`walkDestinations`).
@@ -199,6 +204,38 @@ pub struct Typing<'a> {
     /// expression, and whether it calls a model or reads the clock. `None`,
     /// and nothing kept, unless a story is being recorded.
     pub observed: Option<Box<crate::story::Observed>>,
+}
+
+/// A field read with nothing else in it: `m.Labels`, or the same off a hop's alias.
+fn is_plain_read(expr: &Expression) -> bool {
+    match expr {
+        Expression::Property { .. } | Expression::EdgeProperty { .. } => true,
+        Expression::Traverse { steps, expression, .. } => steps.is_empty() && is_plain_read(expression),
+        _ => false,
+    }
+}
+
+/// The string literals a field is tested against: `== "a"`, `CONTAINS "a"`, `IN ["a", "b"]`;
+/// none when the other side is anything else, so nothing is known of the values.
+fn compared_literals(op: FilterOperator, right: &Expression) -> Option<Vec<String>> {
+    if !matches!(op, FilterOperator::Eq | FilterOperator::Neq | FilterOperator::Contains | FilterOperator::In) {
+        return None;
+    }
+    let literal = |e: &Expression| match e {
+        Expression::Static { value: StaticValue::String(s) } => Some(s.clone()),
+        _ => None,
+    };
+    let literals = match right {
+        Expression::List { elements } => elements
+            .iter()
+            .map(|e| match e {
+                ListElement::Expression(e) => literal(e),
+                ListElement::Spread(_) => None,
+            })
+            .collect::<Option<Vec<_>>>()?,
+        other => vec![literal(other)?],
+    };
+    (!literals.is_empty()).then_some(literals)
 }
 
 impl<'a> Typing<'a> {
@@ -225,6 +262,7 @@ impl<'a> Typing<'a> {
             read_types: HashMap::new(),
             exact_types: HashMap::new(),
             bare_names: HashMap::new(),
+            compared_with: None,
             walk_orderings: HashMap::new(),
             walk_destinations: HashMap::new(),
             closure_operand_refused: std::collections::HashSet::new(),
@@ -1107,8 +1145,12 @@ impl<'a> Typing<'a> {
                 let operands = vec![self.infer_at(left, position), self.infer_at(right, position)];
                 (Some(Ty::Number), operands)
             }
-            Expression::Compare { left, right, .. } => {
-                let operands = vec![self.infer_at(left, position), self.infer_at(right, position)];
+            Expression::Compare { op, left, right } => {
+                let literals = if is_plain_read(left) { compared_literals(*op, right) } else { None };
+                let outer = std::mem::replace(&mut self.compared_with, literals);
+                let read = self.infer_at(left, position);
+                self.compared_with = outer;
+                let operands = vec![read, self.infer_at(right, position)];
                 (Some(Ty::Boolean), operands)
             }
             Expression::Logical { op, operands } => {
