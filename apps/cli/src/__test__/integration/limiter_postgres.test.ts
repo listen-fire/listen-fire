@@ -1,8 +1,8 @@
 // The limiter slot's contract suite against @listen-fire/postgres-limiter (modules/
-// postgres-limiter) as a process, over the slot wire, on the repo's test
-// database in a schema of its own that the run drops. Skipped without
-// DATABASE_URL_TEST. Two module processes share the one schema in the last
-// case: the point of the module is that hosts share one count.
+// postgres-limiter) as a process, over the slot wire, on the integration
+// tests' database (pg.ts) in a schema of its own that the run drops, so no
+// other test or run sees its rows. Two module processes share the one schema
+// in the last cases: the point of the module is that hosts share one count.
 
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
@@ -12,18 +12,18 @@ import { Pool } from 'pg';
 import { HOLD_MS } from 'movement-engine/services/limiter/limiter';
 import { limiterContractCases } from 'movement-engine/services/limiter/contract';
 import { RpcLimiter } from 'movement-engine/services/limiter/rpc_limiter';
+import { POSTGRES_URL } from './pg';
 
-const url = process.env.DATABASE_URL_TEST;
-const MODULE = resolve(__dirname, '../../../../modules/postgres-limiter');
+const MODULE = resolve(__dirname, '../../../../../modules/postgres-limiter');
 const schema = `lf_limiter_test_${randomUUID().replace(/-/g, '').slice(0, 12)}`;
 
 function start(): RpcLimiter {
   return new RpcLimiter(process.execPath, ['--conditions=movement-engine-internals', '--require', require.resolve('tsx/cjs'), resolve(MODULE, 'serve.ts')]);
 }
 
-describe('@listen-fire/postgres-limiter', { skip: url === undefined ? 'DATABASE_URL_TEST is not set' : false }, () => {
+describe('@listen-fire/postgres-limiter', () => {
   const limiters: RpcLimiter[] = [];
-  const settings = { url: url ?? '', schema };
+  const settings = { url: POSTGRES_URL, schema };
 
   before(async () => {
     const first = start();
@@ -33,7 +33,7 @@ describe('@listen-fire/postgres-limiter', { skip: url === undefined ? 'DATABASE_
 
   after(async () => {
     await Promise.all(limiters.map((limiter) => limiter.close()));
-    const pool = new Pool({ connectionString: url });
+    const pool = new Pool({ connectionString: POSTGRES_URL });
     try {
       await pool.query(`drop schema if exists "${schema}" cascade`);
     } finally {
