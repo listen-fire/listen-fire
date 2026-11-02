@@ -6,9 +6,8 @@
 
 import { z } from 'zod';
 import { SlotClient, startModule, type SlotAddress } from 'module-runtime/module_wire/wire';
-import type { EchoAnswer, EchoQuestion, LoopGuard, RecordWrite } from './loop_guard';
+import type { LoopGuard, RecordWrite } from './loop_guard';
 
-const Answer: z.ZodType<EchoAnswer> = z.union([z.object({ echo: z.boolean() }), z.object({ read: z.object({ recordType: z.string() }) })]);
 const Nothing = z.null();
 
 export class RpcLoopGuard implements LoopGuard {
@@ -35,10 +34,6 @@ export class RpcLoopGuard implements LoopGuard {
 
   async recordWrite(write: RecordWrite): Promise<void> {
     await this.call('guard.recordWrite', write, Nothing);
-  }
-
-  isEcho(question: EchoQuestion): Promise<EchoAnswer> {
-    return this.call('guard.isEcho', question, Answer);
   }
 
   async close(): Promise<void> {

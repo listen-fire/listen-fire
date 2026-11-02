@@ -5,7 +5,7 @@
 //! - [`Adapter`]: a system a movement connects to, reads and writes.
 //! - [`Plugins`]: a package of functions a movement calls.
 //! - A core slot: [`Store`] (run state), [`Limiter`] (provider limits),
-//!   [`LoopGuard`] (a movement's own write coming back), [`Wake`] (work is
+//!   [`LoopGuard`] (told of each record write a run makes), [`Wake`] (work is
 //!   due), [`Ocr`] (a scanned file's text).
 //!
 //! A module of any kind asks the host's ocr slot for a scanned file's text

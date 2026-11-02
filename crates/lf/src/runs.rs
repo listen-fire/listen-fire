@@ -1758,8 +1758,8 @@ impl Session {
 
     /// The record writes a segment made, told to the loop guard for its
     /// movement's listens (crate::loop_guard), whether or not the segment
-    /// then failed: the writes were made. Failing to tell it only means
-    /// their echoes fire.
+    /// then failed: the writes were made. Failing to tell it is reported,
+    /// and the run goes on.
     fn remember_writes(&self, run_id: &str, wrote: &[Wrote]) {
         let (Some(guard), false) = (&self.loop_guard, wrote.is_empty()) else { return };
         let remembering = || -> Result<(), String> {
@@ -1768,7 +1768,7 @@ impl Session {
             wrote.iter().try_for_each(|one| guard.record_write(one, &writer))
         };
         if let Err(message) = remembering() {
-            eprintln!("listen-fire: telling the loop guard run {run_id}'s writes: {message} (their echoes will fire)");
+            eprintln!("listen-fire: telling the loop guard run {run_id}'s writes: {message}");
         }
     }
 

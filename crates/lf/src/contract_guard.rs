@@ -10,12 +10,11 @@
 use std::cell::RefCell;
 use std::sync::Arc;
 
-use crate::guard_module::answer_wire;
 use crate::json::Js;
-use crate::loop_guard::{Asked, Current, FingerprintGuard, LoopGuard, Wrote};
+use crate::loop_guard::{FingerprintGuard, LoopGuard, Wrote};
 use crate::slot_server::{Listen, Refusal};
 
-pub const GUARD_METHODS: &[&str] = &["guard.open", "guard.recordWrite", "guard.isEcho"];
+pub const GUARD_METHODS: &[&str] = &["guard.open", "guard.recordWrite"];
 
 /// The guard being served: the project's, or the built-in once `guard.open` has made it.
 pub enum Serving {
@@ -32,8 +31,8 @@ pub async fn serve(serving: Serving, listen: Listen) -> Result<(), String> {
 fn answer(serving: &mut Serving, method: &str, params: &Js) -> Result<Js, Refusal> {
     match method {
         "guard.open" => open(serving, params).map(|()| Js::Null).map_err(Refusal::failed),
-        "guard.recordWrite" | "guard.isEcho" => match guard_of(serving) {
-            Some(guard) => call(guard, method, params),
+        "guard.recordWrite" => match guard_of(serving) {
+            Some(guard) => record_write(guard, params),
             None => Err(Refusal::failed("open me with guard.open first")),
         },
         other => Err(Refusal::unknown(other)),
@@ -61,24 +60,11 @@ fn open(serving: &mut Serving, params: &Js) -> Result<(), String> {
     Ok(())
 }
 
-fn call(guard: &dyn LoopGuard, method: &str, params: &Js) -> Result<Js, Refusal> {
-    let text = |from: &Js, key: &str| -> Result<String, Refusal> {
-        from.get(key).and_then(Js::as_str).map(str::to_string).ok_or_else(|| Refusal::bad_request(format!("{method}: {key}: expected a string")))
+fn record_write(guard: &dyn LoopGuard, params: &Js) -> Result<Js, Refusal> {
+    let text = |key: &str| -> Result<String, Refusal> {
+        params.get(key).and_then(Js::as_str).map(str::to_string).ok_or_else(|| Refusal::bad_request(format!("guard.recordWrite: {key}: expected a string")))
     };
-    let (adapter, external_id) = (text(params, "adapter")?, text(params, "externalId")?);
-    let writer = text(params, "writer")?;
-    if method == "guard.recordWrite" {
-        let record = params.get("record").ok_or_else(|| Refusal::bad_request(format!("{method}: record: expected the record")))?;
-        let wrote = Wrote { adapter, record_type: text(params, "recordType")?, external_id, record: record.clone() };
-        return guard.record_write(&wrote, &writer).map(|()| Js::Null).map_err(Refusal::failed);
-    }
-    let current = match params.get("current") {
-        None | Some(Js::Null) => None,
-        Some(current) => {
-            let record = current.get("record").ok_or_else(|| Refusal::bad_request(format!("{method}: current.record: expected the record")))?;
-            Some((text(current, "recordType")?, record))
-        }
-    };
-    let current = current.as_ref().map(|(record_type, record)| Current { record_type, record });
-    guard.is_echo(&Asked { adapter: &adapter, external_id: &external_id, writer: &writer, current }).map(|a| answer_wire(&a)).map_err(Refusal::failed)
+    let record = params.get("record").ok_or_else(|| Refusal::bad_request("guard.recordWrite: record: expected the record"))?;
+    let wrote = Wrote { adapter: text("adapter")?, record_type: text("recordType")?, external_id: text("externalId")?, record: record.clone() };
+    guard.record_write(&wrote, &text("writer")?).map(|()| Js::Null).map_err(Refusal::failed)
 }

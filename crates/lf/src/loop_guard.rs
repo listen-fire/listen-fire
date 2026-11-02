@@ -1,37 +1,30 @@
-//! The loop guard slot (docs/contracts/loop-guard-slot.md): a module that
-//! keeps a run's own writes from firing it again. Empty unless lf.yaml's
-//! `core:` names one; with none, a movement writing to the source it listens
-//! to hears its own write come back and runs again.
+//! The loop guard slot (docs/contracts/loop-guard-slot.md): a module told of
+//! each record write a run makes. Empty unless lf.yaml's `core:` names one.
 //!
-//! The host's part is small. After a run writes a record to a source that
-//! can echo it (one that sends webhooks or is polled, and can read a record
-//! back), it reads the record back and tells the guard (`record_write`).
-//! When an inbound event names a record, it asks the guard whether the event
-//! is the echo of a listen's own write (`is_echo`); an echo fires none of
-//! that listen's movement. Everything else is the guard's: how long it
-//! remembers, what "unchanged" means, where its memory lives.
+//! The host's part is one moment. After a run writes a record to a source
+//! that can echo it (one that sends webhooks or is polled, and can read a
+//! record back), it reads the record back and tells the guard
+//! (`record_write`). Nothing in listen-fire asks the guard anything: the
+//! loop breaker (crate::loop_breaker) caps every chain of writes and
+//! arrivals, and the slot's `guard.isEcho` is retired.
 //!
 //! `@lf/fingerprint-guard`, the built-in, remembers a hash of the record as
-//! the write left it for an hour, per record and writing movement. An event
-//! is the write's echo while the record still hashes the same. Someone
-//! else's change leaves it different, so it fires (the platform's authorship
-//! rule: this change's author, never the record's identity forever); another
-//! movement's listens hear the write, since reacting to what a movement
-//! wrote is a legitimate chain. Its memory is a file of its own
-//! (`.lf/guard.db`), or a Postgres database every listen-fire worker shares (its
-//! `lf_guard` schema); nothing of it is in the store slot.
+//! the write left it for an hour, per record and writing movement. Its memory
+//! is a file of its own (`.lf/guard.db`), or a Postgres database every
+//! listen-fire worker shares (its `lf_guard` schema); nothing of it is in the
+//! store slot.
 
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::Mutex;
 
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, params};
 use sha2::{Digest, Sha256};
 #[cfg(feature = "postgres")]
 use tokio_postgres::Client;
 
 use crate::json::Js;
-use crate::store::{iso, iso_at};
+use crate::store::iso;
 
 /// How long the built-in remembers a write: an echo arrives within it (a
 /// webhook in seconds, a poll within its interval).
@@ -50,34 +43,9 @@ pub struct Wrote {
     pub record: Js,
 }
 
-/// Whether an inbound event naming `external_id` on `adapter` is the echo of
-/// `writer`'s own write (`listen:<file>:<movement>`). `current` is the record
-/// as it stands now, once the guard has said which type to read.
-#[derive(Debug, Clone, Copy)]
-pub struct Asked<'a> {
-    pub adapter: &'a str,
-    pub external_id: &'a str,
-    pub writer: &'a str,
-    pub current: Option<Current<'a>>,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct Current<'a> {
-    pub record_type: &'a str,
-    pub record: &'a Js,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum Answer {
-    Echo(bool),
-    /// The guard needs the record as it stands, of this type, to say.
-    Read { record_type: String },
-}
-
 pub trait LoopGuard: Send + Sync {
     /// `writer`'s write, remembered; its later write to the same record replaces it.
     fn record_write(&self, wrote: &Wrote, writer: &str) -> Result<(), String>;
-    fn is_echo(&self, asked: &Asked) -> Result<Answer, String>;
 }
 
 /// A record's fingerprint: the hash of its JSON as the source answered it.
@@ -205,34 +173,6 @@ impl LoopGuard for FingerprintGuard {
         }
         Ok(())
     }
-
-    fn is_echo(&self, asked: &Asked) -> Result<Answer, String> {
-        let now = iso_at(jiff::Timestamp::now().as_millisecond());
-        let memory = self.memory.lock().unwrap_or_else(|p| p.into_inner());
-        let remembered: Option<(String, String)> = match &*memory {
-            Memory::File(db) => db
-                .query_row(
-                    "select record_type, fingerprint from write_fingerprint where adapter = ? and external_id = ? and writer = ? and expires_at > ?",
-                    params![asked.adapter, asked.external_id, asked.writer, now],
-                    |r| Ok((r.get(0)?, r.get(1)?)),
-                )
-                .optional()
-                .map_err(|e| e.to_string())?,
-            #[cfg(feature = "postgres")]
-            Memory::Postgres(client) => crate::pg_store::block_on(client.query_opt(
-                "select record_type, fingerprint from lf_guard.write_fingerprint
-                 where adapter = $1::text and external_id = $2::text and writer = $3::text and expires_at > $4::text::timestamptz",
-                &[&asked.adapter, &asked.external_id, &asked.writer, &now],
-            ))
-            .map_err(|e| crate::pg_store::failed(e).to_string())?
-            .map(|r| (r.get(0), r.get(1))),
-        };
-        Ok(match (remembered, asked.current) {
-            (None, _) => Answer::Echo(false),
-            (Some((record_type, _)), None) => Answer::Read { record_type },
-            (Some((_, remembered)), Some(current)) => Answer::Echo(fingerprint(current.record) == remembered),
-        })
-    }
 }
 
 #[cfg(test)]
@@ -258,29 +198,21 @@ mod tests {
         Wrote { adapter: "attio".into(), record_type: "Companies".into(), external_id: "r1".into(), record: Js::Obj(obj! { "description" => Js::str(description) }) }
     }
 
-    fn ask<'a>(guard: &FingerprintGuard, writer: &'a str, current: Option<&'a Js>) -> Answer {
-        let current = current.map(|record| Current { record_type: "Companies", record });
-        guard.is_echo(&Asked { adapter: "attio", external_id: "r1", writer, current }).unwrap()
+    /// The fingerprint the guard remembers for `writer`'s write to r1.
+    fn remembered(guard: &FingerprintGuard, writer: &str) -> Option<String> {
+        use rusqlite::OptionalExtension;
+        let memory = guard.memory.lock().unwrap();
+        let Memory::File(db) = &*memory else { panic!("the tests open a file") };
+        db.query_row("select fingerprint from write_fingerprint where adapter = 'attio' and external_id = 'r1' and writer = ?", params![writer], |r| r.get(0)).optional().unwrap()
     }
 
     #[test]
-    fn an_unchanged_record_is_its_writers_echo_and_nobody_elses() {
-        let guard = guard();
-        guard.record_write(&wrote("Seen by lf"), "listen:sync:stamp").unwrap();
-        let unchanged = wrote("Seen by lf").record;
-        let edited = wrote("Edited by Bob").record;
-        assert_eq!(ask(&guard, "listen:sync:stamp", None), Answer::Read { record_type: "Companies".into() });
-        assert_eq!(ask(&guard, "listen:sync:stamp", Some(&unchanged)), Answer::Echo(true));
-        assert_eq!(ask(&guard, "listen:sync:stamp", Some(&edited)), Answer::Echo(false));
-        assert_eq!(ask(&guard, "listen:audit:log", None), Answer::Echo(false));
-    }
-
-    #[test]
-    fn a_later_write_replaces_the_earlier_one() {
+    fn a_later_write_replaces_the_earlier_one_for_its_writer_only() {
         let guard = guard();
         guard.record_write(&wrote("one"), "listen:sync:stamp").unwrap();
+        guard.record_write(&wrote("audit"), "listen:audit:log").unwrap();
         guard.record_write(&wrote("two"), "listen:sync:stamp").unwrap();
-        assert_eq!(ask(&guard, "listen:sync:stamp", Some(&wrote("one").record)), Answer::Echo(false));
-        assert_eq!(ask(&guard, "listen:sync:stamp", Some(&wrote("two").record)), Answer::Echo(true));
+        assert_eq!(remembered(&guard, "listen:sync:stamp"), Some(fingerprint(&wrote("two").record)));
+        assert_eq!(remembered(&guard, "listen:audit:log"), Some(fingerprint(&wrote("audit").record)));
     }
 }

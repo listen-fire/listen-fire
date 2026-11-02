@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 
 use crate::core::ProcessModule;
 use crate::json::{Js, Obj};
-use crate::loop_guard::{Answer, Asked, LoopGuard, Wrote};
+use crate::loop_guard::{LoopGuard, Wrote};
 use crate::obj;
 use crate::slot_client::SlotClient;
 
@@ -37,34 +37,5 @@ impl LoopGuard for ProcessGuard {
             "record" => wrote.record.clone(),
         };
         self.call("guard.recordWrite", params).map(|_| ())
-    }
-
-    fn is_echo(&self, asked: &Asked) -> Result<Answer, String> {
-        let answer = self.call("guard.isEcho", asked_params(asked))?;
-        answer_of(&answer).ok_or_else(|| format!("{}: guard.isEcho answered {}, not an echo or a record to read", self.client.label, answer.to_json()))
-    }
-}
-
-// ── The wire's shapes, both ways (crate::contract_guard serves them) ────────
-
-pub fn asked_params(asked: &Asked) -> Obj {
-    let mut out = obj! { "adapter" => Js::str(asked.adapter), "externalId" => Js::str(asked.external_id), "writer" => Js::str(asked.writer) };
-    if let Some(current) = asked.current {
-        out.insert("current".into(), Js::from(obj! { "recordType" => Js::str(current.record_type), "record" => current.record.clone() }));
-    }
-    out
-}
-
-pub fn answer_wire(answer: &Answer) -> Js {
-    Js::from(match answer {
-        Answer::Echo(echo) => obj! { "echo" => Js::Bool(*echo) },
-        Answer::Read { record_type } => obj! { "read" => Js::from(obj! { "recordType" => Js::str(record_type) }) },
-    })
-}
-
-fn answer_of(answer: &Js) -> Option<Answer> {
-    match answer.get("echo") {
-        Some(Js::Bool(echo)) => Some(Answer::Echo(*echo)),
-        _ => Some(Answer::Read { record_type: answer.get("read")?.get("recordType")?.as_str()?.to_string() }),
     }
 }

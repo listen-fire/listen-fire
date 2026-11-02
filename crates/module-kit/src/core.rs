@@ -994,44 +994,12 @@ slot! {
 
 // ── loop guard ───────────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CurrentRecord {
-    pub record_type: String,
-    pub record: Js,
-}
-
-/// An `isEcho`'s answer.
-#[derive(Debug, Clone)]
-pub enum Echo {
-    Decided(bool),
-    /// The guard needs the record as it stands: the host reads it and asks
-    /// again with `current`.
-    Read { record_type: String },
-}
-
-impl Serialize for Echo {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let mut map = serializer.serialize_map(Some(1))?;
-        match self {
-            Echo::Decided(echo) => map.serialize_entry("echo", echo)?,
-            Echo::Read { record_type } => {
-                let read: BTreeMap<&str, &str> = BTreeMap::from([("recordType", record_type.as_str())]);
-                map.serialize_entry("read", &read)?;
-            }
-        }
-        map.end()
-    }
-}
-
 slot! {
-    /// The loop guard slot: tells a movement's own write coming back (an
-    /// echo) from a real change. Any doubt means the event fires.
+    /// The loop guard slot: told of each record write a run makes.
     pub trait LoopGuard served as LoopGuardModule in slot "loopGuard" {
         "guard.open" => fn open(GuardOpen { #[serde(default)] settings: BTreeMap<String, String> }) -> ();
         /// `writer` (`listen:<file>:<movement>`) wrote `external_id`; `record`
         /// is the source's answer read back right after (`null`: gone).
         "guard.recordWrite" => fn record_write(GuardRecordWrite { adapter: String, record_type: String, external_id: String, writer: String, record: Js }) -> ();
-        "guard.isEcho" => fn is_echo(GuardIsEcho { adapter: String, external_id: String, writer: String, current: Option<CurrentRecord> }) -> Echo;
     }
 }

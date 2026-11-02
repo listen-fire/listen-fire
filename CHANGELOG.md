@@ -35,6 +35,10 @@ named in [`RELEASING.md`](RELEASING.md).
   - The editor completes an adapter after `connect `, by its package name where it has one, and hover and go-to-definition answer for `connect`'s adapter and credential.
   - The handbook, the docs, the examples and the authoring MCP's guidance show only the form with no import. Their programs that connected the `manual` or `cron` unit now listen to the unit by name.
 
+### Removed
+
+- **The loop guard slot's `guard.isEcho` is retired** (within adapter protocol 2; no version moves). listen-fire stopped calling it in 0.13, when the loop breaker replaced echo suppression. Now listen-fire's built-in guard, `@lf/fingerprint-guard`, no longer answers it (`listen-fire --contract-guard` refuses it as `method_not_implemented`), and the slot's contract suite holds a guard to `guard.recordWrite` alone. A guard module that still offers `guard.isEcho` loads as before and is never asked ([loop-guard-slot.md](docs/contracts/loop-guard-slot.md)).
+
 ## [0.13.0] - 2026-11-02
 
 A new compatibility key: waiting and listening become traversals, and callbacks retire.

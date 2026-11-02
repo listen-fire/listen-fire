@@ -507,8 +507,8 @@ impl<'s> SegmentAdapters<'s> {
     /// A record write to a source that can echo it back (it sends webhooks
     /// or is polled), with a loop guard in its slot: the record read back as
     /// the write left it, for the guard (crate::loop_guard). A source that
-    /// can not read a record back is not compared, and a failed read only
-    /// means its echo fires.
+    /// can not read a record back is not read, and a failed read is reported
+    /// and leaves the guard untold.
     async fn note_write(&self, instance: &Instance, plain: &Js, answer: &Js) {
         let running = self.running(instance);
         if self.externals.loop_guard.is_none() || (running.inbound.is_none() && running.poll_interval_seconds.is_none()) || !self.has(instance, "readRecord") || answer.get("notFound").is_some() {
@@ -524,7 +524,7 @@ impl<'s> SegmentAdapters<'s> {
                 external_id: external_id.to_string(),
                 record,
             }),
-            Err(failure) => eprintln!("listen-fire: {}: reading {record_type} {external_id} back after writing it: {} (its echo will fire)", running.external.manifest.name, failure.message()),
+            Err(failure) => eprintln!("listen-fire: {}: reading {record_type} {external_id} back after writing it, for the loop guard: {}", running.external.manifest.name, failure.message()),
         }
     }
 

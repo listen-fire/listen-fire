@@ -180,7 +180,7 @@ pub const BUILTIN: &[CoreModule] = &[
     built_in(LOCAL_FILES, Slot::Files, &[]),
     // Keeps the limits in this process: one listen-fire's calls, not a fleet's.
     built_in(MEMORY_LIMITER, Slot::Limiter, &[]),
-    // Remembers what a run wrote for an hour, so the write's echo runs nothing.
+    // Remembers what a run wrote for an hour.
     built_in(FINGERPRINT_GUARD, Slot::LoopGuard, FINGERPRINT_GUARD_SETTINGS),
     // The secrets file (plain or SOPS) and its lock file: listen-fire's secrets as they always were.
     built_in(FILE_SECRETS, Slot::Secrets, &[]),
@@ -200,7 +200,7 @@ pub struct CoreChoice {
     pub store: CoreModule,
     pub files: CoreModule,
     pub limiter: CoreModule,
-    /// None: no guard runs, and a movement's own write echoing back fires it again.
+    /// None: no guard runs (the loop breaker caps chains either way).
     pub loop_guard: Option<CoreModule>,
     /// None: a module asking for a page is refused by name.
     pub browser: Option<CoreModule>,
