@@ -172,7 +172,8 @@ test('a note narrowed with is reads its own fields: a landing, a union parameter
   const misread = lf(crmProject('  return c-[:Spaces]->-[:Subjects]->-[n:Notes]-> {\n    if (n is <c-[:Memo]->>) {\n      return n.Tone\n    }\n    return n.Mood\n  }'), 'check');
   assert.equal(misread.code, 1, misread.out);
   assert.match(misread.out, /error MOV_UNKNOWN_PROPERTY .*'Tone'/, misread.out);
-  assert.match(misread.out, /error MOV_UNION_MEMBER_ONLY 'Mood' can't be read here/, misread.out);
+  // Below the arm that returns, the note is a Remark.
+  assert.match(misread.out, /error MOV_UNKNOWN_PROPERTY c\.Remark has no field 'Mood'/, misread.out);
 });
 
 test('an is test naming a type the note can never be is warned: the types have no overlap', () => {
@@ -186,4 +187,17 @@ test('an is test naming a type the note can never be is warned: the types have n
     /warning MOV_IS_NO_OVERLAP 'n' is c\.Remark or c\.Memo, never c\.Person: the types have no overlap, so this test is always false/,
     checked.out,
   );
+});
+
+test('below an arm that always returns, the note is the rest of what it may be', () => {
+  const dir = crmProject(`  return c-[:Spaces]->-[:Subjects]->-[n:Notes]-> {
+    if (n is <c-[:Memo]->>) {
+      return n.Mood
+    }
+    return n.Tone
+  }`);
+  const checked = lf(dir, 'check');
+  assert.equal(checked.code, 0, checked.out);
+  assert.match(checked.out, /1 file\(s\), 0 error\(s\)/, checked.out);
+  assert.deepEqual(returned(dir), ['glad', 'dry']);
 });

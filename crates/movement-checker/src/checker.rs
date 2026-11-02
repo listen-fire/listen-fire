@@ -733,10 +733,14 @@ impl<'c> Checker<'c> {
     /// condition false below the `if` (while every arm before it leaves too);
     /// the `else` sees every arm's condition false; and when the `else` and
     /// every arm but one leave, that arm's condition holds below.
-    /// A failed bare `IS` test rules its variant out of the arms below it.
+    /// A failed bare `IS` test rules its variant out of the arms below it,
+    /// and out of the statements after the `if` when its arm, and every arm
+    /// before it, always leaves (TypeScript's narrowing past an early return).
     fn check_if(&mut self, statement: &movement_parser::ast::IfStatement, scope: ScopeId) {
         // A failed bare `IS` rules its variant out of every later arm and the `else`.
         let mut ruled_out = crate::families::walks::RuledOut::default();
+        // … and out of what follows the `if`, where its arm always leaves.
+        let mut ruled_out_below = crate::families::walks::RuledOut::default();
         let mut all_prior_terminate = true;
         let mut arm_terminates = Vec::new();
         let branch = self.record_node(statement.span, scope, crate::story::What::Branch { arms: Vec::new(), otherwise: None });
@@ -752,14 +756,19 @@ impl<'c> Checker<'c> {
             let terminating = terminates(&arm.body);
             self.record_body(arm.span, "arm", terminating);
             arm_terminates.push(terminating);
-            if all_prior_terminate && terminating {
+            let left = all_prior_terminate && terminating;
+            if left {
                 self.narrow_condition_negation(&arm.condition, scope, scope);
             }
-            all_prior_terminate = all_prior_terminate && terminating;
+            all_prior_terminate = left;
             if let Ok(condition) = condition_of_slot(&arm.condition) {
                 self.collect_is_elimination(&condition, scope, &mut ruled_out);
+                if left {
+                    self.collect_is_elimination(&condition, scope, &mut ruled_out_below);
+                }
             }
         }
+        self.declare_eliminated(&ruled_out_below, scope, scope);
         let Some(else_arm) = &statement.else_arm else { return };
         let else_scope = self.scopes.open(Some(scope));
         self.note_extent(else_arm.span, else_scope);
@@ -818,8 +827,12 @@ impl<'c> Checker<'c> {
             other => vec![other],
         };
         for conjunct in conjuncts {
-            if let MovementCondition::Expr { expr } = conjunct {
-                self.narrow_presence(&expr, scope, scope, slot.span);
+            match conjunct {
+                MovementCondition::Expr { expr } => self.narrow_presence(&expr, scope, scope, slot.span),
+                MovementCondition::IsTest { subject_raw, type_ } if crate::slots::is_bare_ident(subject_raw.trim()) => {
+                    self.narrow_is_true(subject_raw.trim(), &type_, scope, scope);
+                }
+                MovementCondition::IsTest { .. } | MovementCondition::And { .. } => {}
             }
         }
     }

@@ -117,3 +117,29 @@ fn a_test_naming_a_type_the_value_can_never_be_is_warned() {
     }
     assert_eq!(all("function go() {\n  crm-[s:Subjects]-> {\n    if (s is <crm-[:Person]->>) {\n      x = 1\n    }\n  }\n}"), Vec::<String>::new());
 }
+
+#[test]
+fn below_an_arm_that_always_leaves_the_value_is_the_rest() {
+    for leaves in ["return \"\"", "fail(\"no memo\")"] {
+        let body = format!("if (n is <crm-[:Memo]->>) {{\n  {leaves}\n}}\ntone = n.Tone");
+        for (how, functions) in each_value(&body) {
+            assert_eq!(errors(&functions), Vec::<String>::new(), "{how} ({leaves}):\n{functions}");
+        }
+    }
+    // An arm that may fall through narrows nothing below it.
+    for (how, functions) in each_value("if (n is <crm-[:Memo]->>) {\n  x = 1\n}\ntone = n.Tone") {
+        assert_eq!(codes(&errors(&functions)).len(), 1, "{how}");
+    }
+    // The `else` that leaves: the arm's test holds below.
+    for (how, functions) in each_value("if (n is <crm-[:Memo]->>) {\n  x = 1\n} else {\n  return \"\"\n}\nmood = n.Mood") {
+        assert_eq!(errors(&functions), Vec::<String>::new(), "{how}");
+    }
+}
+
+#[test]
+fn below_an_arm_that_always_leaves_a_union_record_is_the_rest() {
+    let body = "function go() {\n  crm-[s:Subjects]-> {\n    if (s is <crm-[:Person]->>) {\n      return \"\"\n    }\n    s-[r:Notes]-> {\n      tone = r.Tone\n    }\n  }\n}";
+    assert_eq!(errors(body), Vec::<String>::new());
+    let held = errors(&body.replace("return \"\"", "x = 1"));
+    assert_eq!(codes(&held), ["MOV_UNION_MEMBER_ONLY"], "{held:?}");
+}
