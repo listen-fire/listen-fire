@@ -80,7 +80,7 @@ pub(crate) fn run_check_with<'c>(program: &Program, catalog: &'c CatalogSnapshot
         .into_iter()
         .chain(std::mem::take(&mut checker.imports.spelling))
         .chain(problems)
-        .chain(found.into_iter().map(version::with_handbook_pointer).map(diagnostic::in_spelling_of))
+        .chain(families::walks::fold_absent_reads(found).into_iter().map(version::with_handbook_pointer).map(diagnostic::in_spelling_of))
         .collect();
     (diagnostics, checker)
 }

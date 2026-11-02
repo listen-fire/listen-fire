@@ -145,4 +145,11 @@ impl TypeEnv for ScopeEnv<'_> {
     fn entry_read_text(&self, name: &str) -> Option<String> {
         self.entry_reads.get(name).map(|(_, written)| written.clone())
     }
+
+    fn binding_of(&self, name: &str) -> Option<crate::scope::SymbolId> {
+        match self.scopes.resolve(self.scope, name) {
+            Resolution::Found(id) => Some(id),
+            _ => None,
+        }
+    }
 }

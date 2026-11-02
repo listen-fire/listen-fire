@@ -32,12 +32,15 @@ fn check(body: &str) -> Vec<String> {
 fn fixed(body: &str) -> String {
     let (source, found) = diagnostics(body);
     let mut lines: Vec<String> = source.lines().map(String::from).collect();
+    // A value read more than once is one report whose fix places each read's `?`.
     let mut edits: Vec<(usize, usize, String)> = found
         .iter()
-        .map(|d| {
+        .flat_map(|d| {
             let fix = d.fix.as_ref().unwrap_or_else(|| panic!("no fix: {}", d.message));
             assert_eq!(fix["safe"], Value::Bool(true), "{}", d.message);
-            let edit = &fix["edits"][0];
+            fix["edits"].as_array().cloned().unwrap_or_default()
+        })
+        .map(|edit| {
             let (start, end) = (&edit["span"]["start"], &edit["span"]["end"]);
             assert_eq!(start, end, "an insertion");
             (start["line"].as_u64().unwrap() as usize, start["col"].as_u64().unwrap() as usize, edit["text"].as_str().unwrap().to_string())
@@ -130,6 +133,24 @@ fn an_index_read_is_not_narrowed_by_another_value() {
         let rebound = found.iter().filter(|d| d.starts_with("MOV_REBOUND_NAME")).count();
         assert!(absent == 1 && absent + rebound == found.len(), "{refused}: {found:?}");
     }
+}
+
+/// Reads through one value are one report: one cause, one test that answers
+/// every read. Another value, or the same name bound in another function,
+/// is reported on its own.
+#[test]
+fn reads_through_one_value_are_one_report() {
+    let found = check(&format!("{T}  a = t.Name\n  return [a, t.Topic, t.Name]"));
+    assert_eq!(
+        found,
+        ["MOV_ABSENT_REQUIRED 't' may be absent, and 2 fields are read through it: Name and Topic (lines 5 and 6). Test it once before the first read: `if (t == null) { fail(\"…\") }`, or read each with `?.` (`t?.Name`, absent when 't' is), or read them inside `if (exists(t)) { … }`. (see handbook: front#maybe-absent)"]
+    );
+    assert_eq!(check(&format!("{T}  u = only(at-[:Tables]->)\n  return [t.Name, u.Name, t.Topic]")).len(), 2);
+    let two_functions = format!("{T}  return t.Name\n}}\nfunction again() {{\n{T}  return t.Topic");
+    assert_eq!(check(&two_functions).len(), 2);
+    // One field read twice names it once.
+    let twice = check(&format!("{T}  return [t.Name, t.Name]"));
+    assert!(twice.len() == 1 && twice[0].contains("and 't.Name' reads through it (line 5)"), "{twice:?}");
 }
 
 #[test]

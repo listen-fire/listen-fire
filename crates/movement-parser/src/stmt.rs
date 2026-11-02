@@ -44,10 +44,23 @@ const NODE_ENTRY_EFFECTS: [&str; 10] =
 /// The words that always begin their own statement, so none of them can be a
 /// name a statement binds. (`match`, `node`, `type`, `race`, `all` and `fail`
 /// begin one only when what follows fits, so `match = …` still binds.)
-const STATEMENT_KEYWORDS: [&str; 19] = [
+const STATEMENT_KEYWORDS: [&str; 20] = [
     "import", "export", "shape", "movement", "function", "listen", "run", "write", "link", "edge", "unlink", "delete", "refresh", "await",
-    "if", "ERROR", "extract", "callback", "else",
+    "if", "ERROR", "extract", "callback", "else", "return",
 ];
+
+/// Why `word = …` is refused, and what to write instead: a name that says
+/// what it holds, and every word a binding cannot take.
+fn reserved_as_name(word: &str) -> String {
+    let mut words = STATEMENT_KEYWORDS.to_vec();
+    words.sort_by_key(|w| w.to_lowercase());
+    let mut letters = word.chars();
+    let suggested = letters.next().map(|c| format!("the{}{}", c.to_uppercase(), letters.as_str().to_lowercase())).unwrap_or_default();
+    format!(
+        "'{word}' starts a statement, so it can't be a name: call the value something else, such as `{suggested}`, here and where it is read. Words that start a statement: {}",
+        words.join(", ")
+    )
+}
 
 const LAZY_AWAIT: &str = "'lazy await' can't be both: 'await' waits for the edge to resolve and continues the run there, 'lazy' waits to look until something reads. Pick the one you meant";
 
@@ -1076,7 +1089,7 @@ impl Parser {
         // Each of these words claims the statement below, so `link = …` would
         // otherwise fail as a malformed `link` statement, naming its arrow.
         if STATEMENT_KEYWORDS.contains(&word.as_str()) && self.assigned_after(&word) {
-            return self.fail_at(format!("'{word}' is reserved; pick another name"), start);
+            return self.fail_at(reserved_as_name(&word), start);
         }
         match word.as_str() {
             "import" => return Ok(Statement::Import(self.parse_import()?)),
@@ -5183,14 +5196,17 @@ mod tests {
 
     #[test]
     fn a_statement_keyword_bound_as_a_name_is_reserved() {
+        let words = "await, callback, delete, edge, else, ERROR, export, extract, function, if, import, link, listen, movement, refresh, return, run, shape, unlink, write";
         assert_eq!(
             error("function m() {\n  link = 1\n}\n"),
-            json!({ "message": "'link' is reserved; pick another name", "loc": { "line": 2, "col": 3 } })
+            json!({ "message": format!("'link' starts a statement, so it can't be a name: call the value something else, such as `theLink`, here and where it is read. Words that start a statement: {words}"), "loc": { "line": 2, "col": 3 } })
         );
-        assert_eq!(error("write\t= 1\n"), json!({ "message": "'write' is reserved; pick another name", "loc": { "line": 1, "col": 1 } }));
+        assert_eq!(error("write\t= 1\n").pointer("/loc"), Some(&json!({ "line": 1, "col": 1 })));
+        assert!(error("write\t= 1\n")["message"].as_str().is_some_and(|m| m.starts_with("'write' starts a statement") && m.contains("`theWrite`")));
+        assert!(error("function m() {\n  return = 1\n}\n")["message"].as_str().is_some_and(|m| m.starts_with("'return' starts a statement")));
         // A comparison is no binding, and a word that begins a statement only
         // when what follows fits binds as any name does.
-        assert_ne!(error("link == 1\n").pointer("/message"), Some(&json!("'link' is reserved; pick another name")));
+        assert!(!error("link == 1\n")["message"].as_str().is_some_and(|m| m.contains("starts a statement")));
         for bound in ["match = 1\n", "`link` = 1\n", "links = 1\n"] {
             program(bound);
         }

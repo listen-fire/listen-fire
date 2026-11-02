@@ -41,6 +41,7 @@
 //! - MOV_WALK_ROOT_NOT_RECORD
 //! - MOV_WALK_ROOTLESS
 
+use indexmap::IndexMap;
 use movement_parser::ast::{PathHead, PathRoot};
 use movement_parser::catalog::types::{CollectionSchema, EdgeCapability, EdgeSchema, PositionSchema, PushMode};
 use movement_parser::lowering::expression::{EdgeStep, Expression, FilterOperator, ListElement, OrderDirection, StaticValue, TraversalStep};
@@ -49,7 +50,7 @@ use movement_parser::surface::phrase::spell_word;
 
 use crate::codes;
 use crate::families::values::quote_name;
-use crate::diagnostic::Severity;
+use crate::diagnostic::{AbsentRead, Diagnostic, Severity};
 use crate::scope::{Resolution, ScopeId};
 use crate::types::field::{CollectionOrder, HeldRecord, Ty, describe_field_type, holds_records, record_head_position};
 use crate::types::scope_env::SymbolTypes;
@@ -392,9 +393,109 @@ pub fn report_read_through_absent(typing: &mut Typing, subject: &str, field: &st
             "'{subject}' may be absent, and '{read}' reads through it. Read it with `{optional}` (absent when '{subject}' is), or test it first: `exists({subject}) && {read} …`, or read it inside `if (exists({subject})) {{ … }}`."
         ),
     };
+    // Only a named value read outside a WHERE folds with its other reads: the
+    // one test that narrows it (`if (x == null) …`) answers them all.
+    let binding = (!staged && typing.hop_where.is_none()).then(|| typing.env.binding_of(written_root(subject))).flatten();
     typing.report(codes::ABSENT_REQUIRED, message);
     if let Some(diagnostic) = typing.diagnostics.last_mut() {
         diagnostic.read_through = Some((subject.to_string(), field.to_string()));
+        diagnostic.absent_read = binding.map(|binding| AbsentRead { binding, subject: subject.to_string(), field: field.to_string() });
+    }
+}
+
+/// The name a read as written starts at: `c` in `c.Previous`, `my inv` in
+/// `` `my inv`.Stage ``.
+fn written_root(subject: &str) -> &str {
+    let mut quoted = false;
+    let end = subject
+        .char_indices()
+        .find(|&(_, c)| {
+            if c == '`' {
+                quoted = !quoted;
+            }
+            c == '.' && !quoted
+        })
+        .map_or(subject.len(), |(i, _)| i);
+    subject[..end].trim_matches('`')
+}
+
+/// `MOV_ABSENT_REQUIRED`, once per value: the reads `report_read_through_absent`
+/// refused through one binding and one value become one report at the first,
+/// naming each field and line, its fix every read's `?.`. Many reports of one
+/// cause bury the others, and the one test that narrows the value answers
+/// them all. A value read once keeps its own report.
+pub fn fold_absent_reads(diagnostics: Vec<Diagnostic>) -> Vec<Diagnostic> {
+    let key = |d: &Diagnostic| d.absent_read.as_ref().map(|r| (r.binding, r.subject.clone()));
+    let mut groups: IndexMap<(crate::scope::SymbolId, String), Vec<usize>> = IndexMap::new();
+    for (i, d) in diagnostics.iter().enumerate() {
+        if let Some(k) = key(d) {
+            groups.entry(k).or_default().push(i);
+        }
+    }
+    let mut folded: std::collections::HashMap<usize, Option<Diagnostic>> = std::collections::HashMap::new();
+    for members in groups.values().filter(|m| m.len() > 1) {
+        let reads: Vec<&Diagnostic> = members.iter().map(|&i| &diagnostics[i]).collect();
+        folded.insert(members[0], Some(folded_report(&reads)));
+        for &i in &members[1..] {
+            folded.insert(i, None);
+        }
+    }
+    diagnostics
+        .into_iter()
+        .enumerate()
+        .filter_map(|(i, d)| match folded.remove(&i) {
+            Some(replacement) => replacement,
+            None => Some(d),
+        })
+        .collect()
+}
+
+fn folded_report(reads: &[&Diagnostic]) -> Diagnostic {
+    let subject = reads[0].absent_read.as_ref().map(|r| r.subject.clone()).unwrap_or_default();
+    let mut fields: Vec<String> = Vec::new();
+    let mut lines: Vec<usize> = Vec::new();
+    let mut edits: Vec<serde_json::Value> = Vec::new();
+    for read in reads {
+        if let Some(r) = &read.absent_read {
+            let field = quote_name(&r.field);
+            if !fields.contains(&field) {
+                fields.push(field);
+            }
+        }
+        if !lines.contains(&read.span.start.line) {
+            lines.push(read.span.start.line);
+        }
+        for edit in read.fix.as_ref().and_then(|f| f.get("edits")).and_then(|e| e.as_array()).into_iter().flatten() {
+            if !edits.contains(edit) {
+                edits.push(edit.clone());
+            }
+        }
+    }
+    lines.sort_unstable();
+    let lines = in_words(&lines.iter().map(|l| l.to_string()).collect::<Vec<_>>());
+    let line_word = if lines.contains(' ') { "lines" } else { "line" };
+    // The example read is one that needs no backticks, where there is one.
+    let first = fields.iter().find(|f| !f.starts_with('`')).or(fields.first()).cloned().unwrap_or_default();
+    let read = match fields.as_slice() {
+        [one] => format!("'{subject}.{one}' reads through it ({line_word} {lines})"),
+        _ => format!("{} fields are read through it: {} ({line_word} {lines})", fields.len(), in_words(&fields)),
+    };
+    let message = format!(
+        "'{subject}' may be absent, and {read}. Test it once before the first read: `if ({subject} == null) {{ fail(\"…\") }}`, or read each with `?.` (`{subject}?.{first}`, absent when '{subject}' is), or read them inside `if (exists({subject})) {{ … }}`."
+    );
+    let anchor = reads.iter().map(|d| d.span).min_by_key(|s| (s.start.line, s.start.col)).unwrap_or(reads[0].span);
+    Diagnostic {
+        fix: (!edits.is_empty()).then(|| serde_json::json!({ "edits": edits, "safe": true })),
+        ..Diagnostic::error(codes::ABSENT_REQUIRED, message, anchor)
+    }
+}
+
+/// `a`, `a and b`, `a, b and c`.
+fn in_words(items: &[String]) -> String {
+    match items {
+        [] => String::new(),
+        [one] => one.clone(),
+        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
     }
 }
 

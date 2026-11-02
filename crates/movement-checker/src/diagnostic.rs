@@ -35,11 +35,25 @@ pub struct Diagnostic {
     /// `?.` (`absent_read_fixes`).
     #[serde(skip)]
     pub read_through: Option<(String, String)>,
+    /// A refused `.` read through a named value that may be absent: reads
+    /// through one binding are folded into one report (`fold_absent_reads`).
+    #[serde(skip)]
+    pub absent_read: Option<AbsentRead>,
+}
+
+/// What `MOV_ABSENT_REQUIRED` refused a read through: the binding its root
+/// name resolves to, the value as written (`invoice`, `c.Previous`), and the
+/// field it read.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AbsentRead {
+    pub binding: crate::scope::SymbolId,
+    pub subject: String,
+    pub field: String,
 }
 
 impl Diagnostic {
     pub fn error(code: &str, message: impl Into<String>, span: Span) -> Self {
-        Diagnostic { code: code.to_string(), message: message.into(), span, severity: None, upgrade: None, fix: None, walks: None, read_through: None }
+        Diagnostic { code: code.to_string(), message: message.into(), span, severity: None, upgrade: None, fix: None, walks: None, read_through: None, absent_read: None }
     }
 
     pub fn is_error(&self) -> bool {

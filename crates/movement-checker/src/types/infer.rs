@@ -90,6 +90,11 @@ pub trait TypeEnv {
     fn entry_read_text(&self, _name: &str) -> Option<String> {
         None
     }
+    /// The binding a name read here resolves to: two reads through one
+    /// binding are about one value, however far apart they are written.
+    fn binding_of(&self, _name: &str) -> Option<crate::scope::SymbolId> {
+        None
+    }
 }
 
 /// An environment with nothing in it.
