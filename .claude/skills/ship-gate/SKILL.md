@@ -20,6 +20,9 @@ Gates everything accumulated on local main since the last gate.
      `@listen-fire/handbook`, `@listen-fire/module-kit`,
      `@listen-fire/fake-channels`, `lf-cli`, and the modules the chunk touched
      (gmail, slack and affinity at least; CI runs those three).
+   - The Postgres leg: `pnpm --filter lf-cli test:postgres` with
+     `LF_TEST_POSTGRES_URL` pointing at a throwaway `postgres:16` container
+     you start for the gate and remove after it.
    - `cargo test --locked --workspace` (the crates' own suites and corpora).
    - The wasm rebuild check: `./scripts/build-movement-wasm.sh`, then
      `git status --short packages/movement-lang/wasm` must be empty (the
@@ -41,3 +44,7 @@ Gates everything accumulated on local main since the last gate.
 - Legs run as background tasks — don't block on one before starting the other.
 - Report results plainly: what ran, what passed, what failed with verbatim
   output. No hedging.
+- In a worktree, run the `lf-cli` legs with `LF_MODULES_DIR=<worktree>/modules`
+  and `LF_SERVE_MODULE=<worktree>/apps/cli/node_modules/.bin/serve-module`:
+  a binary under the shared target walks up to the main checkout, so it would
+  otherwise load the main checkout's modules and serve them with its module-kit.
