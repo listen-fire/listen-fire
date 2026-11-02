@@ -20,6 +20,12 @@ named in [`RELEASING.md`](RELEASING.md).
 
 <!-- add merged PRs here -->
 
+### Changed
+
+- **A value that may be absent is reported once, however many fields are read through it.** `MOV_ABSENT_REQUIRED` used to report each read: twelve errors for a program that read seven fields of one invoice in eight places. Reads through one name, in one function, are now one error at the first read. It names each field and line once, and suggests the one test that answers them all, `if (invoice == null) { fail("…") }`. Its fix is every read's `?.`, so `listen-fire upgrade` and an editor's quick fix place them all at once. A value read once, a read inside a walk's `WHERE` and a read through a call's result keep their own message. Nothing the checker accepts or refuses changes.
+- **Binding a word that starts a statement says what to do.** `link = …` used to answer `'link' is reserved; pick another name`. It now suggests a name (`theLink`) and lists every word that starts a statement. `return = …` gets the same message, where it used to fail as an unexpected `=`.
+- **The handbook's front page shows the forms authors reach for.** One checked program shows a parameter typed by the record a listen lands on (`<crm-[:CompanyChange]->>`), a change's record tested before it is read, mail sent through a mailbox connection, and a post to a channel found by name inside the block over it. The page also lists the words that start a statement.
+
 ## [0.14.2] - 2026-11-02
 
 A patch release of the 0.14 line: it reads the same pins as 0.14.0 (every `0.14.x`). Airtable listens narrowed to a base or table work on every host.
