@@ -28,7 +28,7 @@ listen to sys-[e:Events WHERE e.Kind == "Run Failed"]-> fire report
   - \`Run Failed\`: a run of another program ended failed.
   - \`Run Paused\`: a run paused at its cost limit and waits to be resumed.
   - \`Wait Lost Its Record\`: a run waits on a record that was deleted.
-  - \`Arrival Not Judged\`: a listen could not tell whether an arrival fires it, because its WHERE reads a field the system could not give (a lookup it did not answer). That listen ran nothing; the arrival's other listens ran. It is reported once per listen and arrival, and once more for each replay that still cannot judge it.
+  - \`Arrival Not Judged\`: a listen could not tell whether an arrival fires it, because its WHERE reads a field the system could not give (a lookup it did not answer). That listen ran nothing; the arrival's other listens ran. It is reported once per listen and arrival, and once more whenever a replay still cannot judge it.
   - \`Release Applied\`: a new release is running.
   - \`Validation Issue\`: a saved program does not validate under the running release.
   - \`Deprecated Version\`: a saved program is pinned to a deprecated language version; it still runs.

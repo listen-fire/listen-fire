@@ -20,9 +20,9 @@
     "zod": "4.1.12"
   },
   "peerDependencies": {
-    "@listen-fire/engine": ">=0.13.0 <1.0.0",
-    "@listen-fire/engine-contracts": ">=0.13.0 <1.0.0",
-    "@listen-fire/movement-lang": ">=0.13.0 <1.0.0"
+    "@listen-fire/engine": ">=0.13.1 <1.0.0",
+    "@listen-fire/engine-contracts": ">=0.13.1 <1.0.0",
+    "@listen-fire/movement-lang": ">=0.13.1 <1.0.0"
   },
   "devDependencies": {
     "@listen-fire/engine": "workspace:^",

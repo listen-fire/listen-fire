@@ -14,6 +14,7 @@ import { GMAIL_MANIFEST } from '../../../modules/gmail/manifest';
 import { MCP_MANIFEST } from '../../../modules/mcp/manifest';
 import { SLACK_MANIFEST } from '../../../modules/slack/manifest';
 import { STRIPE_MANIFEST } from '../../../modules/stripe/manifest';
+import { SYSTEM_MANIFEST } from '../../../modules/system/manifest';
 import { TELEGRAM_MANIFEST } from '../../../modules/telegram/manifest';
 import { WEBHOOK_MANIFEST } from '../../../modules/webhook/manifest';
 import { WHATSAPP_MANIFEST } from '../../../modules/whatsapp/manifest';
@@ -29,6 +30,7 @@ export const MODULES: Record<string, AdapterManifest> = {
   mcp: MCP_MANIFEST,
   slack: SLACK_MANIFEST,
   stripe: STRIPE_MANIFEST,
+  system: SYSTEM_MANIFEST,
   telegram: TELEGRAM_MANIFEST,
   webhook: WEBHOOK_MANIFEST,
   whatsapp: WHATSAPP_MANIFEST,

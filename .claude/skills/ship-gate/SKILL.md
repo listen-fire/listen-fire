@@ -20,6 +20,12 @@ Gates everything accumulated on local main since the last gate.
      `@listen-fire/handbook`, `@listen-fire/module-kit`,
      `@listen-fire/fake-channels`, `lf-cli`, and the modules the chunk touched
      (gmail, slack and affinity at least; CI runs those three).
+     The handbook's set includes `peer_floors.unit.test.ts`: it checks every
+     package's shipped programs (the handbook's chapters, each module's handbook
+     section) with the checker of the oldest core its peer range admits, which
+     it installs from npm into `node_modules/.cache/peer-floors` (needs the
+     network the first time). A failure names the package and the program: raise
+     that package's core peer floor in its own changeset.
    - The Postgres leg: `pnpm --filter lf-cli test:postgres` with
      `LF_TEST_POSTGRES_URL` pointing at a throwaway `postgres:16` container
      you start for the gate and remove after it.
