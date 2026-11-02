@@ -214,9 +214,15 @@ pub struct LazyTraversal {
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ConstructionCall {
+    /// The adapter: a name an import binds, or, written with `connect`, the
+    /// adapter's own key (a package tag `` `@lf/x` `` is read as `x`).
     pub callee: String,
     pub args: Vec<NamedArg>,
     pub span: Span,
+    /// Written `connect x using c`, where `x` and `c` need no import; false
+    /// for the older construction `x(credentials: c)`, which is refused.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub connect: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]

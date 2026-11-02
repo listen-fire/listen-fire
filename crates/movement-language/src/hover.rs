@@ -73,6 +73,66 @@ pub fn word_at(text: &Text<'_>, pos: Pos) -> Option<Word> {
     Some(Word { name, range: Range { start, end }, after_dot, receiver, in_hop })
 }
 
+/// An adapter, `name` as written, `key` the catalog's.
+fn adapter_card(service: &Service, name: &str, key: &str) -> String {
+    let adapter = service.catalog.adapters.get(key);
+    let mut lines: Vec<String> = adapter.and_then(|a| a.spec.description.clone()).into_iter().collect();
+    let credentialed = adapter.is_some_and(|a| a.spec.construction_args.iter().any(|arg| arg.kind == movement_parser::catalog::types::ArgKind::Credential));
+    let using = if credentialed || adapter.is_none() { " using <credential>" } else { "" };
+    lines.push(format!("An adapter. Use it with `connect {name}{using}`."));
+    lines.extend(adapter.and_then(any_schema).and_then(holds_line));
+    lines.extend(adapter.and_then(any_schema).and_then(listen_to_line));
+    card(name, &lines, page_of(SymbolKind::Adapter))
+}
+
+/// A credential, `name` as written, `key` the catalog's.
+fn credential_card(service: &Service, name: &str, key: &str) -> String {
+    let adapters = service.catalog.credentials.get(key).map(|c| match c {
+        movement_parser::catalog::types::SnapshotCredential::Adapters(spec) => spec.adapters.clone(),
+        movement_parser::catalog::types::SnapshotCredential::Adapter(legacy) => vec![legacy.adapter.clone()],
+    });
+    let what = match adapters.as_deref() {
+        Some([]) | None => "A sign-in".to_string(),
+        Some(adapters) => format!("Sign-in for {}", adapters.join(" or ")),
+    };
+    let line = format!("{what}. listen-fire reads it from secrets.yaml or the environment when the movement runs; it never appears in the file.");
+    card(name, &[line], page_of(SymbolKind::Credential))
+}
+
+/// A name in one of `connect`'s two positions, which name the catalog's
+/// adapter and credential directly (no import binds them).
+pub(crate) enum ConnectPosition {
+    Adapter,
+    Credential,
+}
+
+/// Which of `connect`'s positions a word starts in, from the line before it.
+pub(crate) fn connect_position(line_before: &str) -> Option<ConnectPosition> {
+    let words: Vec<&str> = line_before.trim_end_matches('`').split_whitespace().collect();
+    match words.as_slice() {
+        [.., "connect"] => Some(ConnectPosition::Adapter),
+        [.., "connect", _, "using"] => Some(ConnectPosition::Credential),
+        _ => None,
+    }
+}
+
+/// The catalog's key for a name written in `connect`'s adapter position (a
+/// package tag is read as the parser reads it).
+pub(crate) fn adapter_key(written: &str) -> &str {
+    written.strip_prefix("@lf/").unwrap_or(written)
+}
+
+/// The word's card when it is a catalog adapter or credential in a `connect`.
+fn connect_position_card(service: &Service, line_before: &str, name: &str) -> Option<String> {
+    match connect_position(line_before)? {
+        ConnectPosition::Adapter => {
+            let key = adapter_key(name);
+            service.catalog.adapters.get(key).map(|_| adapter_card(service, name, key))
+        }
+        ConnectPosition::Credential => service.catalog.credentials.get(name).map(|_| credential_card(service, name, name)),
+    }
+}
+
 /// A header in a code block, a paragraph per line, and the docs link.
 fn card(header: &str, lines: &[String], (page, anchor): (&str, &str)) -> String {
     let body: String = lines.iter().filter(|l| !l.is_empty()).map(|l| format!("{l}\n\n")).collect();
@@ -344,30 +404,8 @@ fn symbol_card(service: &Service, analysis: &Analysis, text: &Text<'_>, id: move
             lines.extend(schema.and_then(listen_to_line));
             card(&header, &lines, docs)
         }
-        SymbolKind::Adapter => {
-            let key = symbol.imported_name.as_deref().unwrap_or(name);
-            let adapter = service.catalog.adapters.get(key);
-            let mut lines: Vec<String> = adapter.and_then(|a| a.spec.description.clone()).into_iter().collect();
-            let credentialed = adapter.is_some_and(|a| a.spec.construction_args.iter().any(|arg| arg.kind == movement_parser::catalog::types::ArgKind::Credential));
-            let using = if credentialed || adapter.is_none() { " using <credential>" } else { "" };
-            lines.push(format!("An adapter. Use it with `connect {name}{using}`."));
-            lines.extend(adapter.and_then(any_schema).and_then(holds_line));
-            lines.extend(adapter.and_then(any_schema).and_then(listen_to_line));
-            card(name, &lines, docs)
-        }
-        SymbolKind::Credential => {
-            let key = symbol.imported_name.as_deref().unwrap_or(name);
-            let adapters = service.catalog.credentials.get(key).map(|c| match c {
-                movement_parser::catalog::types::SnapshotCredential::Adapters(spec) => spec.adapters.clone(),
-                movement_parser::catalog::types::SnapshotCredential::Adapter(legacy) => vec![legacy.adapter.clone()],
-            });
-            let what = match adapters.as_deref() {
-                Some([]) | None => "A sign-in".to_string(),
-                Some(adapters) => format!("Sign-in for {}", adapters.join(" or ")),
-            };
-            let line = format!("{what}. listen-fire reads it from secrets.yaml or the environment when the movement runs; it never appears in the file.");
-            card(name, &[line], docs)
-        }
+        SymbolKind::Adapter => adapter_card(service, name, symbol.imported_name.as_deref().unwrap_or(name)),
+        SymbolKind::Credential => credential_card(service, name, symbol.imported_name.as_deref().unwrap_or(name)),
         SymbolKind::Plugin => match plugin_of(service, symbol) {
             Some(spec) => plugin_card(name, spec),
             None => card(name, &["A plugin the catalog does not describe.".to_string()], docs),
@@ -434,6 +472,10 @@ pub fn hover(service: &Service, source: &str, pos: Pos) -> Option<Hover> {
         // A package's member, bound as `web.fetchUrl`.
         let id = analysis.resolve(at, &format!("{receiver_name}.{}", word.name))?;
         return finish(symbol_card(service, analysis, &text, id));
+    }
+    let line_before = text.line_before(word.range.start);
+    if let Some(card) = connect_position_card(service, line_before, &word.name) {
+        return finish(card);
     }
     let analyzed = service.analyze(source, Some(pos.line));
     if word.in_hop {

@@ -30,7 +30,7 @@ impl Checker<'_> {
     pub(crate) fn declare_units(&mut self, scope: ScopeId) {
         for unit in movement_parser::version::RUN_HOST_UNITS {
             let at = movement_parser::ast::Loc { line: 1, col: 1 };
-            let construct = ConstructionCall { callee: unit.to_string(), args: Vec::new(), span: movement_parser::ast::Span { start: at, end: at } };
+            let construct = ConstructionCall { callee: unit.to_string(), args: Vec::new(), span: movement_parser::ast::Span { start: at, end: at }, connect: false };
             let instantiated = self.catalog.instantiate(unit, &Args::default());
             let mut symbol = crate::scope::Symbol::new(*unit, SymbolKind::Instance, construct.span);
             symbol.unit = true;
@@ -272,12 +272,7 @@ impl Checker<'_> {
 
     /// An instance: the schema its construction picks.
     fn instance_types(&mut self, name: &str, construct: &ConstructionCall, scope: ScopeId) -> SymbolTypes {
-        let adapter = match self.scopes.resolve(scope, &construct.callee) {
-            Resolution::Found(id) if self.scopes.symbol(id).kind == SymbolKind::Adapter => {
-                self.scopes.symbol(id).imported_name.clone().unwrap_or_else(|| construct.callee.clone())
-            }
-            _ => return SymbolTypes::default(),
-        };
+        let Some(adapter) = self.connected_adapter(construct, scope) else { return SymbolTypes::default() };
         let credential_arg = self.catalog.adapter(&adapter).and_then(movement_parser::catalog::helpers::credential_arg_of).map(|a| a.name.clone());
         let args: Args = construct
             .args

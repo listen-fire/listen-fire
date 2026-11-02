@@ -114,7 +114,6 @@ pub async fn add_credential(project: &Project, input: AddInput<'_>, prompter: &m
         return Ok(());
     }
     prompter.print(&format!("added {name} ({module}, credential {}); a movement uses it as:", declaration.name));
-    prompter.print(&format!("  import {{ {name} }} from credentials"));
     prompter.print(&format!("  x = connect {module} using {name}"));
     Ok(())
 }

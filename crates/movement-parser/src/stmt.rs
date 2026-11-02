@@ -1493,7 +1493,7 @@ impl Parser {
                 _ => None,
             })
             .collect();
-        Ok(Some(RValue::Construct { construct: ConstructionCall { callee, args: plain, span } }))
+        Ok(Some(RValue::Construct { construct: ConstructionCall { callee, args: plain, span, connect: false } }))
     }
 
     /// A zero-argument or otherwise unnamed invocation — `go = manual()`. It
@@ -1545,7 +1545,7 @@ impl Parser {
             return Ok(None);
         }
         self.pos = end;
-        Ok(Some(ConstructionCall { callee, args, span: self.span_between(save, end) }))
+        Ok(Some(ConstructionCall { callee, args, span: self.span_between(save, end), connect: false }))
     }
 
     // ── Traversal heads and blocks ──
@@ -3705,7 +3705,7 @@ impl Parser {
                     };
                     if at_stop {
                         self.pos = end;
-                        let construct = ConstructionCall { callee: name, args: Vec::new(), span };
+                        let construct = ConstructionCall { callee: name, args: Vec::new(), span, connect: false };
                         return Ok(Some((RValue::Construct { construct }, span)));
                     }
                 }
@@ -4340,7 +4340,7 @@ impl Parser {
                     self.pos += 1;
                 }
             }
-            construct = Some(ConstructionCall { callee: instance.clone(), args, span: self.span_from(construct_start) });
+            construct = Some(ConstructionCall { callee: instance.clone(), args, span: self.span_from(construct_start), connect: false });
         }
         self.skip_inline_ws();
         let mut config = Vec::new();
@@ -4791,6 +4791,9 @@ impl Parser {
         self.pos += "connect".len();
         self.skip_inline_ws();
         let callee = self.read_name("the adapter after 'connect'")?;
+        // Written as an import's braces write it: the package tag names the
+        // adapter after the prefix, as `parse_import` reads it.
+        let callee = callee.strip_prefix(ADAPTER_PACKAGE_PREFIX).map_or(callee.clone(), str::to_string);
         let mut args = Vec::new();
         self.skip_inline_ws();
         if self.at_word("using") {
@@ -4829,7 +4832,7 @@ impl Parser {
                 args.push(NamedArg { name: snake_case(&key.text), value: self.slot(raw, span), is_type: None });
             }
         }
-        Ok(ConstructionCall { callee, args, span: self.span_from(start) })
+        Ok(ConstructionCall { callee, args, span: self.span_from(start), connect: true })
     }
 
     /// An adapter is set up with `connect`; its construction

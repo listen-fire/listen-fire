@@ -1779,6 +1779,10 @@ impl Checker<'_> {
     /// `callInConstructPosition`: `name(arg: …)` is one surface form, and a
     /// function's name there is a call, not a construction.
     pub fn call_in_construct_position(&self, construct: &movement_parser::ast::ConstructionCall, scope: ScopeId) -> Option<CallStatement> {
+        // `connect x` names an adapter, whatever else `x` names.
+        if construct.connect {
+            return None;
+        }
         let callee = construct.callee.clone();
         let Resolution::Found(id) = self.scopes.resolve(scope, &callee) else { return None };
         let symbol = self.scopes.symbol(id);

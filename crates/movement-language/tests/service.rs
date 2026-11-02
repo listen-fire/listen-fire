@@ -148,7 +148,31 @@ fn credential_names_follow_using() {
     assert_eq!(labels(&items), ["acme_bot"]);
 }
 
-const HOVERED: &str = "import { `@lf/slack` as slack } from adapters
+#[test]
+fn adapters_follow_connect_with_no_import() {
+    let items = service().complete("chat = connect ", Pos { line: 0, character: 15 });
+    assert_eq!(labels(&items), ["slack"]);
+}
+
+#[test]
+fn credential_names_follow_using_with_no_import() {
+    let items = service().complete("chat = connect slack using ", Pos { line: 0, character: 27 });
+    assert_eq!(labels(&items), ["acme_bot"]);
+}
+
+#[test]
+fn connect_s_adapter_and_credential_hover_with_no_import() {
+    let source = "chat = connect `@lf/slack` using acme_bot\n";
+    let adapter = service().hover(source, after(source, "@lf/sla", 0)).unwrap();
+    assert!(adapter.contents.contains("An adapter."), "{}", adapter.contents);
+    let credential = service().hover(source, after(source, "acme_b", 0)).unwrap();
+    assert!(credential.contents.contains("Sign-in for slack"), "{}", credential.contents);
+    let module = |marker: &str| service().definition(source, after(source, marker, 0)).and_then(|l| l.module);
+    assert_eq!(module("@lf/sla"), Some(ModuleRef { namespace: ModuleNamespace::Adapters, name: "slack".into() }));
+    assert_eq!(module("acme_b"), Some(ModuleRef { namespace: ModuleNamespace::Credentials, name: "acme_bot".into() }));
+}
+
+const HOVERED: &str ="import { `@lf/slack` as slack } from adapters
 import { `@lf/web` as web } from plugins
 chat = connect slack
 

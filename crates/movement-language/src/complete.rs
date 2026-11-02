@@ -68,6 +68,8 @@ enum Context {
     Edge { receiver: String, backtick: bool, listen: bool },
     /// `<x-[:`: a record type of instance `x`.
     TypeOf { instance: String },
+    /// `connect `: an adapter, by its key (no import needed).
+    Adapter,
     /// `connect x using `: a credential for module `x`.
     Credential { module: String },
     /// `import { ` … `} from <source>`.
@@ -112,6 +114,9 @@ fn context_of(text: &Text<'_>, pos: Pos) -> (Context, Option<Range>) {
         return (Context::Edge { receiver: format!("{above}{receiver}"), backtick: false, listen: in_listen(line) }, None);
     }
     let words: Vec<&str> = pre.split_whitespace().collect();
+    if words.last() == Some(&"connect") && pre.ends_with(char::is_whitespace) {
+        return (Context::Adapter, None);
+    }
     if let [.., connect, module, using] = words.as_slice()
         && *connect == "connect"
         && *using == "using"
@@ -230,6 +235,12 @@ fn items_for(service: &Service, source: &str, pos: Pos, context: Context) -> Vec
             }
             items
         }
+        Context::Adapter => catalog
+            .adapters
+            .iter()
+            .filter(|(key, _)| !RUN_HOST_UNITS.contains(&key.as_str()))
+            .map(|(key, adapter)| Item { insert: Some(written_name(key)).filter(|w| w != key), ..Item::new(key, ItemKind::Module, adapter.spec.description.clone()) })
+            .collect(),
         Context::Credential { module } => {
             let key = service
                 .analyze(source, Some(pos.line))

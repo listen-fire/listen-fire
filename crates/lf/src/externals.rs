@@ -430,8 +430,8 @@ async fn call_as(target: &Target<'_>, credentials: &Credentials, credential: Opt
     Ok(send(target, credentials, credential, signer, Sending { tenant, method, cache_scope_id: "<none>", params, settings }).await?)
 }
 
-/// The externals the files import (`from adapters`, `from plugins`), by
-/// name or by the module they serve; an external that takes a run host
+/// The externals the files connect or import (`from adapters`, `from
+/// plugins`), by name or by the module they serve; an external that takes a run host
 /// unit's name always (it replaces the unit, imported or not). A plugin
 /// import no external is named for is found in a plugin external's
 /// manifest, so then every plugin external is needed. `also`: any other
@@ -448,6 +448,7 @@ pub fn needed_externals(externals: Vec<External>, files: &[std::rc::Rc<Parsed>],
                 imported.extend(import.names.iter().map(|n| (namespace == "plugins", n.name.clone())));
             }
         }
+        imported.extend(crate::secrets::Named::of(program).adapters().map(|adapter| (false, adapter)));
     }
     let names = |e: &External, name: &str| e.manifest.name == name || e.manifest.module.as_deref() == Some(name);
     let unnamed_plugin = imported.iter().any(|(plugin, name)| *plugin && !externals.iter().any(|e| names(e, name)));
@@ -992,6 +993,8 @@ mod tests {
         let names = |needed: Vec<External>| needed.into_iter().map(|e| e.manifest.name).collect::<Vec<_>>();
         let attio = file("import { `@lf/attio` as attio } from adapters\n");
         assert_eq!(names(needed_externals(all(), &[attio], |_| false)), ["attio", "cron"]);
+        let connected = file("crm = connect acme_crm using acme\nnotes = connect `@lf/attio` using acme\n");
+        assert_eq!(names(needed_externals(all(), &[connected], |_| false)), ["attio", "acme_crm", "cron"], "a connection needs no import");
         let by_module = file("import { `@lf/pdf` as pdf } from plugins\n");
         assert_eq!(names(needed_externals(all(), &[by_module], |_| false)), ["cron", "pdf"]);
         // A plugin package named in no install: the plugin externals answer it.

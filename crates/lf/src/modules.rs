@@ -496,8 +496,8 @@ impl Summary {
         let name = self.module_name();
         match (self.kind.as_str(), self.credentials.is_empty()) {
             ("plugin", _) => line(format!("use: import {{ {name} }} from plugins")),
-            ("adapter", false) => line(format!("use: import {{ {name} }} from adapters; import {{ <credential> }} from credentials; c = connect {name} using <credential>")),
-            ("adapter", true) => line(format!("use: import {{ {name} }} from adapters; c = connect {name}")),
+            ("adapter", false) => line(format!("use: c = connect {name} using <credential>")),
+            ("adapter", true) => line(format!("use: c = connect {name}")),
             _ => {}
         }
         out.join("\n")

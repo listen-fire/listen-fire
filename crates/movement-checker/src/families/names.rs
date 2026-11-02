@@ -150,20 +150,18 @@ impl Checker<'_> {
             Resolution::Unknown => {
                 if self.catalog.adapter(name).is_some() {
                     let message = format!(
-                        "'{name}' is not in scope — import it and construct an instance first: {}{}",
-                        self.import_and_construct_lines(name),
+                        "'{name}' is an adapter, not a connection — connect it and name the connection first: {}{}",
+                        self.connect_lines(name),
                         see_handbook("front#systems")
                     );
                     self.report(codes::NAME_UNRESOLVED, message, span);
                 } else if self.catalog.credential(name).is_some() {
-                    let line = import_line(name, "credentials");
-                    let mut diagnostic = Diagnostic::error(
+                    let connect = connection(&Connection { adapter: "…", args: &[("credentials", name)], credential: Some("credentials") });
+                    self.report(
                         codes::NAME_UNRESOLVED,
-                        format!("'{name}' is a credential — import it: add '{line}' at the top of the file"),
+                        format!("'{name}' is a credential, which is never a value in a program — it is only named after 'using' where an adapter is connected ('{connect}')"),
                         span,
                     );
-                    diagnostic.fix = Some(json!({ "edits": [insert_line_at_top(&line)] }));
-                    self.push(diagnostic);
                 } else if self.catalog.plugin(name).is_some() {
                     self.report(codes::NAME_UNRESOLVED, format!("'{name}' is a plugin — import it: import {{ {name} }} from plugins"), span);
                 } else if let Some(tag) = package_called(&self.catalog.plugins, name) {
@@ -201,10 +199,10 @@ impl Checker<'_> {
         connection(&Connection { adapter, args: &required, credential })
     }
 
-    /// `importAndConstructLines`.
-    fn import_and_construct_lines(&self, adapter: &str) -> String {
-        let adapter_import = import_line(adapter, "adapters");
-        let general = format!("{adapter_import}, then '<name> = {}'", self.construction_call(adapter));
+    /// The `connect` that names a connection to `adapter`, its credential
+    /// filled in when the project has exactly one.
+    fn connect_lines(&self, adapter: &str) -> String {
+        let general = format!("'<name> = {}'", self.construction_call(adapter));
         let Some(spec) = self.catalog.adapter(adapter) else { return general };
         let Some(credential_arg) = credential_arg_of(spec) else { return general };
         if !credential_arg.required {
@@ -225,8 +223,7 @@ impl Checker<'_> {
             .map(|a| (a.name.as_str(), if a.name == credential_arg.name { credential_name.as_str() } else { "…" }))
             .collect();
         format!(
-            "{general} — with the one {adapter} connection here: '{}' and '<name> = {}'",
-            import_line(credential, "credentials"),
+            "{general} — with the one {adapter} connection here: '<name> = {}'",
             connection(&Connection { adapter, args: &call, credential: Some(&credential_arg.name) })
         )
     }
@@ -474,54 +471,17 @@ impl Checker<'_> {
         }
     }
 
-    /// `reportUnimportedAdapterConstruction`: `crm = attio(…)` with `attio`
-    /// never imported — the import line is the fix.
-    pub fn report_unimported_adapter_construction(&mut self, callee: &str, credential_slot: Option<&movement_parser::ast::ExprSlot>, span: Span, scope: ScopeId) {
-        let adapter_import = import_line(callee, "adapters");
-        let repair = credential_slot.and_then(|slot| self.credential_arg_repair(slot, scope));
-        let mut edits = vec![insert_line_at_top(&adapter_import)];
-        let mut message = format!("'{callee}' is not in scope — import it: add '{adapter_import}' at the top of the file");
-        if let Some((instruction, more)) = repair {
-            message.push_str(&format!(", and {instruction}"));
-            edits.extend(more);
-        }
-        let mut diagnostic = Diagnostic::error(codes::NAME_UNRESOLVED, message, span);
-        diagnostic.fix = Some(json!({ "edits": edits }));
-        self.push(diagnostic);
-    }
-
-    /// `credentialArgRepair`.
-    pub(crate) fn credential_arg_repair(&self, slot: &movement_parser::ast::ExprSlot, scope: ScopeId) -> Option<(String, Vec<serde_json::Value>)> {
-        let raw = slot.raw.trim();
-        let quoted = raw
+    /// `credentialArgRepair`: a credential written as a string
+    /// (`using "acme"`) that names one, rewritten as its name.
+    pub(crate) fn credential_arg_repair(&self, slot: &movement_parser::ast::ExprSlot) -> Option<(String, Vec<serde_json::Value>)> {
+        let name = slot
+            .raw
+            .trim()
             .strip_prefix('"')
             .and_then(|r| r.strip_suffix('"'))
-            .filter(|inner| !inner.contains('"') && !inner.contains('\\'))
-            .map(str::to_string);
-        let name = match &quoted {
-            Some(inner) => inner.clone(),
-            None => movement_parser::catalog::helpers::unwrap_credential_arg(raw)?,
-        };
-        self.catalog.credential(&name)?;
-        let imported = matches!(self.scopes.resolve(scope, &name), Resolution::Found(_));
-        if quoted.is_none() && imported {
-            return None;
-        }
-        let line = import_line(&name, "credentials");
-        let mut steps = Vec::new();
-        if quoted.is_some() {
-            steps.push(format!("write the credential as a name, not a string: 'using {}'", spell_name(&name)));
-        }
-        if !imported {
-            steps.push(format!("add '{line}' at the top of the file"));
-        }
-        let mut edits = Vec::new();
-        if !imported {
-            edits.push(insert_line_at_top(&line));
-        }
-        if quoted.is_some() {
-            edits.push(json!({ "span": slot.span, "text": spell_name(&name) }));
-        }
-        Some((steps.join(", and "), edits))
+            .filter(|inner| !inner.contains('"') && !inner.contains('\\'))?;
+        self.catalog.credential(name)?;
+        let written = spell_name(name);
+        Some((format!("write the credential as a name, not a string: 'using {written}'"), vec![json!({ "span": slot.span, "text": written })]))
     }
 }

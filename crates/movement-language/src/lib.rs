@@ -176,6 +176,19 @@ impl Service {
         if word.after_dot {
             return None;
         }
+        let in_connect = match hover::connect_position(text.line_before(word.range.start)) {
+            Some(hover::ConnectPosition::Adapter) => {
+                let key = hover::adapter_key(&word.name);
+                self.catalog.adapters.get(key).map(|_| ModuleRef { namespace: ModuleNamespace::Adapters, name: key.to_string() })
+            }
+            Some(hover::ConnectPosition::Credential) => {
+                self.catalog.credentials.get(&word.name).map(|_| ModuleRef { namespace: ModuleNamespace::Credentials, name: word.name.clone() })
+            }
+            None => None,
+        };
+        if let Some(module) = in_connect {
+            return Some(Location { file: None, range: word.range, module: Some(module) });
+        }
         let analyzed = self.analyze(source, Some(pos.line))?;
         let analysis = &analyzed.analysis;
         if let Some(imported) = analysis.imported(&word.name) {

@@ -20,7 +20,7 @@ const STARTER_MOVEMENT: &str = r#"# A movement is a program the host runs when s
 # (and type the parameter `<cron-[:Ticks]->>`). To react to a system's events,
 # install it under externals/ and connect it:
 #
-#   import { crm } from adapters
+#   crm = connect acme_crm using acme
 #   listen to crm-[:Companies]-> fire greet
 function hello(run: <manual-[:Invocations]->>) {
   return "Hello, ${run.`Run by (name)`}!"

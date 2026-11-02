@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::rc::Rc;
 
-use movement_parser::ast::{ImportSource, Statement};
+use movement_parser::ast::{ConstructionCall, ImportSource, Loc, Program, Statement};
 
 use crate::project::Project;
 use crate::secrets_slot::SecretsStore;
@@ -360,28 +360,66 @@ impl Imported {
     }
 }
 
-/// The credentials the files import (`import { … } from credentials`) and the
-/// constructions with arguments beyond the credential.
+/// The credentials the files name (after `using` in a `connect`, or in an
+/// `import { … } from credentials`) and the constructions with arguments
+/// beyond the credential.
 pub fn imported_credentials(files: &[Rc<Parsed>]) -> Imported {
     let mut imported = Imported::default();
     for file in files {
         let Ok(program) = &file.program else { continue };
-        let mut originals: BTreeMap<String, String> = BTreeMap::new();
+        let named = Named::of(program);
+        imported.credentials.extend(named.credentials.iter().map(|(name, _)| name.clone()));
+        for construct in &named.constructs {
+            let construction = construction_of(construct, &named.originals);
+            if !construction.args.is_empty() {
+                imported.constructions.insert(construction);
+            }
+        }
+        imported.chains.extend(crate::refinements::instance_chains(&program.statements, &named.originals));
+    }
+    imported
+}
+
+/// What one file names: its imports' aliases read back to the names they
+/// import, every construction it writes, and each credential it names.
+pub struct Named<'p> {
+    pub originals: BTreeMap<String, String>,
+    pub constructs: Vec<&'p ConstructionCall>,
+    /// Each credential by its name, where the file first names it: an
+    /// import, or the name after `using`, which needs none.
+    pub credentials: Vec<(String, Loc)>,
+}
+
+impl<'p> Named<'p> {
+    pub fn of(program: &'p Program) -> Named<'p> {
+        let mut named = Named { originals: BTreeMap::new(), constructs: Vec::new(), credentials: Vec::new() };
         for statement in &program.statements {
             let Statement::Import(import) = statement else { continue };
             for name in &import.names {
                 if let Some(alias) = &name.alias {
-                    originals.insert(alias.clone(), name.name.clone());
+                    named.originals.insert(alias.clone(), name.name.clone());
                 }
             }
             if matches!(&import.source, ImportSource::Builtin { namespace } if namespace == "credentials") {
-                imported.credentials.extend(import.names.iter().map(|n| n.name.clone()));
+                named.credentials.extend(import.names.iter().map(|n| (n.name.clone(), import.span.start)));
             }
         }
-        collect_constructions(&program.statements, &originals, &mut imported.constructions);
-        imported.chains.extend(crate::refinements::instance_chains(&program.statements, &originals));
+        collect_constructions(&program.statements, &mut named.constructs);
+        for construct in &named.constructs {
+            let Some(arg) = construct.args.iter().find(|a| a.name == "credentials") else { continue };
+            let Some(written) = movement_parser::catalog::helpers::unwrap_credential_arg(&arg.value.raw) else { continue };
+            let name = named.originals.get(&written).cloned().unwrap_or(written);
+            if !named.credentials.iter().any(|(n, _)| *n == name) {
+                named.credentials.push((name, arg.value.span.start));
+            }
+        }
+        named
     }
-    imported
+
+    /// The adapters the file's constructions connect, an alias read back.
+    pub fn adapters(&self) -> impl Iterator<Item = String> + '_ {
+        self.constructs.iter().map(|c| self.originals.get(&c.callee).cloned().unwrap_or_else(|| c.callee.clone()))
+    }
 }
 
 /// The construction a `connect` writes, its module and credential named as
@@ -394,59 +432,46 @@ pub fn construction_of(construct: &movement_parser::ast::ConstructionCall, origi
     Construction { adapter: original(&construct.callee), credential, args }
 }
 
-fn collect_constructions(statements: &[Statement], originals: &BTreeMap<String, String>, out: &mut BTreeSet<Construction>) {
-    let add = |out: &mut BTreeSet<Construction>, construct: &movement_parser::ast::ConstructionCall| {
-        let construction = construction_of(construct, originals);
-        if !construction.args.is_empty() {
-            out.insert(construction);
-        }
-    };
+fn collect_constructions<'p>(statements: &'p [Statement], out: &mut Vec<&'p ConstructionCall>) {
     for statement in statements {
         match statement {
             Statement::Assign(assign) => {
                 if let movement_parser::ast::RValue::Construct { construct } = &assign.value {
-                    add(out, construct);
+                    out.push(construct);
                 }
             }
             Statement::Listen(listen) => {
                 if let Some(construct) = &listen.construct {
-                    add(out, construct);
+                    out.push(construct);
                 }
             }
-            Statement::Movement(movement) => collect_constructions(&movement.body, originals, out),
+            Statement::Movement(movement) => collect_constructions(&movement.body, out),
             _ => {}
         }
     }
 }
 
-/// Every credential the project's programs import, that the secrets do not hold.
+/// Every credential the project's programs name, that the secrets do not hold.
 pub fn missing_credentials(files: &[Rc<Parsed>], secrets: &Secrets) -> Vec<MissingCredential> {
     let credentials = secrets.credentials();
     let mut missing = Vec::new();
     for file in files {
         // `listen-fire check` reports a file that does not parse.
         let Ok(program) = &file.program else { continue };
-        for statement in &program.statements {
-            let Statement::Import(import) = statement else { continue };
-            if !matches!(&import.source, ImportSource::Builtin { namespace } if namespace == "credentials") {
+        for (name, at) in Named::of(program).credentials {
+            if credentials.iter().any(|c| c.name == name) {
                 continue;
             }
-            for imported in &import.names {
-                if credentials.iter().any(|c| c.name == imported.name) {
-                    continue;
-                }
-                let where_ = secrets.store().looked_in();
-                let upper = imported.name.to_uppercase();
-                missing.push(MissingCredential {
-                    file: file.path.clone(),
-                    line: import.span.start.line,
-                    column: import.span.start.col,
-                    message: format!(
-                        "credential \"{}\" is imported here but not configured. Looked in: {where_}; environment {ENV_PREFIX}{upper}__EXTERNAL and {ENV_PREFIX}{upper}__<FIELD>",
-                        imported.name
-                    ),
-                });
-            }
+            let where_ = secrets.store().looked_in();
+            let upper = name.to_uppercase();
+            missing.push(MissingCredential {
+                file: file.path.clone(),
+                line: at.line,
+                column: at.col,
+                message: format!(
+                    "credential \"{name}\" is named here but not configured. Looked in: {where_}; environment {ENV_PREFIX}{upper}__EXTERNAL and {ENV_PREFIX}{upper}__<FIELD>"
+                ),
+            });
         }
     }
     missing
@@ -464,6 +489,21 @@ mod tests {
         assert!(imported.contains("acme"));
         let wanted = Construction { adapter: "airtable".into(), credential: Some("acme".into()), args: vec![("base".into(), "\"CRM\"".into())] };
         assert_eq!(imported.constructions.into_iter().collect::<Vec<_>>(), vec![wanted], "a construction with no argument beyond the credential pins nothing");
+    }
+
+    #[test]
+    fn a_credential_named_after_using_needs_no_import_and_is_found_where_it_is_named() {
+        let source = "import { acme as a } from credentials\n\ncrm = connect airtable using a { base: \"CRM\" }\nfunction m() {\n  gh = connect `@lf/github` using my_github\n}\n";
+        let file = crate::sources::MovementFile { name: "m".into(), path: "m.mvt".into(), source: source.into(), version: None };
+        let parsed = crate::sources::Parsed::each(&[file], &[]);
+        let Ok(program) = parsed[0].program.as_ref() else { panic!("parses") };
+        let named = super::Named::of(program);
+        let at = |(name, loc): &(String, movement_parser::ast::Loc)| (name.clone(), loc.line, loc.col);
+        assert_eq!(named.credentials.iter().map(at).collect::<Vec<_>>(), [("acme".to_string(), 1, 1), ("my_github".to_string(), 5, 35)]);
+        assert_eq!(named.adapters().collect::<Vec<_>>(), ["airtable", "github"]);
+        let wanted = Construction { adapter: "airtable".into(), credential: Some("acme".into()), args: vec![("base".into(), "\"CRM\"".into())] };
+        assert_eq!(imported_credentials(&parsed).constructions.into_iter().collect::<Vec<_>>(), vec![wanted]);
+        assert!(imported_credentials(&parsed).contains("my_github"));
     }
 
     #[cfg(unix)]

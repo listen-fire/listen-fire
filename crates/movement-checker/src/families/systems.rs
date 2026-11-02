@@ -16,6 +16,7 @@ use movement_parser::ast::{ConstructionCall, ExprSlot, ParamTypeRef, Span, TypeR
 use movement_parser::catalog::helpers::{credential_arg_of, unwrap_credential_arg};
 use movement_parser::catalog::snapshot::Args;
 use movement_parser::catalog::types::{InstanceSchema, JsMap};
+use movement_parser::surface::phrase::{Connection, connection};
 use movement_parser::lowering::expression::{Expression, StaticValue};
 use serde_json::json;
 
@@ -64,32 +65,7 @@ impl Checker<'_> {
     /// `checkConstruction`: the adapter, credential and schema a construction
     /// builds, its arguments checked against the adapter's signature.
     pub fn check_construction(&mut self, construct: &ConstructionCall, scope: ScopeId) -> Constructed {
-        let callee = match self.scopes.resolve(scope, &construct.callee) {
-            Resolution::Found(id) => id,
-            Resolution::Unknown if self.catalog.adapter(&construct.callee).is_some() => {
-                let credential = self.catalog.adapter(&construct.callee).and_then(credential_arg_of).map(|a| a.name.clone());
-                let slot = credential.and_then(|name| construct.args.iter().find(|a| a.name == name)).map(|a| &a.value);
-                self.report_unimported_adapter_construction(&construct.callee, slot, construct.span, scope);
-                return Constructed::default();
-            }
-            failure => {
-                self.report_resolution_failure(&construct.callee, construct.span, failure);
-                return Constructed::default();
-            }
-        };
-        let symbol = self.scopes.symbol(callee);
-        if symbol.kind != SymbolKind::Adapter {
-            let message = if symbol.unit {
-                format!("'{0}' is one of the run host's units, always connected — listen to it by name ('listen to {0} … fire …') with no import and no 'connect'", construct.callee)
-            } else if symbol.kind == SymbolKind::FileImport {
-                format!("'{}' is imported from a file (a movement or a node declaration) — only adapter types are constructed", construct.callee)
-            } else {
-                format!("'{}' is {}, not an adapter type — only adapter types are constructed", construct.callee, symbol.kind.describe())
-            };
-            self.report(codes::CONSTRUCT_NOT_ADAPTER, message, construct.span);
-            return Constructed::default();
-        }
-        let adapter = symbol.imported_name.clone().unwrap_or_else(|| construct.callee.clone());
+        let Some(adapter) = self.constructed_adapter(construct, scope) else { return Constructed::default() };
         let Some(spec) = self.catalog.adapter(&adapter) else {
             return Constructed { adapter: Some(adapter), ..Constructed::default() };
         };
@@ -151,10 +127,7 @@ impl Checker<'_> {
         {
             self.report(
                 codes::CONSTRUCT_MISSING_CRED,
-                format!(
-                    "'{}' requires a '{}' argument naming an imported {} credential",
-                    construct.callee, credential_arg.name, construct.callee
-                ),
+                format!("'{0}' needs a credential to connect with: 'connect {0} using <credential>'", construct.callee),
                 construct.span,
             );
         }
@@ -170,6 +143,79 @@ impl Checker<'_> {
         }
         let schema = self.catalog.instantiate(&adapter, &Args::from(JsMap(args))).cloned();
         Constructed { adapter: Some(adapter), credential, schema }
+    }
+
+    /// The adapter a construction names, its failure reported: one an import
+    /// binds, else, written with `connect`, the catalog's adapter of that key.
+    /// `connect`'s adapter is a position of its own, as a type is in
+    /// TypeScript, so a binding of the same name does not hide it.
+    fn constructed_adapter(&mut self, construct: &ConstructionCall, scope: ScopeId) -> Option<String> {
+        if let Some(adapter) = self.connected_adapter(construct, scope) {
+            return Some(adapter);
+        }
+        let resolution = self.scopes.resolve(scope, &construct.callee);
+        let found = match resolution {
+            Resolution::Found(id) => Some(self.scopes.symbol(id)),
+            _ => None,
+        };
+        if found.is_none() && self.catalog.adapter(&construct.callee).is_some() {
+            self.report_adapter_construction(construct);
+            return None;
+        }
+        let Some(symbol) = found else {
+            if construct.connect && matches!(resolution, Resolution::Unknown) {
+                self.report_unknown_adapter(&construct.callee, construct.span);
+            } else {
+                self.report_resolution_failure(&construct.callee, construct.span, resolution);
+            }
+            return None;
+        };
+        let message = if symbol.unit {
+            format!("'{0}' is one of the run host's units, always connected — listen to it by name ('listen to {0} … fire …') with no import and no 'connect'", construct.callee)
+        } else if symbol.kind == SymbolKind::FileImport {
+            format!("'{}' is imported from a file (a movement or a node declaration) — only adapter types are constructed", construct.callee)
+        } else {
+            format!("'{}' is {}, not an adapter type — only adapter types are constructed", construct.callee, symbol.kind.describe())
+        };
+        self.report(codes::CONSTRUCT_NOT_ADAPTER, message, construct.span);
+        None
+    }
+
+    /// The adapter a construction names, when it names one:
+    /// `constructed_adapter` without the reports, for the typing pass.
+    pub(crate) fn connected_adapter(&self, construct: &ConstructionCall, scope: ScopeId) -> Option<String> {
+        let found = match self.scopes.resolve(scope, &construct.callee) {
+            Resolution::Found(id) => Some(self.scopes.symbol(id)),
+            _ => None,
+        };
+        if let Some(symbol) = found
+            && symbol.kind == SymbolKind::Adapter
+        {
+            return Some(symbol.imported_name.clone().unwrap_or_else(|| construct.callee.clone()));
+        }
+        let unit = found.is_some_and(|s| s.unit);
+        (construct.connect && !unit && self.catalog.adapter(&construct.callee).is_some()).then(|| construct.callee.clone())
+    }
+
+    /// `connect x` where no adapter is called `x`: the adapters there are,
+    /// the closest named first.
+    fn report_unknown_adapter(&mut self, written: &str, span: Span) {
+        let units = movement_parser::version::RUN_HOST_UNITS;
+        let names: Vec<String> = self.catalog.adapters.keys().filter(|k| !units.contains(&k.as_str())).cloned().collect();
+        let hint = closest_by_edit_distance(written, &names).map(|n| format!(" — did you mean '{n}'?")).unwrap_or_default();
+        let listed = if names.is_empty() { "none".to_string() } else { names.join(", ") };
+        self.report(codes::NAME_UNRESOLVED, format!("'{written}' is no adapter here{hint} (the adapters: {listed})"), span);
+    }
+
+    /// `crm = attio(credentials: acme)` with no import: the older
+    /// construction, refused with the `connect` it is now written as.
+    fn report_adapter_construction(&mut self, construct: &ConstructionCall) {
+        let credential = self.catalog.adapter(&construct.callee).and_then(credential_arg_of).map_or("credentials".to_string(), |a| a.name.clone());
+        let args: Vec<(&str, &str)> = construct.args.iter().map(|a| (a.name.as_str(), a.value.raw.trim())).collect();
+        let text = connection(&Connection { adapter: &construct.callee, args: &args, credential: Some(&credential) });
+        let mut diagnostic = Diagnostic::error(codes::NAME_UNRESOLVED, format!("an adapter is set up with `{text}`"), construct.span);
+        diagnostic.fix = Some(json!({ "edits": [{ "span": construct.span, "text": text }] }));
+        self.push(diagnostic);
     }
 
     /// The instance a construction bound to a name declares.
@@ -198,8 +244,8 @@ impl Checker<'_> {
     /// `checkCredentialArg`.
     fn check_credential_arg(&mut self, adapter: &str, slot: &ExprSlot, scope: ScopeId) {
         let Some(name) = unwrap_credential_arg(slot.raw.trim()) else {
-            let repair = self.credential_arg_repair(slot, scope);
-            let mut message = "The credential argument must be an imported credential name, not an expression".to_string();
+            let repair = self.credential_arg_repair(slot);
+            let mut message = "The credential after 'using' is a credential's name, not an expression".to_string();
             if let Some((instruction, _)) = &repair {
                 message.push_str(&format!(" — {instruction}"));
             }
@@ -210,15 +256,21 @@ impl Checker<'_> {
             self.push(diagnostic);
             return;
         };
-        let symbol = match self.scopes.resolve(scope, &name) {
-            Resolution::Found(id) => self.scopes.symbol(id),
+        // A credential an import binds, else the catalog's of that name: the
+        // name after `using` is only ever a credential.
+        let resolution = self.scopes.resolve(scope, &name);
+        let imported = match resolution {
+            Resolution::Found(id) if self.scopes.symbol(id).kind == SymbolKind::Credential => {
+                self.scopes.symbol(id).imported_name.clone().unwrap_or_else(|| name.clone())
+            }
+            _ if self.catalog.credential(&name).is_some() => name.clone(),
+            Resolution::Found(id) => {
+                let message = format!("'{name}' is {}, not a credential", self.scopes.symbol(id).kind.describe());
+                return self.report(codes::CRED_WRONG_ADAPTER, message, slot.span);
+            }
+            Resolution::Unknown => return self.report_unknown_credential(adapter, &name, slot.span),
             failure => return self.report_resolution_failure(&name, slot.span, failure),
         };
-        if symbol.kind != SymbolKind::Credential {
-            let message = format!("'{name}' is {}, not a credential", symbol.kind.describe());
-            return self.report(codes::CRED_WRONG_ADAPTER, message, slot.span);
-        }
-        let imported = symbol.imported_name.clone().unwrap_or_else(|| name.clone());
         if let Some(served) = self.catalog.credential(&imported).map(|c| c.adapters)
             && !served.iter().any(|a| a == adapter)
         {
@@ -243,6 +295,21 @@ impl Checker<'_> {
                 slot.span,
             );
         }
+    }
+
+    /// `using c` where no credential is called `c`: the adapter's credentials,
+    /// the closest named first.
+    fn report_unknown_credential(&mut self, adapter: &str, written: &str, span: Span) {
+        let names: Vec<String> = self
+            .catalog
+            .credential_names()
+            .into_iter()
+            .filter(|name| self.catalog.credential(name).is_some_and(|c| c.adapters.iter().any(|a| a == adapter)))
+            .map(str::to_string)
+            .collect();
+        let hint = closest_by_edit_distance(written, &names).map(|n| format!(" — did you mean '{n}'?")).unwrap_or_default();
+        let listed = if names.is_empty() { format!("none for {adapter} yet") } else { names.join(", ") };
+        self.report(codes::NAME_UNRESOLVED, format!("'{written}' is no credential here{hint} (the {adapter} credentials: {listed})"), span);
     }
 
     /// A movement parameter typed against an adapter rather than an instance

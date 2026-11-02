@@ -283,6 +283,8 @@ export interface ConstructionCall {
   callee: string;
   args: NamedArg[];
   span: Span;
+  /** Written `connect x using c`, whose adapter and credential need no import. */
+  connect?: true;
 }
 
 /**
