@@ -5,7 +5,7 @@
 import { defineModule, type ModuleContext } from 'module-kit';
 
 import { WebhookAdapter, type WebhookSources } from './adapter';
-import { WEBHOOK_MANIFEST } from './manifest';
+import { WEBHOOK_MANIFEST, WEBHOOK_REDACT_FIELDS } from './manifest';
 import { signingOf } from './signing';
 
 /** The adapter's sources over a module context: the credential read per call. */
@@ -38,7 +38,9 @@ export const webhookModule = defineModule({
   ],
   // The sender's provider issues the secret (Stripe, at the endpoint), so listen-fire
   // connect generates none; the check reads it off the connection's credential.
-  inbound: { providerKey: 'webhook', scheme: 'module', secretIssuedBy: 'provider' },
+  // A sender that cannot sign often puts a token in the query string or the
+  // body instead: a kept request (held for a replay, for days) drops these.
+  inbound: { providerKey: 'webhook', scheme: 'module', secretIssuedBy: 'provider', redactFields: [...WEBHOOK_REDACT_FIELDS] },
   create: (ctx) => new WebhookAdapter(webhookSourcesFrom(ctx)),
 });
 

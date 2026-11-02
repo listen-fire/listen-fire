@@ -1059,7 +1059,7 @@ If your system sends webhooks, let Listen-Fire subscribe:
 
    | Status | When |
    |---|---|
-   | 200 `{ "ok": true, "eventsProcessed": n }` | accepted |
+   | 200 `{ "ok": true, "eventsProcessed": n }` | accepted; `n` counts the arrivals (and any events) the delivery brought |
    | 400 `{ "error": "provider_mismatch" }` | the URL's adapter segment does not match the subscription |
    | 401 `{ "error": "signature_invalid" }` | bad or missing signature |
    | 404 `{ "error": "subscription_not_found" }` | unknown or deleted subscription |
@@ -1303,7 +1303,9 @@ host verifies each delivery before `preprocessInbound` sees it:
   request is kept: a JSON body's own members, a form's fields and the
   members of a JSON object a form field holds (Slack's `payload`), and the
   query's parameters. `@lf/slack` names `token`, its legacy verification
-  token. Anything else in the body is kept as the provider sent it, so a
+  token; `@lf/webhook` names the fields a sender that cannot sign puts a
+  credential in (`token`, `access_token`, `api_key`, `apikey`, `api_token`,
+  `secret`, `client_secret`, `password`, `signature`). Anything else in the body is kept as the provider sent it, so a
   kept request may hold what the provider puts there.
 - One host rule for every scheme: a delivery is refused when the key it
   should be signed with is missing, blank or still the placeholder a

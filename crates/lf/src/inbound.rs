@@ -713,8 +713,8 @@ enum Refusal {
 
 /// What a delivery that got in came to.
 enum Received {
-    /// Kept, with this many of its events, and what the module asked the
-    /// door to answer once it is (its `accepted` answer's `reply`).
+    /// Kept, with this many of its events and arrivals, and what the module
+    /// asked the door to answer once it is (its `accepted` answer's `reply`).
     Kept(usize, Option<Answer>),
     /// Its external id was kept at its subscription before: nothing kept.
     Duplicate,
@@ -860,7 +860,9 @@ async fn receive_delivery<S: InboundStore>(store: &S, provider_key: &str, delive
     }
     // The pull cursor rides on "receipted", not "run", and is kept with the
     // receipts it moved past: never one without the other.
-    let events_processed = captured.len();
+    // The sender's count is what the delivery brought: a module reports
+    // arrivals since 0.13, and counting its events alone answered 0 for all.
+    let events_processed = captured.len() + extraction.arrivals.len();
     Captured::name_arrivals(&mut kept_request, &extraction.arrivals);
     let kept = Kept {
         subscription_id: &subscription.id,
@@ -1438,7 +1440,7 @@ mod tests {
             r#"{"outcome":"accepted","events":[],"arrivals":[{"edge":"Replies","key":"C1:1","identity":"r1","landing":{"fields":{}}},{"edge":"Replies","key":"C1:2","gone":true}]}"#,
         );
         let answer = answer_delivery(&store, delivery("POST", b"a=b", &[])).await;
-        assert_eq!((answer.status, answer.body.to_json()), (200, r#"{"ok":true,"eventsProcessed":0}"#.to_string()));
+        assert_eq!((answer.status, answer.body.to_json()), (200, r#"{"ok":true,"eventsProcessed":2}"#.to_string()), "each arrival kept is counted");
         assert_eq!(store.arrived.borrow().clone(), ["r1", "gone C1:2"]);
         let unnamed = ModuleChecked::answering(r#"{"outcome":"accepted","events":[],"arrivals":[{"edge":"Replies","key":"C1:1","landing":{"fields":{}}}]}"#);
         assert_eq!(answer_delivery(&unnamed, delivery("POST", b"a=b", &[])).await.status, 500, "a module's answer that names no identity is its failure");

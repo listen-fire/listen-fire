@@ -111,9 +111,14 @@ describe('the connection', () => {
     await expect(load({ scheme: 'stripe' }).listEntryPoints()).rejects.toThrow('the webhook credential StripeHook is signed with stripe but holds no secret');
   });
 
-  it('declares its door, its one listenable edge, and how a 0.12 payload listen becomes it', async () => {
+  it('declares its door, the credentials a kept request drops, its one listenable edge, and how a 0.12 payload listen becomes it', async () => {
     const { manifest } = loaded({ scheme: 'none' });
-    expect(manifest['inbound']).toEqual({ providerKey: 'webhook', scheme: 'module', secretIssuedBy: 'provider' });
+    expect(manifest['inbound']).toEqual({
+      providerKey: 'webhook',
+      scheme: 'module',
+      secretIssuedBy: 'provider',
+      redactFields: ['token', 'access_token', 'api_key', 'apikey', 'api_token', 'secret', 'client_secret', 'password', 'signature'],
+    });
     expect(manifest).not.toHaveProperty('listenConfig');
     expect(manifest['listenSettingsBecome']).toEqual({ path: ['Requests'], aliases: ['r'], keys: { payload: { hop: 0, op: 'type' } } });
     expect(manifest['methods']).toEqual(expect.arrayContaining(['checkInbound']));

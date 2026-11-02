@@ -291,11 +291,11 @@ export const INBOUND_CONTRACT_CASES: InboundContractCase[] = [
     },
   },
   {
-    name: 'arrivals are logged whether or not any event came with them',
+    name: 'arrivals are logged whether or not any event came with them, and counted in the acknowledgement',
     async run(backend) {
       await arrangeAnd(backend);
       const answer = await post(backend, CRM_DOOR, json({ arrivals: [ARRIVAL, GONE] }), crmSigned);
-      assert.deepEqual([answer.status, answer.body], [200, { ok: true, eventsProcessed: 0 }]);
+      assert.deepEqual([answer.status, answer.body], [200, { ok: true, eventsProcessed: 2 }]);
       assert.deepEqual((await backend.observed()).arrivals, [ARRIVAL, GONE]);
     },
   },
@@ -327,7 +327,7 @@ export const INBOUND_CONTRACT_CASES: InboundContractCase[] = [
       assert.deepEqual([failed.status, failed.body], [500, { error: 'internal' }]);
       assert.deepEqual((await backend.observed()).arrivals, []);
       const retried = await post(backend, CRM_DOOR, delivery, crmSigned);
-      assert.deepEqual([retried.status, retried.body], [200, { ok: true, eventsProcessed: 2 }]);
+      assert.deepEqual([retried.status, retried.body], [200, { ok: true, eventsProcessed: 3 }]);
       const seen = await backend.observed();
       assert.deepEqual([seen.enqueued, seen.arrivals], [2, [ARRIVAL]]);
     },

@@ -185,6 +185,24 @@ test('the same signed Stripe delivery posted twice runs once; the repeat is answ
   }
 });
 
+test('a delivery is acknowledged with what it brought, and its kept request holds no token the sender put in the query or the body', async () => {
+  const dir = await webhookProject();
+  // Under --doors-only the door answers with the module's acknowledgement (and the rows it queued).
+  const doors = await served(dir, ['--doors-only']);
+  try {
+    const url = (await doors.waitFor(/^webhook FormsHook: /)).replace(/^webhook FormsHook: /, '');
+    const answer = await post(`${url}?token=q-secret&source=form`, '{"id":"pay_9","amount":2,"token":"b-secret","api_key":"k-secret"}');
+    assert.equal(answer.status, 202, answer.body);
+    assert.equal((JSON.parse(answer.body) as { eventsProcessed: number }).eventsProcessed, 1, answer.body);
+  } finally {
+    await doors.stop();
+  }
+  const [delivery] = (JSON.parse(await ok(lf(dir, ['deliveries', '--json']))) as { deliveries: { id: string }[] }).deliveries;
+  const kept = (JSON.parse(await ok(lf(dir, ['deliveries', 'show', delivery.id, '--request']))) as { delivery: { request: { query: string; body: string } } }).delivery.request;
+  assert.equal(kept.query, 'source=form', 'the query keeps all but the token');
+  assert.deepEqual(JSON.parse(Buffer.from(kept.body, 'base64').toString('utf8')), { id: 'pay_9', amount: 2 }, 'the body keeps all but the token and the key');
+});
+
 test('a payload node imported from another file gates deliveries like one declared in the file', async () => {
   const dir = await webhookProject();
   const types = 'export node Payment {\n  id: <text>\n  amount: <number>\n  note: <text | null>\n}\n';

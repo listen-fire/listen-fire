@@ -97,6 +97,9 @@ named in [`RELEASING.md`](RELEASING.md).
 
 - **A run a listen fires reads who caused it as its actor again.** In 0.13.0, `@actor_email`, `@actor_name` and `@actor_id` were empty, and no acting user was resolved from the sender, for every run fired by a Granola meeting, an email, a Slack message, reaction or button press, a Telegram or WhatsApp message, or an Attio change. The modules read the actor from the 0.12 event's payload, which a 0.13 run is never handed; they read it from the record that arrived now. `module-kit`'s `firedRecordFields(event)` reads that record's fields for any module. An Attio change keeps Attio's `actor` beside its named fields for this.
 
+- **A webhook delivery's acknowledgement counts what it brought.** `eventsProcessed` counts the arrivals (and any events) a delivery reported, on `listen-fire` and in the engine's door; since 0.13 it was always 0, as modules report arrivals, not events. Only a sender that reads the count noticed.
+- **`@lf/webhook` keeps no token a sender puts in the query or the body.** It declares `inbound.redactFields`, so the request a delivery keeps for a replay drops the query parameters and top-level body fields `token`, `access_token`, `api_key`, `apikey`, `api_token`, `secret`, `client_secret`, `password` and `signature`. The run still reads the body as it was sent; a replay reads it without them.
+
 ## [0.13.0] - 2026-11-02
 
 A new compatibility key: waiting and listening become traversals, and callbacks retire.

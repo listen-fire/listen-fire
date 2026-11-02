@@ -10,6 +10,9 @@ export const WEBHOOK_ADAPTER_TYPE = 'webhook';
 export const REQUESTS_EDGE = 'Requests';
 /** What lands on it: a body the module does not describe. */
 export const REQUEST_TYPE = 'Request';
+/** The query parameters and top-level body fields a kept delivery drops:
+ *  the names a sender gives a credential it sends in place of a signature. */
+export const WEBHOOK_REDACT_FIELDS = ['token', 'access_token', 'api_key', 'apikey', 'api_token', 'secret', 'client_secret', 'password', 'signature'] as const;
 
 const HANDBOOK = `## Incoming webhooks
 
@@ -41,7 +44,8 @@ listen to stripe-[:Requests]-><Payment> fire \`Payment Failed\`
   - \`hmac-sha256\`: the secret, the header the sender signs in (e.g. \`x-signature\`), and \`hex\` or \`base64\`. The header holds the HMAC-SHA256 of the exact body.
   - \`none\`: unsigned. Any POST to the URL runs. Choose it only for a sender that cannot sign.
 - An unsigned, mis-signed or stale delivery is answered 401 and runs nothing.
-- A sender retries a delivery, and the same event runs once. \`stripe\` uses the body's \`id\`. The other schemes use the credential's optional \`idField\`, a top-level body field; without it nothing is deduplicated.`;
+- A sender retries a delivery, and the same event runs once. \`stripe\` uses the body's \`id\`. The other schemes use the credential's optional \`idField\`, a top-level body field; without it nothing is deduplicated.
+- listen-fire keeps each delivery's request for a replay (\`listen-fire deliveries show <id> --request\`), without these query parameters and top-level body fields: ${WEBHOOK_REDACT_FIELDS.map((f) => `\\\`${f}\\\``).join(', ')}. The run reads the body as it was sent; a replay reads it without them.`;
 
 export const WEBHOOK_MANIFEST: AdapterManifest = {
   adapterType: WEBHOOK_ADAPTER_TYPE,

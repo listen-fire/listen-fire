@@ -60,9 +60,10 @@ describe("a delivery's arrivals", () => {
   it('are handed to the run host to log, with the events or without them', async () => {
     const { store, host, logged, observed } = storesLogging();
     const withEvents = await answerDelivery(store, host, { provider: 'contract_crm', subscriptionId: 'sub-crm', ...signed({ events: [{ n: 1 }], arrivals: [LANDED] }) });
-    expect([withEvents.status, withEvents.body]).toEqual([200, { ok: true, eventsProcessed: 1 }]);
+    // The acknowledgement counts what the delivery brought: its events and its arrivals.
+    expect([withEvents.status, withEvents.body]).toEqual([200, { ok: true, eventsProcessed: 2 }]);
     const alone = await answerDelivery(store, host, { provider: 'contract_crm', subscriptionId: 'sub-crm', ...signed({ arrivals: [GONE] }) });
-    expect([alone.status, alone.body]).toEqual([200, { ok: true, eventsProcessed: 0 }]);
+    expect([alone.status, alone.body]).toEqual([200, { ok: true, eventsProcessed: 1 }]);
     expect(logged).toEqual([
       { adapterType: 'contract_crm', teamId: TEAM, arrivals: [LANDED] },
       { adapterType: 'contract_crm', teamId: TEAM, arrivals: [GONE] },
@@ -73,7 +74,7 @@ describe("a delivery's arrivals", () => {
   it("are kept in the delivery's one write, with its receipts and its cursor", async () => {
     const { store, host, writes } = storesLogging();
     const answer = await answerDelivery(store, host, { provider: 'contract_crm', subscriptionId: 'sub-crm', ...signed({ events: [{ n: 1 }, { n: 2 }], arrivals: [LANDED], checkpoint: { cursor: 'c-1' } }) });
-    expect([answer.status, answer.body]).toEqual([200, { ok: true, eventsProcessed: 2 }]);
+    expect([answer.status, answer.body]).toEqual([200, { ok: true, eventsProcessed: 3 }]);
     expect(writes).toEqual([{ captured: 2, arrivals: 1, checkpoint: { cursor: 'c-1' } }]);
   });
 

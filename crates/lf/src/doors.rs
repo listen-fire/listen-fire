@@ -1390,7 +1390,7 @@ pub(crate) mod tests {
 
             project.down.store(false, Ordering::SeqCst);
             let (answer, fired) = hook(&session, NOTE, "d-1").await;
-            assert_eq!((answer.status, answer.body.to_json()), (200, r#"{"ok":true,"eventsProcessed":0}"#.to_string()));
+            assert_eq!((answer.status, answer.body.to_json()), (200, r#"{"ok":true,"eventsProcessed":1}"#.to_string()));
             assert_eq!(fired.outcomes.len(), 1);
             let [retry] = kept(&session).try_into().unwrap();
             assert_eq!((retry.inline, retry.source, retry.external_id.as_deref()), (true, DeliverySource::Hook, Some("d-1")));

@@ -165,7 +165,8 @@ export type ReceivedDelivery<Captured> =
   | { ok: true; eventsProcessed: 0; reply: InboundAnswer }
   | {
       ok: true;
-      /** Events CAPTURED — receipted and ready to run. */
+      /** What the delivery brought: the events captured (receipted and
+       *  ready to run) and the arrivals it reported. */
       eventsProcessed: number;
       /** The delivery's one write, made before the ack. Absent when the
        *  delivery carried nothing to run or log. Rejects when it could not
@@ -276,7 +277,9 @@ export async function receiveDelivery<Captured>(
 
   return {
     ok: true,
-    eventsProcessed: captured.length,
+    // A module reports arrivals since 0.13: counting its events alone
+    // answered 0 for every delivery.
+    eventsProcessed: captured.length + arrivals.length,
     queue,
     ...(store.verifiesSignature(subscription) ? {} : { drainFirst: true }),
     ...(replyOnceKept !== undefined ? { replyOnceKept } : {}),
