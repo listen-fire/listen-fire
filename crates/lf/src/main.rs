@@ -451,9 +451,21 @@ async fn run(argv: Vec<String>) -> Result<i32, String> {
         "check" => check::run(&load()?, args.json, &mut out).await,
         "catalog" => match check::open_checking_in(&load()?, check::Scope::Held).await? {
             check::Opened::Ready(checking) => {
-                let shown = if args.json { checking.catalog.to_json() } else { catalog::catalog_text(&checking.catalog) };
-                writeln!(out, "{shown}").map_err(|e| e.to_string())?;
-                Ok(0)
+                // A connection that cannot be described hides no other: the
+                // rest are printed, it is named with why, and the exit says so.
+                let undescribed: Vec<String> = checking.undescribed.iter().map(|u| format!("connection {}: could not be described: {}", u.connection, u.why)).collect();
+                if args.json {
+                    writeln!(out, "{}", checking.catalog.to_json()).map_err(|e| e.to_string())?;
+                    for line in &undescribed {
+                        eprintln!("{line}");
+                    }
+                } else {
+                    writeln!(out, "{}", catalog::catalog_text(&checking.catalog)).map_err(|e| e.to_string())?;
+                    if !undescribed.is_empty() {
+                        writeln!(out, "\n{}", undescribed.join("\n")).map_err(|e| e.to_string())?;
+                    }
+                }
+                Ok(if undescribed.is_empty() { 0 } else { 1 })
             }
             check::Opened::MissingCredentials(missing) => {
                 if args.json {

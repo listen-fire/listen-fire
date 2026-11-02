@@ -114,6 +114,9 @@ pub struct Checking {
     /// `catalog_with` narrows further.
     schemas: IndexMap<String, ConnectionSchemas>,
     scope: Scope,
+    /// The connections that could not be described, each with why: only a
+    /// `Held` scope goes on past one (a `Used` one fails the check).
+    pub undescribed: Vec<Undescribed>,
 }
 
 /// Which connections are described.
@@ -155,13 +158,22 @@ pub async fn open_checking_in(project: &Project, scope: Scope) -> Result<Opened,
     let running: Vec<Rc<RunningExternal>> = start_externals(project, &externals, credentials, LOCAL_TENANT).await?.into_iter().map(Rc::new).collect();
     let imported = imported_in(scope, imported_credentials(&parsed), credentials);
     let mut schemas = IndexMap::new();
+    let mut undescribed = Vec::new();
     for r in running.iter().filter(|r| !r.is_plugin()) {
-        schemas.insert(r.external.manifest.name.clone(), describe_external(r, credentials, &imported, ConnectionSchemas::new()).await?);
+        let described = match scope {
+            Scope::Used => describe_external(r, credentials, &imported, ConnectionSchemas::new()).await?,
+            Scope::Held => {
+                let (described, failed) = describe_each(r, credentials, &imported).await;
+                undescribed.extend(failed);
+                described
+            }
+        };
+        schemas.insert(r.external.manifest.name.clone(), described);
     }
     // Scanned again after the externals start: one may have written a movement file.
     let files = scan_movements(project)?;
     let catalog = catalog_of(&running, &schemas, credentials, &files);
-    Ok(Opened::Ready(Checking { files, catalog, _running: running, secrets, schemas, scope }))
+    Ok(Opened::Ready(Checking { files, catalog, _running: running, secrets, schemas, scope, undescribed }))
 }
 
 fn imported_in(scope: Scope, imported: Imported, credentials: &Credentials) -> Imported {
@@ -196,6 +208,43 @@ pub async fn catalog_with(checking: &mut Checking, walked: &[MovementFile]) -> R
 /// narrowed by the WHEREs the files' hops select with (crate::refinements),
 /// again whenever those change.
 pub async fn describe_external(running: &RunningExternal, credentials: &Credentials, imported: &Imported, known: ConnectionSchemas) -> Result<ConnectionSchemas, String> {
+    let mut schemas = known;
+    for connection in wanted_of(running, credentials, imported) {
+        let described = describe_connection(running, credentials, imported, &schemas, &connection).await.map_err(|why| connection.failed(running, &why))?;
+        if let Some(described) = described {
+            schemas.insert(connection.key, described);
+        }
+    }
+    Ok(schemas)
+}
+
+/// A connection its module could not describe, and why.
+pub struct Undescribed {
+    /// What the catalog text names it by: its credential, else its module.
+    pub connection: String,
+    pub why: String,
+}
+
+/// `describe_external`, every connection asked whatever another answered:
+/// what `catalog` prints, so one connection that cannot be described hides
+/// no other.
+async fn describe_each(running: &RunningExternal, credentials: &Credentials, imported: &Imported) -> (ConnectionSchemas, Vec<Undescribed>) {
+    let mut schemas = ConnectionSchemas::new();
+    let mut undescribed = Vec::new();
+    for connection in wanted_of(running, credentials, imported) {
+        match describe_connection(running, credentials, imported, &schemas, &connection).await {
+            Ok(Some(described)) => {
+                schemas.insert(connection.key, described);
+            }
+            Ok(None) => {}
+            Err(why) => undescribed.push(Undescribed { connection: connection.credential.map_or_else(|| running.external.manifest.name.clone(), |c| c.name.clone()), why }),
+        }
+    }
+    (schemas, undescribed)
+}
+
+/// The connections of `running` the files can make (`describe_external`).
+fn wanted_of<'c>(running: &RunningExternal, credentials: &'c Credentials, imported: &Imported) -> Vec<Wanted<'c>> {
     let connections = connections_of(running, credentials);
     let mut wanted: Vec<Wanted> = Vec::new();
     if !connections.credential_required {
@@ -218,38 +267,33 @@ pub async fn describe_external(running: &RunningExternal, credentials: &Credenti
         let key = instance_schema_key(construction.credential.as_deref(), Some(&position.key));
         wanted.push(Wanted { key, credential, settings: Some(position.settings) });
     }
-    let mut schemas = known;
+    wanted
+}
+
+/// One connection described, narrowed by the hops the files walk from it;
+/// None when `known` already holds it narrowed so.
+async fn describe_connection(running: &RunningExternal, credentials: &Credentials, imported: &Imported, known: &ConnectionSchemas, connection: &Wanted<'_>) -> Result<Option<Described>, String> {
     let adapter_type = running.manifest_answer.get("adapterType").and_then(Js::as_str).unwrap_or(&running.external.manifest.name);
-    let position_args = running.position_args();
-    for connection in wanted {
-        let chains = chains_of(running, imported, &connection.key);
-        let walk = ConnectionWalk { running, credentials, credential: connection.credential, settings: connection.settings.clone() };
-        let failed = |why: String| {
-            let external = &running.external.manifest.name;
-            match connection.credential {
-                Some(credential) => format!("couldn't read external \"{external}\"'s schema with credential \"{}\": {why}", credential.name),
-                None => format!("couldn't read external \"{external}\"'s schema: {why}"),
-            }
-        };
-        let (entries, described, position_options) = match schemas.get(&connection.key) {
-            Some(held) if held.chains == chains => continue,
-            Some(held) => (held.entries.clone(), held.described.clone(), held.position_options.clone()),
-            None => {
-                let (entries, described) = describe_as(running, credentials, connection.credential, connection.settings.clone()).await.map_err(failed)?;
-                // What its position args may be set to, read where no position is set yet.
-                let position_options = match connection.settings.is_none() && !position_args.is_empty() {
-                    true => position_arg_options(&walk, adapter_type, &position_args).await.map_err(failed)?,
-                    false => BTreeMap::new(),
-                };
-                (entries, described, position_options)
-            }
-        };
-        let walker = Walker::new(&walk, adapter_type);
-        let refining = Refining { adapter: &running.external.manifest.name, entries: &entries, walker: &walker };
-        let schema = refine_instance_schema(described.clone(), &chains.iter().collect::<Vec<_>>(), &refining).await.map_err(failed)?;
-        schemas.insert(connection.key, Described { entries, described, chains, schema, position_options });
-    }
-    Ok(schemas)
+    let chains = chains_of(running, imported, &connection.key);
+    let walk = ConnectionWalk { running, credentials, credential: connection.credential, settings: connection.settings.clone() };
+    let (entries, described, position_options) = match known.get(&connection.key) {
+        Some(held) if held.chains == chains => return Ok(None),
+        Some(held) => (held.entries.clone(), held.described.clone(), held.position_options.clone()),
+        None => {
+            let (entries, described) = describe_as(running, credentials, connection.credential, connection.settings.clone()).await?;
+            // What its position args may be set to, read where no position is set yet.
+            let position_args = running.position_args();
+            let position_options = match connection.settings.is_none() && !position_args.is_empty() {
+                true => position_arg_options(&walk, adapter_type, &position_args).await?,
+                false => BTreeMap::new(),
+            };
+            (entries, described, position_options)
+        }
+    };
+    let walker = Walker::new(&walk, adapter_type);
+    let refining = Refining { adapter: &running.external.manifest.name, entries: &entries, walker: &walker };
+    let schema = refine_instance_schema(described.clone(), &chains.iter().collect::<Vec<_>>(), &refining).await?;
+    Ok(Some(Described { entries, described, chains, schema, position_options }))
 }
 
 /// One connection `describe_external` serves.
@@ -258,6 +302,17 @@ struct Wanted<'c> {
     credential: Option<&'c Credential>,
     /// What a call in its position carries.
     settings: Option<serde_json::Value>,
+}
+
+impl Wanted<'_> {
+    /// Why a check cannot go on: this connection could not be described.
+    fn failed(&self, running: &RunningExternal, why: &str) -> String {
+        let external = &running.external.manifest.name;
+        match self.credential {
+            Some(credential) => format!("couldn't read external \"{external}\"'s schema with credential \"{}\": {why}", credential.name),
+            None => format!("couldn't read external \"{external}\"'s schema: {why}"),
+        }
+    }
 }
 
 /// The hop chains the files walk from the connection filed under `key`, in the files' order.

@@ -73,11 +73,18 @@ test('a field only another connection of the same module has is refused at check
   assert.match(check.out, /Title/);
 });
 
-test('catalog describes the credential no file imports; one the module refuses fails the catalog by name, and check still asks nothing of it', () => {
+test('catalog describes the credential no file imports; one the module refuses is named with why, hides no other, and exits 1; check still asks nothing of it', () => {
   const dir = notesProject('  write alpha-[:Note]-> { Title: company.Name }');
   const catalog = lf(dir, 'catalog');
   assert.equal(catalog.code, 1, catalog.out);
-  assert.match(catalog.out, /schema with credential "gone_notes"/);
+  for (const name of ['acme', 'alpha_notes', 'beta_notes']) assert.match(catalog.out, new RegExp(`^connection ${name}: `, 'm'));
+  assert.match(catalog.out, /\n\nconnection gone_notes: could not be described: .*gone/);
+  assert.equal(catalog.out.match(/^connection gone_notes: /gm)?.length, 1, 'named once, with why, and not described');
+  const json = lf(dir, 'catalog', '--json');
+  assert.equal(json.code, 1, json.out);
+  assert.match(json.out, /"alpha_notes":\{/, 'the snapshot holds the connections that were described');
+  assert.match(json.out, /^connection gone_notes: could not be described: /m, 'and the one that was not is named on the error output');
+  assert.equal(lf(dir, 'check').code, 0, 'a check asks nothing of a credential no file names');
 
   const secretsPath = join(dir, '.lf/secrets.yaml');
   const secrets = parse(readFileSync(secretsPath, 'utf8')) as Record<string, unknown>;
