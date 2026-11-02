@@ -177,9 +177,8 @@ impl Service {
             return None;
         }
         let in_connect = match hover::connect_position(text.line_before(word.range.start)) {
-            Some(hover::ConnectPosition::Adapter) => {
-                let key = hover::adapter_key(&word.name);
-                self.catalog.adapters.get(key).map(|_| ModuleRef { namespace: ModuleNamespace::Adapters, name: key.to_string() })
+            Some(hover::ConnectPosition::Adapter { own }) => {
+                self.catalog.adapter_connected(&word.name, own).map(|key| ModuleRef { namespace: ModuleNamespace::Adapters, name: key.to_string() })
             }
             Some(hover::ConnectPosition::Credential) => {
                 self.catalog.credentials.get(&word.name).map(|_| ModuleRef { namespace: ModuleNamespace::Credentials, name: word.name.clone() })

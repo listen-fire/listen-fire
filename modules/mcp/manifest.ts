@@ -16,8 +16,8 @@ const HANDBOOK = `## MCP servers
 - A refused call fails the run with the server's own text.
 
 \`\`\`
-crm = connect acme_crm using acme
-tracker = connect mcp using linear
+crm = connect #acme_crm using acme
+tracker = connect \`@lf/mcp\` using linear
 
 function triage(company: <crm-[:Company]->>) {
   issue = write tracker-[:create_issue]-> { title: "Follow up \${company.Name}", team: "ENG" }

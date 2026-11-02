@@ -207,7 +207,8 @@ fn hook_urls(session: &Session, local: &str) -> Vec<String> {
             seen.insert((listen.adapter.clone(), credential.clone()));
         }
     }
-    for (external, credential) in connections(set.parsed()) {
+    for (written, credential) in connections(set.parsed()) {
+        let external = crate::catalog::adapter_named(&set.catalog, &written);
         if takes_hooks(&external, true) {
             seen.insert((external, credential));
         }

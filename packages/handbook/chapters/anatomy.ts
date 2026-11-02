@@ -8,8 +8,8 @@ export const anatomy: Chapter = {
 Write a file (extension \`.mvt\`) in four passes, top to bottom: imports, constructions, declarations, entry points.
 
 \`\`\`
-inbox = connect email
-crm   = connect attio using acme_main
+inbox = connect \`@lf/email\`
+crm   = connect \`@lf/attio\` using acme_main
 
 function \`Inbound Intake\`(msg: <inbox-[:Emails]->>) {
   write crm-[:Companies]-> {
@@ -42,8 +42,8 @@ The quoted path is the other file's saved name, matched exactly — no folders, 
 \`connect\` an adapter to get an instance — the graph you actually read and write. Name the adapter and your workspace's stored connection (its credential) right there; neither is imported:
 
 \`\`\`
-crm   = connect attio using acme_main
-inbox = connect email
+crm   = connect \`@lf/attio\` using acme_main
+inbox = connect \`@lf/email\`
 \`\`\`
 
 A credential is only ever named after \`using\`; the host resolves it when the instance is used. It is never a value: read anywhere else (bound to a name, in a string, compared, passed on) it is refused. A credential is typed: an Attio credential cannot connect a Slack instance. Some sources need no credential and connect without \`using\`. Which record types and fields an instance offers depends on the workspace behind the credentials, so the schema is only known once it is connected. A connection is made at file scope only. A \`node\` you declare needs no connection: it names a structure, not a system.
@@ -51,7 +51,7 @@ A credential is only ever named after \`using\`; the host resolves it when the i
 Every connection takes \`dryRun\` as well:
 
 \`\`\`
-crm = connect attio using acme_main { dryRun: true }
+crm = connect \`@lf/attio\` using acme_main { dryRun: true }
 \`\`\`
 
 Writes to a dry-run instance are rehearsed — captured and reported instead of committed. Three traps:
@@ -327,8 +327,8 @@ function team_size(name: <text>, people: <{ name: text, manager: text }[]>): <nu
       construct: 'recursion: a function calling itself from inside a map, with a declared return type',
       status: 'runs',
       probe: `
-inbox = connect email
-crm   = connect attio using acme
+inbox = connect \`@lf/email\`
+crm   = connect \`@lf/attio\` using acme
 
 function team_size(name: <text>, people: <{ name: text, manager: text }[]>): <number> {
   reports = filter(people, (p) => p.manager == name)
@@ -354,8 +354,8 @@ function \`Intake\`(m: <inbox-[:Emails]->>) {
       construct: 'function calls (composition) with a graph<Shape> argument built in place',
       status: 'runs',
       probe: `
-inbox = connect email
-crm   = connect attio using acme
+inbox = connect \`@lf/email\`
+crm   = connect \`@lf/attio\` using acme
 
 node Lead {
   Name: <text>
@@ -377,8 +377,8 @@ function \`Intake\`(m: <inbox-[:Emails]->>) {
       construct: "everything a run wrote, collected by returning each write's handle from map, then acted on member by member",
       status: 'runs',
       probe: `
-inbox = connect email
-chat  = connect slack using team_workspace
+inbox = connect \`@lf/email\`
+chat  = connect \`@lf/slack\` using team_workspace
 
 function \`Post And Confirm\`(msg: <inbox-[:Emails]->>) {
   deals = only(chat-[ch:Channels WHERE ch.Name == "deals"]->)
@@ -399,8 +399,8 @@ listen to inbox-[e:Emails WHERE e.Key == "intake"]-> fire \`Post And Confirm\`
       construct: "a call's value — what the callee returned, bound and passed on",
       status: 'runs',
       probe: `
-inbox = connect email
-crm   = connect attio using acme
+inbox = connect \`@lf/email\`
+crm   = connect \`@lf/attio\` using acme
 
 node Lead {
   Name: <text>
@@ -428,8 +428,8 @@ function \`Intake\`(m: <inbox-[:Emails]->>) {
       construct: 'a returned graph carrying several results — one entry read by dot, one walked as an edge',
       status: 'runs',
       probe: `
-inbox = connect email
-crm   = connect attio using acme
+inbox = connect \`@lf/email\`
+crm   = connect \`@lf/attio\` using acme
 
 node Doc {
   title: <text>
@@ -459,8 +459,8 @@ function \`Intake\`(msg: <inbox-[:Emails]->>) {
       construct: 'multi-parameter library functions (any arity by call; entries stay arity-1)',
       status: 'runs',
       probe: `
-inbox = connect email
-crm   = connect attio using acme
+inbox = connect \`@lf/email\`
+crm   = connect \`@lf/attio\` using acme
 
 node Lead {
   Name: <text>
@@ -487,8 +487,8 @@ function \`Intake\`(m: <inbox-[:Emails]->>) {
       construct: 'a graph literal TREE — a single synthesised edge, traversed by the callee',
       status: 'runs',
       probe: `
-inbox = connect email
-crm   = connect attio using acme
+inbox = connect \`@lf/email\`
+crm   = connect \`@lf/attio\` using acme
 
 node Deal {
   Title: <text>
@@ -516,8 +516,8 @@ function \`Intake\`(m: <inbox-[:Emails]->>) {
       construct: 'a graph literal child built per record on a path (renamed landings)',
       status: 'runs',
       probe: `
-inbox = connect email
-crm   = connect attio using acme
+inbox = connect \`@lf/email\`
+crm   = connect \`@lf/attio\` using acme
 
 node Doc {
   Title: <text>
@@ -581,7 +581,7 @@ function \`Dedupe\`(go: <manual-[:Invocation]->>) {
       probe: `
 import { \`Log Lead\` } from "lib/intake-routines"
 
-inbox = connect email
+inbox = connect \`@lf/email\`
 
 function \`Intake\`(m: <inbox-[:Emails]->>) {
   \`Log Lead\`(m)
@@ -592,8 +592,8 @@ function \`Intake\`(m: <inbox-[:Emails]->>) {
       construct: 'graph literals — graph<Shape> with path-with-field-body children, a bare-path reference, and a spread of a map',
       status: 'runs',
       probe: `
-inbox = connect email
-crm   = connect attio using acme
+inbox = connect \`@lf/email\`
+crm   = connect \`@lf/attio\` using acme
 
 node Message {
   Body: <text>
@@ -635,8 +635,8 @@ function \`Snapshot\`(m: <inbox-[:Emails]->>) {
       construct: 'function convention — positional calls, value and record parameters, exact-case names',
       status: 'runs',
       probe: `
-inbox = connect email
-crm   = connect attio using acme
+inbox = connect \`@lf/email\`
+crm   = connect \`@lf/attio\` using acme
 
 function \`Label\`(name: <text>, tags: <text[]>, cfg: <{ prefix: text, suffix?: text }>) {
   return "\${cfg.prefix}\${name} (\${Text.join(tags, ", ")})"

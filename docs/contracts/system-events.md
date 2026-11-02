@@ -7,7 +7,7 @@ What `@lf/system` reports about the host it runs on, and how a host feeds it. Th
 One root edge, `Events`, lands on one record, `Event`. A listen names the kinds it wants by `Kind`:
 
 ```
-sys = connect system
+sys = connect `@lf/system`
 
 function report(e: <sys-[:Events]->>) { … }
 

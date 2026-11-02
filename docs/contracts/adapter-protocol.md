@@ -193,7 +193,7 @@ The manifest file registers your server with a team:
 }
 ```
 
-- `adapterType` is the slug an automation connects (`crm = connect acme_crm using acme`). One install per slug per team. Charset: `^[a-z][a-z0-9_]*$` (ASCII lower case).
+- `adapterType` is the slug an automation connects (`crm = connect #acme_crm using acme`). One install per slug per team. Charset: `^[a-z][a-z0-9_]*$` (ASCII lower case).
   It may not be a name a built-in adapter answers to (`slack`, `gmail`,
   `inbound_email`, `kg_mutation`, …, in any casing), nor `callback` or `ask`:
   the install is refused.
@@ -208,7 +208,7 @@ The manifest file registers your server with a team:
   author's editor shows it when they hover your adapter or a connection to it.
 - `positionArgs` (optional): `[{ name, optionsFrom, label? }]`, the construction
   args that pin an entry position (an Airtable `base`). A program writes one on
-  the connection (`connect airtable using acme { base: "CRM" }`); the host
+  the connection (``connect `@lf/airtable` using acme { base: "CRM" }``); the host
   describes the module once per value a program constructs it with, and sends
   that value on every call of the connection as `"settings": { "base": "CRM" }`.
 - `introspectedSchema` (optional): `true` when your schema comes from the
@@ -1091,7 +1091,7 @@ twice. `refreshCredential` needs
 
 Declare the credential your module needs to reach its provider. Several
 declarations are ALTERNATIVES (Gmail sign-in or a service account): a
-connection uses exactly one (`connect gmail using alice_gmail`), and the host
+connection uses exactly one (``connect `@lf/gmail` using alice_gmail``), and the host
 sends only that one. A module that needs two secrets at once declares them as
 two fields of one credential:
 
@@ -1133,8 +1133,8 @@ the CONNECTION. One install serves many users: a movement connects once per
 account, naming the credential each connection acts as,
 
 ```
-hs_alice = connect hubspot using alice_hubspot
-hs_bob = connect hubspot using bob_hubspot
+hs_alice = connect #hubspot using alice_hubspot
+hs_bob = connect #hubspot using bob_hubspot
 ```
 
 and every call made through `hs_alice` is signed with the install's secret
@@ -1844,7 +1844,7 @@ from `apps/cli`.
    `movements/companies.mvt` with `movements/discuss.mvt`:
 
    ```
-   crm = connect acme_crm using acme
+   crm = connect #acme_crm using acme
 
    function discuss(company: <crm-[:Company]->>) {
      thread = write crm-[:Company]-> { Name: "Discuss ${company.Name}" }

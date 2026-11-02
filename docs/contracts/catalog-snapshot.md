@@ -38,6 +38,7 @@ interface AdapterSnapshot extends AdapterSpec {
 
 interface AdapterSpec {
   constructionArgs: ConstructionArg[];
+  package?: string;                               // the package the module is installed from (`@lf/github`), which a `connect` names it by; absent for a module known only by its key (a project's local command, file or server, an embedding host's adapter)
   declaredCredentials?: string[];                 // a module's declared credentials, by name; a credential naming another (`credential`) is refused at check
   canFire?: boolean;                              // absent on a known spec: it cannot fire anything
   connectActions?: Array<{ kind: string; label: string }>;
@@ -241,6 +242,7 @@ interface FieldCapability {
 
 ## Changes
 
+- **Version 3, after 0.13.0:** an `AdapterSpec` gains `package?`, the package the module is installed from, compared whole against what a `connect` names (``connect `@lf/github` ``). It is optional and additive, so the version stays 3. A Rust reader built before it refuses a snapshot that carries it, so a builder writes it only for a reader of this release or later.
 - **Version 3, with 0.13's listen:** the settings listen (`listen to x { … }`) is retired, and with it what said what it could hear.
   - An `AdapterSpec` loses `triggerConfig?`, `triggerConfigOptions?`, `defaultEvents?`, `triggerConfigRequired?`, `triggerConfigRequiredWhy?` and `triggerConfigFormats?`.
   - An `InstanceSchema` loses `eventPosition?`, `eventPositions?`, `eventNarrowingKeys?` and `eventNarrowingValues?`.

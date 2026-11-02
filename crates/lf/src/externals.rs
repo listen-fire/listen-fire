@@ -150,6 +150,25 @@ pub struct External {
     pub manifest: ExternalManifest,
 }
 
+impl External {
+    /// The package it is installed from (`module: "@lf/github"`), which a
+    /// `connect` names it by. None for a module of the project's own (a
+    /// `command:`, a `url:`, a local file `module: ./words.ts`), named by
+    /// its name.
+    pub fn package(&self) -> Option<&str> {
+        self.manifest.module.as_deref().filter(|module| !module.starts_with('.') && !module.starts_with('/'))
+    }
+
+    /// How a program's `connect` names it: its package's name
+    /// (`` `@lf/github` ``), else `#` and its name (`#acme_crm`).
+    pub fn connect_name(&self) -> String {
+        match self.package() {
+            Some(package) => format!("`{package}`"),
+            None => format!("#{}", self.manifest.name),
+        }
+    }
+}
+
 /// The adapters and plugin packages the host starts and calls over the
 /// protocol: every installed folder but the core modules.
 pub fn scan_externals(project: &Project) -> Result<Vec<External>, String> {

@@ -1,4 +1,4 @@
-crm = connect acme_crm using acme
+crm = connect #acme_crm using acme
 
 # A company created in the CRM is welcomed at once, then followed up an hour later.
 function welcome(company: <crm-[:Company]->>) {

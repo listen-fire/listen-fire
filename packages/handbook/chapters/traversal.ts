@@ -129,7 +129,7 @@ Message: "Logged \${count(orgs)} companies"
       construct: 'graph-rooted query traversals (WHERE / ORDER BY / LIMIT on a collection hop)',
       status: 'runs',
       probe: `
-crm  = connect attio using acme
+crm  = connect \`@lf/attio\` using acme
 
 function \`Top Ten\`(go: <manual-[:Invocation]->>) {
   crm-[c:Companies WHERE c.Categories == "Customer" ORDER BY c.\`Created At\` DESC LIMIT 10]-> {
@@ -152,7 +152,7 @@ listen to manual-[:Invocations]-> fire \`Top Ten\`
       construct: 'an ORDER BY key that walks one hop off the record it ranks',
       status: 'runs',
       probe: `
-crm  = connect attio using acme
+crm  = connect \`@lf/attio\` using acme
 
 function \`By Company\`(go: <manual-[:Invocation]->>) {
   crm-[p:People ORDER BY p-[:Company]->.Name LIMIT 5]-> {
@@ -170,7 +170,7 @@ listen to manual-[:Invocations]-> fire \`By Company\`
       construct: 'a walk wrapped in a closure, called only in the branch that needs it',
       status: 'runs',
       probe: `
-crm  = connect attio using acme
+crm  = connect \`@lf/attio\` using acme
 
 function \`Recent\`(go: <manual-[:Invocation]->>) {
   customers = () => crm-[c:Companies WHERE c.Categories == "Customer" ORDER BY c.\`Created At\` DESC LIMIT 5]->
@@ -190,9 +190,9 @@ listen to manual-[:Invocations]-> fire \`Recent\`
       construct: 'a block returning a record — the returned handles counted and walked after it',
       status: 'runs',
       probe: `
-inbox = connect email
-crm   = connect attio using acme
-team  = connect slack using team_workspace
+inbox = connect \`@lf/email\`
+crm   = connect \`@lf/attio\` using acme
+team  = connect \`@lf/slack\` using team_workspace
 
 function \`Intake\`(m: <inbox-[:Emails]->>) {
   orgs = m-[f:Attachments]-> {
@@ -216,9 +216,9 @@ function \`Intake\`(m: <inbox-[:Emails]->>) {
       construct: 'the record-order rules — only for a lookup, Text.join over an ordered relationship, LIMIT on a sequenced one',
       status: 'runs',
       probe: `
-inbox = connect email
-crm   = connect attio using acme
-team  = connect slack using team_workspace
+inbox = connect \`@lf/email\`
+crm   = connect \`@lf/attio\` using acme
+team  = connect \`@lf/slack\` using team_workspace
 
 function \`Digest\`(m: <inbox-[:Emails]->>) {
   channel = only(team-[ch:Channels WHERE ch.Name == "general"]->)
@@ -237,8 +237,8 @@ function \`Digest\`(m: <inbox-[:Emails]->>) {
       construct: 'a block returning a value — every iteration collected as a list',
       status: 'runs',
       probe: `
-inbox = connect email
-team  = connect slack using team_workspace
+inbox = connect \`@lf/email\`
+team  = connect \`@lf/slack\` using team_workspace
 
 function \`Name Them\`(m: <inbox-[:Emails]->>) {
   names = m-[f:Attachments]-> {

@@ -500,7 +500,7 @@ mod tests {
         let named = super::Named::of(program);
         let at = |(name, loc): &(String, movement_parser::ast::Loc)| (name.clone(), loc.line, loc.col);
         assert_eq!(named.credentials.iter().map(at).collect::<Vec<_>>(), [("acme".to_string(), 1, 1), ("my_github".to_string(), 5, 35)]);
-        assert_eq!(named.adapters().collect::<Vec<_>>(), ["airtable", "github"]);
+        assert_eq!(named.adapters().collect::<Vec<_>>(), ["airtable", "@lf/github"], "a package name is kept whole, for the externals to answer to");
         let wanted = Construction { adapter: "airtable".into(), credential: Some("acme".into()), args: vec![("base".into(), "\"CRM\"".into())] };
         assert_eq!(imported_credentials(&parsed).constructions.into_iter().collect::<Vec<_>>(), vec![wanted]);
         assert!(imported_credentials(&parsed).contains("my_github"));

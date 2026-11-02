@@ -24,8 +24,8 @@ The credential asks for:
 ## What a movement sees
 
 ```
-stripe = connect webhook using StripeHook
-crm = connect acme_crm using acme
+stripe = connect `@lf/webhook` using StripeHook
+crm = connect #acme_crm using acme
 
 node Payment {
   id: <text>

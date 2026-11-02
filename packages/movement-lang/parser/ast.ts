@@ -285,6 +285,8 @@ export interface ConstructionCall {
   span: Span;
   /** Written `connect x using c`, whose adapter and credential need no import. */
   connect?: true;
+  /** Written `connect #x`: `x` is a module of the project's own (no package), by its key. */
+  own?: true;
 }
 
 /**

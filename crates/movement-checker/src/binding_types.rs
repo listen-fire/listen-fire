@@ -30,7 +30,7 @@ impl Checker<'_> {
     pub(crate) fn declare_units(&mut self, scope: ScopeId) {
         for unit in movement_parser::version::RUN_HOST_UNITS {
             let at = movement_parser::ast::Loc { line: 1, col: 1 };
-            let construct = ConstructionCall { callee: unit.to_string(), args: Vec::new(), span: movement_parser::ast::Span { start: at, end: at }, connect: false };
+            let construct = ConstructionCall { callee: unit.to_string(), args: Vec::new(), span: movement_parser::ast::Span { start: at, end: at }, connect: false, own: false };
             let instantiated = self.catalog.instantiate(unit, &Args::default());
             let mut symbol = crate::scope::Symbol::new(*unit, SymbolKind::Instance, construct.span);
             symbol.unit = true;

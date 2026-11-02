@@ -82,6 +82,8 @@ struct Plugin {
 
 struct Summary {
     reference: String,
+    /// How a program's `connect` names it (crate::externals::External::connect_name).
+    connect_name: String,
     /// What the project calls it, when it is installed here.
     installed_as: Option<String>,
     description: Option<String>,
@@ -151,6 +153,7 @@ async fn read_module(project: &Project, reference: &str, external: &External, cr
     let live = Js::is_true(answer.get("introspectedSchema"));
     let mut summary = Summary {
         reference: reference.to_string(),
+        connect_name: external.connect_name(),
         installed_as: installed.then(|| external.manifest.name.clone()),
         description: answer.get("description").and_then(Js::as_str).map(str::to_string),
         kind: if running.is_plugin() || answer.get("plugins").is_some() { "plugin".into() } else { "adapter".into() },
@@ -203,6 +206,7 @@ fn core_summary(reference: &str, module: &crate::core::CoreModule) -> Summary {
     let needs = module.settings.iter().filter(|s| !s.optional).map(|s| format!("--setting {}=<value>", s.name)).collect();
     Summary {
         reference: reference.to_string(),
+        connect_name: format!("#{}", external_name(reference)),
         installed_as: None,
         description: None,
         kind: format!("{} slot", module.slot.name()),
@@ -496,8 +500,8 @@ impl Summary {
         let name = self.module_name();
         match (self.kind.as_str(), self.credentials.is_empty()) {
             ("plugin", _) => line(format!("use: import {{ {name} }} from plugins")),
-            ("adapter", false) => line(format!("use: c = connect {name} using <credential>")),
-            ("adapter", true) => line(format!("use: c = connect {name}")),
+            ("adapter", false) => line(format!("use: c = connect {} using <credential>", self.connect_name)),
+            ("adapter", true) => line(format!("use: c = connect {}", self.connect_name)),
             _ => {}
         }
         out.join("\n")

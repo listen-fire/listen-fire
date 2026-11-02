@@ -22,14 +22,17 @@ named in [`RELEASING.md`](RELEASING.md).
 
 ### Changed
 
-- **`connect` names the adapter and the credential itself, so neither is imported.** `gh = connect github using my_github` checks and runs with no `import … from adapters` and no `import … from credentials`. Why: an adapter and a credential are only ever named in a `connect`, so the checker types them there. Imports are for plugins and other files.
-  - The name after `connect` is an adapter of the catalog. Its package tag names the same adapter (``connect `@lf/github` ``).
+- **`connect` names the adapter and the credential itself, so neither is imported.** ``gh = connect `@lf/github` using my_github`` checks and runs with no `import … from adapters` and no `import … from credentials`. Why: an adapter and a credential are only ever named in a `connect`, so the checker types them there. Imports are for plugins and other files.
+  - A module installed from a package is named by its package name (``connect `@lf/github` ``), compared whole against the package each installed module came from. Its short name (`connect github`) is refused, with the package name as the fix: one spelling per module.
+  - A module that is no package is named by `#` and its name: a project's local command, local file or remote server by its external's name (`connect #acme_crm using acme`), an embedding host's own system by its adapter type (`connect #crm using workspace`). `#` is syntax, as in a TypeScript subpath import: no package name starts with it, so the two never collide. Without `#` (`connect acme_crm`) the name is refused, with the `#` as the fix; how a module runs is the project's `lf-external.yaml`, never its name.
+  - An imported alias still names its adapter with neither form, while imports remain.
   - The name after `using` is a credential of the project.
-  - Each of the two positions holds only one kind of name, as a type position does in TypeScript, so a binding of the same name does not hide it (`github = connect github using my_github`).
+  - Each of the two positions holds only one kind of name, as a type position does in TypeScript, so a binding of the same name does not hide it (``github = connect `@lf/github` using my_github``).
   - **Deprecated:** `import { … } from adapters` and `import { … } from credentials`. Under a `0.13` pin both still check and run as written, and `connect` resolves an imported name first. A later compatibility key will refuse them.
-  - `listen-fire` reads what a file connects as well as what it imports: it starts the externals a file connects, and `check` reports a credential named after `using` that the secrets lack (`MISSING_CREDENTIAL`, at the name).
-  - The checker's messages name `connect` where they named an import: an adapter or a credential read as a value; a `connect` to an adapter or a credential the project lacks, with the closest name; and the older construction `attio(credentials: acme)` with no import, whose fix is its `connect`. The codes are unchanged.
-  - The editor completes an adapter after `connect `, and hover and go-to-definition answer for `connect`'s adapter and credential.
+  - The catalog snapshot's `AdapterSpec` gains `package?`, the package the module is installed from, which `listen-fire` fills from each external's `module:`. A host building its own catalog sets it for each module installed from a package, or `connect` cannot name that module by its package name. A reader built before it refuses a snapshot that carries it.
+  - `listen-fire` reads what a file connects as well as what it imports: it starts the externals a file connects, routes their listens, and `check` reports a credential named after `using` that the secrets lack (`MISSING_CREDENTIAL`, at the name).
+  - The checker's messages name `connect` where they named an import, writing each module as `connect` names it: an adapter or a credential read as a value; a `connect` to an adapter or a credential the project lacks, with the closest name; and the older construction `attio(credentials: acme)` with no import, whose fix is its `connect`. The codes are unchanged.
+  - The editor completes an adapter after `connect `, by its package name where it has one, and hover and go-to-definition answer for `connect`'s adapter and credential.
   - The handbook, the docs, the examples and the authoring MCP's guidance show only the form with no import. Their programs that connected the `manual` or `cron` unit now listen to the unit by name.
 
 ## [0.13.0] - 2026-11-02

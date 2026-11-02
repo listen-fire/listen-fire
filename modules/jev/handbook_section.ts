@@ -8,8 +8,8 @@ import type { HandbookSection } from 'engine-contracts';
 
 const INTAKE = `
 import { \`@lf/jev\` as jev } from plugins
-inbox = connect email
-crm   = connect attio using acme
+inbox = connect \`@lf/email\`
+crm   = connect \`@lf/attio\` using acme
 
 function \`Sort Inbound\`(m: <inbox-[:Emails]->>) {
   wanted = jev.score(m.Body, "Is this email asking us to meet or to buy something?")

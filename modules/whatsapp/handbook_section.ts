@@ -119,8 +119,8 @@ WhatsApp cannot edit a message it already sent, and there is nothing like a toas
       construct: 'a WhatsApp url button (cta_url) that opens a form from @lf/forms, the run waiting on its submission inside a race with a sleep',
       status: 'runs',
       probe: `
-wa = connect whatsapp
-forms = connect forms
+wa = connect \`@lf/whatsapp\`
+forms = connect \`@lf/forms\`
 
 node Decision {
   Send: <boolean>

@@ -13,8 +13,8 @@ All the output below is real. You can reproduce it from a clone with no accounts
 `movements/triage.mvt`:
 
 ```
-gh   = connect github using my_github
-chat = connect slack using my_slack
+gh   = connect `@lf/github` using my_github
+chat = connect `@lf/slack` using my_slack
 
 function triage(t: <cron-[:Ticks]->>) {
   lines = gh-[n:Notifications WHERE n.Reason IN ["review_requested", "mention"] ORDER BY n.`Updated At` DESC]-> {

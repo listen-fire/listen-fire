@@ -21,10 +21,10 @@ The credential asks for:
 ## What a movement sees
 
 ```
-pay = connect stripe using stripe_account
-cr = connect mcp using crm
-mail = connect gmail using billing_mail
-chat = connect slack using team_slack
+pay = connect `@lf/stripe` using stripe_account
+cr = connect `@lf/mcp` using crm
+mail = connect `@lf/gmail` using billing_mail
+chat = connect `@lf/slack` using team_slack
 
 function `Payment Failed`(e: <pay-[:InvoiceChange]->>) {
   inv = only(e-[:Invoice]->)

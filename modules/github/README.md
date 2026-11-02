@@ -19,8 +19,8 @@ The credential asks for:
 ## What a movement sees
 
 ```
-gh   = connect github using henry_github
-chat = connect slack using team_slack
+gh   = connect `@lf/github` using henry_github
+chat = connect `@lf/slack` using team_slack
 
 function triage(n: <gh-[:Notifications]->>) {
   general = only(chat-[ch:Channels WHERE ch.Name == "general"]->)

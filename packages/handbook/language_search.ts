@@ -98,7 +98,7 @@ export const CONTROL_FORMS: readonly ControlForm[] = [
     purpose: 'get typed answers from a person at a link, and wait for what they submit',
     example: {
       program:
-        'forms = connect forms\nnode Decision {\n  Pursue: <boolean>\n}\nfunction `Ask`(m: <inbox-[:Emails]->>) {\n  form = write forms-[:Forms]-> { Title: "Pursue ${m.Subject}?", Fields: Decision }\n  ops = only(chat-[c:Channels WHERE c.Name == "ops"]->)\n  if (ops == null) { fail("no #ops channel") }\n  write ops-[:Messages]-> { Message: "Answer at ${form.Url}" }\n  r = race(\n    () => {\n      answer = await form-[:Submissions]->\n      return answer.Pursue\n    },\n    () => { await sleep(2d) },\n  )\n  if (r[0] == true) { write crm-[:Companies]-> { unique by (Name), Name: m.Subject } }\n}',
+        'forms = connect `@lf/forms`\nnode Decision {\n  Pursue: <boolean>\n}\nfunction `Ask`(m: <inbox-[:Emails]->>) {\n  form = write forms-[:Forms]-> { Title: "Pursue ${m.Subject}?", Fields: Decision }\n  ops = only(chat-[c:Channels WHERE c.Name == "ops"]->)\n  if (ops == null) { fail("no #ops channel") }\n  write ops-[:Messages]-> { Message: "Answer at ${form.Url}" }\n  r = race(\n    () => {\n      answer = await form-[:Submissions]->\n      return answer.Pursue\n    },\n    () => { await sleep(2d) },\n  )\n  if (r[0] == true) { write crm-[:Companies]-> { unique by (Name), Name: m.Subject } }\n}',
     },
     anchor: 'reviews#host-links',
   },

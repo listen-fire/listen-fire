@@ -1187,7 +1187,10 @@ impl Run<'_> {
     /// `instanceBinding`: the construction's arguments as text, the
     /// credential's unwrapped, and the schema the snapshot instantiates.
     fn instance_binding(&self, name: &str, construct: &ast::ConstructionCall) -> InstanceBinding {
-        let adapter_slug = self.original(&construct.callee);
+        // The name as written or imported: a package name resolves to the
+        // adapter installed from it, `#name` to the project's own module.
+        let written = self.original(&construct.callee);
+        let adapter_slug = self.catalog.adapter_connected(&written, construct.own).map_or_else(|| written.clone(), str::to_string);
         let credential_arg = self
             .catalog
             .adapter(&adapter_slug)

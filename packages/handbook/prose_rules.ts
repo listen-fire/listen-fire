@@ -68,7 +68,7 @@ const NOT_RECOMMENDED: Array<{ pattern: RegExp; label: string }> = [
   { pattern: /\bONLY\(\s*extract\(/i, label: '`only(extract(…))` — write `extractOne(…)`' },
   // The current surface: the spellings it replaced, outside walk brackets.
   { pattern: /\bERROR\(/, label: '`ERROR(…)` — write `fail(…)`' },
-  { pattern: /\(credentials:/, label: 'an adapter construction — write `connect attio using acme`' },
+  { pattern: /\(credentials:/, label: 'an adapter construction — write ``connect `@lf/attio` using acme``' },
   { pattern: /\bIF\b[^\n]*\bTHEN\b/, label: '`IF … THEN … ELSE … END` — write `c ? a : b`' },
   { pattern: /\bISNULL\(/, label: '`ISNULL(x)` — write `x == null`' },
   { pattern: /\bAT\(/, label: '`AT(xs, i)` — write `xs[i]`' },

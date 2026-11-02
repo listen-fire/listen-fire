@@ -20,8 +20,8 @@ export const builtins: Chapter = {
       construct: 'text and number helpers (Text.trim/lower/upper/length/split/concat/from, Number.abs/round/floor/ceil/parse, List.compact, == null)',
       status: 'runs',
       probe: `
-inbox = connect email
-crm   = connect attio using acme
+inbox = connect \`@lf/email\`
+crm   = connect \`@lf/attio\` using acme
 
 function \`Intake\`(m: <inbox-[:Emails]->>) {
   n    = Number.parse(m.Subject)
@@ -41,8 +41,8 @@ function \`Intake\`(m: <inbox-[:Emails]->>) {
       construct: 'coalesce and exists (including a walk WHERE form)',
       status: 'runs',
       probe: `
-inbox = connect email
-crm   = connect attio using acme
+inbox = connect \`@lf/email\`
+crm   = connect \`@lf/attio\` using acme
 
 function \`Intake\`(m: <inbox-[:Emails]->>) {
   if (exists(m-[a:Attachments WHERE a.Name CONTAINS "pdf"]->)) {
@@ -58,7 +58,7 @@ function \`Intake\`(m: <inbox-[:Emails]->>) {
       construct: 'the commutative aggregates (count, only) over a captured relationship, plus Text.join/first/List.last/xs[n] each ordered inline with sort',
       status: 'runs',
       probe: `
-crm = connect attio using acme
+crm = connect \`@lf/attio\` using acme
 
 function m(evt: <crm-[:CompanyChange]->>) {
   evt-[co:Company]-> {
@@ -79,7 +79,7 @@ function m(evt: <crm-[:CompanyChange]->>) {
       construct: 'List.sum/avg/min/max over a list of numbers',
       status: 'runs',
       probe: `
-crm = connect attio using acme
+crm = connect \`@lf/attio\` using acme
 
 function m(evt: <crm-[:CompanyChange]->>) {
   evt-[co:Company]-> {
@@ -100,7 +100,7 @@ function m(evt: <crm-[:CompanyChange]->>) {
       construct: 'map/filter/reduce/List.groupBy/List.keyBy, a bare no-return map statement, and indexing a dict literal vs a List.groupBy result',
       status: 'runs',
       probe: `
-crm  = connect attio using acme
+crm  = connect \`@lf/attio\` using acme
 
 function \`Roster\`(go: <manual-[:Invocation]->>) {
   d = { bucket: "a", packed: 3 }
@@ -136,7 +136,7 @@ listen to manual-[:Invocations]-> fire \`Roster\`
       construct: 'members in declaration order, the c ? a : b conditional, and unary minus',
       status: 'runs',
       probe: `
-chat = connect slack using team_workspace
+chat = connect \`@lf/slack\` using team_workspace
 
 type Thesis = <"Consumer" | "Infra" | "Health">
 
@@ -161,7 +161,7 @@ listen to manual-[:Invocations]-> fire \`Recap\`
       status: 'runs',
       probe: `
 import { \`@lf/pdf\` as pdf } from plugins
-crm  = connect attio using acme
+crm  = connect \`@lf/attio\` using acme
 
 function \`Cut A Document\`(go: <manual-[:Invocation]->>) {
   go-[f:Files]-> {
@@ -189,8 +189,8 @@ listen to manual-[:Invocations]-> fire \`Cut A Document\`
       construct: 'namespace members: Currency.*, Date.*, DateTime.at/toIso, Text.regexExtract/slug, Url.host, Number.format',
       status: 'runs',
       probe: `
-inbox = connect email
-crm   = connect attio using acme
+inbox = connect \`@lf/email\`
+crm   = connect \`@lf/attio\` using acme
 
 function \`Intake\`(m: <inbox-[:Emails]->>) {
   today  = Date.today("Europe/Berlin")

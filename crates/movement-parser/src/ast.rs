@@ -223,6 +223,11 @@ pub struct ConstructionCall {
     /// for the older construction `x(credentials: c)`, which is refused.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub connect: bool,
+    /// Written `connect #x`: `x` is a module of the project's own (a local
+    /// command, file or server, an embedding host's adapter), named by its
+    /// key; without `#` the name is a package's.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub own: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]

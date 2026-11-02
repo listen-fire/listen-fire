@@ -52,6 +52,9 @@ pub fn spell_if(condition: &str) -> String {
 /// named `credential`.
 pub struct Connection<'a> {
     pub adapter: &'a str,
+    /// A module of the project's own, written `#adapter`; else a package
+    /// name or an import's local name.
+    pub own: bool,
     pub args: &'a [(&'a str, &'a str)],
     pub credential: Option<&'a str>,
 }
@@ -60,7 +63,7 @@ pub struct Connection<'a> {
 /// (the credential after `using`, every other argument a setting). The
 /// parser's refusal of an old construction writes its fix with it.
 pub fn connection(c: &Connection) -> String {
-    let mut text = format!("connect {}", name_source(c.adapter));
+    let mut text = format!("connect {}{}", if c.own { "#" } else { "" }, name_source(c.adapter));
     if let Some((_, value)) = c.args.iter().find(|(name, _)| Some(*name) == c.credential) {
         text.push_str(&format!(" using {value}"));
     }
@@ -184,9 +187,9 @@ mod tests {
     #[test]
     fn connections() {
         use super::{Connection, connection};
-        let attio = Connection { adapter: "attio", args: &[("credentials", "acme"), ("dry_run", "true")], credential: Some("credentials") };
+        let attio = Connection { adapter: "attio", own: false, args: &[("credentials", "acme"), ("dry_run", "true")], credential: Some("credentials") };
         assert_eq!(connection(&attio), "connect attio using acme { dryRun: true }");
-        assert_eq!(connection(&Connection { adapter: "kg", args: &[], credential: None }), "connect kg");
+        assert_eq!(connection(&Connection { adapter: "kg", own: true, args: &[], credential: None }), "connect #kg");
         assert_eq!(super::spell_word("NOT"), "'!'");
         assert_eq!(super::spell_if("EXISTS(co)"), "if (co != null)");
     }

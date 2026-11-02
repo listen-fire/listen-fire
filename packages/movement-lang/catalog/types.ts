@@ -43,6 +43,12 @@ export interface ConstructionArg {
 
 export interface AdapterSpec {
   /**
+   * The package the module is installed from (`@lf/github`), which a
+   * `connect` names it by. Absent for a module known only by its key: a
+   * project's local command, file or server, an embedding host's adapter.
+   */
+  package?: string;
+  /**
    * The adapter's full construction signature — the credential (if any) folded
    * in as a `kind: 'credential'` entry, plus every entry-position arg.
    */

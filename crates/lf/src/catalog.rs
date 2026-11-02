@@ -143,6 +143,7 @@ pub fn catalog_of(running: &[Rc<RunningExternal>], schemas: &IndexMap<String, Co
         adapters.insert(
             name.clone(),
             adapter_snapshot_of(AdapterDeclarations {
+                package: r.external.package(),
                 supported_triggers: &r.supported_triggers,
                 listen: &r.listen,
                 construction_args,
@@ -173,6 +174,7 @@ fn unit_snapshot(unit: &str) -> Js {
     let schema = crate::schema::describe_external_schema(unit, &entries, &descriptors);
     let schemas: Obj = [(instance_schema_key(None), schema)].into_iter().collect();
     adapter_snapshot_of(AdapterDeclarations {
+        package: None,
         supported_triggers: &["webhook".to_string()],
         listen: &crate::units::listen_vocabulary(unit),
         construction_args: Vec::new(),
@@ -196,6 +198,8 @@ fn declared_names(declarations: &[crate::oauth2::Declaration]) -> Vec<String> {
 
 /// What one adapter's catalog entry is made of.
 struct AdapterDeclarations<'a> {
+    /// The package the module is installed from, which a `connect` names it by.
+    package: Option<&'a str>,
     supported_triggers: &'a [String],
     listen: &'a Obj,
     construction_args: Vec<Js>,
@@ -208,10 +212,25 @@ struct AdapterDeclarations<'a> {
     construction_arg_options: Obj,
 }
 
+/// The adapter key a `connect` names as written: the adapter installed from
+/// that package (compared whole), else the name itself (a project's own
+/// module, or an import's original). The fallback is where a module that is
+/// not a package is read, as `CatalogSnapshot::own_module_named` reads it.
+pub fn adapter_named(catalog: &Js, written: &str) -> String {
+    let installed_from = |(_, adapter): &(&String, &Js)| adapter.get("package").and_then(Js::as_str) == Some(written);
+    match catalog.get("adapters") {
+        Some(Js::Obj(adapters)) => adapters.iter().find(installed_from).map_or_else(|| written.to_string(), |(key, _)| key.clone()),
+        _ => written.to_string(),
+    }
+}
+
 /// `adapterSnapshotOf` for a remote adapter's manifest: no construction
 /// blocks, no connect affordance, no trigger expectation, an introspected schema.
 fn adapter_snapshot_of(adapter: AdapterDeclarations) -> Js {
     let mut snapshot = obj! { "constructionArgs" => Js::Arr(adapter.construction_args) };
+    if let Some(package) = adapter.package {
+        snapshot.insert("package".into(), Js::str(package));
+    }
     if !adapter.declared_credentials.is_empty() {
         snapshot.insert("declaredCredentials".into(), Js::strings(adapter.declared_credentials));
     }
@@ -262,6 +281,15 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_connect_s_package_name_is_compared_whole_against_each_adapter_s_package() {
+        let catalog = Js::parse(br#"{"adapters":{"github":{"package":"@lf/github"},"google_drive":{"package":"@lf/google-drive"},"acme_crm":{}}}"#).unwrap();
+        assert_eq!(adapter_named(&catalog, "@lf/github"), "github");
+        assert_eq!(adapter_named(&catalog, "@lf/google-drive"), "google_drive", "the key is never derived from the package name");
+        assert_eq!(adapter_named(&catalog, "acme_crm"), "acme_crm");
+        assert_eq!(adapter_named(&catalog, "@lf/acme_crm"), "@lf/acme_crm", "no package answers, so nothing is cut");
+    }
+
+    #[test]
     fn a_modules_settings_mapping_reaches_the_checker_as_the_catalog_types_it() {
         let declared = r#"{"path":["Bases","Tables","Changes"],"aliases":["b","t","c"],"paramFrom":"Record Change","keys":{"table":{"hop":1,"field":"Id","op":"eq"}}}"#;
         let listen = match Js::parse(format!(r#"{{"listenSettingsBecome":{declared}}}"#).as_bytes()).unwrap() {
@@ -269,6 +297,7 @@ mod tests {
             _ => unreachable!(),
         };
         let snapshot = adapter_snapshot_of(AdapterDeclarations {
+            package: None,
             supported_triggers: &[],
             listen: &listen,
             construction_args: Vec::new(),

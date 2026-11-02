@@ -56,7 +56,7 @@ Two waits 0.12 accepted are refused once respelled, and the pin holds until each
 | `reply = await first(ops-[:Messages]->-[:Replies]->)` | `msg = only(ops-[:Messages]->)`, then `if (msg == null) { fail("no message") }`, then `reply = await msg-[:Replies]->` |
 
 ```
-team = connect slack using team_workspace
+team = connect `@lf/slack` using team_workspace
 
 function `Who Takes It`(go: <manual-[:Invocation]->>) {
   ops = only(team-[ch:Channels WHERE ch.Name == "ops"]->)
@@ -98,7 +98,7 @@ write approvals-[:Messages]-> { Message: "Approve this?", Blocks: [ … ] }   # 
 After, the buttons are a field of the message, and a press arrives on the message's `Interactions`. The `Value` of the action pressed is one of the values written, so comparing it with one no button offers is refused.
 
 ```
-team = connect slack using team_workspace
+team = connect `@lf/slack` using team_workspace
 
 function `Approve Or Reject`(go: <manual-[:Invocation]->>) {
   approvals = only(team-[ch:Channels WHERE ch.Name == "approvals"]->)
@@ -141,8 +141,8 @@ write ops-[:Messages]-> { Message: "Pick a day: ${booked.url}" }
 After, the link is a form from `@lf/forms`. Its fields are a `node` you declare, and the answer arrives on the form's `Submissions`, typed by that node.
 
 ```
-team  = connect slack using team_workspace
-forms = connect forms
+team  = connect `@lf/slack` using team_workspace
+forms = connect `@lf/forms`
 
 node Booking {
   Day: <date>
@@ -402,8 +402,8 @@ A listen sets no numbers. Each comes from the module's declaration, and `lf.yaml
 `callback(…, { once: false })` took many answers in one run. In 0.13 each answer is its own run of a standing listen, and the state lives in a table. The poll is a Slack message with `Buttons` and a `Topic`, and every press on a message with that `Topic` runs `count_vote`, one row per poll and person:
 
 ```
-chat = connect slack using team_slack
-office = connect airtable using team_airtable { base: "Office" }
+chat = connect `@lf/slack` using team_slack
+office = connect `@lf/airtable` using team_airtable { base: "Office" }
 
 function ask_lunch(t: <cron-[:Ticks]->>) {
   channel = only(chat-[ch:Channels WHERE ch.Name == "office"]->)

@@ -263,7 +263,7 @@
 "probes": [
 {"at":{"character":0,"line":1},"definition":{"file":null,"range":{"end":{"character":5,"line":1},"start":{"character":0,"line":1}}},"hover":{"contents":"```movement\ninbox = connect email\n```\nA connection to email.\n\nHolds: Attachment, Email\n\nListen to: Emails\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":5,"line":1},"start":{"character":0,"line":1}}}},
 {"at":{"character":0,"line":2},"definition":{"file":null,"range":{"end":{"character":3,"line":2},"start":{"character":0,"line":2}}},"hover":{"contents":"```movement\ncrm = connect attio\n```\nYour attio account, signed in with the credential acme.\n\nHolds: Comment, Companies, `Companies List`, CompanyChange, DealChange, Deals, File, FundChange and 9 more\n\nListen to: Changes\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":3,"line":2},"start":{"character":0,"line":2}}}},
-{"at":{"character":28,"line":2},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":28,"line":2},"start":{"character":28,"line":2}}}},
+{"at":{"character":34,"line":2},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":34,"line":2},"start":{"character":34,"line":2}}}},
 {"at":{"character":0,"line":4},"definition":null,"hover":null},
 {"at":{"character":44,"line":4},"codeActions":[],"complete":{"items":1,"word":{"end":{"character":44,"line":4},"start":{"character":44,"line":4}}}},
 {"at":{"character":2,"line":5},"definition":{"file":null,"range":{"end":{"character":9,"line":5},"start":{"character":2,"line":5}}},"hover":{"contents":"```movement\nreports: list of { name: text, manager: text }\n```\nSet on line 6.\n\n[Docs](<docs>/reference#top-level)","range":{"end":{"character":9,"line":5},"start":{"character":2,"line":5}}}},
@@ -292,7 +292,7 @@
 "probes": [
 {"at":{"character":0,"line":1},"definition":{"file":null,"range":{"end":{"character":5,"line":1},"start":{"character":0,"line":1}}},"hover":{"contents":"```movement\ninbox = connect email\n```\nA connection to email.\n\nHolds: Attachment, Email\n\nListen to: Emails\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":5,"line":1},"start":{"character":0,"line":1}}}},
 {"at":{"character":0,"line":2},"definition":{"file":null,"range":{"end":{"character":3,"line":2},"start":{"character":0,"line":2}}},"hover":{"contents":"```movement\ncrm = connect attio\n```\nYour attio account, signed in with the credential acme.\n\nHolds: Comment, Companies, `Companies List`, CompanyChange, DealChange, Deals, File, FundChange and 9 more\n\nListen to: Changes\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":3,"line":2},"start":{"character":0,"line":2}}}},
-{"at":{"character":28,"line":2},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":28,"line":2},"start":{"character":28,"line":2}}}},
+{"at":{"character":34,"line":2},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":34,"line":2},"start":{"character":34,"line":2}}}},
 {"at":{"character":0,"line":4},"definition":null,"hover":null},
 {"at":{"character":2,"line":5},"definition":null,"hover":null},
 {"at":{"character":0,"line":8},"definition":null,"hover":null},
@@ -311,7 +311,7 @@
 "probes": [
 {"at":{"character":0,"line":1},"definition":{"file":null,"range":{"end":{"character":5,"line":1},"start":{"character":0,"line":1}}},"hover":{"contents":"```movement\ninbox = connect email\n```\nA connection to email.\n\nHolds: Attachment, Email\n\nListen to: Emails\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":5,"line":1},"start":{"character":0,"line":1}}}},
 {"at":{"character":0,"line":2},"definition":{"file":null,"range":{"end":{"character":4,"line":2},"start":{"character":0,"line":2}}},"hover":{"contents":"```movement\nchat = connect slack\n```\nYour slack account, signed in with the credential team_workspace.\n\nHolds: Action, Channel, File, Interaction, Message, Reaction, User\n\nListen to: Messages, Interactions, Reactions, Replies\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":4,"line":2},"start":{"character":0,"line":2}}}},
-{"at":{"character":28,"line":2},"codeActions":[],"complete":{"items":10,"word":{"end":{"character":28,"line":2},"start":{"character":28,"line":2}}}},
+{"at":{"character":34,"line":2},"codeActions":[],"complete":{"items":10,"word":{"end":{"character":34,"line":2},"start":{"character":34,"line":2}}}},
 {"at":{"character":0,"line":4},"definition":null,"hover":null},
 {"at":{"character":41,"line":4},"codeActions":[],"complete":{"items":4,"word":{"end":{"character":41,"line":4},"start":{"character":41,"line":4}}}},
 {"at":{"character":2,"line":5},"definition":{"file":null,"range":{"end":{"character":7,"line":5},"start":{"character":2,"line":5}}},"hover":{"contents":"```movement\ndeals: Channel (from chat)\n```\nSet on line 6.\n\nFields: Id: text, `Is Private`: boolean, Name: known values (dealflow | general | portfolio, …), Topic: text\n\nWalk on: Members → User, Messages → Message\n\n[Docs](<docs>/reference#top-level)","range":{"end":{"character":7,"line":5},"start":{"character":2,"line":5}}}},
@@ -340,7 +340,7 @@
 "probes": [
 {"at":{"character":0,"line":1},"definition":{"file":null,"range":{"end":{"character":5,"line":1},"start":{"character":0,"line":1}}},"hover":{"contents":"```movement\ninbox = connect email\n```\nA connection to email.\n\nHolds: Attachment, Email\n\nListen to: Emails\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":5,"line":1},"start":{"character":0,"line":1}}}},
 {"at":{"character":0,"line":2},"definition":{"file":null,"range":{"end":{"character":3,"line":2},"start":{"character":0,"line":2}}},"hover":{"contents":"```movement\ncrm = connect attio\n```\nYour attio account, signed in with the credential acme.\n\nHolds: Comment, Companies, `Companies List`, CompanyChange, DealChange, Deals, File, FundChange and 9 more\n\nListen to: Changes\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":3,"line":2},"start":{"character":0,"line":2}}}},
-{"at":{"character":28,"line":2},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":28,"line":2},"start":{"character":28,"line":2}}}},
+{"at":{"character":34,"line":2},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":34,"line":2},"start":{"character":34,"line":2}}}},
 {"at":{"character":0,"line":4},"definition":null,"hover":null},
 {"at":{"character":2,"line":5},"definition":null,"hover":null},
 {"at":{"character":0,"line":8},"definition":null,"hover":null},
@@ -364,7 +364,7 @@
 "probes": [
 {"at":{"character":0,"line":1},"definition":{"file":null,"range":{"end":{"character":5,"line":1},"start":{"character":0,"line":1}}},"hover":{"contents":"```movement\ninbox = connect email\n```\nA connection to email.\n\nHolds: Attachment, Email\n\nListen to: Emails\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":5,"line":1},"start":{"character":0,"line":1}}}},
 {"at":{"character":0,"line":2},"definition":{"file":null,"range":{"end":{"character":3,"line":2},"start":{"character":0,"line":2}}},"hover":{"contents":"```movement\ncrm = connect attio\n```\nYour attio account, signed in with the credential acme.\n\nHolds: Comment, Companies, `Companies List`, CompanyChange, DealChange, Deals, File, FundChange and 9 more\n\nListen to: Changes\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":3,"line":2},"start":{"character":0,"line":2}}}},
-{"at":{"character":28,"line":2},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":28,"line":2},"start":{"character":28,"line":2}}}},
+{"at":{"character":34,"line":2},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":34,"line":2},"start":{"character":34,"line":2}}}},
 {"at":{"character":0,"line":4},"definition":null,"hover":null},
 {"at":{"character":2,"line":5},"definition":null,"hover":null},
 {"at":{"character":2,"line":6},"definition":null,"hover":null},
@@ -395,7 +395,7 @@
 "probes": [
 {"at":{"character":0,"line":1},"definition":{"file":null,"range":{"end":{"character":5,"line":1},"start":{"character":0,"line":1}}},"hover":{"contents":"```movement\ninbox = connect email\n```\nA connection to email.\n\nHolds: Attachment, Email\n\nListen to: Emails\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":5,"line":1},"start":{"character":0,"line":1}}}},
 {"at":{"character":0,"line":2},"definition":{"file":null,"range":{"end":{"character":3,"line":2},"start":{"character":0,"line":2}}},"hover":{"contents":"```movement\ncrm = connect attio\n```\nYour attio account, signed in with the credential acme.\n\nHolds: Comment, Companies, `Companies List`, CompanyChange, DealChange, Deals, File, FundChange and 9 more\n\nListen to: Changes\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":3,"line":2},"start":{"character":0,"line":2}}}},
-{"at":{"character":28,"line":2},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":28,"line":2},"start":{"character":28,"line":2}}}},
+{"at":{"character":34,"line":2},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":34,"line":2},"start":{"character":34,"line":2}}}},
 {"at":{"character":0,"line":4},"definition":null,"hover":null},
 {"at":{"character":2,"line":5},"definition":null,"hover":null},
 {"at":{"character":0,"line":8},"definition":null,"hover":null},
@@ -420,7 +420,7 @@
 "probes": [
 {"at":{"character":0,"line":1},"definition":{"file":null,"range":{"end":{"character":5,"line":1},"start":{"character":0,"line":1}}},"hover":{"contents":"```movement\ninbox = connect email\n```\nA connection to email.\n\nHolds: Attachment, Email\n\nListen to: Emails\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":5,"line":1},"start":{"character":0,"line":1}}}},
 {"at":{"character":0,"line":2},"definition":{"file":null,"range":{"end":{"character":3,"line":2},"start":{"character":0,"line":2}}},"hover":{"contents":"```movement\ncrm = connect attio\n```\nYour attio account, signed in with the credential acme.\n\nHolds: Comment, Companies, `Companies List`, CompanyChange, DealChange, Deals, File, FundChange and 9 more\n\nListen to: Changes\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":3,"line":2},"start":{"character":0,"line":2}}}},
-{"at":{"character":28,"line":2},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":28,"line":2},"start":{"character":28,"line":2}}}},
+{"at":{"character":34,"line":2},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":34,"line":2},"start":{"character":34,"line":2}}}},
 {"at":{"character":0,"line":4},"definition":null,"hover":null},
 {"at":{"character":2,"line":5},"definition":null,"hover":null},
 {"at":{"character":2,"line":6},"definition":null,"hover":null},
@@ -447,7 +447,7 @@
 "probes": [
 {"at":{"character":0,"line":1},"definition":{"file":null,"range":{"end":{"character":5,"line":1},"start":{"character":0,"line":1}}},"hover":{"contents":"```movement\ninbox = connect email\n```\nA connection to email.\n\nHolds: Attachment, Email\n\nListen to: Emails\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":5,"line":1},"start":{"character":0,"line":1}}}},
 {"at":{"character":0,"line":2},"definition":{"file":null,"range":{"end":{"character":3,"line":2},"start":{"character":0,"line":2}}},"hover":{"contents":"```movement\ncrm = connect attio\n```\nYour attio account, signed in with the credential acme.\n\nHolds: Comment, Companies, `Companies List`, CompanyChange, DealChange, Deals, File, FundChange and 9 more\n\nListen to: Changes\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":3,"line":2},"start":{"character":0,"line":2}}}},
-{"at":{"character":28,"line":2},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":28,"line":2},"start":{"character":28,"line":2}}}},
+{"at":{"character":34,"line":2},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":34,"line":2},"start":{"character":34,"line":2}}}},
 {"at":{"character":0,"line":4},"definition":null,"hover":null},
 {"at":{"character":2,"line":5},"definition":null,"hover":null},
 {"at":{"character":2,"line":6},"definition":null,"hover":null},
@@ -502,7 +502,7 @@
 "probes": [
 {"at":{"character":0,"line":1},"definition":{"file":null,"range":{"end":{"character":5,"line":1},"start":{"character":0,"line":1}}},"hover":{"contents":"```movement\ninbox = connect email\n```\nA connection to email.\n\nHolds: Attachment, Email\n\nListen to: Emails\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":5,"line":1},"start":{"character":0,"line":1}}}},
 {"at":{"character":0,"line":2},"definition":{"file":null,"range":{"end":{"character":3,"line":2},"start":{"character":0,"line":2}}},"hover":{"contents":"```movement\ncrm = connect attio\n```\nYour attio account, signed in with the credential acme.\n\nHolds: Comment, Companies, `Companies List`, CompanyChange, DealChange, Deals, File, FundChange and 9 more\n\nListen to: Changes\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":3,"line":2},"start":{"character":0,"line":2}}}},
-{"at":{"character":28,"line":2},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":28,"line":2},"start":{"character":28,"line":2}}}},
+{"at":{"character":34,"line":2},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":34,"line":2},"start":{"character":34,"line":2}}}},
 {"at":{"character":0,"line":4},"definition":null,"hover":null},
 {"at":{"character":2,"line":5},"definition":null,"hover":null},
 {"at":{"character":2,"line":6},"definition":null,"hover":null},
@@ -549,7 +549,7 @@
 "probes": [
 {"at":{"character":0,"line":1},"definition":{"file":null,"range":{"end":{"character":5,"line":1},"start":{"character":0,"line":1}}},"hover":{"contents":"```movement\ninbox = connect email\n```\nA connection to email.\n\nHolds: Attachment, Email\n\nListen to: Emails\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":5,"line":1},"start":{"character":0,"line":1}}}},
 {"at":{"character":0,"line":2},"definition":{"file":null,"range":{"end":{"character":3,"line":2},"start":{"character":0,"line":2}}},"hover":{"contents":"```movement\ncrm = connect attio\n```\nYour attio account, signed in with the credential acme.\n\nHolds: Comment, Companies, `Companies List`, CompanyChange, DealChange, Deals, File, FundChange and 9 more\n\nListen to: Changes\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":3,"line":2},"start":{"character":0,"line":2}}}},
-{"at":{"character":28,"line":2},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":28,"line":2},"start":{"character":28,"line":2}}}},
+{"at":{"character":34,"line":2},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":34,"line":2},"start":{"character":34,"line":2}}}},
 {"at":{"character":0,"line":4},"definition":null,"hover":null},
 {"at":{"character":55,"line":4},"codeActions":[],"complete":{"items":41,"word":{"end":{"character":55,"line":4},"start":{"character":55,"line":4}}}},
 {"at":{"character":2,"line":5},"definition":null,"hover":null},
@@ -571,7 +571,7 @@
 "probes": [
 {"at":{"character":0,"line":1},"definition":{"file":null,"range":{"end":{"character":5,"line":1},"start":{"character":0,"line":1}}},"hover":{"contents":"```movement\ninbox = connect email\n```\nA connection to email.\n\nHolds: Attachment, Email\n\nListen to: Emails\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":5,"line":1},"start":{"character":0,"line":1}}}},
 {"at":{"character":0,"line":2},"definition":{"file":null,"range":{"end":{"character":3,"line":2},"start":{"character":0,"line":2}}},"hover":{"contents":"```movement\ncrm = connect attio\n```\nYour attio account, signed in with the credential acme.\n\nHolds: Comment, Companies, `Companies List`, CompanyChange, DealChange, Deals, File, FundChange and 9 more\n\nListen to: Changes\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":3,"line":2},"start":{"character":0,"line":2}}}},
-{"at":{"character":28,"line":2},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":28,"line":2},"start":{"character":28,"line":2}}}},
+{"at":{"character":34,"line":2},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":34,"line":2},"start":{"character":34,"line":2}}}},
 {"at":{"character":0,"line":4},"definition":{"file":null,"range":{"end":{"character":6,"line":4},"start":{"character":0,"line":4}}},"hover":{"contents":"```movement\nroster: [{ Name: text, Theme: text }, { Name: text, Theme: text }, { Name: text, Theme: text }]\n```\nSet on line 5.\n\n[Docs](<docs>/reference#top-level)","range":{"end":{"character":6,"line":4},"start":{"character":0,"line":4}}}},
 {"at":{"character":4,"line":5},"codeActions":[],"complete":{"items":44,"word":{"end":{"character":4,"line":5},"start":{"character":4,"line":5}}}},
 {"at":{"character":4,"line":5},"definition":null,"hover":null},
@@ -606,7 +606,7 @@
 {"construct": "sort over a collection in hand, then an order-sensitive fold",
 "probes": [
 {"at":{"character":0,"line":1},"definition":{"file":null,"range":{"end":{"character":3,"line":1},"start":{"character":0,"line":1}}},"hover":{"contents":"```movement\ncrm = connect attio\n```\nYour attio account, signed in with the credential acme.\n\nHolds: Comment, Companies, `Companies List`, CompanyChange, DealChange, Deals, File, FundChange and 9 more\n\nListen to: Changes\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":3,"line":1},"start":{"character":0,"line":1}}}},
-{"at":{"character":27,"line":1},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":27,"line":1},"start":{"character":27,"line":1}}}},
+{"at":{"character":33,"line":1},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":33,"line":1},"start":{"character":33,"line":1}}}},
 {"at":{"character":0,"line":3},"definition":null,"hover":null},
 {"at":{"character":31,"line":3},"codeActions":[],"complete":{"items":33,"word":{"end":{"character":31,"line":3},"start":{"character":31,"line":3}}}},
 {"at":{"character":2,"line":4},"definition":{"file":null,"range":{"end":{"character":7,"line":4},"start":{"character":2,"line":4}}},"hover":{"contents":"```movement\nnames: list of text\n```\nSet on line 5.\n\n[Docs](<docs>/reference#top-level)","range":{"end":{"character":7,"line":4},"start":{"character":2,"line":4}}}},
@@ -635,7 +635,7 @@
 "probes": [
 {"at":{"character":0,"line":1},"definition":{"file":null,"range":{"end":{"character":5,"line":1},"start":{"character":0,"line":1}}},"hover":{"contents":"```movement\ninbox = connect email\n```\nA connection to email.\n\nHolds: Attachment, Email\n\nListen to: Emails\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":5,"line":1},"start":{"character":0,"line":1}}}},
 {"at":{"character":0,"line":2},"definition":{"file":null,"range":{"end":{"character":4,"line":2},"start":{"character":0,"line":2}}},"hover":{"contents":"```movement\nteam = connect slack\n```\nYour slack account, signed in with the credential acme_slack.\n\nHolds: Action, Channel, File, Interaction, Message, Reaction, User\n\nListen to: Messages, Interactions, Reactions, Replies\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":4,"line":2},"start":{"character":0,"line":2}}}},
-{"at":{"character":28,"line":2},"codeActions":[],"complete":{"items":10,"word":{"end":{"character":28,"line":2},"start":{"character":28,"line":2}}}},
+{"at":{"character":34,"line":2},"codeActions":[],"complete":{"items":10,"word":{"end":{"character":34,"line":2},"start":{"character":34,"line":2}}}},
 {"at":{"character":0,"line":4},"definition":null,"hover":null},
 {"at":{"character":32,"line":4},"codeActions":[],"complete":{"items":4,"word":{"end":{"character":32,"line":4},"start":{"character":32,"line":4}}}},
 {"at":{"character":3,"line":5},"definition":{"file":null,"range":{"end":{"character":19,"line":5},"start":{"character":3,"line":5}}},"hover":{"contents":"```movement\nSuggested Action\n```\nSet on line 6.\n\n[Docs](<docs>/reference#top-level)","range":{"end":{"character":20,"line":5},"start":{"character":2,"line":5}}}},
@@ -653,7 +653,7 @@
 "probes": [
 {"at":{"character":0,"line":1},"definition":{"file":null,"range":{"end":{"character":5,"line":1},"start":{"character":0,"line":1}}},"hover":{"contents":"```movement\ninbox = connect email\n```\nA connection to email.\n\nHolds: Attachment, Email\n\nListen to: Emails\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":5,"line":1},"start":{"character":0,"line":1}}}},
 {"at":{"character":0,"line":2},"definition":{"file":null,"range":{"end":{"character":3,"line":2},"start":{"character":0,"line":2}}},"hover":{"contents":"```movement\ncrm = connect attio\n```\nYour attio account, signed in with the credential acme.\n\nHolds: Comment, Companies, `Companies List`, CompanyChange, DealChange, Deals, File, FundChange and 9 more\n\nListen to: Changes\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":3,"line":2},"start":{"character":0,"line":2}}}},
-{"at":{"character":28,"line":2},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":28,"line":2},"start":{"character":28,"line":2}}}},
+{"at":{"character":34,"line":2},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":34,"line":2},"start":{"character":34,"line":2}}}},
 {"at":{"character":1,"line":4},"definition":{"file":null,"range":{"end":{"character":15,"line":4},"start":{"character":1,"line":4}}},"hover":{"contents":"```movement\nCompany Prompt: text\n```\nSet on line 5.\n\n[Docs](<docs>/reference#top-level)","range":{"end":{"character":16,"line":4},"start":{"character":0,"line":4}}}},
 {"at":{"character":0,"line":6},"definition":null,"hover":null},
 {"at":{"character":29,"line":6},"codeActions":[],"complete":{"items":4,"word":{"end":{"character":29,"line":6},"start":{"character":29,"line":6}}}},
@@ -666,7 +666,7 @@
 "probes": [
 {"at":{"character":0,"line":1},"definition":{"file":null,"range":{"end":{"character":5,"line":1},"start":{"character":0,"line":1}}},"hover":{"contents":"```movement\ninbox = connect email\n```\nA connection to email.\n\nHolds: Attachment, Email\n\nListen to: Emails\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":5,"line":1},"start":{"character":0,"line":1}}}},
 {"at":{"character":0,"line":2},"definition":{"file":null,"range":{"end":{"character":3,"line":2},"start":{"character":0,"line":2}}},"hover":{"contents":"```movement\ncrm = connect attio\n```\nYour attio account, signed in with the credential acme.\n\nHolds: Comment, Companies, `Companies List`, CompanyChange, DealChange, Deals, File, FundChange and 9 more\n\nListen to: Changes\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":3,"line":2},"start":{"character":0,"line":2}}}},
-{"at":{"character":28,"line":2},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":28,"line":2},"start":{"character":28,"line":2}}}},
+{"at":{"character":34,"line":2},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":34,"line":2},"start":{"character":34,"line":2}}}},
 {"at":{"character":0,"line":4},"definition":null,"hover":null},
 {"at":{"character":29,"line":4},"codeActions":[],"complete":{"items":4,"word":{"end":{"character":29,"line":4},"start":{"character":29,"line":4}}}},
 {"at":{"character":2,"line":5},"definition":null,"hover":null},
@@ -682,7 +682,7 @@
 "probes": [
 {"at":{"character":0,"line":1},"definition":{"file":null,"range":{"end":{"character":5,"line":1},"start":{"character":0,"line":1}}},"hover":{"contents":"```movement\ninbox = connect email\n```\nA connection to email.\n\nHolds: Attachment, Email\n\nListen to: Emails\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":5,"line":1},"start":{"character":0,"line":1}}}},
 {"at":{"character":0,"line":2},"definition":{"file":null,"range":{"end":{"character":3,"line":2},"start":{"character":0,"line":2}}},"hover":{"contents":"```movement\ncrm = connect attio\n```\nYour attio account, signed in with the credential acme.\n\nHolds: Comment, Companies, `Companies List`, CompanyChange, DealChange, Deals, File, FundChange and 9 more\n\nListen to: Changes\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":3,"line":2},"start":{"character":0,"line":2}}}},
-{"at":{"character":28,"line":2},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":28,"line":2},"start":{"character":28,"line":2}}}},
+{"at":{"character":34,"line":2},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":34,"line":2},"start":{"character":34,"line":2}}}},
 {"at":{"character":0,"line":4},"definition":null,"hover":null},
 {"at":{"character":29,"line":4},"codeActions":[],"complete":{"items":4,"word":{"end":{"character":29,"line":4},"start":{"character":29,"line":4}}}},
 {"at":{"character":2,"line":5},"definition":null,"hover":null},
@@ -697,7 +697,7 @@
 "probes": [
 {"at":{"character":0,"line":1},"definition":{"file":null,"range":{"end":{"character":5,"line":1},"start":{"character":0,"line":1}}},"hover":{"contents":"```movement\ninbox = connect email\n```\nA connection to email.\n\nHolds: Attachment, Email\n\nListen to: Emails\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":5,"line":1},"start":{"character":0,"line":1}}}},
 {"at":{"character":0,"line":2},"definition":{"file":null,"range":{"end":{"character":3,"line":2},"start":{"character":0,"line":2}}},"hover":{"contents":"```movement\ncrm = connect attio\n```\nYour attio account, signed in with the credential acme.\n\nHolds: Comment, Companies, `Companies List`, CompanyChange, DealChange, Deals, File, FundChange and 9 more\n\nListen to: Changes\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":3,"line":2},"start":{"character":0,"line":2}}}},
-{"at":{"character":28,"line":2},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":28,"line":2},"start":{"character":28,"line":2}}}},
+{"at":{"character":34,"line":2},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":34,"line":2},"start":{"character":34,"line":2}}}},
 {"at":{"character":0,"line":4},"definition":null,"hover":null},
 {"at":{"character":29,"line":4},"codeActions":[],"complete":{"items":4,"word":{"end":{"character":29,"line":4},"start":{"character":29,"line":4}}}},
 {"at":{"character":2,"line":5},"definition":null,"hover":null},
@@ -713,7 +713,7 @@
 "probes": [
 {"at":{"character":0,"line":1},"definition":{"file":null,"range":{"end":{"character":5,"line":1},"start":{"character":0,"line":1}}},"hover":{"contents":"```movement\ninbox = connect email\n```\nA connection to email.\n\nHolds: Attachment, Email\n\nListen to: Emails\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":5,"line":1},"start":{"character":0,"line":1}}}},
 {"at":{"character":0,"line":2},"definition":{"file":null,"range":{"end":{"character":3,"line":2},"start":{"character":0,"line":2}}},"hover":{"contents":"```movement\ncrm = connect attio\n```\nYour attio account, signed in with the credential acme.\n\nHolds: Comment, Companies, `Companies List`, CompanyChange, DealChange, Deals, File, FundChange and 9 more\n\nListen to: Changes\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":3,"line":2},"start":{"character":0,"line":2}}}},
-{"at":{"character":28,"line":2},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":28,"line":2},"start":{"character":28,"line":2}}}},
+{"at":{"character":34,"line":2},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":34,"line":2},"start":{"character":34,"line":2}}}},
 {"at":{"character":0,"line":4},"definition":null,"hover":null},
 {"at":{"character":29,"line":4},"codeActions":[],"complete":{"items":4,"word":{"end":{"character":29,"line":4},"start":{"character":29,"line":4}}}},
 {"at":{"character":2,"line":5},"definition":null,"hover":null},
@@ -725,7 +725,7 @@
 "probes": [
 {"at":{"character":0,"line":1},"definition":{"file":null,"range":{"end":{"character":5,"line":1},"start":{"character":0,"line":1}}},"hover":{"contents":"```movement\ninbox = connect email\n```\nA connection to email.\n\nHolds: Attachment, Email\n\nListen to: Emails\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":5,"line":1},"start":{"character":0,"line":1}}}},
 {"at":{"character":0,"line":2},"definition":{"file":null,"range":{"end":{"character":3,"line":2},"start":{"character":0,"line":2}}},"hover":{"contents":"```movement\ncrm = connect attio\n```\nYour attio account, signed in with the credential acme.\n\nHolds: Comment, Companies, `Companies List`, CompanyChange, DealChange, Deals, File, FundChange and 9 more\n\nListen to: Changes\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":3,"line":2},"start":{"character":0,"line":2}}}},
-{"at":{"character":28,"line":2},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":28,"line":2},"start":{"character":28,"line":2}}}},
+{"at":{"character":34,"line":2},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":34,"line":2},"start":{"character":34,"line":2}}}},
 {"at":{"character":0,"line":4},"definition":null,"hover":null},
 {"at":{"character":29,"line":4},"codeActions":[],"complete":{"items":4,"word":{"end":{"character":29,"line":4},"start":{"character":29,"line":4}}}},
 {"at":{"character":2,"line":5},"definition":null,"hover":null},
@@ -740,7 +740,7 @@
 "probes": [
 {"at":{"character":0,"line":1},"definition":{"file":null,"range":{"end":{"character":5,"line":1},"start":{"character":0,"line":1}}},"hover":{"contents":"```movement\ninbox = connect email\n```\nA connection to email.\n\nHolds: Attachment, Email\n\nListen to: Emails\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":5,"line":1},"start":{"character":0,"line":1}}}},
 {"at":{"character":0,"line":2},"definition":{"file":null,"range":{"end":{"character":3,"line":2},"start":{"character":0,"line":2}}},"hover":{"contents":"```movement\ncrm = connect attio\n```\nYour attio account, signed in with the credential acme.\n\nHolds: Comment, Companies, `Companies List`, CompanyChange, DealChange, Deals, File, FundChange and 9 more\n\nListen to: Changes\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":3,"line":2},"start":{"character":0,"line":2}}}},
-{"at":{"character":28,"line":2},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":28,"line":2},"start":{"character":28,"line":2}}}},
+{"at":{"character":34,"line":2},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":34,"line":2},"start":{"character":34,"line":2}}}},
 {"at":{"character":0,"line":4},"definition":null,"hover":null},
 {"at":{"character":29,"line":4},"codeActions":[],"complete":{"items":4,"word":{"end":{"character":29,"line":4},"start":{"character":29,"line":4}}}},
 {"at":{"character":2,"line":5},"definition":null,"hover":null},
@@ -776,7 +776,7 @@
 "probes": [
 {"at":{"character":0,"line":1},"definition":{"file":null,"range":{"end":{"character":5,"line":1},"start":{"character":0,"line":1}}},"hover":{"contents":"```movement\ninbox = connect email\n```\nA connection to email.\n\nHolds: Attachment, Email\n\nListen to: Emails\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":5,"line":1},"start":{"character":0,"line":1}}}},
 {"at":{"character":0,"line":2},"definition":{"file":null,"range":{"end":{"character":3,"line":2},"start":{"character":0,"line":2}}},"hover":{"contents":"```movement\ncrm = connect attio\n```\nYour attio account, signed in with the credential acme.\n\nHolds: Comment, Companies, `Companies List`, CompanyChange, DealChange, Deals, File, FundChange and 9 more\n\nListen to: Changes\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":3,"line":2},"start":{"character":0,"line":2}}}},
-{"at":{"character":28,"line":2},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":28,"line":2},"start":{"character":28,"line":2}}}},
+{"at":{"character":34,"line":2},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":34,"line":2},"start":{"character":34,"line":2}}}},
 {"at":{"character":0,"line":4},"definition":null,"hover":null},
 {"at":{"character":29,"line":4},"codeActions":[],"complete":{"items":4,"word":{"end":{"character":29,"line":4},"start":{"character":29,"line":4}}}},
 {"at":{"character":2,"line":5},"definition":{"file":null,"range":{"end":{"character":14,"line":5},"start":{"character":2,"line":5}}},"hover":{"contents":"```movement\nberlin_today: date\n```\nSet on line 6.\n\n[Docs](<docs>/reference#top-level)","range":{"end":{"character":14,"line":5},"start":{"character":2,"line":5}}}},
@@ -801,7 +801,7 @@
 {"at":{"character":9,"line":1},"codeActions":[],"complete":{"items":63,"word":{"end":{"character":9,"line":1},"start":{"character":9,"line":1}}}},
 {"at":{"character":0,"line":2},"definition":{"file":null,"range":{"end":{"character":5,"line":2},"start":{"character":0,"line":2}}},"hover":{"contents":"```movement\ninbox = connect email\n```\nA connection to email.\n\nHolds: Attachment, Email\n\nListen to: Emails\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":5,"line":2},"start":{"character":0,"line":2}}}},
 {"at":{"character":0,"line":3},"definition":{"file":null,"range":{"end":{"character":3,"line":3},"start":{"character":0,"line":3}}},"hover":{"contents":"```movement\ncrm = connect attio\n```\nYour attio account, signed in with the credential acme.\n\nHolds: Comment, Companies, `Companies List`, CompanyChange, DealChange, Deals, File, FundChange and 9 more\n\nListen to: Changes\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":3,"line":3},"start":{"character":0,"line":3}}}},
-{"at":{"character":28,"line":3},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":28,"line":3},"start":{"character":28,"line":3}}}},
+{"at":{"character":34,"line":3},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":34,"line":3},"start":{"character":34,"line":3}}}},
 {"at":{"character":0,"line":5},"definition":null,"hover":null},
 {"at":{"character":29,"line":5},"codeActions":[],"complete":{"items":4,"word":{"end":{"character":29,"line":5},"start":{"character":29,"line":5}}}},
 {"at":{"character":2,"line":6},"definition":{"file":null,"range":{"end":{"character":8,"line":6},"start":{"character":2,"line":6}}},"hover":{"contents":"```movement\ndigest: text\n```\nSet on line 7.\n\n[Docs](<docs>/reference#top-level)","range":{"end":{"character":8,"line":6},"start":{"character":2,"line":6}}}},
@@ -819,7 +819,7 @@
 "probes": [
 {"at":{"character":0,"line":1},"definition":{"file":null,"range":{"end":{"character":5,"line":1},"start":{"character":0,"line":1}}},"hover":{"contents":"```movement\ninbox = connect email\n```\nA connection to email.\n\nHolds: Attachment, Email\n\nListen to: Emails\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":5,"line":1},"start":{"character":0,"line":1}}}},
 {"at":{"character":0,"line":2},"definition":{"file":null,"range":{"end":{"character":3,"line":2},"start":{"character":0,"line":2}}},"hover":{"contents":"```movement\ncrm = connect attio\n```\nYour attio account, signed in with the credential acme.\n\nHolds: Comment, Companies, `Companies List`, CompanyChange, DealChange, Deals, File, FundChange and 9 more\n\nListen to: Changes\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":3,"line":2},"start":{"character":0,"line":2}}}},
-{"at":{"character":28,"line":2},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":28,"line":2},"start":{"character":28,"line":2}}}},
+{"at":{"character":34,"line":2},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":34,"line":2},"start":{"character":34,"line":2}}}},
 {"at":{"character":0,"line":4},"definition":null,"hover":null},
 {"at":{"character":29,"line":4},"codeActions":[],"complete":{"items":4,"word":{"end":{"character":29,"line":4},"start":{"character":29,"line":4}}}},
 {"at":{"character":2,"line":5},"definition":null,"hover":null},
@@ -831,7 +831,7 @@
 {"construct": "'== null' as a presence guard clause that narrows a maybe-absent first() scalar",
 "probes": [
 {"at":{"character":0,"line":1},"definition":{"file":null,"range":{"end":{"character":3,"line":1},"start":{"character":0,"line":1}}},"hover":{"contents":"```movement\ncrm = connect attio\n```\nYour attio account, signed in with the credential acme.\n\nHolds: Comment, Companies, `Companies List`, CompanyChange, DealChange, Deals, File, FundChange and 9 more\n\nListen to: Changes\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":3,"line":1},"start":{"character":0,"line":1}}}},
-{"at":{"character":26,"line":1},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":26,"line":1},"start":{"character":26,"line":1}}}},
+{"at":{"character":32,"line":1},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":32,"line":1},"start":{"character":32,"line":1}}}},
 {"at":{"character":0,"line":3},"definition":null,"hover":null},
 {"at":{"character":22,"line":3},"codeActions":[],"complete":{"items":65,"word":{"end":{"character":22,"line":3},"start":{"character":22,"line":3}}}},
 {"at":{"character":2,"line":4},"definition":{"file":null,"range":{"end":{"character":14,"line":3},"start":{"character":11,"line":3}}},"hover":{"contents":"```movement\nevt: CompanyChange (from crm)\n```\nA change to a company in Attio: what happened (`Kind`) and, on an update, which attribute (`Field`). Walk `Company` for the company as it is now.\n\nParameter of m.\n\nFields: Field: enum (Name | Domains | Description | Categories | Team Size | Team), Id: text, Kind: enum (created | updated | deleted), Record: text\n\nWalk on: Company → Companies\n\n[Docs](<docs>/reference#top-level)","range":{"end":{"character":5,"line":4},"start":{"character":2,"line":4}}}},
@@ -846,7 +846,7 @@
 {"construct": "File.read a file into text, Text.chunks the text into pieces, extract over the pieces",
 "probes": [
 {"at":{"character":0,"line":1},"definition":{"file":null,"range":{"end":{"character":3,"line":1},"start":{"character":0,"line":1}}},"hover":{"contents":"```movement\ncrm = connect attio\n```\nYour attio account, signed in with the credential acme.\n\nHolds: Comment, Companies, `Companies List`, CompanyChange, DealChange, Deals, File, FundChange and 9 more\n\nListen to: Changes\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":3,"line":1},"start":{"character":0,"line":1}}}},
-{"at":{"character":27,"line":1},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":27,"line":1},"start":{"character":27,"line":1}}}},
+{"at":{"character":33,"line":1},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":33,"line":1},"start":{"character":33,"line":1}}}},
 {"at":{"character":0,"line":3},"definition":null,"hover":null},
 {"at":{"character":39,"line":3},"codeActions":[],"complete":{"items":33,"word":{"end":{"character":39,"line":3},"start":{"character":39,"line":3}}}},
 {"at":{"character":2,"line":4},"definition":{"file":null,"range":{"end":{"character":28,"line":3},"start":{"character":26,"line":3}}},"hover":{"contents":"```movement\ngo: Invocation (from manual)\n```\nParameter of Cut A Document.\n\nFields: Content: text, `Fired at`: date, `Run by (email)`: text, `Run by (name)`: text, Text: text\n\nWalk on: Files → File\n\n[Docs](<docs>/reference#top-level)","range":{"end":{"character":4,"line":4},"start":{"character":2,"line":4}}}},
@@ -870,7 +870,7 @@
 "probes": [
 {"at":{"character":0,"line":1},"definition":{"file":null,"range":{"end":{"character":5,"line":1},"start":{"character":0,"line":1}}},"hover":{"contents":"```movement\ninbox = connect email\n```\nA connection to email.\n\nHolds: Attachment, Email\n\nListen to: Emails\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":5,"line":1},"start":{"character":0,"line":1}}}},
 {"at":{"character":0,"line":2},"definition":{"file":null,"range":{"end":{"character":3,"line":2},"start":{"character":0,"line":2}}},"hover":{"contents":"```movement\ncrm = connect attio\n```\nYour attio account, signed in with the credential acme.\n\nHolds: Comment, Companies, `Companies List`, CompanyChange, DealChange, Deals, File, FundChange and 9 more\n\nListen to: Changes\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":3,"line":2},"start":{"character":0,"line":2}}}},
-{"at":{"character":28,"line":2},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":28,"line":2},"start":{"character":28,"line":2}}}},
+{"at":{"character":34,"line":2},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":34,"line":2},"start":{"character":34,"line":2}}}},
 {"at":{"character":0,"line":4},"definition":null,"hover":null},
 {"at":{"character":32,"line":4},"codeActions":[],"complete":{"items":4,"word":{"end":{"character":32,"line":4},"start":{"character":32,"line":4}}}},
 {"at":{"character":2,"line":5},"definition":{"file":null,"range":{"end":{"character":5,"line":5},"start":{"character":2,"line":5}}},"hover":{"contents":"```movement\ninc: a closure returning number\n```\nSet on line 6.\n\n[Docs](<docs>/reference#top-level)","range":{"end":{"character":5,"line":5},"start":{"character":2,"line":5}}}},
@@ -894,7 +894,7 @@
 "probes": [
 {"at":{"character":0,"line":1},"definition":{"file":null,"range":{"end":{"character":5,"line":1},"start":{"character":0,"line":1}}},"hover":{"contents":"```movement\ninbox = connect email\n```\nA connection to email.\n\nHolds: Attachment, Email\n\nListen to: Emails\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":5,"line":1},"start":{"character":0,"line":1}}}},
 {"at":{"character":0,"line":2},"definition":{"file":null,"range":{"end":{"character":3,"line":2},"start":{"character":0,"line":2}}},"hover":{"contents":"```movement\ncrm = connect attio\n```\nYour attio account, signed in with the credential acme.\n\nHolds: Comment, Companies, `Companies List`, CompanyChange, DealChange, Deals, File, FundChange and 9 more\n\nListen to: Changes\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":3,"line":2},"start":{"character":0,"line":2}}}},
-{"at":{"character":28,"line":2},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":28,"line":2},"start":{"character":28,"line":2}}}},
+{"at":{"character":34,"line":2},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":34,"line":2},"start":{"character":34,"line":2}}}},
 {"at":{"character":0,"line":4},"definition":null,"hover":null},
 {"at":{"character":27,"line":4},"codeActions":[],"complete":{"items":4,"word":{"end":{"character":27,"line":4},"start":{"character":27,"line":4}}}},
 {"at":{"character":2,"line":5},"definition":{"file":null,"range":{"end":{"character":7,"line":5},"start":{"character":2,"line":5}}},"hover":{"contents":"```movement\nlines: [text, text]\n```\nSet on line 6.\n\n[Docs](<docs>/reference#top-level)","range":{"end":{"character":7,"line":5},"start":{"character":2,"line":5}}}},
@@ -914,7 +914,7 @@
 "probes": [
 {"at":{"character":0,"line":1},"definition":{"file":null,"range":{"end":{"character":5,"line":1},"start":{"character":0,"line":1}}},"hover":{"contents":"```movement\ninbox = connect email\n```\nA connection to email.\n\nHolds: Attachment, Email\n\nListen to: Emails\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":5,"line":1},"start":{"character":0,"line":1}}}},
 {"at":{"character":0,"line":2},"definition":{"file":null,"range":{"end":{"character":3,"line":2},"start":{"character":0,"line":2}}},"hover":{"contents":"```movement\ncrm = connect attio\n```\nYour attio account, signed in with the credential acme.\n\nHolds: Comment, Companies, `Companies List`, CompanyChange, DealChange, Deals, File, FundChange and 9 more\n\nListen to: Changes\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":3,"line":2},"start":{"character":0,"line":2}}}},
-{"at":{"character":28,"line":2},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":28,"line":2},"start":{"character":28,"line":2}}}},
+{"at":{"character":34,"line":2},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":34,"line":2},"start":{"character":34,"line":2}}}},
 {"at":{"character":0,"line":4},"definition":null,"hover":null},
 {"at":{"character":2,"line":5},"definition":null,"hover":null},
 {"at":{"character":2,"line":6},"definition":null,"hover":null},
@@ -962,7 +962,7 @@
 "probes": [
 {"at":{"character":0,"line":1},"definition":{"file":null,"range":{"end":{"character":5,"line":1},"start":{"character":0,"line":1}}},"hover":{"contents":"```movement\ninbox = connect email\n```\nA connection to email.\n\nHolds: Attachment, Email\n\nListen to: Emails\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":5,"line":1},"start":{"character":0,"line":1}}}},
 {"at":{"character":0,"line":2},"definition":{"file":null,"range":{"end":{"character":3,"line":2},"start":{"character":0,"line":2}}},"hover":{"contents":"```movement\ncrm = connect attio\n```\nYour attio account, signed in with the credential acme.\n\nHolds: Comment, Companies, `Companies List`, CompanyChange, DealChange, Deals, File, FundChange and 9 more\n\nListen to: Changes\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":3,"line":2},"start":{"character":0,"line":2}}}},
-{"at":{"character":28,"line":2},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":28,"line":2},"start":{"character":28,"line":2}}}},
+{"at":{"character":34,"line":2},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":34,"line":2},"start":{"character":34,"line":2}}}},
 {"at":{"character":0,"line":4},"definition":null,"hover":null},
 {"at":{"character":29,"line":4},"codeActions":[],"complete":{"items":4,"word":{"end":{"character":29,"line":4},"start":{"character":29,"line":4}}}},
 {"at":{"character":2,"line":5},"definition":{"file":null,"range":{"end":{"character":6,"line":5},"start":{"character":2,"line":5}}},"hover":{"contents":"```movement\npdfs: file\n```\nSet on line 6.\n\n[Docs](<docs>/reference#top-level)","range":{"end":{"character":6,"line":5},"start":{"character":2,"line":5}}}},
@@ -996,7 +996,7 @@
 "probes": [
 {"at":{"character":0,"line":1},"definition":{"file":null,"range":{"end":{"character":5,"line":1},"start":{"character":0,"line":1}}},"hover":{"contents":"```movement\ninbox = connect email\n```\nA connection to email.\n\nHolds: Attachment, Email\n\nListen to: Emails\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":5,"line":1},"start":{"character":0,"line":1}}}},
 {"at":{"character":0,"line":2},"definition":{"file":null,"range":{"end":{"character":3,"line":2},"start":{"character":0,"line":2}}},"hover":{"contents":"```movement\ncrm = connect attio\n```\nYour attio account, signed in with the credential acme.\n\nHolds: Comment, Companies, `Companies List`, CompanyChange, DealChange, Deals, File, FundChange and 9 more\n\nListen to: Changes\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":3,"line":2},"start":{"character":0,"line":2}}}},
-{"at":{"character":28,"line":2},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":28,"line":2},"start":{"character":28,"line":2}}}},
+{"at":{"character":34,"line":2},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":34,"line":2},"start":{"character":34,"line":2}}}},
 {"at":{"character":0,"line":4},"definition":null,"hover":null},
 {"at":{"character":29,"line":4},"codeActions":[],"complete":{"items":4,"word":{"end":{"character":29,"line":4},"start":{"character":29,"line":4}}}},
 {"at":{"character":2,"line":5},"definition":{"file":null,"range":{"end":{"character":3,"line":5},"start":{"character":2,"line":5}}},"hover":{"contents":"```movement\na: Companies (from crm)\n```\nSet on line 6.\n\nFields: Categories: list of enum (Lead | Customer | Open | Snoozed | Reviewed | inbound), `Created At`: date, Description: text, Domains: text, Name: text, `Team Size`: number, externalId: text, url: text\n\nWalk on: Changes → CompanyChange, Comments → Comment, Files → File, Lists → Companies List, Notes → Note, Tasks → Task, Team → People, `VC Deal Flow` → VC Deal Flow\n\n[Docs](<docs>/reference#top-level)","range":{"end":{"character":3,"line":5},"start":{"character":2,"line":5}}}},
@@ -1014,7 +1014,7 @@
 "probes": [
 {"at":{"character":0,"line":1},"definition":{"file":null,"range":{"end":{"character":5,"line":1},"start":{"character":0,"line":1}}},"hover":{"contents":"```movement\ninbox = connect email\n```\nA connection to email.\n\nHolds: Attachment, Email\n\nListen to: Emails\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":5,"line":1},"start":{"character":0,"line":1}}}},
 {"at":{"character":0,"line":2},"definition":{"file":null,"range":{"end":{"character":3,"line":2},"start":{"character":0,"line":2}}},"hover":{"contents":"```movement\ncrm = connect attio\n```\nYour attio account, signed in with the credential acme.\n\nHolds: Comment, Companies, `Companies List`, CompanyChange, DealChange, Deals, File, FundChange and 9 more\n\nListen to: Changes\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":3,"line":2},"start":{"character":0,"line":2}}}},
-{"at":{"character":28,"line":2},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":28,"line":2},"start":{"character":28,"line":2}}}},
+{"at":{"character":34,"line":2},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":34,"line":2},"start":{"character":34,"line":2}}}},
 {"at":{"character":0,"line":4},"definition":null,"hover":null},
 {"at":{"character":29,"line":4},"codeActions":[],"complete":{"items":4,"word":{"end":{"character":29,"line":4},"start":{"character":29,"line":4}}}},
 {"at":{"character":2,"line":5},"definition":{"file":null,"range":{"end":{"character":8,"line":5},"start":{"character":2,"line":5}}},"hover":{"contents":"```movement\nperson: People (from crm)\n```\nSet on line 6.\n\nFields: `Created At`: date, Email: text, `Job Title`: text, Name: text, externalId: text, url: text\n\nWalk on: Changes → PersonChange, Comments → Comment, Company → Companies, Files → File, Lists → People List, Notes → Note, Tasks → Task\n\n[Docs](<docs>/reference#top-level)","range":{"end":{"character":8,"line":5},"start":{"character":2,"line":5}}}},
@@ -1036,7 +1036,7 @@
 "probes": [
 {"at":{"character":0,"line":1},"definition":{"file":null,"range":{"end":{"character":5,"line":1},"start":{"character":0,"line":1}}},"hover":{"contents":"```movement\ninbox = connect email\n```\nA connection to email.\n\nHolds: Attachment, Email\n\nListen to: Emails\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":5,"line":1},"start":{"character":0,"line":1}}}},
 {"at":{"character":0,"line":2},"definition":{"file":null,"range":{"end":{"character":3,"line":2},"start":{"character":0,"line":2}}},"hover":{"contents":"```movement\ncrm = connect attio\n```\nYour attio account, signed in with the credential acme.\n\nHolds: Comment, Companies, `Companies List`, CompanyChange, DealChange, Deals, File, FundChange and 9 more\n\nListen to: Changes\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":3,"line":2},"start":{"character":0,"line":2}}}},
-{"at":{"character":28,"line":2},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":28,"line":2},"start":{"character":28,"line":2}}}},
+{"at":{"character":34,"line":2},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":34,"line":2},"start":{"character":34,"line":2}}}},
 {"at":{"character":0,"line":4},"definition":null,"hover":null},
 {"at":{"character":29,"line":4},"codeActions":[],"complete":{"items":4,"word":{"end":{"character":29,"line":4},"start":{"character":29,"line":4}}}},
 {"at":{"character":2,"line":5},"definition":{"file":null,"range":{"end":{"character":8,"line":5},"start":{"character":2,"line":5}}},"hover":{"contents":"```movement\nperson: People (from crm)\n```\nSet on line 6.\n\nFields: `Created At`: date, Email: text, `Job Title`: text, Name: text, externalId: text, url: text\n\nWalk on: Changes → PersonChange, Comments → Comment, Company → Companies, Files → File, Lists → People List, Notes → Note, Tasks → Task\n\n[Docs](<docs>/reference#top-level)","range":{"end":{"character":8,"line":5},"start":{"character":2,"line":5}}}},
@@ -1058,7 +1058,7 @@
 "probes": [
 {"at":{"character":0,"line":1},"definition":{"file":null,"range":{"end":{"character":5,"line":1},"start":{"character":0,"line":1}}},"hover":{"contents":"```movement\ninbox = connect email\n```\nA connection to email.\n\nHolds: Attachment, Email\n\nListen to: Emails\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":5,"line":1},"start":{"character":0,"line":1}}}},
 {"at":{"character":0,"line":2},"definition":{"file":null,"range":{"end":{"character":3,"line":2},"start":{"character":0,"line":2}}},"hover":{"contents":"```movement\ncrm = connect attio\n```\nYour attio account, signed in with the credential acme.\n\nHolds: Comment, Companies, `Companies List`, CompanyChange, DealChange, Deals, File, FundChange and 9 more\n\nListen to: Changes\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":3,"line":2},"start":{"character":0,"line":2}}}},
-{"at":{"character":28,"line":2},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":28,"line":2},"start":{"character":28,"line":2}}}},
+{"at":{"character":34,"line":2},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":34,"line":2},"start":{"character":34,"line":2}}}},
 {"at":{"character":0,"line":4},"definition":null,"hover":null},
 {"at":{"character":29,"line":4},"codeActions":[],"complete":{"items":4,"word":{"end":{"character":29,"line":4},"start":{"character":29,"line":4}}}},
 {"at":{"character":2,"line":5},"definition":{"file":null,"range":{"end":{"character":9,"line":5},"start":{"character":2,"line":5}}},"hover":{"contents":"```movement\ncompany: Companies (from crm, which may be empty)\n```\nSet on line 6. It may be empty, so check it before use.\n\nFields: Categories: list of enum (Lead | Customer | Open | Snoozed | Reviewed | inbound) (or absent), `Created At`: date (or absent), Description: text (or absent), Domains: text (or absent), Name: text (or absent), `Team Size`: number (or absent), externalId: text (or absent), url: text (or absent)\n\nWalk on: Changes → CompanyChange, Comments → Comment, Files → File, Lists → Companies List, Notes → Note, Tasks → Task, Team → People, `VC Deal Flow` → VC Deal Flow\n\n[Docs](<docs>/reference#top-level)","range":{"end":{"character":9,"line":5},"start":{"character":2,"line":5}}}},
@@ -1077,7 +1077,7 @@
 "probes": [
 {"at":{"character":0,"line":1},"definition":{"file":null,"range":{"end":{"character":5,"line":1},"start":{"character":0,"line":1}}},"hover":{"contents":"```movement\ninbox = connect email\n```\nA connection to email.\n\nHolds: Attachment, Email\n\nListen to: Emails\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":5,"line":1},"start":{"character":0,"line":1}}}},
 {"at":{"character":0,"line":2},"definition":{"file":null,"range":{"end":{"character":3,"line":2},"start":{"character":0,"line":2}}},"hover":{"contents":"```movement\ncrm = connect attio\n```\nYour attio account, signed in with the credential acme.\n\nHolds: Comment, Companies, `Companies List`, CompanyChange, DealChange, Deals, File, FundChange and 9 more\n\nListen to: Changes\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":3,"line":2},"start":{"character":0,"line":2}}}},
-{"at":{"character":28,"line":2},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":28,"line":2},"start":{"character":28,"line":2}}}},
+{"at":{"character":34,"line":2},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":34,"line":2},"start":{"character":34,"line":2}}}},
 {"at":{"character":0,"line":4},"definition":null,"hover":null},
 {"at":{"character":29,"line":4},"codeActions":[],"complete":{"items":4,"word":{"end":{"character":29,"line":4},"start":{"character":29,"line":4}}}},
 {"at":{"character":2,"line":5},"definition":{"file":null,"range":{"end":{"character":9,"line":5},"start":{"character":2,"line":5}}},"hover":{"contents":"```movement\ncompany: Companies (from crm, which may be empty)\n```\nSet on line 6. It may be empty, so check it before use.\n\nFields: Categories: list of enum (Lead | Customer | Open | Snoozed | Reviewed | inbound) (or absent), `Created At`: date (or absent), Description: text (or absent), Domains: text (or absent), Name: text (or absent), `Team Size`: number (or absent), externalId: text (or absent), url: text (or absent)\n\nWalk on: Changes → CompanyChange, Comments → Comment, Files → File, Lists → Companies List, Notes → Note, Tasks → Task, Team → People, `VC Deal Flow` → VC Deal Flow\n\n[Docs](<docs>/reference#top-level)","range":{"end":{"character":9,"line":5},"start":{"character":2,"line":5}}}},
@@ -1098,7 +1098,7 @@
 "probes": [
 {"at":{"character":0,"line":1},"definition":{"file":null,"range":{"end":{"character":5,"line":1},"start":{"character":0,"line":1}}},"hover":{"contents":"```movement\ninbox = connect email\n```\nA connection to email.\n\nHolds: Attachment, Email\n\nListen to: Emails\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":5,"line":1},"start":{"character":0,"line":1}}}},
 {"at":{"character":0,"line":2},"definition":{"file":null,"range":{"end":{"character":3,"line":2},"start":{"character":0,"line":2}}},"hover":{"contents":"```movement\ncrm = connect attio\n```\nYour attio account, signed in with the credential acme.\n\nHolds: Comment, Companies, `Companies List`, CompanyChange, DealChange, Deals, File, FundChange and 9 more\n\nListen to: Changes\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":3,"line":2},"start":{"character":0,"line":2}}}},
-{"at":{"character":28,"line":2},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":28,"line":2},"start":{"character":28,"line":2}}}},
+{"at":{"character":34,"line":2},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":34,"line":2},"start":{"character":34,"line":2}}}},
 {"at":{"character":0,"line":4},"definition":null,"hover":null},
 {"at":{"character":29,"line":4},"codeActions":[],"complete":{"items":4,"word":{"end":{"character":29,"line":4},"start":{"character":29,"line":4}}}},
 {"at":{"character":2,"line":5},"definition":null,"hover":null},
@@ -1112,7 +1112,7 @@
 "probes": [
 {"at":{"character":0,"line":1},"definition":{"file":null,"range":{"end":{"character":5,"line":1},"start":{"character":0,"line":1}}},"hover":{"contents":"```movement\ninbox = connect email\n```\nA connection to email.\n\nHolds: Attachment, Email\n\nListen to: Emails\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":5,"line":1},"start":{"character":0,"line":1}}}},
 {"at":{"character":0,"line":2},"definition":{"file":null,"range":{"end":{"character":3,"line":2},"start":{"character":0,"line":2}}},"hover":{"contents":"```movement\ncrm = connect attio\n```\nYour attio account, signed in with the credential acme.\n\nHolds: Comment, Companies, `Companies List`, CompanyChange, DealChange, Deals, File, FundChange and 9 more\n\nListen to: Changes\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":3,"line":2},"start":{"character":0,"line":2}}}},
-{"at":{"character":28,"line":2},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":28,"line":2},"start":{"character":28,"line":2}}}},
+{"at":{"character":34,"line":2},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":34,"line":2},"start":{"character":34,"line":2}}}},
 {"at":{"character":0,"line":4},"definition":null,"hover":null},
 {"at":{"character":29,"line":4},"codeActions":[],"complete":{"items":4,"word":{"end":{"character":29,"line":4},"start":{"character":29,"line":4}}}},
 {"at":{"character":2,"line":5},"definition":null,"hover":null},
@@ -1129,7 +1129,7 @@
 {"construct": "in-place update of a traversed record (`write <alias> { … }`)",
 "probes": [
 {"at":{"character":0,"line":1},"definition":{"file":null,"range":{"end":{"character":3,"line":1},"start":{"character":0,"line":1}}},"hover":{"contents":"```movement\ncrm = connect attio\n```\nYour attio account, signed in with the credential acme.\n\nHolds: Comment, Companies, `Companies List`, CompanyChange, DealChange, Deals, File, FundChange and 9 more\n\nListen to: Changes\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":3,"line":1},"start":{"character":0,"line":1}}}},
-{"at":{"character":27,"line":1},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":27,"line":1},"start":{"character":27,"line":1}}}},
+{"at":{"character":33,"line":1},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":33,"line":1},"start":{"character":33,"line":1}}}},
 {"at":{"character":0,"line":3},"definition":null,"hover":null},
 {"at":{"character":35,"line":3},"codeActions":[],"complete":{"items":33,"word":{"end":{"character":35,"line":3},"start":{"character":35,"line":3}}}},
 {"at":{"character":2,"line":4},"definition":{"file":null,"range":{"end":{"character":3,"line":1},"start":{"character":0,"line":1}}},"hover":{"contents":"```movement\ncrm = connect attio\n```\nYour attio account, signed in with the credential acme.\n\nHolds: Comment, Companies, `Companies List`, CompanyChange, DealChange, Deals, File, FundChange and 9 more\n\nListen to: Changes\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":5,"line":4},"start":{"character":2,"line":4}}}},
@@ -1143,7 +1143,7 @@
 {"construct": "a WHERE-filtered lookup over the source graph, bound with only and guarded (the exact-lookup idiom)",
 "probes": [
 {"at":{"character":0,"line":1},"definition":{"file":null,"range":{"end":{"character":3,"line":1},"start":{"character":0,"line":1}}},"hover":{"contents":"```movement\ncrm = connect attio\n```\nYour attio account, signed in with the credential acme.\n\nHolds: Comment, Companies, `Companies List`, CompanyChange, DealChange, Deals, File, FundChange and 9 more\n\nListen to: Changes\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":3,"line":1},"start":{"character":0,"line":1}}}},
-{"at":{"character":27,"line":1},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":27,"line":1},"start":{"character":27,"line":1}}}},
+{"at":{"character":33,"line":1},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":33,"line":1},"start":{"character":33,"line":1}}}},
 {"at":{"character":0,"line":3},"definition":null,"hover":null},
 {"at":{"character":31,"line":3},"codeActions":[],"complete":{"items":33,"word":{"end":{"character":31,"line":3},"start":{"character":31,"line":3}}}},
 {"at":{"character":2,"line":4},"definition":{"file":null,"range":{"end":{"character":9,"line":4},"start":{"character":2,"line":4}}},"hover":{"contents":"```movement\ncompany: Companies (from crm)\n```\nSet on line 5.\n\nFields: Categories: list of enum (Lead | Customer | Open | Snoozed | Reviewed | inbound), `Created At`: date, Description: text, Domains: text, Name: text, `Team Size`: number\n\nWalk on: Changes → CompanyChange, Comments → Comment, Files → File, Lists → Companies List, Notes → Note, Tasks → Task, Team → People, `VC Deal Flow` → VC Deal Flow\n\n[Docs](<docs>/reference#top-level)","range":{"end":{"character":9,"line":4},"start":{"character":2,"line":4}}}},
@@ -1164,7 +1164,7 @@
 "probes": [
 {"at":{"character":0,"line":1},"definition":{"file":null,"range":{"end":{"character":5,"line":1},"start":{"character":0,"line":1}}},"hover":{"contents":"```movement\ninbox = connect email\n```\nA connection to email.\n\nHolds: Attachment, Email\n\nListen to: Emails\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":5,"line":1},"start":{"character":0,"line":1}}}},
 {"at":{"character":0,"line":2},"definition":{"file":null,"range":{"end":{"character":3,"line":2},"start":{"character":0,"line":2}}},"hover":{"contents":"```movement\ncrm = connect attio\n```\nYour attio account, signed in with the credential acme.\n\nHolds: Comment, Companies, `Companies List`, CompanyChange, DealChange, Deals, File, FundChange and 9 more\n\nListen to: Changes\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":3,"line":2},"start":{"character":0,"line":2}}}},
-{"at":{"character":28,"line":2},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":28,"line":2},"start":{"character":28,"line":2}}}},
+{"at":{"character":34,"line":2},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":34,"line":2},"start":{"character":34,"line":2}}}},
 {"at":{"character":0,"line":4},"definition":null,"hover":null},
 {"at":{"character":29,"line":4},"codeActions":[],"complete":{"items":4,"word":{"end":{"character":29,"line":4},"start":{"character":29,"line":4}}}},
 {"at":{"character":2,"line":5},"definition":{"file":null,"range":{"end":{"character":3,"line":5},"start":{"character":2,"line":5}}},"hover":{"contents":"```movement\na: Companies (from crm)\n```\nSet on line 6.\n\nFields: Categories: list of enum (Lead | Customer | Open | Snoozed | Reviewed | inbound), `Created At`: date, Description: text, Domains: text, Name: text, `Team Size`: number, externalId: text, url: text\n\nWalk on: Changes → CompanyChange, Comments → Comment, Files → File, Lists → Companies List, Notes → Note, Tasks → Task, Team → People, `VC Deal Flow` → VC Deal Flow\n\n[Docs](<docs>/reference#top-level)","range":{"end":{"character":3,"line":5},"start":{"character":2,"line":5}}}},
@@ -1182,7 +1182,7 @@
 "probes": [
 {"at":{"character":0,"line":1},"definition":{"file":null,"range":{"end":{"character":5,"line":1},"start":{"character":0,"line":1}}},"hover":{"contents":"```movement\ninbox = connect email\n```\nA connection to email.\n\nHolds: Attachment, Email\n\nListen to: Emails\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":5,"line":1},"start":{"character":0,"line":1}}}},
 {"at":{"character":0,"line":2},"definition":{"file":null,"range":{"end":{"character":3,"line":2},"start":{"character":0,"line":2}}},"hover":{"contents":"```movement\ncrm = connect attio\n```\nYour attio account, signed in with the credential acme.\n\nHolds: Comment, Companies, `Companies List`, CompanyChange, DealChange, Deals, File, FundChange and 9 more\n\nListen to: Changes\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":3,"line":2},"start":{"character":0,"line":2}}}},
-{"at":{"character":28,"line":2},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":28,"line":2},"start":{"character":28,"line":2}}}},
+{"at":{"character":34,"line":2},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":34,"line":2},"start":{"character":34,"line":2}}}},
 {"at":{"character":0,"line":4},"definition":null,"hover":null},
 {"at":{"character":29,"line":4},"codeActions":[],"complete":{"items":4,"word":{"end":{"character":29,"line":4},"start":{"character":29,"line":4}}}},
 {"at":{"character":2,"line":5},"definition":{"file":null,"range":{"end":{"character":7,"line":5},"start":{"character":2,"line":5}}},"hover":{"contents":"```movement\nstale: Companies (from crm)\n```\nSet on line 6.\n\nFields: Categories: list of enum (Lead | Customer | Open | Snoozed | Reviewed | inbound), `Created At`: date, Description: text, Domains: text, Name: text, `Team Size`: number, externalId: text, url: text\n\nWalk on: Changes → CompanyChange, Comments → Comment, Files → File, Lists → Companies List, Notes → Note, Tasks → Task, Team → People, `VC Deal Flow` → VC Deal Flow\n\n[Docs](<docs>/reference#top-level)","range":{"end":{"character":7,"line":5},"start":{"character":2,"line":5}}}},
@@ -1194,7 +1194,7 @@
 {"construct": "'?:' discharging a first()-bound value that may be absent, no guard needed",
 "probes": [
 {"at":{"character":0,"line":1},"definition":{"file":null,"range":{"end":{"character":3,"line":1},"start":{"character":0,"line":1}}},"hover":{"contents":"```movement\ncrm = connect attio\n```\nYour attio account, signed in with the credential acme.\n\nHolds: Comment, Companies, `Companies List`, CompanyChange, DealChange, Deals, File, FundChange and 9 more\n\nListen to: Changes\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":3,"line":1},"start":{"character":0,"line":1}}}},
-{"at":{"character":26,"line":1},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":26,"line":1},"start":{"character":26,"line":1}}}},
+{"at":{"character":32,"line":1},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":32,"line":1},"start":{"character":32,"line":1}}}},
 {"at":{"character":0,"line":3},"definition":null,"hover":null},
 {"at":{"character":22,"line":3},"codeActions":[],"complete":{"items":65,"word":{"end":{"character":22,"line":3},"start":{"character":22,"line":3}}}},
 {"at":{"character":2,"line":4},"definition":{"file":null,"range":{"end":{"character":14,"line":3},"start":{"character":11,"line":3}}},"hover":{"contents":"```movement\nevt: CompanyChange (from crm)\n```\nA change to a company in Attio: what happened (`Kind`) and, on an update, which attribute (`Field`). Walk `Company` for the company as it is now.\n\nParameter of m.\n\nFields: Field: enum (Name | Domains | Description | Categories | Team Size | Team), Id: text, Kind: enum (created | updated | deleted), Record: text\n\nWalk on: Company → Companies\n\n[Docs](<docs>/reference#top-level)","range":{"end":{"character":5,"line":4},"start":{"character":2,"line":4}}}},
@@ -1207,7 +1207,7 @@
 {"construct": "traversing edges onward from a write handle (block head and expression form)",
 "probes": [
 {"at":{"character":0,"line":0},"definition":{"file":null,"range":{"end":{"character":3,"line":0},"start":{"character":0,"line":0}}},"hover":{"contents":"```movement\ncrm = connect attio\n```\nYour attio account, signed in with the credential acme_main.\n\nHolds: Comment, Companies, `Companies List`, CompanyChange, DealChange, Deals, File, FundChange and 9 more\n\nListen to: Changes\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":3,"line":0},"start":{"character":0,"line":0}}}},
-{"at":{"character":27,"line":0},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":27,"line":0},"start":{"character":27,"line":0}}}},
+{"at":{"character":33,"line":0},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":33,"line":0},"start":{"character":33,"line":0}}}},
 {"at":{"character":0,"line":1},"definition":null,"hover":null},
 {"at":{"character":24,"line":1},"codeActions":[],"complete":{"items":33,"word":{"end":{"character":24,"line":1},"start":{"character":24,"line":1}}}},
 {"at":{"character":2,"line":2},"definition":{"file":null,"range":{"end":{"character":4,"line":2},"start":{"character":2,"line":2}}},"hover":{"contents":"```movement\nco: Companies (from crm)\n```\nSet on line 3.\n\nFields: Categories: list of enum (Lead | Customer | Open | Snoozed | Reviewed | inbound), `Created At`: date, Description: text, Domains: text, Name: text, `Team Size`: number, externalId: text, url: text\n\nWalk on: Changes → CompanyChange, Comments → Comment, Files → File, Lists → Companies List, Notes → Note, Tasks → Task, Team → People, `VC Deal Flow` → VC Deal Flow\n\n[Docs](<docs>/reference#top-level)","range":{"end":{"character":4,"line":2},"start":{"character":2,"line":2}}}},
@@ -1231,7 +1231,7 @@
 {"construct": "graph-rooted query traversals (WHERE / ORDER BY / LIMIT on a collection hop)",
 "probes": [
 {"at":{"character":0,"line":1},"definition":{"file":null,"range":{"end":{"character":3,"line":1},"start":{"character":0,"line":1}}},"hover":{"contents":"```movement\ncrm = connect attio\n```\nYour attio account, signed in with the credential acme.\n\nHolds: Comment, Companies, `Companies List`, CompanyChange, DealChange, Deals, File, FundChange and 9 more\n\nListen to: Changes\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":3,"line":1},"start":{"character":0,"line":1}}}},
-{"at":{"character":27,"line":1},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":27,"line":1},"start":{"character":27,"line":1}}}},
+{"at":{"character":33,"line":1},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":33,"line":1},"start":{"character":33,"line":1}}}},
 {"at":{"character":0,"line":3},"definition":null,"hover":null},
 {"at":{"character":32,"line":3},"codeActions":[],"complete":{"items":33,"word":{"end":{"character":32,"line":3},"start":{"character":32,"line":3}}}},
 {"at":{"character":2,"line":4},"definition":{"file":null,"range":{"end":{"character":3,"line":1},"start":{"character":0,"line":1}}},"hover":{"contents":"```movement\ncrm = connect attio\n```\nYour attio account, signed in with the credential acme.\n\nHolds: Comment, Companies, `Companies List`, CompanyChange, DealChange, Deals, File, FundChange and 9 more\n\nListen to: Changes\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":5,"line":4},"start":{"character":2,"line":4}}}},
@@ -1260,7 +1260,7 @@
 {"construct": "an ORDER BY key that walks one hop off the record it ranks",
 "probes": [
 {"at":{"character":0,"line":1},"definition":{"file":null,"range":{"end":{"character":3,"line":1},"start":{"character":0,"line":1}}},"hover":{"contents":"```movement\ncrm = connect attio\n```\nYour attio account, signed in with the credential acme.\n\nHolds: Comment, Companies, `Companies List`, CompanyChange, DealChange, Deals, File, FundChange and 9 more\n\nListen to: Changes\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":3,"line":1},"start":{"character":0,"line":1}}}},
-{"at":{"character":27,"line":1},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":27,"line":1},"start":{"character":27,"line":1}}}},
+{"at":{"character":33,"line":1},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":33,"line":1},"start":{"character":33,"line":1}}}},
 {"at":{"character":0,"line":3},"definition":null,"hover":null},
 {"at":{"character":35,"line":3},"codeActions":[],"complete":{"items":33,"word":{"end":{"character":35,"line":3},"start":{"character":35,"line":3}}}},
 {"at":{"character":2,"line":4},"definition":{"file":null,"range":{"end":{"character":3,"line":1},"start":{"character":0,"line":1}}},"hover":{"contents":"```movement\ncrm = connect attio\n```\nYour attio account, signed in with the credential acme.\n\nHolds: Comment, Companies, `Companies List`, CompanyChange, DealChange, Deals, File, FundChange and 9 more\n\nListen to: Changes\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":5,"line":4},"start":{"character":2,"line":4}}}},
@@ -1278,7 +1278,7 @@
 {"construct": "a walk wrapped in a closure, called only in the branch that needs it",
 "probes": [
 {"at":{"character":0,"line":1},"definition":{"file":null,"range":{"end":{"character":3,"line":1},"start":{"character":0,"line":1}}},"hover":{"contents":"```movement\ncrm = connect attio\n```\nYour attio account, signed in with the credential acme.\n\nHolds: Comment, Companies, `Companies List`, CompanyChange, DealChange, Deals, File, FundChange and 9 more\n\nListen to: Changes\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":3,"line":1},"start":{"character":0,"line":1}}}},
-{"at":{"character":27,"line":1},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":27,"line":1},"start":{"character":27,"line":1}}}},
+{"at":{"character":33,"line":1},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":33,"line":1},"start":{"character":33,"line":1}}}},
 {"at":{"character":0,"line":3},"definition":null,"hover":null},
 {"at":{"character":31,"line":3},"codeActions":[],"complete":{"items":33,"word":{"end":{"character":31,"line":3},"start":{"character":31,"line":3}}}},
 {"at":{"character":2,"line":4},"definition":{"file":null,"range":{"end":{"character":11,"line":4},"start":{"character":2,"line":4}}},"hover":{"contents":"```movement\ncustomers: a closure returning list of crm.Companies\n```\nSet on line 5.\n\n[Docs](<docs>/reference#top-level)","range":{"end":{"character":11,"line":4},"start":{"character":2,"line":4}}}},
@@ -1299,9 +1299,9 @@
 "probes": [
 {"at":{"character":0,"line":1},"definition":{"file":null,"range":{"end":{"character":5,"line":1},"start":{"character":0,"line":1}}},"hover":{"contents":"```movement\ninbox = connect email\n```\nA connection to email.\n\nHolds: Attachment, Email\n\nListen to: Emails\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":5,"line":1},"start":{"character":0,"line":1}}}},
 {"at":{"character":0,"line":2},"definition":{"file":null,"range":{"end":{"character":3,"line":2},"start":{"character":0,"line":2}}},"hover":{"contents":"```movement\ncrm = connect attio\n```\nYour attio account, signed in with the credential acme.\n\nHolds: Comment, Companies, `Companies List`, CompanyChange, DealChange, Deals, File, FundChange and 9 more\n\nListen to: Changes\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":3,"line":2},"start":{"character":0,"line":2}}}},
-{"at":{"character":28,"line":2},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":28,"line":2},"start":{"character":28,"line":2}}}},
+{"at":{"character":34,"line":2},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":34,"line":2},"start":{"character":34,"line":2}}}},
 {"at":{"character":0,"line":3},"definition":{"file":null,"range":{"end":{"character":4,"line":3},"start":{"character":0,"line":3}}},"hover":{"contents":"```movement\nteam = connect slack\n```\nYour slack account, signed in with the credential team_workspace.\n\nHolds: Action, Channel, File, Interaction, Message, Reaction, User\n\nListen to: Messages, Interactions, Reactions, Replies\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":4,"line":3},"start":{"character":0,"line":3}}}},
-{"at":{"character":28,"line":3},"codeActions":[],"complete":{"items":10,"word":{"end":{"character":28,"line":3},"start":{"character":28,"line":3}}}},
+{"at":{"character":34,"line":3},"codeActions":[],"complete":{"items":10,"word":{"end":{"character":34,"line":3},"start":{"character":34,"line":3}}}},
 {"at":{"character":0,"line":5},"definition":null,"hover":null},
 {"at":{"character":29,"line":5},"codeActions":[],"complete":{"items":4,"word":{"end":{"character":29,"line":5},"start":{"character":29,"line":5}}}},
 {"at":{"character":2,"line":6},"definition":{"file":null,"range":{"end":{"character":6,"line":6},"start":{"character":2,"line":6}}},"hover":{"contents":"```movement\norgs: Companies (from crm)\n```\nSet on line 7.\n\nFields: Categories: list of enum (Lead | Customer | Open | Snoozed | Reviewed | inbound), `Created At`: date, Description: text, Domains: text, Name: text, `Team Size`: number, externalId: text, url: text\n\nWalk on: Changes → CompanyChange, Comments → Comment, Files → File, Lists → Companies List, Notes → Note, Tasks → Task, Team → People, `VC Deal Flow` → VC Deal Flow\n\n[Docs](<docs>/reference#top-level)","range":{"end":{"character":6,"line":6},"start":{"character":2,"line":6}}}},
@@ -1328,9 +1328,9 @@
 "probes": [
 {"at":{"character":0,"line":1},"definition":{"file":null,"range":{"end":{"character":5,"line":1},"start":{"character":0,"line":1}}},"hover":{"contents":"```movement\ninbox = connect email\n```\nA connection to email.\n\nHolds: Attachment, Email\n\nListen to: Emails\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":5,"line":1},"start":{"character":0,"line":1}}}},
 {"at":{"character":0,"line":2},"definition":{"file":null,"range":{"end":{"character":3,"line":2},"start":{"character":0,"line":2}}},"hover":{"contents":"```movement\ncrm = connect attio\n```\nYour attio account, signed in with the credential acme.\n\nHolds: Comment, Companies, `Companies List`, CompanyChange, DealChange, Deals, File, FundChange and 9 more\n\nListen to: Changes\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":3,"line":2},"start":{"character":0,"line":2}}}},
-{"at":{"character":28,"line":2},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":28,"line":2},"start":{"character":28,"line":2}}}},
+{"at":{"character":34,"line":2},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":34,"line":2},"start":{"character":34,"line":2}}}},
 {"at":{"character":0,"line":3},"definition":{"file":null,"range":{"end":{"character":4,"line":3},"start":{"character":0,"line":3}}},"hover":{"contents":"```movement\nteam = connect slack\n```\nYour slack account, signed in with the credential team_workspace.\n\nHolds: Action, Channel, File, Interaction, Message, Reaction, User\n\nListen to: Messages, Interactions, Reactions, Replies\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":4,"line":3},"start":{"character":0,"line":3}}}},
-{"at":{"character":28,"line":3},"codeActions":[],"complete":{"items":10,"word":{"end":{"character":28,"line":3},"start":{"character":28,"line":3}}}},
+{"at":{"character":34,"line":3},"codeActions":[],"complete":{"items":10,"word":{"end":{"character":34,"line":3},"start":{"character":34,"line":3}}}},
 {"at":{"character":0,"line":5},"definition":null,"hover":null},
 {"at":{"character":29,"line":5},"codeActions":[],"complete":{"items":4,"word":{"end":{"character":29,"line":5},"start":{"character":29,"line":5}}}},
 {"at":{"character":2,"line":6},"definition":{"file":null,"range":{"end":{"character":9,"line":6},"start":{"character":2,"line":6}}},"hover":{"contents":"```movement\nchannel: Channel (from team)\n```\nSet on line 7.\n\nFields: Id: text, `Is Private`: boolean, Name: known values (dealflow | general | portfolio, …), Topic: text\n\nWalk on: Members → User, Messages → Message\n\n[Docs](<docs>/reference#top-level)","range":{"end":{"character":9,"line":6},"start":{"character":2,"line":6}}}},
@@ -1359,7 +1359,7 @@
 "probes": [
 {"at":{"character":0,"line":1},"definition":{"file":null,"range":{"end":{"character":5,"line":1},"start":{"character":0,"line":1}}},"hover":{"contents":"```movement\ninbox = connect email\n```\nA connection to email.\n\nHolds: Attachment, Email\n\nListen to: Emails\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":5,"line":1},"start":{"character":0,"line":1}}}},
 {"at":{"character":0,"line":2},"definition":{"file":null,"range":{"end":{"character":4,"line":2},"start":{"character":0,"line":2}}},"hover":{"contents":"```movement\nteam = connect slack\n```\nYour slack account, signed in with the credential team_workspace.\n\nHolds: Action, Channel, File, Interaction, Message, Reaction, User\n\nListen to: Messages, Interactions, Reactions, Replies\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":4,"line":2},"start":{"character":0,"line":2}}}},
-{"at":{"character":28,"line":2},"codeActions":[],"complete":{"items":10,"word":{"end":{"character":28,"line":2},"start":{"character":28,"line":2}}}},
+{"at":{"character":34,"line":2},"codeActions":[],"complete":{"items":10,"word":{"end":{"character":34,"line":2},"start":{"character":34,"line":2}}}},
 {"at":{"character":0,"line":4},"definition":null,"hover":null},
 {"at":{"character":32,"line":4},"codeActions":[],"complete":{"items":4,"word":{"end":{"character":32,"line":4},"start":{"character":32,"line":4}}}},
 {"at":{"character":2,"line":5},"definition":{"file":null,"range":{"end":{"character":7,"line":5},"start":{"character":2,"line":5}}},"hover":{"contents":"```movement\nnames: list of text\n```\nSet on line 6.\n\n[Docs](<docs>/reference#top-level)","range":{"end":{"character":7,"line":5},"start":{"character":2,"line":5}}}},
@@ -1383,7 +1383,7 @@
 "probes": [
 {"at":{"character":0,"line":1},"definition":{"file":null,"range":{"end":{"character":5,"line":1},"start":{"character":0,"line":1}}},"hover":{"contents":"```movement\ninbox = connect email\n```\nA connection to email.\n\nHolds: Attachment, Email\n\nListen to: Emails\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":5,"line":1},"start":{"character":0,"line":1}}}},
 {"at":{"character":0,"line":2},"definition":{"file":null,"range":{"end":{"character":3,"line":2},"start":{"character":0,"line":2}}},"hover":{"contents":"```movement\ncrm = connect attio\n```\nYour attio account, signed in with the credential acme.\n\nHolds: Comment, Companies, `Companies List`, CompanyChange, DealChange, Deals, File, FundChange and 9 more\n\nListen to: Changes\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":3,"line":2},"start":{"character":0,"line":2}}}},
-{"at":{"character":28,"line":2},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":28,"line":2},"start":{"character":28,"line":2}}}},
+{"at":{"character":34,"line":2},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":34,"line":2},"start":{"character":34,"line":2}}}},
 {"at":{"character":0,"line":4},"definition":null,"hover":null},
 {"at":{"character":2,"line":5},"definition":null,"hover":null},
 {"at":{"character":2,"line":6},"definition":null,"hover":null},
@@ -1436,7 +1436,7 @@
 "probes": [
 {"at":{"character":0,"line":1},"definition":{"file":null,"range":{"end":{"character":5,"line":1},"start":{"character":0,"line":1}}},"hover":{"contents":"```movement\ninbox = connect email\n```\nA connection to email.\n\nHolds: Attachment, Email\n\nListen to: Emails\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":5,"line":1},"start":{"character":0,"line":1}}}},
 {"at":{"character":0,"line":2},"definition":{"file":null,"range":{"end":{"character":3,"line":2},"start":{"character":0,"line":2}}},"hover":{"contents":"```movement\ncrm = connect attio\n```\nYour attio account, signed in with the credential acme.\n\nHolds: Comment, Companies, `Companies List`, CompanyChange, DealChange, Deals, File, FundChange and 9 more\n\nListen to: Changes\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":3,"line":2},"start":{"character":0,"line":2}}}},
-{"at":{"character":28,"line":2},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":28,"line":2},"start":{"character":28,"line":2}}}},
+{"at":{"character":34,"line":2},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":34,"line":2},"start":{"character":34,"line":2}}}},
 {"at":{"character":0,"line":4},"definition":null,"hover":null},
 {"at":{"character":2,"line":5},"definition":null,"hover":null},
 {"at":{"character":2,"line":6},"definition":null,"hover":null},
@@ -1511,7 +1511,7 @@
 "probes": [
 {"at":{"character":0,"line":1},"definition":{"file":null,"range":{"end":{"character":5,"line":1},"start":{"character":0,"line":1}}},"hover":{"contents":"```movement\ninbox = connect email\n```\nA connection to email.\n\nHolds: Attachment, Email\n\nListen to: Emails\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":5,"line":1},"start":{"character":0,"line":1}}}},
 {"at":{"character":0,"line":2},"definition":{"file":null,"range":{"end":{"character":3,"line":2},"start":{"character":0,"line":2}}},"hover":{"contents":"```movement\ncrm = connect attio\n```\nYour attio account, signed in with the credential acme.\n\nHolds: Comment, Companies, `Companies List`, CompanyChange, DealChange, Deals, File, FundChange and 9 more\n\nListen to: Changes\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":3,"line":2},"start":{"character":0,"line":2}}}},
-{"at":{"character":28,"line":2},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":28,"line":2},"start":{"character":28,"line":2}}}},
+{"at":{"character":34,"line":2},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":34,"line":2},"start":{"character":34,"line":2}}}},
 {"at":{"character":0,"line":4},"definition":null,"hover":null},
 {"at":{"character":2,"line":5},"definition":null,"hover":null},
 {"at":{"character":3,"line":6},"definition":null,"hover":null},
@@ -1532,7 +1532,7 @@
 "probes": [
 {"at":{"character":0,"line":1},"definition":{"file":null,"range":{"end":{"character":5,"line":1},"start":{"character":0,"line":1}}},"hover":{"contents":"```movement\ninbox = connect email\n```\nA connection to email.\n\nHolds: Attachment, Email\n\nListen to: Emails\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":5,"line":1},"start":{"character":0,"line":1}}}},
 {"at":{"character":0,"line":2},"definition":{"file":null,"range":{"end":{"character":3,"line":2},"start":{"character":0,"line":2}}},"hover":{"contents":"```movement\ncrm = connect attio\n```\nYour attio account, signed in with the credential acme.\n\nHolds: Comment, Companies, `Companies List`, CompanyChange, DealChange, Deals, File, FundChange and 9 more\n\nListen to: Changes\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":3,"line":2},"start":{"character":0,"line":2}}}},
-{"at":{"character":28,"line":2},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":28,"line":2},"start":{"character":28,"line":2}}}},
+{"at":{"character":34,"line":2},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":34,"line":2},"start":{"character":34,"line":2}}}},
 {"at":{"character":0,"line":4},"definition":null,"hover":null},
 {"at":{"character":0,"line":6},"definition":null,"hover":null},
 {"at":{"character":2,"line":7},"definition":null,"hover":null},
@@ -1585,7 +1585,7 @@
 {"at":{"character":9,"line":1},"codeActions":[],"complete":{"items":63,"word":{"end":{"character":9,"line":1},"start":{"character":9,"line":1}}}},
 {"at":{"character":0,"line":3},"definition":{"file":null,"range":{"end":{"character":5,"line":3},"start":{"character":0,"line":3}}},"hover":{"contents":"```movement\ninbox = connect email\n```\nA connection to email.\n\nHolds: Attachment, Email\n\nListen to: Emails\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":5,"line":3},"start":{"character":0,"line":3}}}},
 {"at":{"character":0,"line":4},"definition":{"file":null,"range":{"end":{"character":3,"line":4},"start":{"character":0,"line":4}}},"hover":{"contents":"```movement\ncrm = connect attio\n```\nYour attio account, signed in with the credential acme.\n\nHolds: Comment, Companies, `Companies List`, CompanyChange, DealChange, Deals, File, FundChange and 9 more\n\nListen to: Changes\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":3,"line":4},"start":{"character":0,"line":4}}}},
-{"at":{"character":28,"line":4},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":28,"line":4},"start":{"character":28,"line":4}}}},
+{"at":{"character":34,"line":4},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":34,"line":4},"start":{"character":34,"line":4}}}},
 {"at":{"character":0,"line":6},"definition":null,"hover":null},
 {"at":{"character":2,"line":7},"definition":null,"hover":null},
 {"at":{"character":2,"line":8},"definition":null,"hover":null},
@@ -1645,7 +1645,7 @@
 {"construct": "a long document read with File.read, cut with Text.chunks, extracted per piece in map, merged into a typed empty graph by unique by, then written",
 "probes": [
 {"at":{"character":0,"line":1},"definition":{"file":null,"range":{"end":{"character":3,"line":1},"start":{"character":0,"line":1}}},"hover":{"contents":"```movement\ncrm = connect attio\n```\nYour attio account, signed in with the credential acme.\n\nHolds: Comment, Companies, `Companies List`, CompanyChange, DealChange, Deals, File, FundChange and 9 more\n\nListen to: Changes\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":3,"line":1},"start":{"character":0,"line":1}}}},
-{"at":{"character":27,"line":1},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":27,"line":1},"start":{"character":27,"line":1}}}},
+{"at":{"character":33,"line":1},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":33,"line":1},"start":{"character":33,"line":1}}}},
 {"at":{"character":0,"line":3},"definition":null,"hover":null},
 {"at":{"character":2,"line":4},"definition":null,"hover":null},
 {"at":{"character":2,"line":5},"definition":null,"hover":null},
@@ -1687,7 +1687,7 @@
 {"at":{"character":9,"line":1},"codeActions":[],"complete":{"items":63,"word":{"end":{"character":9,"line":1},"start":{"character":9,"line":1}}}},
 {"at":{"character":0,"line":3},"definition":{"file":null,"range":{"end":{"character":5,"line":3},"start":{"character":0,"line":3}}},"hover":{"contents":"```movement\ninbox = connect email\n```\nA connection to email.\n\nHolds: Attachment, Email\n\nListen to: Emails\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":5,"line":3},"start":{"character":0,"line":3}}}},
 {"at":{"character":0,"line":4},"definition":{"file":null,"range":{"end":{"character":3,"line":4},"start":{"character":0,"line":4}}},"hover":{"contents":"```movement\ncrm = connect attio\n```\nYour attio account, signed in with the credential acme.\n\nHolds: Comment, Companies, `Companies List`, CompanyChange, DealChange, Deals, File, FundChange and 9 more\n\nListen to: Changes\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":3,"line":4},"start":{"character":0,"line":4}}}},
-{"at":{"character":28,"line":4},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":28,"line":4},"start":{"character":28,"line":4}}}},
+{"at":{"character":34,"line":4},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":34,"line":4},"start":{"character":34,"line":4}}}},
 {"at":{"character":0,"line":6},"definition":null,"hover":null},
 {"at":{"character":29,"line":6},"codeActions":[],"complete":{"items":4,"word":{"end":{"character":29,"line":6},"start":{"character":29,"line":6}}}},
 {"at":{"character":2,"line":7},"definition":{"file":null,"range":{"end":{"character":8,"line":7},"start":{"character":2,"line":7}}},"hover":{"contents":"```movement\nlinked: list of what 'vcUrlRetrieval' found\n```\nSet on line 8.\n\n[Docs](<docs>/reference#top-level)","range":{"end":{"character":8,"line":7},"start":{"character":2,"line":7}}}},
@@ -1713,7 +1713,7 @@
 "probes": [
 {"at":{"character":0,"line":1},"definition":{"file":null,"range":{"end":{"character":5,"line":1},"start":{"character":0,"line":1}}},"hover":{"contents":"```movement\ninbox = connect email\n```\nA connection to email.\n\nHolds: Attachment, Email\n\nListen to: Emails\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":5,"line":1},"start":{"character":0,"line":1}}}},
 {"at":{"character":0,"line":2},"definition":{"file":null,"range":{"end":{"character":3,"line":2},"start":{"character":0,"line":2}}},"hover":{"contents":"```movement\ncrm = connect attio\n```\nYour attio account, signed in with the credential acme.\n\nHolds: Comment, Companies, `Companies List`, CompanyChange, DealChange, Deals, File, FundChange and 9 more\n\nListen to: Changes\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":3,"line":2},"start":{"character":0,"line":2}}}},
-{"at":{"character":28,"line":2},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":28,"line":2},"start":{"character":28,"line":2}}}},
+{"at":{"character":34,"line":2},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":34,"line":2},"start":{"character":34,"line":2}}}},
 {"at":{"character":0,"line":4},"definition":null,"hover":null},
 {"at":{"character":9,"line":4},"codeActions":[],"complete":{"items":63,"word":{"end":{"character":9,"line":4},"start":{"character":9,"line":4}}}},
 {"at":{"character":0,"line":6},"definition":null,"hover":null},
@@ -1757,7 +1757,7 @@
 "probes": [
 {"at":{"character":0,"line":1},"definition":{"file":null,"range":{"end":{"character":5,"line":1},"start":{"character":0,"line":1}}},"hover":{"contents":"```movement\ninbox = connect email\n```\nA connection to email.\n\nHolds: Attachment, Email\n\nListen to: Emails\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":5,"line":1},"start":{"character":0,"line":1}}}},
 {"at":{"character":0,"line":2},"definition":{"file":null,"range":{"end":{"character":3,"line":2},"start":{"character":0,"line":2}}},"hover":{"contents":"```movement\ncrm = connect attio\n```\nYour attio account, signed in with the credential acme.\n\nHolds: Comment, Companies, `Companies List`, CompanyChange, DealChange, Deals, File, FundChange and 9 more\n\nListen to: Changes\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":3,"line":2},"start":{"character":0,"line":2}}}},
-{"at":{"character":28,"line":2},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":28,"line":2},"start":{"character":28,"line":2}}}},
+{"at":{"character":34,"line":2},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":34,"line":2},"start":{"character":34,"line":2}}}},
 {"at":{"character":0,"line":4},"definition":null,"hover":null},
 {"at":{"character":2,"line":5},"definition":null,"hover":null},
 {"at":{"character":2,"line":6},"definition":null,"hover":null},
@@ -1805,7 +1805,7 @@
 {"construct": "is type tests (union narrowing through a branch)",
 "probes": [
 {"at":{"character":0,"line":1},"definition":{"file":null,"range":{"end":{"character":3,"line":1},"start":{"character":0,"line":1}}},"hover":{"contents":"```movement\ncrm = connect attio\n```\nYour attio account, signed in with the credential acme.\n\nHolds: Comment, Companies, `Companies List`, CompanyChange, DealChange, Deals, File, FundChange and 9 more\n\nListen to: Changes\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":3,"line":1},"start":{"character":0,"line":1}}}},
-{"at":{"character":26,"line":1},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":26,"line":1},"start":{"character":26,"line":1}}}},
+{"at":{"character":32,"line":1},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":32,"line":1},"start":{"character":32,"line":1}}}},
 {"at":{"character":0,"line":3},"definition":null,"hover":null},
 {"at":{"character":27,"line":3},"codeActions":[],"complete":{"items":65,"word":{"end":{"character":27,"line":3},"start":{"character":27,"line":3}}}},
 {"at":{"character":2,"line":4},"definition":null,"hover":null},
@@ -1819,9 +1819,9 @@
 {"construct": "is against a declared node (structural conformance as a test)",
 "probes": [
 {"at":{"character":0,"line":1},"definition":{"file":null,"range":{"end":{"character":3,"line":1},"start":{"character":0,"line":1}}},"hover":{"contents":"```movement\ncrm = connect attio\n```\nYour attio account, signed in with the credential acme.\n\nHolds: Comment, Companies, `Companies List`, CompanyChange, DealChange, Deals, File, FundChange and 9 more\n\nListen to: Changes\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":3,"line":1},"start":{"character":0,"line":1}}}},
-{"at":{"character":27,"line":1},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":27,"line":1},"start":{"character":27,"line":1}}}},
+{"at":{"character":33,"line":1},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":33,"line":1},"start":{"character":33,"line":1}}}},
 {"at":{"character":0,"line":2},"definition":{"file":null,"range":{"end":{"character":4,"line":2},"start":{"character":0,"line":2}}},"hover":{"contents":"```movement\nchat = connect slack\n```\nYour slack account, signed in with the credential team_workspace.\n\nHolds: Action, Channel, File, Interaction, Message, Reaction, User\n\nListen to: Messages, Interactions, Reactions, Replies\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":4,"line":2},"start":{"character":0,"line":2}}}},
-{"at":{"character":27,"line":2},"codeActions":[],"complete":{"items":10,"word":{"end":{"character":27,"line":2},"start":{"character":27,"line":2}}}},
+{"at":{"character":33,"line":2},"codeActions":[],"complete":{"items":10,"word":{"end":{"character":33,"line":2},"start":{"character":33,"line":2}}}},
 {"at":{"character":0,"line":4},"definition":null,"hover":null},
 {"at":{"character":2,"line":5},"definition":null,"hover":null},
 {"at":{"character":0,"line":8},"definition":null,"hover":null},
@@ -1843,7 +1843,7 @@
 "probes": [
 {"at":{"character":0,"line":1},"definition":{"file":null,"range":{"end":{"character":5,"line":1},"start":{"character":0,"line":1}}},"hover":{"contents":"```movement\ninbox = connect email\n```\nA connection to email.\n\nHolds: Attachment, Email\n\nListen to: Emails\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":5,"line":1},"start":{"character":0,"line":1}}}},
 {"at":{"character":0,"line":2},"definition":{"file":null,"range":{"end":{"character":3,"line":2},"start":{"character":0,"line":2}}},"hover":{"contents":"```movement\ncrm = connect attio\n```\nYour attio account, signed in with the credential acme.\n\nHolds: Comment, Companies, `Companies List`, CompanyChange, DealChange, Deals, File, FundChange and 9 more\n\nListen to: Changes\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":3,"line":2},"start":{"character":0,"line":2}}}},
-{"at":{"character":28,"line":2},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":28,"line":2},"start":{"character":28,"line":2}}}},
+{"at":{"character":34,"line":2},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":34,"line":2},"start":{"character":34,"line":2}}}},
 {"at":{"character":0,"line":4},"definition":null,"hover":null},
 {"at":{"character":29,"line":4},"codeActions":[],"complete":{"items":4,"word":{"end":{"character":29,"line":4},"start":{"character":29,"line":4}}}},
 {"at":{"character":2,"line":5},"definition":null,"hover":null},
@@ -1860,7 +1860,7 @@
 "probes": [
 {"at":{"character":0,"line":1},"definition":{"file":null,"range":{"end":{"character":5,"line":1},"start":{"character":0,"line":1}}},"hover":{"contents":"```movement\ninbox = connect email\n```\nA connection to email.\n\nHolds: Attachment, Email\n\nListen to: Emails\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":5,"line":1},"start":{"character":0,"line":1}}}},
 {"at":{"character":0,"line":2},"definition":{"file":null,"range":{"end":{"character":3,"line":2},"start":{"character":0,"line":2}}},"hover":{"contents":"```movement\ncrm = connect attio\n```\nYour attio account, signed in with the credential acme.\n\nHolds: Comment, Companies, `Companies List`, CompanyChange, DealChange, Deals, File, FundChange and 9 more\n\nListen to: Changes\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":3,"line":2},"start":{"character":0,"line":2}}}},
-{"at":{"character":28,"line":2},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":28,"line":2},"start":{"character":28,"line":2}}}},
+{"at":{"character":34,"line":2},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":34,"line":2},"start":{"character":34,"line":2}}}},
 {"at":{"character":0,"line":4},"definition":null,"hover":null},
 {"at":{"character":29,"line":4},"codeActions":[],"complete":{"items":4,"word":{"end":{"character":29,"line":4},"start":{"character":29,"line":4}}}},
 {"at":{"character":2,"line":5},"definition":{"file":null,"range":{"end":{"character":8,"line":5},"start":{"character":2,"line":5}}},"hover":{"contents":"```movement\nsender: People (from crm)\n```\nSet on line 6.\n\nFields: `Created At`: date, Email: text, `Job Title`: text, Name: text, externalId: text, url: text\n\nWalk on: Changes → PersonChange, Comments → Comment, Company → Companies, Files → File, Lists → People List, Notes → Note, Tasks → Task\n\n[Docs](<docs>/reference#top-level)","range":{"end":{"character":8,"line":5},"start":{"character":2,"line":5}}}},
@@ -1893,9 +1893,9 @@
 {"construct": "guard clause on an only-bound record (`if (x == null) { fail(…) }`) narrowing the write below it, plus a `? :` over an optional field",
 "probes": [
 {"at":{"character":0,"line":1},"definition":{"file":null,"range":{"end":{"character":3,"line":1},"start":{"character":0,"line":1}}},"hover":{"contents":"```movement\ncrm = connect attio\n```\nYour attio account, signed in with the credential acme.\n\nHolds: Comment, Companies, `Companies List`, CompanyChange, DealChange, Deals, File, FundChange and 9 more\n\nListen to: Changes\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":3,"line":1},"start":{"character":0,"line":1}}}},
-{"at":{"character":27,"line":1},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":27,"line":1},"start":{"character":27,"line":1}}}},
+{"at":{"character":33,"line":1},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":33,"line":1},"start":{"character":33,"line":1}}}},
 {"at":{"character":0,"line":2},"definition":{"file":null,"range":{"end":{"character":4,"line":2},"start":{"character":0,"line":2}}},"hover":{"contents":"```movement\nchat = connect slack\n```\nYour slack account, signed in with the credential team_workspace.\n\nHolds: Action, Channel, File, Interaction, Message, Reaction, User\n\nListen to: Messages, Interactions, Reactions, Replies\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":4,"line":2},"start":{"character":0,"line":2}}}},
-{"at":{"character":27,"line":2},"codeActions":[],"complete":{"items":10,"word":{"end":{"character":27,"line":2},"start":{"character":27,"line":2}}}},
+{"at":{"character":33,"line":2},"codeActions":[],"complete":{"items":10,"word":{"end":{"character":33,"line":2},"start":{"character":33,"line":2}}}},
 {"at":{"character":0,"line":4},"definition":null,"hover":null},
 {"at":{"character":44,"line":4},"codeActions":[],"complete":{"items":65,"word":{"end":{"character":44,"line":4},"start":{"character":44,"line":4}}}},
 {"at":{"character":2,"line":5},"definition":{"file":null,"range":{"end":{"character":9,"line":5},"start":{"character":2,"line":5}}},"hover":{"contents":"```movement\nchannel: Channel (from chat)\n```\nSet on line 6.\n\nFields: Id: text, `Is Private`: boolean, Name: known values (dealflow | general | portfolio, …), Topic: text\n\nWalk on: Members → User, Messages → Message\n\n[Docs](<docs>/reference#top-level)","range":{"end":{"character":9,"line":5},"start":{"character":2,"line":5}}}},
@@ -1924,9 +1924,9 @@
 {"construct": "a chain of flat guard clauses, each narrowing a separate only-bound binding",
 "probes": [
 {"at":{"character":0,"line":1},"definition":{"file":null,"range":{"end":{"character":3,"line":1},"start":{"character":0,"line":1}}},"hover":{"contents":"```movement\ncrm = connect attio\n```\nYour attio account, signed in with the credential acme.\n\nHolds: Comment, Companies, `Companies List`, CompanyChange, DealChange, Deals, File, FundChange and 9 more\n\nListen to: Changes\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":3,"line":1},"start":{"character":0,"line":1}}}},
-{"at":{"character":27,"line":1},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":27,"line":1},"start":{"character":27,"line":1}}}},
+{"at":{"character":33,"line":1},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":33,"line":1},"start":{"character":33,"line":1}}}},
 {"at":{"character":0,"line":2},"definition":{"file":null,"range":{"end":{"character":4,"line":2},"start":{"character":0,"line":2}}},"hover":{"contents":"```movement\nchat = connect slack\n```\nYour slack account, signed in with the credential team_workspace.\n\nHolds: Action, Channel, File, Interaction, Message, Reaction, User\n\nListen to: Messages, Interactions, Reactions, Replies\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":4,"line":2},"start":{"character":0,"line":2}}}},
-{"at":{"character":27,"line":2},"codeActions":[],"complete":{"items":10,"word":{"end":{"character":27,"line":2},"start":{"character":27,"line":2}}}},
+{"at":{"character":33,"line":2},"codeActions":[],"complete":{"items":10,"word":{"end":{"character":33,"line":2},"start":{"character":33,"line":2}}}},
 {"at":{"character":0,"line":4},"definition":null,"hover":null},
 {"at":{"character":22,"line":4},"codeActions":[],"complete":{"items":65,"word":{"end":{"character":22,"line":4},"start":{"character":22,"line":4}}}},
 {"at":{"character":2,"line":5},"definition":{"file":null,"range":{"end":{"character":9,"line":5},"start":{"character":2,"line":5}}},"hover":{"contents":"```movement\nchannel: Channel (from chat)\n```\nSet on line 6.\n\nFields: Id: text, `Is Private`: boolean, Name: known values (dealflow | general | portfolio, …), Topic: text\n\nWalk on: Members → User, Messages → Message\n\n[Docs](<docs>/reference#top-level)","range":{"end":{"character":9,"line":5},"start":{"character":2,"line":5}}}},
@@ -1950,7 +1950,7 @@
 "probes": [
 {"at":{"character":0,"line":1},"definition":{"file":null,"range":{"end":{"character":5,"line":1},"start":{"character":0,"line":1}}},"hover":{"contents":"```movement\ninbox = connect email\n```\nA connection to email.\n\nHolds: Attachment, Email\n\nListen to: Emails\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":5,"line":1},"start":{"character":0,"line":1}}}},
 {"at":{"character":0,"line":2},"definition":{"file":null,"range":{"end":{"character":3,"line":2},"start":{"character":0,"line":2}}},"hover":{"contents":"```movement\ncrm = connect attio\n```\nYour attio account, signed in with the credential acme.\n\nHolds: Comment, Companies, `Companies List`, CompanyChange, DealChange, Deals, File, FundChange and 9 more\n\nListen to: Changes\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":3,"line":2},"start":{"character":0,"line":2}}}},
-{"at":{"character":28,"line":2},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":28,"line":2},"start":{"character":28,"line":2}}}},
+{"at":{"character":34,"line":2},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":34,"line":2},"start":{"character":34,"line":2}}}},
 {"at":{"character":0,"line":4},"definition":null,"hover":null},
 {"at":{"character":29,"line":4},"codeActions":[],"complete":{"items":4,"word":{"end":{"character":29,"line":4},"start":{"character":29,"line":4}}}},
 {"at":{"character":2,"line":5},"definition":null,"hover":null},
@@ -1968,7 +1968,7 @@
 {"construct": "a two-way sync whose listen takes only the fields it reads, so its own write does not run it again",
 "probes": [
 {"at":{"character":0,"line":1},"definition":{"file":null,"range":{"end":{"character":3,"line":1},"start":{"character":0,"line":1}}},"hover":{"contents":"```movement\ncrm = connect attio\n```\nYour attio account, signed in with the credential acme.\n\nHolds: Comment, Companies, `Companies List`, CompanyChange, DealChange, Deals, File, FundChange and 9 more\n\nListen to: Changes\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":3,"line":1},"start":{"character":0,"line":1}}}},
-{"at":{"character":26,"line":1},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":26,"line":1},"start":{"character":26,"line":1}}}},
+{"at":{"character":32,"line":1},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":32,"line":1},"start":{"character":32,"line":1}}}},
 {"at":{"character":0,"line":3},"definition":null,"hover":null},
 {"at":{"character":35,"line":3},"codeActions":[],"complete":{"items":65,"word":{"end":{"character":35,"line":3},"start":{"character":35,"line":3}}}},
 {"at":{"character":2,"line":4},"definition":{"file":null,"range":{"end":{"character":27,"line":3},"start":{"character":26,"line":3}}},"hover":{"contents":"```movement\nc: CompanyChange (from crm)\n```\nA change to a company in Attio: what happened (`Kind`) and, on an update, which attribute (`Field`). Walk `Company` for the company as it is now.\n\nParameter of Mirror Company.\n\nFields: Field: enum (Name | Domains | Description | Categories | Team Size | Team), Id: text, Kind: enum (created | updated | deleted), Record: text\n\nWalk on: Company → Companies\n\n[Docs](<docs>/reference#top-level)","range":{"end":{"character":3,"line":4},"start":{"character":2,"line":4}}}},
@@ -1988,9 +1988,9 @@
 "probes": [
 {"at":{"character":0,"line":1},"definition":{"file":null,"range":{"end":{"character":5,"line":1},"start":{"character":0,"line":1}}},"hover":{"contents":"```movement\ninbox = connect email\n```\nA connection to email.\n\nHolds: Attachment, Email\n\nListen to: Emails\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":5,"line":1},"start":{"character":0,"line":1}}}},
 {"at":{"character":0,"line":2},"definition":{"file":null,"range":{"end":{"character":4,"line":2},"start":{"character":0,"line":2}}},"hover":{"contents":"```movement\nteam = connect slack\n```\nYour slack account, signed in with the credential team_workspace.\n\nHolds: Action, Channel, File, Interaction, Message, Reaction, User\n\nListen to: Messages, Interactions, Reactions, Replies\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":4,"line":2},"start":{"character":0,"line":2}}}},
-{"at":{"character":28,"line":2},"codeActions":[],"complete":{"items":10,"word":{"end":{"character":28,"line":2},"start":{"character":28,"line":2}}}},
+{"at":{"character":34,"line":2},"codeActions":[],"complete":{"items":10,"word":{"end":{"character":34,"line":2},"start":{"character":34,"line":2}}}},
 {"at":{"character":0,"line":3},"definition":{"file":null,"range":{"end":{"character":3,"line":3},"start":{"character":0,"line":3}}},"hover":{"contents":"```movement\ncrm = connect attio\n```\nYour attio account, signed in with the credential acme_main.\n\nHolds: Comment, Companies, `Companies List`, CompanyChange, DealChange, Deals, File, FundChange and 9 more\n\nListen to: Changes\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":3,"line":3},"start":{"character":0,"line":3}}}},
-{"at":{"character":28,"line":3},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":28,"line":3},"start":{"character":28,"line":3}}}},
+{"at":{"character":34,"line":3},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":34,"line":3},"start":{"character":34,"line":3}}}},
 {"at":{"character":0,"line":4},"definition":{"file":null,"range":{"end":{"character":4,"line":4},"start":{"character":0,"line":4}}},"hover":{"contents":"```movement\nasks = connect ask\n```\nA connection to ask.\n\nHolds: `Check Response`, `Choose Response`, `Choose Response<pursue | hold | pass>`, `Correct Response`, `Draft Response`, `Form Response`, `Form Response<Company | Contact | Budget>`, `Provide Response` and 4 more\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":4,"line":4},"start":{"character":0,"line":4}}}},
 {"at":{"character":0,"line":6},"definition":null,"hover":null},
 {"at":{"character":39,"line":6},"codeActions":[],"complete":{"items":4,"word":{"end":{"character":39,"line":6},"start":{"character":39,"line":6}}}},
@@ -2035,7 +2035,7 @@
 {"construct": "buttons on a message, their press raced against a timeout, the press time read off slot 0",
 "probes": [
 {"at":{"character":0,"line":1},"definition":{"file":null,"range":{"end":{"character":4,"line":1},"start":{"character":0,"line":1}}},"hover":{"contents":"```movement\nteam = connect slack\n```\nYour slack account, signed in with the credential team_workspace.\n\nHolds: Action, Channel, File, Interaction, Message, Reaction, User\n\nListen to: Messages, Interactions, Reactions, Replies\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":4,"line":1},"start":{"character":0,"line":1}}}},
-{"at":{"character":27,"line":1},"codeActions":[],"complete":{"items":10,"word":{"end":{"character":27,"line":1},"start":{"character":27,"line":1}}}},
+{"at":{"character":33,"line":1},"codeActions":[],"complete":{"items":10,"word":{"end":{"character":33,"line":1},"start":{"character":33,"line":1}}}},
 {"at":{"character":0,"line":3},"definition":null,"hover":null},
 {"at":{"character":44,"line":3},"codeActions":[],"complete":{"items":33,"word":{"end":{"character":44,"line":3},"start":{"character":44,"line":3}}}},
 {"at":{"character":2,"line":4},"definition":{"file":null,"range":{"end":{"character":11,"line":4},"start":{"character":2,"line":4}}},"hover":{"contents":"```movement\napprovals: Channel (from team)\n```\nSet on line 5.\n\nFields: Id: text, `Is Private`: boolean, Name: known values (dealflow | general | portfolio, …), Topic: text\n\nWalk on: Members → User, Messages → Message\n\n[Docs](<docs>/reference#top-level)","range":{"end":{"character":11,"line":4},"start":{"character":2,"line":4}}}},
@@ -2077,9 +2077,9 @@
 {"construct": "buttons whose press carries the Value it was written with, narrowed to those values and compared after the race",
 "probes": [
 {"at":{"character":0,"line":1},"definition":{"file":null,"range":{"end":{"character":4,"line":1},"start":{"character":0,"line":1}}},"hover":{"contents":"```movement\nteam = connect slack\n```\nYour slack account, signed in with the credential team_workspace.\n\nHolds: Action, Channel, File, Interaction, Message, Reaction, User\n\nListen to: Messages, Interactions, Reactions, Replies\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":4,"line":1},"start":{"character":0,"line":1}}}},
-{"at":{"character":27,"line":1},"codeActions":[],"complete":{"items":10,"word":{"end":{"character":27,"line":1},"start":{"character":27,"line":1}}}},
+{"at":{"character":33,"line":1},"codeActions":[],"complete":{"items":10,"word":{"end":{"character":33,"line":1},"start":{"character":33,"line":1}}}},
 {"at":{"character":0,"line":2},"definition":{"file":null,"range":{"end":{"character":3,"line":2},"start":{"character":0,"line":2}}},"hover":{"contents":"```movement\ncrm = connect attio\n```\nYour attio account, signed in with the credential acme_main.\n\nHolds: Comment, Companies, `Companies List`, CompanyChange, DealChange, Deals, File, FundChange and 9 more\n\nListen to: Changes\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":3,"line":2},"start":{"character":0,"line":2}}}},
-{"at":{"character":27,"line":2},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":27,"line":2},"start":{"character":27,"line":2}}}},
+{"at":{"character":33,"line":2},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":33,"line":2},"start":{"character":33,"line":2}}}},
 {"at":{"character":0,"line":4},"definition":null,"hover":null},
 {"at":{"character":39,"line":4},"codeActions":[],"complete":{"items":33,"word":{"end":{"character":39,"line":4},"start":{"character":39,"line":4}}}},
 {"at":{"character":2,"line":5},"definition":{"file":null,"range":{"end":{"character":10,"line":5},"start":{"character":2,"line":5}}},"hover":{"contents":"```movement\ndealflow: Channel (from team)\n```\nSet on line 6.\n\nFields: Id: text, `Is Private`: boolean, Name: known values (dealflow | general | portfolio, …), Topic: text\n\nWalk on: Members → User, Messages → Message\n\n[Docs](<docs>/reference#top-level)","range":{"end":{"character":10,"line":5},"start":{"character":2,"line":5}}}},
@@ -2123,7 +2123,7 @@
 {"construct": "await on an edge that is also listed (a thread's Replies): the first reply already there, or the next, raced against a sleep",
 "probes": [
 {"at":{"character":0,"line":1},"definition":{"file":null,"range":{"end":{"character":4,"line":1},"start":{"character":0,"line":1}}},"hover":{"contents":"```movement\nteam = connect slack\n```\nYour slack account, signed in with the credential team_workspace.\n\nHolds: Action, Channel, File, Interaction, Message, Reaction, User\n\nListen to: Messages, Interactions, Reactions, Replies\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":4,"line":1},"start":{"character":0,"line":1}}}},
-{"at":{"character":27,"line":1},"codeActions":[],"complete":{"items":10,"word":{"end":{"character":27,"line":1},"start":{"character":27,"line":1}}}},
+{"at":{"character":33,"line":1},"codeActions":[],"complete":{"items":10,"word":{"end":{"character":33,"line":1},"start":{"character":33,"line":1}}}},
 {"at":{"character":0,"line":3},"definition":null,"hover":null},
 {"at":{"character":37,"line":3},"codeActions":[],"complete":{"items":33,"word":{"end":{"character":37,"line":3},"start":{"character":37,"line":3}}}},
 {"at":{"character":2,"line":4},"definition":{"file":null,"range":{"end":{"character":10,"line":4},"start":{"character":2,"line":4}}},"hover":{"contents":"```movement\ndealflow: Channel (from team)\n```\nSet on line 5.\n\nFields: Id: text, `Is Private`: boolean, Name: known values (dealflow | general | portfolio, …), Topic: text\n\nWalk on: Members → User, Messages → Message\n\n[Docs](<docs>/reference#top-level)","range":{"end":{"character":10,"line":4},"start":{"character":2,"line":4}}}},
@@ -2155,7 +2155,7 @@
 {"construct": "await new on a thread's Replies, its WHERE reading a record the run holds — only an answer from the author, after the run read the message",
 "probes": [
 {"at":{"character":0,"line":1},"definition":{"file":null,"range":{"end":{"character":4,"line":1},"start":{"character":0,"line":1}}},"hover":{"contents":"```movement\nteam = connect slack\n```\nYour slack account, signed in with the credential team_workspace.\n\nHolds: Action, Channel, File, Interaction, Message, Reaction, User\n\nListen to: Messages, Interactions, Reactions, Replies\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":4,"line":1},"start":{"character":0,"line":1}}}},
-{"at":{"character":27,"line":1},"codeActions":[],"complete":{"items":10,"word":{"end":{"character":27,"line":1},"start":{"character":27,"line":1}}}},
+{"at":{"character":33,"line":1},"codeActions":[],"complete":{"items":10,"word":{"end":{"character":33,"line":1},"start":{"character":33,"line":1}}}},
 {"at":{"character":0,"line":3},"definition":null,"hover":null},
 {"at":{"character":41,"line":3},"codeActions":[],"complete":{"items":33,"word":{"end":{"character":41,"line":3},"start":{"character":41,"line":3}}}},
 {"at":{"character":2,"line":4},"definition":{"file":null,"range":{"end":{"character":10,"line":4},"start":{"character":2,"line":4}}},"hover":{"contents":"```movement\ndealflow: Channel (from team)\n```\nSet on line 5.\n\nFields: Id: text, `Is Private`: boolean, Name: known values (dealflow | general | portfolio, …), Topic: text\n\nWalk on: Members → User, Messages → Message\n\n[Docs](<docs>/reference#top-level)","range":{"end":{"character":10,"line":4},"start":{"character":2,"line":4}}}},
@@ -2192,7 +2192,7 @@
 {"construct": "a race arm handing back WHICH place answered — a dict built in the arm that knows it, the first answered slot taken with coalesce",
 "probes": [
 {"at":{"character":0,"line":1},"definition":{"file":null,"range":{"end":{"character":4,"line":1},"start":{"character":0,"line":1}}},"hover":{"contents":"```movement\nteam = connect slack\n```\nYour slack account, signed in with the credential team_workspace.\n\nHolds: Action, Channel, File, Interaction, Message, Reaction, User\n\nListen to: Messages, Interactions, Reactions, Replies\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":4,"line":1},"start":{"character":0,"line":1}}}},
-{"at":{"character":27,"line":1},"codeActions":[],"complete":{"items":10,"word":{"end":{"character":27,"line":1},"start":{"character":27,"line":1}}}},
+{"at":{"character":33,"line":1},"codeActions":[],"complete":{"items":10,"word":{"end":{"character":33,"line":1},"start":{"character":33,"line":1}}}},
 {"at":{"character":0,"line":3},"definition":null,"hover":null},
 {"at":{"character":45,"line":3},"codeActions":[],"complete":{"items":33,"word":{"end":{"character":45,"line":3},"start":{"character":45,"line":3}}}},
 {"at":{"character":3,"line":4},"definition":{"file":null,"range":{"end":{"character":19,"line":4},"start":{"character":3,"line":4}}},"hover":{"contents":"```movement\nDealflow Channel: Channel (from team)\n```\nSet on line 5.\n\nFields: Id: text, `Is Private`: boolean, Name: known values (dealflow | general | portfolio, …), Topic: text\n\nWalk on: Members → User, Messages → Message\n\n[Docs](<docs>/reference#top-level)","range":{"end":{"character":20,"line":4},"start":{"character":2,"line":4}}}},
@@ -2246,7 +2246,7 @@
 {"construct": "all over two awaiting closures, run at once inside a race with a sleep — both answers combined",
 "probes": [
 {"at":{"character":0,"line":1},"definition":{"file":null,"range":{"end":{"character":4,"line":1},"start":{"character":0,"line":1}}},"hover":{"contents":"```movement\nteam = connect slack\n```\nYour slack account, signed in with the credential team_workspace.\n\nHolds: Action, Channel, File, Interaction, Message, Reaction, User\n\nListen to: Messages, Interactions, Reactions, Replies\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":4,"line":1},"start":{"character":0,"line":1}}}},
-{"at":{"character":27,"line":1},"codeActions":[],"complete":{"items":10,"word":{"end":{"character":27,"line":1},"start":{"character":27,"line":1}}}},
+{"at":{"character":33,"line":1},"codeActions":[],"complete":{"items":10,"word":{"end":{"character":33,"line":1},"start":{"character":33,"line":1}}}},
 {"at":{"character":0,"line":2},"definition":{"file":null,"range":{"end":{"character":4,"line":2},"start":{"character":0,"line":2}}},"hover":{"contents":"```movement\nasks = connect ask\n```\nA connection to ask.\n\nHolds: `Check Response`, `Choose Response`, `Choose Response<pursue | hold | pass>`, `Correct Response`, `Draft Response`, `Form Response`, `Form Response<Company | Contact | Budget>`, `Provide Response` and 4 more\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":4,"line":2},"start":{"character":0,"line":2}}}},
 {"at":{"character":0,"line":4},"definition":null,"hover":null},
 {"at":{"character":40,"line":4},"codeActions":[],"complete":{"items":33,"word":{"end":{"character":40,"line":4},"start":{"character":40,"line":4}}}},
@@ -2296,9 +2296,9 @@
 {"construct": "await until — a closure condition refreshing a written handle, on a named cadence",
 "probes": [
 {"at":{"character":0,"line":1},"definition":{"file":null,"range":{"end":{"character":3,"line":1},"start":{"character":0,"line":1}}},"hover":{"contents":"```movement\ncrm = connect attio\n```\nYour attio account, signed in with the credential acme_main.\n\nHolds: Comment, Companies, `Companies List`, CompanyChange, DealChange, Deals, File, FundChange and 9 more\n\nListen to: Changes\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":3,"line":1},"start":{"character":0,"line":1}}}},
-{"at":{"character":27,"line":1},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":27,"line":1},"start":{"character":27,"line":1}}}},
+{"at":{"character":33,"line":1},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":33,"line":1},"start":{"character":33,"line":1}}}},
 {"at":{"character":0,"line":2},"definition":{"file":null,"range":{"end":{"character":4,"line":2},"start":{"character":0,"line":2}}},"hover":{"contents":"```movement\nteam = connect slack\n```\nYour slack account, signed in with the credential team_workspace.\n\nHolds: Action, Channel, File, Interaction, Message, Reaction, User\n\nListen to: Messages, Interactions, Reactions, Replies\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":4,"line":2},"start":{"character":0,"line":2}}}},
-{"at":{"character":27,"line":2},"codeActions":[],"complete":{"items":10,"word":{"end":{"character":27,"line":2},"start":{"character":27,"line":2}}}},
+{"at":{"character":33,"line":2},"codeActions":[],"complete":{"items":10,"word":{"end":{"character":33,"line":2},"start":{"character":33,"line":2}}}},
 {"at":{"character":0,"line":4},"definition":null,"hover":null},
 {"at":{"character":42,"line":4},"codeActions":[],"complete":{"items":33,"word":{"end":{"character":42,"line":4},"start":{"character":42,"line":4}}}},
 {"at":{"character":2,"line":5},"definition":{"file":null,"range":{"end":{"character":4,"line":5},"start":{"character":2,"line":5}}},"hover":{"contents":"```movement\nco: Companies (from crm)\n```\nSet on line 6.\n\nFields: Categories: list of enum (Lead | Customer | Open | Snoozed | Reviewed | inbound), `Created At`: date, Description: text, Domains: text, Name: text, `Team Size`: number, externalId: text, url: text\n\nWalk on: Changes → CompanyChange, Comments → Comment, Files → File, Lists → Companies List, Notes → Note, Tasks → Task, Team → People, `VC Deal Flow` → VC Deal Flow\n\n[Docs](<docs>/reference#top-level)","range":{"end":{"character":4,"line":5},"start":{"character":2,"line":5}}}},
@@ -2327,9 +2327,9 @@
 {"construct": "a Provide question with a literal Answer Type, its typed answer filled into a record with ?:",
 "probes": [
 {"at":{"character":0,"line":1},"definition":{"file":null,"range":{"end":{"character":4,"line":1},"start":{"character":0,"line":1}}},"hover":{"contents":"```movement\nteam = connect slack\n```\nYour slack account, signed in with the credential team_workspace.\n\nHolds: Action, Channel, File, Interaction, Message, Reaction, User\n\nListen to: Messages, Interactions, Reactions, Replies\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":4,"line":1},"start":{"character":0,"line":1}}}},
-{"at":{"character":27,"line":1},"codeActions":[],"complete":{"items":10,"word":{"end":{"character":27,"line":1},"start":{"character":27,"line":1}}}},
+{"at":{"character":33,"line":1},"codeActions":[],"complete":{"items":10,"word":{"end":{"character":33,"line":1},"start":{"character":33,"line":1}}}},
 {"at":{"character":0,"line":2},"definition":{"file":null,"range":{"end":{"character":3,"line":2},"start":{"character":0,"line":2}}},"hover":{"contents":"```movement\ncrm = connect attio\n```\nYour attio account, signed in with the credential acme_main.\n\nHolds: Comment, Companies, `Companies List`, CompanyChange, DealChange, Deals, File, FundChange and 9 more\n\nListen to: Changes\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":3,"line":2},"start":{"character":0,"line":2}}}},
-{"at":{"character":27,"line":2},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":27,"line":2},"start":{"character":27,"line":2}}}},
+{"at":{"character":33,"line":2},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":33,"line":2},"start":{"character":33,"line":2}}}},
 {"at":{"character":0,"line":3},"definition":{"file":null,"range":{"end":{"character":4,"line":3},"start":{"character":0,"line":3}}},"hover":{"contents":"```movement\nasks = connect ask\n```\nA connection to ask.\n\nHolds: `Check Response`, `Choose Response`, `Choose Response<pursue | hold | pass>`, `Correct Response`, `Draft Response`, `Form Response`, `Form Response<Company | Contact | Budget>`, `Provide Response` and 4 more\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":4,"line":3},"start":{"character":0,"line":3}}}},
 {"at":{"character":0,"line":5},"definition":null,"hover":null},
 {"at":{"character":41,"line":5},"codeActions":[],"complete":{"items":33,"word":{"end":{"character":41,"line":5},"start":{"character":41,"line":5}}}},
@@ -2361,9 +2361,9 @@
 {"construct": "a Choose question over literal options, its answer compared against one of them",
 "probes": [
 {"at":{"character":0,"line":1},"definition":{"file":null,"range":{"end":{"character":4,"line":1},"start":{"character":0,"line":1}}},"hover":{"contents":"```movement\nteam = connect slack\n```\nYour slack account, signed in with the credential team_workspace.\n\nHolds: Action, Channel, File, Interaction, Message, Reaction, User\n\nListen to: Messages, Interactions, Reactions, Replies\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":4,"line":1},"start":{"character":0,"line":1}}}},
-{"at":{"character":27,"line":1},"codeActions":[],"complete":{"items":10,"word":{"end":{"character":27,"line":1},"start":{"character":27,"line":1}}}},
+{"at":{"character":33,"line":1},"codeActions":[],"complete":{"items":10,"word":{"end":{"character":33,"line":1},"start":{"character":33,"line":1}}}},
 {"at":{"character":0,"line":2},"definition":{"file":null,"range":{"end":{"character":3,"line":2},"start":{"character":0,"line":2}}},"hover":{"contents":"```movement\ncrm = connect attio\n```\nYour attio account, signed in with the credential acme_main.\n\nHolds: Comment, Companies, `Companies List`, CompanyChange, DealChange, Deals, File, FundChange and 9 more\n\nListen to: Changes\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":3,"line":2},"start":{"character":0,"line":2}}}},
-{"at":{"character":27,"line":2},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":27,"line":2},"start":{"character":27,"line":2}}}},
+{"at":{"character":33,"line":2},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":33,"line":2},"start":{"character":33,"line":2}}}},
 {"at":{"character":0,"line":3},"definition":{"file":null,"range":{"end":{"character":4,"line":3},"start":{"character":0,"line":3}}},"hover":{"contents":"```movement\nasks = connect ask\n```\nA connection to ask.\n\nHolds: `Check Response`, `Choose Response`, `Choose Response<pursue | hold | pass>`, `Correct Response`, `Draft Response`, `Form Response`, `Form Response<Company | Contact | Budget>`, `Provide Response` and 4 more\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":4,"line":3},"start":{"character":0,"line":3}}}},
 {"at":{"character":0,"line":5},"definition":null,"hover":null},
 {"at":{"character":41,"line":5},"codeActions":[],"complete":{"items":33,"word":{"end":{"character":41,"line":5},"start":{"character":41,"line":5}}}},
@@ -2395,7 +2395,7 @@
 {"construct": "a Select question over literal options, its chosen subset joined into a message",
 "probes": [
 {"at":{"character":0,"line":1},"definition":{"file":null,"range":{"end":{"character":4,"line":1},"start":{"character":0,"line":1}}},"hover":{"contents":"```movement\nteam = connect slack\n```\nYour slack account, signed in with the credential team_workspace.\n\nHolds: Action, Channel, File, Interaction, Message, Reaction, User\n\nListen to: Messages, Interactions, Reactions, Replies\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":4,"line":1},"start":{"character":0,"line":1}}}},
-{"at":{"character":27,"line":1},"codeActions":[],"complete":{"items":10,"word":{"end":{"character":27,"line":1},"start":{"character":27,"line":1}}}},
+{"at":{"character":33,"line":1},"codeActions":[],"complete":{"items":10,"word":{"end":{"character":33,"line":1},"start":{"character":33,"line":1}}}},
 {"at":{"character":0,"line":2},"definition":{"file":null,"range":{"end":{"character":4,"line":2},"start":{"character":0,"line":2}}},"hover":{"contents":"```movement\nasks = connect ask\n```\nA connection to ask.\n\nHolds: `Check Response`, `Choose Response`, `Choose Response<pursue | hold | pass>`, `Correct Response`, `Draft Response`, `Form Response`, `Form Response<Company | Contact | Budget>`, `Provide Response` and 4 more\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":4,"line":2},"start":{"character":0,"line":2}}}},
 {"at":{"character":0,"line":4},"definition":null,"hover":null},
 {"at":{"character":38,"line":4},"codeActions":[],"complete":{"items":33,"word":{"end":{"character":38,"line":4},"start":{"character":38,"line":4}}}},
@@ -2425,9 +2425,9 @@
 {"construct": "a Review question — an acknowledgement awaited before the work carries on",
 "probes": [
 {"at":{"character":0,"line":1},"definition":{"file":null,"range":{"end":{"character":4,"line":1},"start":{"character":0,"line":1}}},"hover":{"contents":"```movement\nteam = connect slack\n```\nYour slack account, signed in with the credential team_workspace.\n\nHolds: Action, Channel, File, Interaction, Message, Reaction, User\n\nListen to: Messages, Interactions, Reactions, Replies\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":4,"line":1},"start":{"character":0,"line":1}}}},
-{"at":{"character":27,"line":1},"codeActions":[],"complete":{"items":10,"word":{"end":{"character":27,"line":1},"start":{"character":27,"line":1}}}},
+{"at":{"character":33,"line":1},"codeActions":[],"complete":{"items":10,"word":{"end":{"character":33,"line":1},"start":{"character":33,"line":1}}}},
 {"at":{"character":0,"line":2},"definition":{"file":null,"range":{"end":{"character":3,"line":2},"start":{"character":0,"line":2}}},"hover":{"contents":"```movement\ncrm = connect attio\n```\nYour attio account, signed in with the credential acme_main.\n\nHolds: Comment, Companies, `Companies List`, CompanyChange, DealChange, Deals, File, FundChange and 9 more\n\nListen to: Changes\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":3,"line":2},"start":{"character":0,"line":2}}}},
-{"at":{"character":27,"line":2},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":27,"line":2},"start":{"character":27,"line":2}}}},
+{"at":{"character":33,"line":2},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":33,"line":2},"start":{"character":33,"line":2}}}},
 {"at":{"character":0,"line":3},"definition":{"file":null,"range":{"end":{"character":4,"line":3},"start":{"character":0,"line":3}}},"hover":{"contents":"```movement\nasks = connect ask\n```\nA connection to ask.\n\nHolds: `Check Response`, `Choose Response`, `Choose Response<pursue | hold | pass>`, `Correct Response`, `Draft Response`, `Form Response`, `Form Response<Company | Contact | Budget>`, `Provide Response` and 4 more\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":4,"line":3},"start":{"character":0,"line":3}}}},
 {"at":{"character":0,"line":5},"definition":null,"hover":null},
 {"at":{"character":42,"line":5},"codeActions":[],"complete":{"items":33,"word":{"end":{"character":42,"line":5},"start":{"character":42,"line":5}}}},
@@ -2458,7 +2458,7 @@
 {"construct": "a Draft question — a structured artifact composed by a person, awaited",
 "probes": [
 {"at":{"character":0,"line":1},"definition":{"file":null,"range":{"end":{"character":4,"line":1},"start":{"character":0,"line":1}}},"hover":{"contents":"```movement\nteam = connect slack\n```\nYour slack account, signed in with the credential team_workspace.\n\nHolds: Action, Channel, File, Interaction, Message, Reaction, User\n\nListen to: Messages, Interactions, Reactions, Replies\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":4,"line":1},"start":{"character":0,"line":1}}}},
-{"at":{"character":27,"line":1},"codeActions":[],"complete":{"items":10,"word":{"end":{"character":27,"line":1},"start":{"character":27,"line":1}}}},
+{"at":{"character":33,"line":1},"codeActions":[],"complete":{"items":10,"word":{"end":{"character":33,"line":1},"start":{"character":33,"line":1}}}},
 {"at":{"character":0,"line":2},"definition":{"file":null,"range":{"end":{"character":4,"line":2},"start":{"character":0,"line":2}}},"hover":{"contents":"```movement\nasks = connect ask\n```\nA connection to ask.\n\nHolds: `Check Response`, `Choose Response`, `Choose Response<pursue | hold | pass>`, `Correct Response`, `Draft Response`, `Form Response`, `Form Response<Company | Contact | Budget>`, `Provide Response` and 4 more\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":4,"line":2},"start":{"character":0,"line":2}}}},
 {"at":{"character":0,"line":4},"definition":null,"hover":null},
 {"at":{"character":40,"line":4},"codeActions":[],"complete":{"items":33,"word":{"end":{"character":40,"line":4},"start":{"character":40,"line":4}}}},
@@ -2488,7 +2488,7 @@
 {"construct": "a Correct question whose Rows are written as literal objects",
 "probes": [
 {"at":{"character":0,"line":1},"definition":{"file":null,"range":{"end":{"character":4,"line":1},"start":{"character":0,"line":1}}},"hover":{"contents":"```movement\nteam = connect slack\n```\nYour slack account, signed in with the credential team_workspace.\n\nHolds: Action, Channel, File, Interaction, Message, Reaction, User\n\nListen to: Messages, Interactions, Reactions, Replies\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":4,"line":1},"start":{"character":0,"line":1}}}},
-{"at":{"character":27,"line":1},"codeActions":[],"complete":{"items":10,"word":{"end":{"character":27,"line":1},"start":{"character":27,"line":1}}}},
+{"at":{"character":33,"line":1},"codeActions":[],"complete":{"items":10,"word":{"end":{"character":33,"line":1},"start":{"character":33,"line":1}}}},
 {"at":{"character":0,"line":2},"definition":{"file":null,"range":{"end":{"character":4,"line":2},"start":{"character":0,"line":2}}},"hover":{"contents":"```movement\nasks = connect ask\n```\nA connection to ask.\n\nHolds: `Check Response`, `Choose Response`, `Choose Response<pursue | hold | pass>`, `Correct Response`, `Draft Response`, `Form Response`, `Form Response<Company | Contact | Budget>`, `Provide Response` and 4 more\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":4,"line":2},"start":{"character":0,"line":2}}}},
 {"at":{"character":0,"line":4},"definition":null,"hover":null},
 {"at":{"character":37,"line":4},"codeActions":[],"complete":{"items":33,"word":{"end":{"character":37,"line":4},"start":{"character":37,"line":4}}}},
@@ -2523,7 +2523,7 @@
 {"construct": "a Form question collecting several named fields at once, one of them read back by name",
 "probes": [
 {"at":{"character":0,"line":1},"definition":{"file":null,"range":{"end":{"character":4,"line":1},"start":{"character":0,"line":1}}},"hover":{"contents":"```movement\nteam = connect slack\n```\nYour slack account, signed in with the credential team_workspace.\n\nHolds: Action, Channel, File, Interaction, Message, Reaction, User\n\nListen to: Messages, Interactions, Reactions, Replies\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":4,"line":1},"start":{"character":0,"line":1}}}},
-{"at":{"character":27,"line":1},"codeActions":[],"complete":{"items":10,"word":{"end":{"character":27,"line":1},"start":{"character":27,"line":1}}}},
+{"at":{"character":33,"line":1},"codeActions":[],"complete":{"items":10,"word":{"end":{"character":33,"line":1},"start":{"character":33,"line":1}}}},
 {"at":{"character":0,"line":2},"definition":{"file":null,"range":{"end":{"character":4,"line":2},"start":{"character":0,"line":2}}},"hover":{"contents":"```movement\nasks = connect ask\n```\nA connection to ask.\n\nHolds: `Check Response`, `Choose Response`, `Choose Response<pursue | hold | pass>`, `Correct Response`, `Draft Response`, `Form Response`, `Form Response<Company | Contact | Budget>`, `Provide Response` and 4 more\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":4,"line":2},"start":{"character":0,"line":2}}}},
 {"at":{"character":0,"line":4},"definition":null,"hover":null},
 {"at":{"character":44,"line":4},"codeActions":[],"complete":{"items":33,"word":{"end":{"character":44,"line":4},"start":{"character":44,"line":4}}}},
@@ -2553,9 +2553,9 @@
 {"construct": "the pick idiom — Choose over options gathered at run time, the answer filtering the graph back to the record",
 "probes": [
 {"at":{"character":0,"line":1},"definition":{"file":null,"range":{"end":{"character":3,"line":1},"start":{"character":0,"line":1}}},"hover":{"contents":"```movement\ncrm = connect attio\n```\nYour attio account, signed in with the credential acme_main.\n\nHolds: Comment, Companies, `Companies List`, CompanyChange, DealChange, Deals, File, FundChange and 9 more\n\nListen to: Changes\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":3,"line":1},"start":{"character":0,"line":1}}}},
-{"at":{"character":27,"line":1},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":27,"line":1},"start":{"character":27,"line":1}}}},
+{"at":{"character":33,"line":1},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":33,"line":1},"start":{"character":33,"line":1}}}},
 {"at":{"character":0,"line":2},"definition":{"file":null,"range":{"end":{"character":4,"line":2},"start":{"character":0,"line":2}}},"hover":{"contents":"```movement\nteam = connect slack\n```\nYour slack account, signed in with the credential team_workspace.\n\nHolds: Action, Channel, File, Interaction, Message, Reaction, User\n\nListen to: Messages, Interactions, Reactions, Replies\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":4,"line":2},"start":{"character":0,"line":2}}}},
-{"at":{"character":27,"line":2},"codeActions":[],"complete":{"items":10,"word":{"end":{"character":27,"line":2},"start":{"character":27,"line":2}}}},
+{"at":{"character":33,"line":2},"codeActions":[],"complete":{"items":10,"word":{"end":{"character":33,"line":2},"start":{"character":33,"line":2}}}},
 {"at":{"character":0,"line":3},"definition":{"file":null,"range":{"end":{"character":4,"line":3},"start":{"character":0,"line":3}}},"hover":{"contents":"```movement\nasks = connect ask\n```\nA connection to ask.\n\nHolds: `Check Response`, `Choose Response`, `Choose Response<pursue | hold | pass>`, `Correct Response`, `Draft Response`, `Form Response`, `Form Response<Company | Contact | Budget>`, `Provide Response` and 4 more\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":4,"line":3},"start":{"character":0,"line":3}}}},
 {"at":{"character":0,"line":5},"definition":null,"hover":null},
 {"at":{"character":41,"line":5},"codeActions":[],"complete":{"items":33,"word":{"end":{"character":41,"line":5},"start":{"character":41,"line":5}}}},
@@ -2603,7 +2603,7 @@
 {"construct": "a host link: a form from @lf/forms, its Url sent, its typed submission raced against a sleep",
 "probes": [
 {"at":{"character":0,"line":1},"definition":{"file":null,"range":{"end":{"character":4,"line":1},"start":{"character":0,"line":1}}},"hover":{"contents":"```movement\nteam = connect slack\n```\nYour slack account, signed in with the credential team_workspace.\n\nHolds: Action, Channel, File, Interaction, Message, Reaction, User\n\nListen to: Messages, Interactions, Reactions, Replies\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":4,"line":1},"start":{"character":0,"line":1}}}},
-{"at":{"character":28,"line":1},"codeActions":[],"complete":{"items":10,"word":{"end":{"character":28,"line":1},"start":{"character":28,"line":1}}}},
+{"at":{"character":34,"line":1},"codeActions":[],"complete":{"items":10,"word":{"end":{"character":34,"line":1},"start":{"character":34,"line":1}}}},
 {"at":{"character":0,"line":2},"definition":{"file":null,"range":{"end":{"character":5,"line":2},"start":{"character":0,"line":2}}},"hover":{"contents":"```movement\nforms = connect forms\n```\nA form at a link, answered once. A write makes it; the node the write names in Fields says what it asks, and its answer lands on the form’s Submissions, typed by that node.\n\nA connection to forms.\n\nHolds: Submission\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":5,"line":2},"start":{"character":0,"line":2}}}},
 {"at":{"character":0,"line":4},"definition":null,"hover":null},
 {"at":{"character":2,"line":5},"definition":null,"hover":null},
@@ -2644,9 +2644,9 @@
 {"construct": "a form whose answer is typed by a node, its fields read after the await",
 "probes": [
 {"at":{"character":0,"line":1},"definition":{"file":null,"range":{"end":{"character":4,"line":1},"start":{"character":0,"line":1}}},"hover":{"contents":"```movement\nteam = connect slack\n```\nYour slack account, signed in with the credential team_workspace.\n\nHolds: Action, Channel, File, Interaction, Message, Reaction, User\n\nListen to: Messages, Interactions, Reactions, Replies\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":4,"line":1},"start":{"character":0,"line":1}}}},
-{"at":{"character":28,"line":1},"codeActions":[],"complete":{"items":10,"word":{"end":{"character":28,"line":1},"start":{"character":28,"line":1}}}},
+{"at":{"character":34,"line":1},"codeActions":[],"complete":{"items":10,"word":{"end":{"character":34,"line":1},"start":{"character":34,"line":1}}}},
 {"at":{"character":0,"line":2},"definition":{"file":null,"range":{"end":{"character":3,"line":2},"start":{"character":0,"line":2}}},"hover":{"contents":"```movement\ncrm = connect attio\n```\nYour attio account, signed in with the credential acme_main.\n\nHolds: Comment, Companies, `Companies List`, CompanyChange, DealChange, Deals, File, FundChange and 9 more\n\nListen to: Changes\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":3,"line":2},"start":{"character":0,"line":2}}}},
-{"at":{"character":28,"line":2},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":28,"line":2},"start":{"character":28,"line":2}}}},
+{"at":{"character":34,"line":2},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":34,"line":2},"start":{"character":34,"line":2}}}},
 {"at":{"character":0,"line":3},"definition":{"file":null,"range":{"end":{"character":5,"line":3},"start":{"character":0,"line":3}}},"hover":{"contents":"```movement\nforms = connect forms\n```\nA form at a link, answered once. A write makes it; the node the write names in Fields says what it asks, and its answer lands on the form’s Submissions, typed by that node.\n\nA connection to forms.\n\nHolds: Submission\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":5,"line":3},"start":{"character":0,"line":3}}}},
 {"at":{"character":0,"line":5},"definition":null,"hover":null},
 {"at":{"character":2,"line":6},"definition":null,"hover":null},
@@ -2684,7 +2684,7 @@
 {"construct": "a named function called with the answer a form returned",
 "probes": [
 {"at":{"character":0,"line":1},"definition":{"file":null,"range":{"end":{"character":3,"line":1},"start":{"character":0,"line":1}}},"hover":{"contents":"```movement\ncrm = connect attio\n```\nYour attio account, signed in with the credential acme_main.\n\nHolds: Comment, Companies, `Companies List`, CompanyChange, DealChange, Deals, File, FundChange and 9 more\n\nListen to: Changes\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":3,"line":1},"start":{"character":0,"line":1}}}},
-{"at":{"character":28,"line":1},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":28,"line":1},"start":{"character":28,"line":1}}}},
+{"at":{"character":34,"line":1},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":34,"line":1},"start":{"character":34,"line":1}}}},
 {"at":{"character":0,"line":2},"definition":{"file":null,"range":{"end":{"character":5,"line":2},"start":{"character":0,"line":2}}},"hover":{"contents":"```movement\nforms = connect forms\n```\nA form at a link, answered once. A write makes it; the node the write names in Fields says what it asks, and its answer lands on the form’s Submissions, typed by that node.\n\nA connection to forms.\n\nHolds: Submission\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":5,"line":2},"start":{"character":0,"line":2}}}},
 {"at":{"character":0,"line":4},"definition":null,"hover":null},
 {"at":{"character":2,"line":5},"definition":null,"hover":null},
@@ -2718,7 +2718,7 @@
 {"construct": "declare-once (a described node declaration as the extract shape, `?...e` spread writes)",
 "probes": [
 {"at":{"character":0,"line":1},"definition":{"file":null,"range":{"end":{"character":3,"line":1},"start":{"character":0,"line":1}}},"hover":{"contents":"```movement\ncrm = connect attio\n```\nYour attio account, signed in with the credential acme.\n\nHolds: Comment, Companies, `Companies List`, CompanyChange, DealChange, Deals, File, FundChange and 9 more\n\nListen to: Changes\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":3,"line":1},"start":{"character":0,"line":1}}}},
-{"at":{"character":27,"line":1},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":27,"line":1},"start":{"character":27,"line":1}}}},
+{"at":{"character":33,"line":1},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":33,"line":1},"start":{"character":33,"line":1}}}},
 {"at":{"character":0,"line":3},"definition":{"file":null,"range":{"end":{"character":5,"line":3},"start":{"character":0,"line":3}}},"hover":{"contents":"```movement\nrules: text\n```\nSet on line 4.\n\n[Docs](<docs>/reference#top-level)","range":{"end":{"character":5,"line":3},"start":{"character":0,"line":3}}}},
 {"at":{"character":0,"line":5},"definition":null,"hover":null},
 {"at":{"character":2,"line":6},"definition":null,"hover":null},
@@ -2752,7 +2752,7 @@
 {"construct": "sections from a type (List.groupBy over dict rows, members in declared order, an index per member)",
 "probes": [
 {"at":{"character":0,"line":1},"definition":{"file":null,"range":{"end":{"character":4,"line":1},"start":{"character":0,"line":1}}},"hover":{"contents":"```movement\nchat = connect slack\n```\nYour slack account, signed in with the credential team_workspace.\n\nHolds: Action, Channel, File, Interaction, Message, Reaction, User\n\nListen to: Messages, Interactions, Reactions, Replies\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":4,"line":1},"start":{"character":0,"line":1}}}},
-{"at":{"character":27,"line":1},"codeActions":[],"complete":{"items":10,"word":{"end":{"character":27,"line":1},"start":{"character":27,"line":1}}}},
+{"at":{"character":33,"line":1},"codeActions":[],"complete":{"items":10,"word":{"end":{"character":33,"line":1},"start":{"character":33,"line":1}}}},
 {"at":{"character":0,"line":3},"definition":null,"hover":null},
 {"at":{"character":0,"line":5},"definition":null,"hover":null},
 {"at":{"character":2,"line":6},"definition":null,"hover":null},
@@ -2788,7 +2788,7 @@
 {"at":{"character":9,"line":1},"codeActions":[],"complete":{"items":63,"word":{"end":{"character":9,"line":1},"start":{"character":9,"line":1}}}},
 {"at":{"character":0,"line":2},"definition":{"file":null,"range":{"end":{"character":5,"line":2},"start":{"character":0,"line":2}}},"hover":{"contents":"```movement\ninbox = connect email\n```\nA connection to email.\n\nHolds: Attachment, Email\n\nListen to: Emails\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":5,"line":2},"start":{"character":0,"line":2}}}},
 {"at":{"character":0,"line":3},"definition":{"file":null,"range":{"end":{"character":3,"line":3},"start":{"character":0,"line":3}}},"hover":{"contents":"```movement\ncrm = connect attio\n```\nYour attio account, signed in with the credential acme.\n\nHolds: Comment, Companies, `Companies List`, CompanyChange, DealChange, Deals, File, FundChange and 9 more\n\nListen to: Changes\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":3,"line":3},"start":{"character":0,"line":3}}}},
-{"at":{"character":28,"line":3},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":28,"line":3},"start":{"character":28,"line":3}}}},
+{"at":{"character":34,"line":3},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":34,"line":3},"start":{"character":34,"line":3}}}},
 {"at":{"character":0,"line":5},"definition":null,"hover":null},
 {"at":{"character":40,"line":5},"codeActions":[],"complete":{"items":4,"word":{"end":{"character":40,"line":5},"start":{"character":40,"line":5}}}},
 {"at":{"character":2,"line":6},"definition":{"file":null,"range":{"end":{"character":7,"line":6},"start":{"character":2,"line":6}}},"hover":{"contents":"```movement\nlines: list of text\n```\nSet on line 7.\n\n[Docs](<docs>/reference#top-level)","range":{"end":{"character":7,"line":6},"start":{"character":2,"line":6}}}},
@@ -2812,7 +2812,7 @@
 "probes": [
 {"at":{"character":0,"line":1},"definition":{"file":null,"range":{"end":{"character":5,"line":1},"start":{"character":0,"line":1}}},"hover":{"contents":"```movement\ninbox = connect email\n```\nA connection to email.\n\nHolds: Attachment, Email\n\nListen to: Emails\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":5,"line":1},"start":{"character":0,"line":1}}}},
 {"at":{"character":0,"line":2},"definition":{"file":null,"range":{"end":{"character":3,"line":2},"start":{"character":0,"line":2}}},"hover":{"contents":"```movement\ncrm = connect attio\n```\nYour attio account, signed in with the credential acme.\n\nHolds: Comment, Companies, `Companies List`, CompanyChange, DealChange, Deals, File, FundChange and 9 more\n\nListen to: Changes\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":3,"line":2},"start":{"character":0,"line":2}}}},
-{"at":{"character":28,"line":2},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":28,"line":2},"start":{"character":28,"line":2}}}},
+{"at":{"character":34,"line":2},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":34,"line":2},"start":{"character":34,"line":2}}}},
 {"at":{"character":0,"line":4},"definition":null,"hover":null},
 {"at":{"character":29,"line":4},"codeActions":[],"complete":{"items":4,"word":{"end":{"character":29,"line":4},"start":{"character":29,"line":4}}}},
 {"at":{"character":2,"line":5},"definition":null,"hover":null},
@@ -2835,7 +2835,7 @@
 {"at":{"character":9,"line":1},"codeActions":[],"complete":{"items":63,"word":{"end":{"character":9,"line":1},"start":{"character":9,"line":1}}}},
 {"at":{"character":0,"line":2},"definition":{"file":null,"range":{"end":{"character":5,"line":2},"start":{"character":0,"line":2}}},"hover":{"contents":"```movement\ninbox = connect email\n```\nA connection to email.\n\nHolds: Attachment, Email\n\nListen to: Emails\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":5,"line":2},"start":{"character":0,"line":2}}}},
 {"at":{"character":0,"line":3},"definition":{"file":null,"range":{"end":{"character":3,"line":3},"start":{"character":0,"line":3}}},"hover":{"contents":"```movement\ncrm = connect attio\n```\nYour attio account, signed in with the credential acme.\n\nHolds: Comment, Companies, `Companies List`, CompanyChange, DealChange, Deals, File, FundChange and 9 more\n\nListen to: Changes\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":3,"line":3},"start":{"character":0,"line":3}}}},
-{"at":{"character":28,"line":3},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":28,"line":3},"start":{"character":28,"line":3}}}},
+{"at":{"character":34,"line":3},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":34,"line":3},"start":{"character":34,"line":3}}}},
 {"at":{"character":0,"line":5},"definition":null,"hover":null},
 {"at":{"character":2,"line":6},"definition":null,"hover":null},
 {"at":{"character":2,"line":7},"definition":null,"hover":null},
@@ -2871,7 +2871,7 @@
 {"construct": "human-reviewed-intake (manual text/files → extract → write a Check question, race its Response against a sleep, gate the linked writes on the approval)",
 "probes": [
 {"at":{"character":0,"line":1},"definition":{"file":null,"range":{"end":{"character":3,"line":1},"start":{"character":0,"line":1}}},"hover":{"contents":"```movement\ncrm = connect attio\n```\nYour attio account, signed in with the credential acme.\n\nHolds: Comment, Companies, `Companies List`, CompanyChange, DealChange, Deals, File, FundChange and 9 more\n\nListen to: Changes\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":3,"line":1},"start":{"character":0,"line":1}}}},
-{"at":{"character":27,"line":1},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":27,"line":1},"start":{"character":27,"line":1}}}},
+{"at":{"character":33,"line":1},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":33,"line":1},"start":{"character":33,"line":1}}}},
 {"at":{"character":0,"line":2},"definition":{"file":null,"range":{"end":{"character":4,"line":2},"start":{"character":0,"line":2}}},"hover":{"contents":"```movement\nasks = connect ask\n```\nA connection to ask.\n\nHolds: `Check Response`, `Choose Response`, `Choose Response<pursue | hold | pass>`, `Correct Response`, `Draft Response`, `Form Response`, `Form Response<Company | Contact | Budget>`, `Provide Response` and 4 more\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":4,"line":2},"start":{"character":0,"line":2}}}},
 {"at":{"character":0,"line":4},"definition":null,"hover":null},
 {"at":{"character":2,"line":5},"definition":null,"hover":null},
@@ -2924,9 +2924,9 @@
 {"construct": "scheduled-digest (a cron tick fires; a bounded query composes lines; one message goes out)",
 "probes": [
 {"at":{"character":0,"line":1},"definition":{"file":null,"range":{"end":{"character":3,"line":1},"start":{"character":0,"line":1}}},"hover":{"contents":"```movement\ncrm = connect attio\n```\nYour attio account, signed in with the credential acme.\n\nHolds: Comment, Companies, `Companies List`, CompanyChange, DealChange, Deals, File, FundChange and 9 more\n\nListen to: Changes\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":3,"line":1},"start":{"character":0,"line":1}}}},
-{"at":{"character":28,"line":1},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":28,"line":1},"start":{"character":28,"line":1}}}},
+{"at":{"character":34,"line":1},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":34,"line":1},"start":{"character":34,"line":1}}}},
 {"at":{"character":0,"line":2},"definition":{"file":null,"range":{"end":{"character":4,"line":2},"start":{"character":0,"line":2}}},"hover":{"contents":"```movement\nchat = connect slack\n```\nYour slack account, signed in with the credential team_workspace.\n\nHolds: Action, Channel, File, Interaction, Message, Reaction, User\n\nListen to: Messages, Interactions, Reactions, Replies\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":4,"line":2},"start":{"character":0,"line":2}}}},
-{"at":{"character":28,"line":2},"codeActions":[],"complete":{"items":10,"word":{"end":{"character":28,"line":2},"start":{"character":28,"line":2}}}},
+{"at":{"character":34,"line":2},"codeActions":[],"complete":{"items":10,"word":{"end":{"character":34,"line":2},"start":{"character":34,"line":2}}}},
 {"at":{"character":0,"line":4},"definition":null,"hover":null},
 {"at":{"character":35,"line":4},"codeActions":[],"complete":{"items":237,"word":{"end":{"character":35,"line":4},"start":{"character":35,"line":4}}}},
 {"at":{"character":2,"line":5},"definition":{"file":null,"range":{"end":{"character":7,"line":5},"start":{"character":2,"line":5}}},"hover":{"contents":"```movement\nlines: list of text\n```\nSet on line 6.\n\n[Docs](<docs>/reference#top-level)","range":{"end":{"character":7,"line":5},"start":{"character":2,"line":5}}}},
@@ -2954,7 +2954,7 @@
 {"at":{"character":9,"line":1},"codeActions":[],"complete":{"items":63,"word":{"end":{"character":9,"line":1},"start":{"character":9,"line":1}}}},
 {"at":{"character":0,"line":2},"definition":{"file":null,"range":{"end":{"character":5,"line":2},"start":{"character":0,"line":2}}},"hover":{"contents":"```movement\ninbox = connect email\n```\nA connection to email.\n\nHolds: Attachment, Email\n\nListen to: Emails\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":5,"line":2},"start":{"character":0,"line":2}}}},
 {"at":{"character":0,"line":3},"definition":{"file":null,"range":{"end":{"character":3,"line":3},"start":{"character":0,"line":3}}},"hover":{"contents":"```movement\ncrm = connect attio\n```\nYour attio account, signed in with the credential acme.\n\nHolds: Comment, Companies, `Companies List`, CompanyChange, DealChange, Deals, File, FundChange and 9 more\n\nListen to: Changes\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":3,"line":3},"start":{"character":0,"line":3}}}},
-{"at":{"character":28,"line":3},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":28,"line":3},"start":{"character":28,"line":3}}}},
+{"at":{"character":34,"line":3},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":34,"line":3},"start":{"character":34,"line":3}}}},
 {"at":{"character":0,"line":5},"definition":null,"hover":null},
 {"at":{"character":2,"line":6},"definition":null,"hover":null},
 {"at":{"character":2,"line":7},"definition":null,"hover":null},
@@ -3008,7 +3008,7 @@
 "probes": [
 {"at":{"character":0,"line":1},"definition":{"file":null,"range":{"end":{"character":5,"line":1},"start":{"character":0,"line":1}}},"hover":{"contents":"```movement\ninbox = connect email\n```\nA connection to email.\n\nHolds: Attachment, Email\n\nListen to: Emails\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":5,"line":1},"start":{"character":0,"line":1}}}},
 {"at":{"character":0,"line":2},"definition":{"file":null,"range":{"end":{"character":3,"line":2},"start":{"character":0,"line":2}}},"hover":{"contents":"```movement\ncrm = connect attio\n```\nYour attio account, signed in with the credential acme.\n\nHolds: Comment, Companies, `Companies List`, CompanyChange, DealChange, Deals, File, FundChange and 9 more\n\nListen to: Changes\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":3,"line":2},"start":{"character":0,"line":2}}}},
-{"at":{"character":28,"line":2},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":28,"line":2},"start":{"character":28,"line":2}}}},
+{"at":{"character":34,"line":2},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":34,"line":2},"start":{"character":34,"line":2}}}},
 {"at":{"character":0,"line":4},"definition":null,"hover":null},
 {"at":{"character":29,"line":4},"codeActions":[],"complete":{"items":4,"word":{"end":{"character":29,"line":4},"start":{"character":29,"line":4}}}},
 {"at":{"character":2,"line":5},"definition":{"file":null,"range":{"end":{"character":3,"line":5},"start":{"character":2,"line":5}}},"hover":{"contents":"```movement\nn: number\n```\nSet on line 6.\n\n[Docs](<docs>/reference#top-level)","range":{"end":{"character":3,"line":5},"start":{"character":2,"line":5}}}},
@@ -3051,7 +3051,7 @@
 "probes": [
 {"at":{"character":0,"line":1},"definition":{"file":null,"range":{"end":{"character":5,"line":1},"start":{"character":0,"line":1}}},"hover":{"contents":"```movement\ninbox = connect email\n```\nA connection to email.\n\nHolds: Attachment, Email\n\nListen to: Emails\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":5,"line":1},"start":{"character":0,"line":1}}}},
 {"at":{"character":0,"line":2},"definition":{"file":null,"range":{"end":{"character":3,"line":2},"start":{"character":0,"line":2}}},"hover":{"contents":"```movement\ncrm = connect attio\n```\nYour attio account, signed in with the credential acme.\n\nHolds: Comment, Companies, `Companies List`, CompanyChange, DealChange, Deals, File, FundChange and 9 more\n\nListen to: Changes\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":3,"line":2},"start":{"character":0,"line":2}}}},
-{"at":{"character":28,"line":2},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":28,"line":2},"start":{"character":28,"line":2}}}},
+{"at":{"character":34,"line":2},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":34,"line":2},"start":{"character":34,"line":2}}}},
 {"at":{"character":0,"line":4},"definition":null,"hover":null},
 {"at":{"character":29,"line":4},"codeActions":[],"complete":{"items":4,"word":{"end":{"character":29,"line":4},"start":{"character":29,"line":4}}}},
 {"at":{"character":2,"line":5},"definition":null,"hover":null},
@@ -3066,7 +3066,7 @@
 {"construct": "the commutative aggregates (count, only) over a captured relationship, plus Text.join/first/List.last/xs[n] each ordered inline with sort",
 "probes": [
 {"at":{"character":0,"line":1},"definition":{"file":null,"range":{"end":{"character":3,"line":1},"start":{"character":0,"line":1}}},"hover":{"contents":"```movement\ncrm = connect attio\n```\nYour attio account, signed in with the credential acme.\n\nHolds: Comment, Companies, `Companies List`, CompanyChange, DealChange, Deals, File, FundChange and 9 more\n\nListen to: Changes\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":3,"line":1},"start":{"character":0,"line":1}}}},
-{"at":{"character":26,"line":1},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":26,"line":1},"start":{"character":26,"line":1}}}},
+{"at":{"character":32,"line":1},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":32,"line":1},"start":{"character":32,"line":1}}}},
 {"at":{"character":0,"line":3},"definition":null,"hover":null},
 {"at":{"character":22,"line":3},"codeActions":[],"complete":{"items":65,"word":{"end":{"character":22,"line":3},"start":{"character":22,"line":3}}}},
 {"at":{"character":2,"line":4},"definition":{"file":null,"range":{"end":{"character":14,"line":3},"start":{"character":11,"line":3}}},"hover":{"contents":"```movement\nevt: CompanyChange (from crm)\n```\nA change to a company in Attio: what happened (`Kind`) and, on an update, which attribute (`Field`). Walk `Company` for the company as it is now.\n\nParameter of m.\n\nFields: Field: enum (Name | Domains | Description | Categories | Team Size | Team), Id: text, Kind: enum (created | updated | deleted), Record: text\n\nWalk on: Company → Companies\n\n[Docs](<docs>/reference#top-level)","range":{"end":{"character":5,"line":4},"start":{"character":2,"line":4}}}},
@@ -3092,7 +3092,7 @@
 {"construct": "List.sum/avg/min/max over a list of numbers",
 "probes": [
 {"at":{"character":0,"line":1},"definition":{"file":null,"range":{"end":{"character":3,"line":1},"start":{"character":0,"line":1}}},"hover":{"contents":"```movement\ncrm = connect attio\n```\nYour attio account, signed in with the credential acme.\n\nHolds: Comment, Companies, `Companies List`, CompanyChange, DealChange, Deals, File, FundChange and 9 more\n\nListen to: Changes\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":3,"line":1},"start":{"character":0,"line":1}}}},
-{"at":{"character":26,"line":1},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":26,"line":1},"start":{"character":26,"line":1}}}},
+{"at":{"character":32,"line":1},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":32,"line":1},"start":{"character":32,"line":1}}}},
 {"at":{"character":0,"line":3},"definition":null,"hover":null},
 {"at":{"character":22,"line":3},"codeActions":[],"complete":{"items":65,"word":{"end":{"character":22,"line":3},"start":{"character":22,"line":3}}}},
 {"at":{"character":2,"line":4},"definition":{"file":null,"range":{"end":{"character":14,"line":3},"start":{"character":11,"line":3}}},"hover":{"contents":"```movement\nevt: CompanyChange (from crm)\n```\nA change to a company in Attio: what happened (`Kind`) and, on an update, which attribute (`Field`). Walk `Company` for the company as it is now.\n\nParameter of m.\n\nFields: Field: enum (Name | Domains | Description | Categories | Team Size | Team), Id: text, Kind: enum (created | updated | deleted), Record: text\n\nWalk on: Company → Companies\n\n[Docs](<docs>/reference#top-level)","range":{"end":{"character":5,"line":4},"start":{"character":2,"line":4}}}},
@@ -3115,7 +3115,7 @@
 {"construct": "map/filter/reduce/List.groupBy/List.keyBy, a bare no-return map statement, and indexing a dict literal vs a List.groupBy result",
 "probes": [
 {"at":{"character":0,"line":1},"definition":{"file":null,"range":{"end":{"character":3,"line":1},"start":{"character":0,"line":1}}},"hover":{"contents":"```movement\ncrm = connect attio\n```\nYour attio account, signed in with the credential acme.\n\nHolds: Comment, Companies, `Companies List`, CompanyChange, DealChange, Deals, File, FundChange and 9 more\n\nListen to: Changes\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":3,"line":1},"start":{"character":0,"line":1}}}},
-{"at":{"character":27,"line":1},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":27,"line":1},"start":{"character":27,"line":1}}}},
+{"at":{"character":33,"line":1},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":33,"line":1},"start":{"character":33,"line":1}}}},
 {"at":{"character":0,"line":3},"definition":null,"hover":null},
 {"at":{"character":31,"line":3},"codeActions":[],"complete":{"items":33,"word":{"end":{"character":31,"line":3},"start":{"character":31,"line":3}}}},
 {"at":{"character":2,"line":4},"definition":{"file":null,"range":{"end":{"character":3,"line":4},"start":{"character":2,"line":4}}},"hover":{"contents":"```movement\nd: { bucket: text, packed: number }\n```\nSet on line 5.\n\n[Docs](<docs>/reference#top-level)","range":{"end":{"character":3,"line":4},"start":{"character":2,"line":4}}}},
@@ -3168,7 +3168,7 @@
 {"construct": "members in declaration order, the c ? a : b conditional, and unary minus",
 "probes": [
 {"at":{"character":0,"line":1},"definition":{"file":null,"range":{"end":{"character":4,"line":1},"start":{"character":0,"line":1}}},"hover":{"contents":"```movement\nchat = connect slack\n```\nYour slack account, signed in with the credential team_workspace.\n\nHolds: Action, Channel, File, Interaction, Message, Reaction, User\n\nListen to: Messages, Interactions, Reactions, Replies\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":4,"line":1},"start":{"character":0,"line":1}}}},
-{"at":{"character":27,"line":1},"codeActions":[],"complete":{"items":10,"word":{"end":{"character":27,"line":1},"start":{"character":27,"line":1}}}},
+{"at":{"character":33,"line":1},"codeActions":[],"complete":{"items":10,"word":{"end":{"character":33,"line":1},"start":{"character":33,"line":1}}}},
 {"at":{"character":0,"line":3},"definition":null,"hover":null},
 {"at":{"character":0,"line":5},"definition":null,"hover":null},
 {"at":{"character":30,"line":5},"codeActions":[],"complete":{"items":33,"word":{"end":{"character":30,"line":5},"start":{"character":30,"line":5}}}},
@@ -3195,7 +3195,7 @@
 {"at":{"character":0,"line":1},"definition":null,"hover":null},
 {"at":{"character":9,"line":1},"codeActions":[],"complete":{"items":63,"word":{"end":{"character":9,"line":1},"start":{"character":9,"line":1}}}},
 {"at":{"character":0,"line":2},"definition":{"file":null,"range":{"end":{"character":3,"line":2},"start":{"character":0,"line":2}}},"hover":{"contents":"```movement\ncrm = connect attio\n```\nYour attio account, signed in with the credential acme.\n\nHolds: Comment, Companies, `Companies List`, CompanyChange, DealChange, Deals, File, FundChange and 9 more\n\nListen to: Changes\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":3,"line":2},"start":{"character":0,"line":2}}}},
-{"at":{"character":27,"line":2},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":27,"line":2},"start":{"character":27,"line":2}}}},
+{"at":{"character":33,"line":2},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":33,"line":2},"start":{"character":33,"line":2}}}},
 {"at":{"character":0,"line":4},"definition":null,"hover":null},
 {"at":{"character":39,"line":4},"codeActions":[],"complete":{"items":33,"word":{"end":{"character":39,"line":4},"start":{"character":39,"line":4}}}},
 {"at":{"character":2,"line":5},"definition":{"file":null,"range":{"end":{"character":28,"line":4},"start":{"character":26,"line":4}}},"hover":{"contents":"```movement\ngo: Invocation (from manual)\n```\nParameter of Cut A Document.\n\nFields: Content: text, `Fired at`: date, `Run by (email)`: text, `Run by (name)`: text, Text: text\n\nWalk on: Files → File\n\n[Docs](<docs>/reference#top-level)","range":{"end":{"character":4,"line":5},"start":{"character":2,"line":5}}}},
@@ -3230,7 +3230,7 @@
 "probes": [
 {"at":{"character":0,"line":1},"definition":{"file":null,"range":{"end":{"character":5,"line":1},"start":{"character":0,"line":1}}},"hover":{"contents":"```movement\ninbox = connect email\n```\nA connection to email.\n\nHolds: Attachment, Email\n\nListen to: Emails\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":5,"line":1},"start":{"character":0,"line":1}}}},
 {"at":{"character":0,"line":2},"definition":{"file":null,"range":{"end":{"character":3,"line":2},"start":{"character":0,"line":2}}},"hover":{"contents":"```movement\ncrm = connect attio\n```\nYour attio account, signed in with the credential acme.\n\nHolds: Comment, Companies, `Companies List`, CompanyChange, DealChange, Deals, File, FundChange and 9 more\n\nListen to: Changes\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":3,"line":2},"start":{"character":0,"line":2}}}},
-{"at":{"character":28,"line":2},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":28,"line":2},"start":{"character":28,"line":2}}}},
+{"at":{"character":34,"line":2},"codeActions":[],"complete":{"items":0,"word":{"end":{"character":34,"line":2},"start":{"character":34,"line":2}}}},
 {"at":{"character":0,"line":4},"definition":null,"hover":null},
 {"at":{"character":29,"line":4},"codeActions":[],"complete":{"items":4,"word":{"end":{"character":29,"line":4},"start":{"character":29,"line":4}}}},
 {"at":{"character":2,"line":5},"definition":{"file":null,"range":{"end":{"character":7,"line":5},"start":{"character":2,"line":5}}},"hover":{"contents":"```movement\ntoday: date\n```\nSet on line 6.\n\n[Docs](<docs>/reference#top-level)","range":{"end":{"character":7,"line":5},"start":{"character":2,"line":5}}}},

@@ -18,8 +18,8 @@ const HANDBOOK = `## Forms
 \`@lf/forms\` asks a person for an answer the program's other systems cannot take: a form at a link, answered once. The link is under \`listen-fire serve\`, at lf.yaml's \`publicUrl\`.
 
 \`\`\`
-forms = connect forms
-mail = connect gmail using my_gmail
+forms = connect \`@lf/forms\`
+mail = connect \`@lf/gmail\` using my_gmail
 
 node Refund {
   Approve: <boolean>

@@ -102,33 +102,28 @@ fn credential_card(service: &Service, name: &str, key: &str) -> String {
 /// A name in one of `connect`'s two positions, which name the catalog's
 /// adapter and credential directly (no import binds them).
 pub(crate) enum ConnectPosition {
-    Adapter,
+    /// `own`: written `#name`, a module of the project's own.
+    Adapter { own: bool },
     Credential,
 }
 
 /// Which of `connect`'s positions a word starts in, from the line before it.
 pub(crate) fn connect_position(line_before: &str) -> Option<ConnectPosition> {
-    let words: Vec<&str> = line_before.trim_end_matches('`').split_whitespace().collect();
+    let before = line_before.trim_end_matches('`');
+    let own = before.ends_with('#');
+    let words: Vec<&str> = before.trim_end_matches('#').split_whitespace().collect();
     match words.as_slice() {
-        [.., "connect"] => Some(ConnectPosition::Adapter),
+        [.., "connect"] => Some(ConnectPosition::Adapter { own }),
         [.., "connect", _, "using"] => Some(ConnectPosition::Credential),
         _ => None,
     }
 }
 
-/// The catalog's key for a name written in `connect`'s adapter position (a
-/// package tag is read as the parser reads it).
-pub(crate) fn adapter_key(written: &str) -> &str {
-    written.strip_prefix("@lf/").unwrap_or(written)
-}
 
 /// The word's card when it is a catalog adapter or credential in a `connect`.
 fn connect_position_card(service: &Service, line_before: &str, name: &str) -> Option<String> {
     match connect_position(line_before)? {
-        ConnectPosition::Adapter => {
-            let key = adapter_key(name);
-            service.catalog.adapters.get(key).map(|_| adapter_card(service, name, key))
-        }
+        ConnectPosition::Adapter { own } => service.catalog.adapter_connected(name, own).map(|key| adapter_card(service, name, key)),
         ConnectPosition::Credential => service.catalog.credentials.get(name).map(|_| credential_card(service, name, name)),
     }
 }

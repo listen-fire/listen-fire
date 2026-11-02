@@ -274,7 +274,8 @@ pub fn listens(source: &str, catalog: &Catalog, language_version: &str) -> Resul
             }
             Statement::Assign(assign) => {
                 if let RValue::Construct { construct } = &assign.value {
-                    let adapter = aliases.get(&construct.callee).cloned().unwrap_or_else(|| construct.callee.clone());
+                    let written = aliases.get(&construct.callee).cloned().unwrap_or_else(|| construct.callee.clone());
+                    let adapter = catalog.snapshot.adapter_connected(&written, construct.own).map_or_else(|| written.clone(), str::to_string);
                     // The instance's schema, as the checker instantiates it: the credential by the name it is imported as.
                     let credential_arg = catalog.snapshot.adapter(&adapter).and_then(movement_parser::catalog::helpers::credential_arg_of).map_or_else(|| "credentials".to_string(), |arg| arg.name.clone());
                     let args: movement_parser::catalog::snapshot::Args = construct

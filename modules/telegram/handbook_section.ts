@@ -108,8 +108,8 @@ Put the bare \`Url\` in the message text as well, so the question is still answe
       construct: 'a Telegram url button that opens a form from @lf/forms, the run waiting on its submission inside a race with a sleep',
       status: 'runs',
       probe: `
-tg = connect telegram using team_telegram
-forms = connect forms
+tg = connect \`@lf/telegram\` using team_telegram
+forms = connect \`@lf/forms\`
 
 node Decision {
   Send: <boolean>

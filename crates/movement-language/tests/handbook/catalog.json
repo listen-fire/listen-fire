@@ -22,6 +22,7 @@
           }
         }
       },
+      "package": "@lf/email",
       "schemas": {
         "": {
           "positions": {
@@ -98,6 +99,7 @@
           "required": true
         }
       ],
+      "package": "@lf/attio",
       "schemas": {
         "acme": {
           "positions": {
@@ -3076,6 +3078,7 @@
           }
         }
       },
+      "package": "@lf/slack",
       "schemas": {
         "acme_slack": {
           "positions": {
@@ -4858,6 +4861,7 @@
     "ask": {
       "canFire": true,
       "constructionArgs": [],
+      "package": "@lf/ask",
       "schemas": {
         "": {
           "positions": {
@@ -5714,6 +5718,7 @@
         "paramFrom": "Message",
         "keys": {}
       },
+      "package": "@lf/telegram",
       "schemas": {
         "team_telegram": {
           "positions": {
@@ -5933,6 +5938,7 @@
           }
         }
       },
+      "package": "@lf/whatsapp",
       "schemas": {}
     },
     "system": {
@@ -5955,6 +5961,7 @@
           }
         }
       },
+      "package": "@lf/system",
       "schemas": {
         "": {
           "positions": {
@@ -6073,6 +6080,7 @@
           }
         }
       },
+      "package": "@lf/github",
       "schemas": {
         "my_github": {
           "positions": {
@@ -6582,6 +6590,7 @@
       "constructionArgs": [],
       "description": "A form at a link, answered once. A write makes it; the node the write names in Fields says what it asks, and its answer lands on the form’s Submissions, typed by that node.",
       "schemaShape": "introspected",
+      "package": "@lf/forms",
       "schemas": {
         "": {
           "positions": {

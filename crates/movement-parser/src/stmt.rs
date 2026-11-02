@@ -1493,7 +1493,7 @@ impl Parser {
                 _ => None,
             })
             .collect();
-        Ok(Some(RValue::Construct { construct: ConstructionCall { callee, args: plain, span, connect: false } }))
+        Ok(Some(RValue::Construct { construct: ConstructionCall { callee, args: plain, span, connect: false, own: false } }))
     }
 
     /// A zero-argument or otherwise unnamed invocation — `go = manual()`. It
@@ -1545,7 +1545,7 @@ impl Parser {
             return Ok(None);
         }
         self.pos = end;
-        Ok(Some(ConstructionCall { callee, args, span: self.span_between(save, end), connect: false }))
+        Ok(Some(ConstructionCall { callee, args, span: self.span_between(save, end), connect: false, own: false }))
     }
 
     // ── Traversal heads and blocks ──
@@ -3705,7 +3705,7 @@ impl Parser {
                     };
                     if at_stop {
                         self.pos = end;
-                        let construct = ConstructionCall { callee: name, args: Vec::new(), span, connect: false };
+                        let construct = ConstructionCall { callee: name, args: Vec::new(), span, connect: false, own: false };
                         return Ok(Some((RValue::Construct { construct }, span)));
                     }
                 }
@@ -4340,7 +4340,7 @@ impl Parser {
                     self.pos += 1;
                 }
             }
-            construct = Some(ConstructionCall { callee: instance.clone(), args, span: self.span_from(construct_start), connect: false });
+            construct = Some(ConstructionCall { callee: instance.clone(), args, span: self.span_from(construct_start), connect: false, own: false });
         }
         self.skip_inline_ws();
         let mut config = Vec::new();
@@ -4789,11 +4789,19 @@ impl Parser {
     fn parse_connect(&mut self) -> SResult<ConstructionCall> {
         let start = self.pos;
         self.pos += "connect".len();
-        self.skip_inline_ws();
-        let callee = self.read_name("the adapter after 'connect'")?;
-        // Written as an import's braces write it: the package tag names the
-        // adapter after the prefix, as `parse_import` reads it.
-        let callee = callee.strip_prefix(ADAPTER_PACKAGE_PREFIX).map_or(callee.clone(), str::to_string);
+        // Spaces only: a `#` here begins the module's name, not a comment
+        // (as one directly inside a hop's brackets begins a head).
+        while self.is(' ') || self.is('\t') {
+            self.pos += 1;
+        }
+        // A package's name (`` `@lf/github` ``), or `#` and the name of a
+        // module of the project's own (`#acme_crm`): the catalog resolves
+        // either by comparing, nothing here reads inside the name.
+        let own = self.is('#');
+        if own {
+            self.pos += 1;
+        }
+        let callee = self.read_name(if own { "the module's name after '#'" } else { "the adapter after 'connect'" })?;
         let mut args = Vec::new();
         self.skip_inline_ws();
         if self.at_word("using") {
@@ -4832,7 +4840,7 @@ impl Parser {
                 args.push(NamedArg { name: snake_case(&key.text), value: self.slot(raw, span), is_type: None });
             }
         }
-        Ok(ConstructionCall { callee, args, span: self.span_from(start), connect: true })
+        Ok(ConstructionCall { callee, args, span: self.span_from(start), connect: true, own })
     }
 
     /// An adapter is set up with `connect`; its construction
@@ -4843,7 +4851,7 @@ impl Parser {
         }
         let args: Vec<(&str, &str)> = construct.args.iter().map(|a| (a.name.as_str(), a.value.raw.trim())).collect();
         let text = crate::surface::phrase::connection(
-            &crate::surface::phrase::Connection { adapter: &construct.callee, args: &args, credential: Some("credentials") });
+            &crate::surface::phrase::Connection { adapter: &construct.callee, own: false, args: &args, credential: Some("credentials") });
         let end = self.pos;
         let message = format!("an adapter is set up with `{text}`");
         self.spelling(message, start, end, vec![(start, end, text)]);

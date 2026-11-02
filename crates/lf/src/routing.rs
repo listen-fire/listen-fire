@@ -199,6 +199,9 @@ pub fn listens_across(parsed: &[Rc<crate::sources::Parsed>], catalog: &Js) -> Li
         read.unwatched.extend(unplanned);
         listens_of(file, program, &scopes, plans, &mut read);
     }
+    for listen in &mut read.listens {
+        listen.adapter = crate::catalog::adapter_named(catalog, &listen.adapter);
+    }
     if let Some(Ok(catalog)) = &snapshot {
         for listen in &mut read.listens {
             listen.field_ids = field_ids_of(catalog, listen);

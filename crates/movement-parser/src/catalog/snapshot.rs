@@ -65,6 +65,21 @@ impl CatalogSnapshot {
         self.adapters.get(name).map(|a| &a.spec)
     }
 
+    /// The key of the adapter a `connect` names: `#name` (`own`) a module of
+    /// the project's own by its key; otherwise a package's name, the adapter
+    /// installed from it. Both compared whole, never cut.
+    pub fn adapter_connected<'s>(&'s self, written: &'s str, own: bool) -> Option<&'s str> {
+        if own {
+            return self.adapters.contains_key(written).then_some(written);
+        }
+        self.adapter_from_package(written)
+    }
+
+    /// The key of the adapter installed from `package`.
+    pub fn adapter_from_package(&self, package: &str) -> Option<&str> {
+        self.adapters.iter().find(|(_, a)| a.spec.package.as_deref() == Some(package)).map(|(key, _)| key.as_str())
+    }
+
     /// `credential(name)`, the legacy single-adapter form normalised.
     pub fn credential(&self, name: &str) -> Option<CredentialSpec> {
         Some(match self.credentials.get(name)? {

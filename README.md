@@ -12,8 +12,8 @@ With Listen-Fire you ask once. You tell your agent:
 It writes a program:
 
 ```
-gh   = connect github using my_github
-chat = connect slack using my_slack
+gh   = connect `@lf/github` using my_github
+chat = connect `@lf/slack` using my_slack
 
 function triage(t: <cron-[:Ticks]->>) {
   lines = gh-[n:Notifications WHERE n.Reason IN ["review_requested", "mention"] ORDER BY n.`Updated At` DESC]-> {

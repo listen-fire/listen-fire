@@ -182,8 +182,8 @@ A document a plugin downloaded comes back on its result (\`vcUrlRetrieval\`'s \`
       construct: 'the extraction call — extract(content, Shape, settings), then a per-record extractOne in map',
       status: 'runs',
       probe: `
-inbox = connect email
-crm   = connect attio using acme
+inbox = connect \`@lf/email\`
+crm   = connect \`@lf/attio\` using acme
 
 node Company: "each company named in this message" {
   name:    <text> "the company's name"
@@ -220,8 +220,8 @@ function \`Intake\`(m: <inbox-[:Emails]->>) {
       construct: 'merging an extracted record with its detail — { ...c, ...details } and graph<Shape> { ...c, ...details }',
       status: 'runs',
       probe: `
-inbox = connect email
-crm   = connect attio using acme
+inbox = connect \`@lf/email\`
+crm   = connect \`@lf/attio\` using acme
 
 node Company: "each company named in this message" {
   name:    <text> "the company's name"
@@ -273,8 +273,8 @@ function \`Intake\`(m: <inbox-[:Emails]->>) {
       construct: 'a <boolean> extraction field on extractOne, guarded then branched on directly with if',
       status: 'runs',
       probe: `
-inbox = connect email
-crm   = connect attio using acme
+inbox = connect \`@lf/email\`
+crm   = connect \`@lf/attio\` using acme
 
 node Lead: "the company this email is about" {
   name:      <text> "the company's name"
@@ -294,8 +294,8 @@ function \`Triage\`(m: <inbox-[:Emails]->>) {
       construct: 'the extraction call over a body and its files — a borrowed option type, a written set of values, a nested node written along its parent, and the source files attached',
       status: 'runs',
       probe: `
-inbox = connect email
-crm   = connect attio using acme
+inbox = connect \`@lf/email\`
+crm   = connect \`@lf/attio\` using acme
 
 type Thesis = <"Consumer" | "Infra" | "Health">
 
@@ -333,8 +333,8 @@ function \`Intake\`(m: <inbox-[:Emails]->>) {
       probe: `
 import { fetchUrl, research } from plugins
 
-inbox = connect email
-crm   = connect attio using acme
+inbox = connect \`@lf/email\`
+crm   = connect \`@lf/attio\` using acme
 
 node Company: "each company named in this message" {
   name:    <text> "the company's name"
@@ -377,7 +377,7 @@ function \`Enrich\`(m: <inbox-[:Emails]->>) {
       construct: 'a long document read with File.read, cut with Text.chunks, extracted per piece in map, merged into a typed empty graph by unique by, then written',
       status: 'runs',
       probe: `
-crm  = connect attio using acme
+crm  = connect \`@lf/attio\` using acme
 
 node Company: "each company named" {
   name:    <text> "the company's name"
@@ -416,8 +416,8 @@ listen to manual-[:Invocations]-> fire \`Intake Documents\`
       probe: `
 import { fetchUrl, research, vcUrlRetrieval } from plugins
 
-inbox = connect email
-crm   = connect attio using acme
+inbox = connect \`@lf/email\`
+crm   = connect \`@lf/attio\` using acme
 
 function \`Enrich\`(m: <inbox-[:Emails]->>) {
   linked = vcUrlRetrieval(m.Body)
@@ -437,8 +437,8 @@ function \`Enrich\`(m: <inbox-[:Emails]->>) {
       construct: 'extraction call — an inline shape, only around a nested call, a walk spread into the content, and enrichment in map with a plugin call',
       status: 'runs',
       probe: `
-inbox = connect email
-crm   = connect attio using acme
+inbox = connect \`@lf/email\`
+crm   = connect \`@lf/attio\` using acme
 
 import { fetchUrl } from plugins
 
@@ -471,8 +471,8 @@ function \`Intake\`(m: <inbox-[:Emails]->>) {
       construct: 'extractOne(content, Shape, settings) — the single record or absent, handled, nested, and enriching each record in map',
       status: 'runs',
       probe: `
-inbox = connect email
-crm   = connect attio using acme
+inbox = connect \`@lf/email\`
+crm   = connect \`@lf/attio\` using acme
 
 node Company: "each company named in this message" {
   name:      <text> "the company's name"

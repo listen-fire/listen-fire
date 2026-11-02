@@ -10,7 +10,7 @@ export const SYSTEM_MANIFEST: AdapterManifest = {
   adapterType: SYSTEM_ADAPTER_TYPE,
   displayName: 'Listen-Fire',
   description:
-    'The host itself, as a source: a run failed or paused, a wait lost its record, a release was applied. Bundled with listen-fire, but connected like any module (`listen-fire connect @lf/system`, then `sys = connect system`); it needs no credentials.',
+    'The host itself, as a source: a run failed or paused, a wait lost its record, a release was applied. Bundled with listen-fire, but connected like any module (`listen-fire connect @lf/system`, then ``sys = connect `@lf/system` ``); it needs no credentials.',
   authoringHints:
     'Every event arrives on `Events`; narrow it by `Kind` (`sys-[e:Events WHERE e.Kind == "Run Failed"]->`). Every event carries `Automation`, `Automation Id`, `Run Id`, `Version`, `Reason`, `Url` and `At`. A program is never told about its own listen’s failures.',
   handbookSection: SYSTEM_HANDBOOK_SECTION,

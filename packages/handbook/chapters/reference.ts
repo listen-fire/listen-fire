@@ -14,9 +14,9 @@ import { fetchUrl } from plugins              # functions the platform ships, ca
 import { \`Log Lead\`, Lead } from "lib/intake"  # exported declarations, by file path
 import { \`Files Out\` as send } from "lib/out"  # rename on import with: as
 
-inbox = connect email                          # a system by its name; no credential
-crm   = connect attio using acme_main          # with a stored connection, by its saved name
-crm   = connect attio using acme_main { dryRun: true }   # dryRun is universal
+inbox = connect \`@lf/email\`                          # a system by its name; no credential
+crm   = connect \`@lf/attio\` using acme_main          # with a stored connection, by its saved name
+crm   = connect \`@lf/attio\` using acme_main { dryRun: true }   # dryRun is universal
 
 prompt = "the company this email is about"     # file-scope binding
 

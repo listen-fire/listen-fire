@@ -76,11 +76,31 @@ const CREDENTIAL_ADAPTERS: Record<string, string> = {
   my_slack: 'slack',
 };
 
+/**
+ * The package each captured adapter is installed from, which a `connect`
+ * names it by. The run host's units (`manual`, `cron`) are always connected
+ * and come from no package.
+ */
+const CAPTURED_PACKAGES: Record<string, string> = {
+  email: '@lf/email',
+  attio: '@lf/attio',
+  slack: '@lf/slack',
+  ask: '@lf/ask',
+  telegram: '@lf/telegram',
+  whatsapp: '@lf/whatsapp',
+  system: '@lf/system',
+  github: '@lf/github',
+  forms: '@lf/forms',
+};
+
 /** The snapshot a run of any example would be handed. */
 export const HANDBOOK_CATALOG: CatalogSnapshot = mockCatalogSnapshot({
   adapters: {
     ...Object.fromEntries(
-      CAPTURED_ADAPTERS.map((adapter) => [adapter, { ...capturedSpecs[adapter], schema: capturedSchemas[adapter] }]),
+      CAPTURED_ADAPTERS.map((adapter) => [
+        adapter,
+        { ...capturedSpecs[adapter], ...(CAPTURED_PACKAGES[adapter] !== undefined ? { package: CAPTURED_PACKAGES[adapter] } : {}), schema: capturedSchemas[adapter] },
+      ]),
     ),
     kg: HANDBOOK_KG_SPEC,
   },

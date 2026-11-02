@@ -37,7 +37,7 @@ listen to hiring-[t:Tables WHERE t.Name == "Candidates"]->-[c:Changes WHERE exis
 
 It fires when Stage comes to be Interview, by an edit or on a row created at it (no \`Previous\`), and never while it stays there. A listen narrowed to one table fires that table's changes (\`Candidates Change\`), whose rows are typed by the table's fields; a function over every table's changes (\`<hiring-[:Change]->>\`) takes them too, reading only what every row has.
 
-A connection started at its base (\`connect airtable using … { base: "Hiring" }\`) begins at that base's tables, so its listens start at \`Tables\`.
+A connection started at its base (\`\`connect \`@lf/airtable\` using … { base: "Hiring" }\`\`) begins at that base's tables, so its listens start at \`Tables\`.
 
 ### a-renamed-table
 

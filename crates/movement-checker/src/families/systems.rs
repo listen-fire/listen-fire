@@ -127,7 +127,7 @@ impl Checker<'_> {
         {
             self.report(
                 codes::CONSTRUCT_MISSING_CRED,
-                format!("'{0}' needs a credential to connect with: 'connect {0} using <credential>'", construct.callee),
+                format!("'{}' needs a credential to connect with: 'connect {} using <credential>'", construct.callee, written_as(&construct.callee, construct.own)),
                 construct.span,
             );
         }
@@ -146,11 +146,15 @@ impl Checker<'_> {
     }
 
     /// The adapter a construction names, its failure reported: one an import
-    /// binds, else, written with `connect`, the catalog's adapter of that key.
-    /// `connect`'s adapter is a position of its own, as a type is in
-    /// TypeScript, so a binding of the same name does not hide it.
+    /// binds, else, written with `connect`, the catalog's adapter that name
+    /// compares to. `connect`'s adapter is a position of its own, as a type is
+    /// in TypeScript, so a binding of the same name does not hide it.
     fn constructed_adapter(&mut self, construct: &ConstructionCall, scope: ScopeId) -> Option<String> {
         if let Some(adapter) = self.connected_adapter(construct, scope) {
+            let imported = matches!(self.scopes.resolve(scope, &construct.callee), Resolution::Found(id) if self.scopes.symbol(id).kind == SymbolKind::Adapter);
+            if !imported && self.adapter_spelling(&adapter) != (construct.callee.clone(), construct.own) {
+                self.report_connect_spelling(construct, &adapter);
+            }
             return Some(adapter);
         }
         let resolution = self.scopes.resolve(scope, &construct.callee);
@@ -164,7 +168,7 @@ impl Checker<'_> {
         }
         let Some(symbol) = found else {
             if construct.connect && matches!(resolution, Resolution::Unknown) {
-                self.report_unknown_adapter(&construct.callee, construct.span);
+                self.report_unknown_adapter(construct);
             } else {
                 self.report_resolution_failure(&construct.callee, construct.span, resolution);
             }
@@ -182,7 +186,9 @@ impl Checker<'_> {
     }
 
     /// The adapter a construction names, when it names one:
-    /// `constructed_adapter` without the reports, for the typing pass.
+    /// `constructed_adapter` without the reports, for the typing pass. A
+    /// `connect` that names a module the way it is not named (a package's
+    /// key, `#` on a package) still resolves, so its refusal is its only error.
     pub(crate) fn connected_adapter(&self, construct: &ConstructionCall, scope: ScopeId) -> Option<String> {
         let found = match self.scopes.resolve(scope, &construct.callee) {
             Resolution::Found(id) => Some(self.scopes.symbol(id)),
@@ -193,26 +199,74 @@ impl Checker<'_> {
         {
             return Some(symbol.imported_name.clone().unwrap_or_else(|| construct.callee.clone()));
         }
-        let unit = found.is_some_and(|s| s.unit);
-        (construct.connect && !unit && self.catalog.adapter(&construct.callee).is_some()).then(|| construct.callee.clone())
+        if !construct.connect || found.is_some_and(|s| s.unit) {
+            return None;
+        }
+        let written = &construct.callee;
+        self.catalog
+            .adapter_connected(written, construct.own)
+            .or_else(|| self.catalog.adapter(written).is_some().then_some(written.as_str()))
+            .map(str::to_string)
+    }
+
+    /// How `connect` names an adapter, as (name, `#`): a package module by
+    /// its package's name, a module of the project's own as `#` and its key.
+    pub fn adapter_spelling(&self, adapter: &str) -> (String, bool) {
+        match self.catalog.adapter(adapter).and_then(|a| a.package.clone()) {
+            Some(package) => (package, false),
+            None => (adapter.to_string(), true),
+        }
+    }
+
+    /// An adapter as `connect` writes it, for a message (`` `@lf/attio` ``, `#acme_crm`).
+    pub fn adapter_written(&self, adapter: &str) -> String {
+        let (name, own) = self.adapter_spelling(adapter);
+        written_as(&name, own)
+    }
+
+    /// `connect github` for a module installed from a package, `connect
+    /// acme_crm` for one of the project's own, `` connect #`@lf/x` ``: one
+    /// spelling per module, written as the fix.
+    fn report_connect_spelling(&mut self, construct: &ConstructionCall, adapter: &str) {
+        let text = self.connect_text(construct, adapter);
+        let written = if construct.own { format!("#{}", construct.callee) } else { construct.callee.clone() };
+        let message = match self.adapter_spelling(adapter) {
+            (package, false) => format!("'{written}' is installed from the package {package}, and a package module is connected by its package name: `{text}`"),
+            (_, true) => format!("'{written}' is a module of this project's own, connected by '#' and its name: `{text}`"),
+        };
+        let mut diagnostic = Diagnostic::error(codes::NAME_UNRESOLVED, message, construct.span);
+        diagnostic.fix = Some(json!({ "edits": [{ "span": construct.span, "text": text }] }));
+        self.push(diagnostic);
+    }
+
+    /// The `connect` that writes `construct` with `adapter` named as `connect` names it.
+    fn connect_text(&self, construct: &ConstructionCall, adapter: &str) -> String {
+        let (name, own) = self.adapter_spelling(adapter);
+        let credential = self.catalog.adapter(adapter).and_then(credential_arg_of).map_or("credentials".to_string(), |a| a.name.clone());
+        let args: Vec<(&str, &str)> = construct.args.iter().map(|a| (a.name.as_str(), a.value.raw.trim())).collect();
+        connection(&Connection { adapter: &name, own, args: &args, credential: Some(&credential) })
     }
 
     /// `connect x` where no adapter is called `x`: the adapters there are,
-    /// the closest named first.
-    fn report_unknown_adapter(&mut self, written: &str, span: Span) {
+    /// each as `connect` names it, the closest first.
+    fn report_unknown_adapter(&mut self, construct: &ConstructionCall) {
         let units = movement_parser::version::RUN_HOST_UNITS;
-        let names: Vec<String> = self.catalog.adapters.keys().filter(|k| !units.contains(&k.as_str())).cloned().collect();
-        let hint = closest_by_edit_distance(written, &names).map(|n| format!(" — did you mean '{n}'?")).unwrap_or_default();
-        let listed = if names.is_empty() { "none".to_string() } else { names.join(", ") };
-        self.report(codes::NAME_UNRESOLVED, format!("'{written}' is no adapter here{hint} (the adapters: {listed})"), span);
+        let keys: Vec<String> = self.catalog.adapters.keys().filter(|k| !units.contains(&k.as_str())).cloned().collect();
+        let spellings: Vec<(String, String)> = keys.iter().map(|k| (self.adapter_spelling(k).0, self.adapter_written(k))).collect();
+        let names: Vec<String> = spellings.iter().map(|(name, _)| name.clone()).collect();
+        let hint = closest_by_edit_distance(&construct.callee, &names)
+            .and_then(|c| spellings.iter().find(|(name, _)| name == c))
+            .map(|(_, written)| format!(" — did you mean {written}?"))
+            .unwrap_or_default();
+        let listed = if spellings.is_empty() { "none".to_string() } else { spellings.iter().map(|(_, w)| w.as_str()).collect::<Vec<_>>().join(", ") };
+        let written = if construct.own { format!("#{}", construct.callee) } else { construct.callee.clone() };
+        self.report(codes::NAME_UNRESOLVED, format!("'{written}' is no adapter here{hint} (the adapters: {listed})"), construct.span);
     }
 
     /// `crm = attio(credentials: acme)` with no import: the older
     /// construction, refused with the `connect` it is now written as.
     fn report_adapter_construction(&mut self, construct: &ConstructionCall) {
-        let credential = self.catalog.adapter(&construct.callee).and_then(credential_arg_of).map_or("credentials".to_string(), |a| a.name.clone());
-        let args: Vec<(&str, &str)> = construct.args.iter().map(|a| (a.name.as_str(), a.value.raw.trim())).collect();
-        let text = connection(&Connection { adapter: &construct.callee, args: &args, credential: Some(&credential) });
+        let text = self.connect_text(construct, &construct.callee);
         let mut diagnostic = Diagnostic::error(codes::NAME_UNRESOLVED, format!("an adapter is set up with `{text}`"), construct.span);
         diagnostic.fix = Some(json!({ "edits": [{ "span": construct.span, "text": text }] }));
         self.push(diagnostic);
@@ -368,6 +422,13 @@ impl Checker<'_> {
         }
         self.report(codes::ENUM_UNKNOWN_VALUE, message, span);
     }
+}
+
+/// A name as `connect` writes it: `#` and the name for a module of the
+/// project's own, the name (backticked where it must be) for a package.
+pub fn written_as(name: &str, own: bool) -> String {
+    let spelled = crate::families::names::spell_name(name);
+    if own { format!("#{spelled}") } else { spelled }
 }
 
 /// `staticStringLiteralOf`: the value of a slot that is one string literal.

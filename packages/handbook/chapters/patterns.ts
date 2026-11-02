@@ -203,7 +203,7 @@ Two things make it this shape rather than a thinner one:
       construct: 'declare-once (a described node declaration as the extract shape, `?...e` spread writes)',
       status: 'runs',
       probe: `
-crm  = connect attio using acme
+crm  = connect \`@lf/attio\` using acme
 
 rules = "a company counts only if it is named as the subject"
 
@@ -228,7 +228,7 @@ listen to manual-[:Invocations]-> fire \`Intake\`
       construct: 'sections from a type (List.groupBy over dict rows, members in declared order, an index per member)',
       status: 'runs',
       probe: `
-chat = connect slack using team_workspace
+chat = connect \`@lf/slack\` using team_workspace
 
 type Thesis = <"Consumer" | "Infra" | "Health">
 
@@ -256,8 +256,8 @@ listen to manual-[:Invocations]-> fire \`Thesis Recap\`
       status: 'runs',
       probe: `
 import { \`@lf/pdf\` as pdf } from plugins
-inbox = connect email
-crm   = connect attio using acme
+inbox = connect \`@lf/email\`
+crm   = connect \`@lf/attio\` using acme
 
 function \`Attachment Report\`(m: <inbox-[:Emails]->>) {
   lines = m-[f:Attachments]-> {
@@ -279,8 +279,8 @@ function \`Attachment Report\`(m: <inbox-[:Emails]->>) {
       construct: 'all over closures, run at once (independent writes, concurrent, no binding)',
       status: 'runs',
       probe: `
-inbox = connect email
-crm   = connect attio using acme
+inbox = connect \`@lf/email\`
+crm   = connect \`@lf/attio\` using acme
 
 function \`Intake\`(m: <inbox-[:Emails]->>) {
   all(
@@ -306,8 +306,8 @@ function \`Intake\`(m: <inbox-[:Emails]->>) {
       status: 'runs',
       probe: `
 import { vcUrlRetrieval } from plugins
-inbox = connect email
-crm   = connect attio using acme
+inbox = connect \`@lf/email\`
+crm   = connect \`@lf/attio\` using acme
 
 node Company: "each company this message is about" {
   name:    <text> "the company's name"
@@ -336,8 +336,8 @@ function \`Extract And Connect\`(msg: <inbox-[:Emails]->>) {
       construct: 'human-reviewed-intake (manual text/files → extract → write a Check question, race its Response against a sleep, gate the linked writes on the approval)',
       status: 'runs',
       probe: `
-crm  = connect attio using acme
-asks = connect ask
+crm  = connect \`@lf/attio\` using acme
+asks = connect \`@lf/ask\`
 
 node Company: "each company named in the supplied text or files" {
   name:    <text> "the company's name"
@@ -389,8 +389,8 @@ listen to manual-[:Invocations]-> fire \`Review And Import\`
       construct: 'scheduled-digest (a cron tick fires; a bounded query composes lines; one message goes out)',
       status: 'runs',
       probe: `
-crm   = connect attio using acme
-chat  = connect slack using team_workspace
+crm   = connect \`@lf/attio\` using acme
+chat  = connect \`@lf/slack\` using team_workspace
 
 function \`Weekly Digest\`(t: <cron-[:Ticks]->>) {
   lines = crm-[c:Companies WHERE c.\`Created At\` WITHIN 7d ORDER BY c.\`Created At\` DESC LIMIT 20]-> {

@@ -750,6 +750,11 @@ pub enum SchemaShape {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AdapterSpec {
     pub construction_args: Vec<ConstructionArg>,
+    /// The package the module is installed from (`@lf/github`), which a
+    /// `connect` names it by. Absent for a module known only by its key: a
+    /// project's local command, file or server, an embedding host's adapter.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub package: Option<String>,
     /// The credentials a module declares, by name (`AdapterSpec.declaredCredentials`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub declared_credentials: Option<Vec<String>>,

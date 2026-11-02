@@ -28,7 +28,7 @@ listen-fire connect @lf/attio
 listen-fire credential add --module attio henry_attio --credential attio
 ```
 
-Either way the movement says `connect attio using henry_attio`; Attio receives the
+Either way the movement says ``connect `@lf/attio` using henry_attio``; Attio receives the
 same bearer header from both.
 
 ## Listening

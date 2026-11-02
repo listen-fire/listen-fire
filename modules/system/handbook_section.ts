@@ -10,8 +10,8 @@ export const SYSTEM_HANDBOOK_SECTION: HandbookSection = {
 \`@lf/system\` runs a program when something happens to your other programs: a run failed, or a wait lost its record. Post each failure to Slack:
 
 \`\`\`
-sys  = connect system
-team = connect slack using team_workspace
+sys  = connect \`@lf/system\`
+team = connect \`@lf/slack\` using team_workspace
 
 function report(e: <sys-[:Events]->>) {
   alerts = only(team-[ch:Channels WHERE ch.Name == "alerts"]->)

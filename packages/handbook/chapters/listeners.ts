@@ -10,7 +10,7 @@ Use \`listen\` to say when an automation runs. Everything that starts a run — 
 ### listen
 
 \`\`\`
-inbox = connect email
+inbox = connect \`@lf/email\`
 …
 listen as "Deal intake" to inbox-[e:Emails WHERE e.Key == "deals"]-> fire \`Intake\`
 \`\`\`
@@ -70,14 +70,14 @@ Once the system answers again, \`listen-fire listens replay <file>:<movement> --
 
 ### inbound-mail
 
-\`connect email\` is inbound mail. Which carrier delivers it is a setting of the deployment, not a choice an automation makes.`,
+\`\`connect \`@lf/email\` \`\` is inbound mail. Which carrier delivers it is a setting of the deployment, not a choice an automation makes.`,
   engineClaims: [
     {
       construct: 'listen as "…" — two aliased lanes on one channel firing one movement',
       status: 'runs',
       probe: `
-inbox = connect email
-crm   = connect attio using acme
+inbox = connect \`@lf/email\`
+crm   = connect \`@lf/attio\` using acme
 
 function \`Intake\`(m: <inbox-[:Emails]->>) {
   write crm-[:Companies]-> {
@@ -94,7 +94,7 @@ listen as "Intro intake" to inbox-[e:Emails WHERE e.Key == "intros"]-> fire \`In
       construct: 'a two-way sync whose listen takes only the fields it reads, so its own write does not run it again',
       status: 'runs',
       probe: `
-crm = connect attio using acme
+crm = connect \`@lf/attio\` using acme
 
 function \`Mirror Company\`(c: <crm-[:CompanyChange]->>) {
   c-[rec:Company]-> {

@@ -58,7 +58,7 @@ describe('the check', () => {
 describe('the digest of connected systems', () => {
   it('constructs each system and lists its record types with their fields, marking those a listen can start on', () => {
     const digest = renderConnectionsDigest(CATALOG);
-    expect(digest).toContain('### crm — `connect crm using workspace`');
+    expect(digest).toContain('### crm — `connect #crm using workspace`');
     expect(digest).not.toContain('listen {');
     expect(digest).toContain('- Company [rw listenable]: Name text!, Stage enum(Lead|Customer)');
     expect(digest).toContain('### manual — `listen to manual-[:…]->` (in scope with no import or connect)');

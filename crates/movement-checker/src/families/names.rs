@@ -104,7 +104,7 @@ impl Checker<'_> {
         if self.scopes.symbol(symbol).kind != SymbolKind::Credential {
             return Some(symbol);
         }
-        let connect = connection(&Connection { adapter: "…", args: &[("credentials", name)], credential: Some("credentials") });
+        let connect = connection(&Connection { adapter: "…", own: false, args: &[("credentials", name)], credential: Some("credentials") });
         self.report(
             codes::CREDENTIAL_NOT_A_VALUE,
             format!(
@@ -156,7 +156,7 @@ impl Checker<'_> {
                     );
                     self.report(codes::NAME_UNRESOLVED, message, span);
                 } else if self.catalog.credential(name).is_some() {
-                    let connect = connection(&Connection { adapter: "…", args: &[("credentials", name)], credential: Some("credentials") });
+                    let connect = connection(&Connection { adapter: "…", own: false, args: &[("credentials", name)], credential: Some("credentials") });
                     self.report(
                         codes::NAME_UNRESOLVED,
                         format!("'{name}' is a credential, which is never a value in a program — it is only named after 'using' where an adapter is connected ('{connect}')"),
@@ -188,7 +188,7 @@ impl Checker<'_> {
     }
 
     /// `constructionCall`: `attio(credentials: …)` with the required
-    /// arguments, as the program's version writes it (`connect attio using …`
+    /// arguments, as the program's version writes it (``connect `@lf/attio` using …``
     /// from 5).
     pub fn construction_call(&self, adapter: &str) -> String {
         let spec = self.catalog.adapter(adapter);
@@ -196,7 +196,8 @@ impl Checker<'_> {
             .map(|spec| spec.construction_args.iter().filter(|a| a.required).map(|a| (a.name.as_str(), "…")).collect())
             .unwrap_or_default();
         let credential = spec.and_then(credential_arg_of).map(|a| a.name.as_str());
-        connection(&Connection { adapter, args: &required, credential })
+        let (name, own) = self.adapter_spelling(adapter);
+        connection(&Connection { adapter: &name, own, args: &required, credential })
     }
 
     /// The `connect` that names a connection to `adapter`, its credential
@@ -224,7 +225,10 @@ impl Checker<'_> {
             .collect();
         format!(
             "{general} — with the one {adapter} connection here: '<name> = {}'",
-            connection(&Connection { adapter, args: &call, credential: Some(&credential_arg.name) })
+            {
+                let (name, own) = self.adapter_spelling(adapter);
+                connection(&Connection { adapter: &name, own, args: &call, credential: Some(&credential_arg.name) })
+            }
         )
     }
 

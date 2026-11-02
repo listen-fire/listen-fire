@@ -68,7 +68,7 @@ enum Context {
     Edge { receiver: String, backtick: bool, listen: bool },
     /// `<x-[:`: a record type of instance `x`.
     TypeOf { instance: String },
-    /// `connect `: an adapter, by its key (no import needed).
+    /// `connect `: an adapter, by its package name, else `#` and its key (no import needed).
     Adapter,
     /// `connect x using `: a credential for module `x`.
     Credential { module: String },
@@ -239,7 +239,14 @@ fn items_for(service: &Service, source: &str, pos: Pos, context: Context) -> Vec
             .adapters
             .iter()
             .filter(|(key, _)| !RUN_HOST_UNITS.contains(&key.as_str()))
-            .map(|(key, adapter)| Item { insert: Some(written_name(key)).filter(|w| w != key), ..Item::new(key, ItemKind::Module, adapter.spec.description.clone()) })
+            .map(|(key, adapter)| {
+                let spelled = match &adapter.spec.package {
+                    Some(package) => package.clone(),
+                    None => format!("#{}", written_name(key)),
+                };
+                let insert = if adapter.spec.package.is_some() { written_name(&spelled) } else { spelled.clone() };
+                Item { insert: Some(insert).filter(|w| *w != spelled), ..Item::new(spelled, ItemKind::Module, adapter.spec.description.clone()) }
+            })
             .collect(),
         Context::Credential { module } => {
             let key = service
@@ -250,7 +257,10 @@ fn items_for(service: &Service, source: &str, pos: Pos, context: Context) -> Vec
                     Some(symbol.imported_name.clone().or_else(|| symbol.adapter.clone()).unwrap_or_else(|| symbol.name.clone()))
                 })
                 .unwrap_or(module);
-            let bare = key.trim_matches('`').strip_prefix("@lf/").unwrap_or(key.trim_matches('`')).to_string();
+            // The editor reads the line's words, not a parse: `#` marks the project's own module.
+            let own = key.starts_with('#');
+            let written = key.trim_start_matches('#').trim_matches('`');
+            let bare = catalog.adapter_connected(written, own).unwrap_or(written).to_string();
             let mut names: Vec<Item> = catalog
                 .credential_names()
                 .into_iter()

@@ -71,8 +71,8 @@ Everything after the extraction is the ordinary shape: each founder written alon
       status: 'runs',
       probe: `
 import { vcUrlRetrieval } from plugins
-inbox = connect email
-crm   = connect attio using acme
+inbox = connect \`@lf/email\`
+crm   = connect \`@lf/attio\` using acme
 
 node Company: "each company this message is about — the one being pitched for investment, not competitors or customers named in passing" {
   name:    <text> "the company's name"

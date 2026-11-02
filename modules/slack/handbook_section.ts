@@ -169,7 +169,7 @@ Slack delivers only the events its app is subscribed to, so an automation readin
       construct: 'a Slack message with Buttons, a press on it awaited in a race with a sleep',
       status: 'runs',
       probe: `
-team = connect slack using team_workspace
+team = connect \`@lf/slack\` using team_workspace
 
 function sign_off(msg: <team-[:Message]->>) {
   ask = write msg-[:Replies]-> {
@@ -199,7 +199,7 @@ listen to team-[:Channels]->-[m:Messages WHERE m.\`Mentions App\` == true]-> fir
       construct: 'a reply in a Slack thread awaited on the message, with a nudge after two days',
       status: 'runs',
       probe: `
-team = connect slack using team_workspace
+team = connect \`@lf/slack\` using team_workspace
 
 function follow_up(msg: <team-[:Message]->>) {
   asked = write msg-[:Replies]-> { Message: "Who can take this?" }
@@ -219,7 +219,7 @@ listen to team-[:Channels]->-[m:Messages WHERE m.\`Mentions App\` == true]-> fir
       construct: 'a poll whose every press is its own run: a Topic written with Buttons, and a listen on the Interactions of the messages that have it',
       status: 'runs',
       probe: `
-team = connect slack using team_workspace
+team = connect \`@lf/slack\` using team_workspace
 
 function ask_lunch(msg: <team-[:Message]->>) {
   office = only(msg-[:Channel]->)

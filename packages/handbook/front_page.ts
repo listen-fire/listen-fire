@@ -39,9 +39,9 @@ export function exampleText(example: FrontExample): string {
   return example.file;
 }
 
-const PRELUDE = `inbox = connect email
-crm   = connect attio using acme
-chat  = connect slack using team_chat
+const PRELUDE = `inbox = connect \`@lf/email\`
+crm   = connect \`@lf/attio\` using acme
+chat  = connect \`@lf/slack\` using team_chat
 `;
 
 /** Where a TypeScript habit is wrong here. Each claim was tried against the
@@ -118,9 +118,9 @@ export const CONCEPTS: readonly FrontEntry[] = [
   {
     anchor: 'systems',
     title: 'Connect each system once',
-    text: 'Connect a system once, naming its adapter and the stored connection it signs in with (`crm = connect attio using acme`); neither is imported. An email listen needs a `key`, the address mail goes to.',
+    text: 'Connect a system once, naming its adapter and the stored connection it signs in with (``crm = connect `@lf/attio` using acme``); neither is imported. An email listen needs a `key`, the address mail goes to.',
     example: {
-      file: 'inbox = connect email\ncrm = connect attio using acme\n\nfunction `Log Sender`(m: <inbox-[:Emails]->>) {\n  write crm-[:People]-> { unique by (Email), Email: m.From, Name: m.From }\n}\n\nlisten to inbox-[e:Emails WHERE e.Key == "senders"]-> fire `Log Sender`',
+      file: 'inbox = connect `@lf/email`\ncrm = connect `@lf/attio` using acme\n\nfunction `Log Sender`(m: <inbox-[:Emails]->>) {\n  write crm-[:People]-> { unique by (Email), Email: m.From, Name: m.From }\n}\n\nlisten to inbox-[e:Emails WHERE e.Key == "senders"]-> fire `Log Sender`',
     },
   },
   {

@@ -150,10 +150,10 @@ function fieldList(fields: RecordField[], limit: number): string {
 
 // ── The system's header lines ───────────────────────────────────────────────
 
-type SpecLike = Pick<AdapterSnapshot, 'constructionArgs'>;
+type SpecLike = Pick<AdapterSnapshot, 'constructionArgs' | 'package'>;
 
-/** `connect attio using acme { list: … }`, the system and its connection
- *  named there with no import; a second connection is named after it. A
+/** ``connect `@lf/attio` using acme { list: … }``: the system, by its
+ *  package else `#` and its key, and its connection, named there with no import; a second connection is named after it. A
  *  run host unit is in every program's scope, never connected. */
 function constructionSpelling(system: string, spec: SpecLike, connections: string[]): string {
   // Its edges are listed below it: a listen names one (`manual-[:Invocations]->`).
@@ -161,7 +161,11 @@ function constructionSpelling(system: string, spec: SpecLike, connections: strin
   const using = spec.constructionArgs.some((arg) => arg.kind === 'credential') ? ` using ${connections[0] ?? '…'}` : '';
   const settings = spec.constructionArgs.filter((arg) => arg.kind !== 'credential' && arg.required).map((arg) => `${camelCase(arg.name)}: …`);
   const others = connections.slice(1);
-  return `\`connect ${system}${using}${settings.length > 0 ? ` { ${settings.join(', ')} }` : ''}\`${others.length > 0 ? ` (other connections: ${others.join(', ')})` : ''}`;
+  // A package module is connected by its package name, the host's own module by `#` and its key.
+  const adapter = spec.package !== undefined ? `\`${spec.package}\`` : `#${system}`;
+  const code = `connect ${adapter}${using}${settings.length > 0 ? ` { ${settings.join(', ')} }` : ''}`;
+  const span = code.includes('`') ? `\`\`${code}\`\`` : `\`${code}\``;
+  return `${span}${others.length > 0 ? ` (other connections: ${others.join(', ')})` : ''}`;
 }
 
 /** A setting as `connect` writes it (`base_id` → `baseId`). */

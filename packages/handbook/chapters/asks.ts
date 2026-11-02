@@ -100,7 +100,7 @@ if (r[0] == "approve") { … }
 A link a person opens to answer is a form from \`@lf/forms\`. Reach for one when the person is outside every system the automation uses, or when the answer has several typed fields. Its fields are a \`node\` you declare, and the answer is typed by it.
 
 \`\`\`
-forms = connect forms
+forms = connect \`@lf/forms\`
 
 node Refund {
   Approve: <boolean>
@@ -135,7 +135,7 @@ function \`Refund Check\`(go: <manual-[:Invocation]->>) {
 
 ### questions
 
-A question gives what buttons and a form do not: a page that renders the right control for whoever opens it, and an entry in that person's queue of things to decide. Connect with \`asks = connect ask\` and write one along a **family** edge, which is the kind of question and fixes the type of the answer.
+A question gives what buttons and a form do not: a page that renders the right control for whoever opens it, and an entry in that person's queue of things to decide. Connect its package, \`@lf/ask\`, and write one along a **family** edge, which is the kind of question and fixes the type of the answer.
 
 Every family takes \`Prompt\` (the question) and an optional \`Detail\` (a longer explanation shown under it), plus the parameters below.
 
@@ -328,10 +328,10 @@ What a person can act on lives as long as its system keeps it: a message's butto
       construct: 'write an ask along a Check family edge, deliver its Url, and await its Response inside a race arm; the timeout is a null test on the slot',
       status: 'runs',
       probe: `
-inbox = connect email
-team  = connect slack using team_workspace
-crm   = connect attio using acme_main
-asks  = connect ask
+inbox = connect \`@lf/email\`
+team  = connect \`@lf/slack\` using team_workspace
+crm   = connect \`@lf/attio\` using acme_main
+asks  = connect \`@lf/ask\`
 
 function \`Triage Inbound\`(msg: <inbox-[:Emails]->>) {
   \`Company Name\` = ai("the company this message is about")
@@ -371,7 +371,7 @@ listen to inbox-[e:Emails WHERE e.Key == "intake"]-> fire \`Triage Inbound\`
       construct: 'buttons on a message, their press raced against a timeout, the press time read off slot 0',
       status: 'runs',
       probe: `
-team = connect slack using team_workspace
+team = connect \`@lf/slack\` using team_workspace
 
 function \`First Approval Wins\`(go: <manual-[:Invocation]->>) {
   approvals = only(team-[ch:Channels WHERE ch.Topic == "approvals"]->)
@@ -407,8 +407,8 @@ listen to manual-[:Invocations]-> fire \`First Approval Wins\`
       construct: 'buttons whose press carries the Value it was written with, narrowed to those values and compared after the race',
       status: 'runs',
       probe: `
-team = connect slack using team_workspace
-crm  = connect attio using acme_main
+team = connect \`@lf/slack\` using team_workspace
+crm  = connect \`@lf/attio\` using acme_main
 
 function \`Pursue Or Pass\`(go: <manual-[:Invocation]->>) {
   dealflow = only(team-[ch:Channels WHERE ch.Name == "dealflow"]->)
@@ -445,7 +445,7 @@ listen to manual-[:Invocations]-> fire \`Pursue Or Pass\`
       construct: 'await on an edge that is also listed (a thread\'s Replies): the first reply already there, or the next, raced against a sleep',
       status: 'runs',
       probe: `
-team = connect slack using team_workspace
+team = connect \`@lf/slack\` using team_workspace
 
 function \`Who Takes It\`(go: <manual-[:Invocation]->>) {
   dealflow = only(team-[ch:Channels WHERE ch.Name == "dealflow"]->)
@@ -472,7 +472,7 @@ listen to manual-[:Invocations]-> fire \`Who Takes It\`
       construct: 'await new on a thread\'s Replies, its WHERE reading a record the run holds — only an answer from the author, after the run read the message',
       status: 'runs',
       probe: `
-team = connect slack using team_workspace
+team = connect \`@lf/slack\` using team_workspace
 
 function \`Chase The Author\`(go: <manual-[:Invocation]->>) {
   dealflow = only(team-[ch:Channels WHERE ch.Name == "dealflow"]->)
@@ -501,7 +501,7 @@ listen to manual-[:Invocations]-> fire \`Chase The Author\`
       construct: 'a race arm handing back WHICH place answered — a dict built in the arm that knows it, the first answered slot taken with coalesce',
       status: 'runs',
       probe: `
-team = connect slack using team_workspace
+team = connect \`@lf/slack\` using team_workspace
 
 function \`Which Place Answered\`(go: <manual-[:Invocation]->>) {
   \`Dealflow Channel\` = only(team-[ch:Channels WHERE ch.Name == "dealflow"]->)
@@ -547,8 +547,8 @@ listen to manual-[:Invocations]-> fire \`Which Place Answered\`
       construct: 'all over two awaiting closures, run at once inside a race with a sleep — both answers combined',
       status: 'runs',
       probe: `
-team = connect slack using team_workspace
-asks = connect ask
+team = connect \`@lf/slack\` using team_workspace
+asks = connect \`@lf/ask\`
 
 function \`Both Must Agree\`(go: <manual-[:Invocation]->>) {
   budget = write asks-[:Check]-> { Prompt: "Budget approved?" }
@@ -591,8 +591,8 @@ listen to manual-[:Invocations]-> fire \`Both Must Agree\`
       construct: 'await until — a closure condition refreshing a written handle, on a named cadence',
       status: 'runs',
       probe: `
-crm  = connect attio using acme_main
-team = connect slack using team_workspace
+crm  = connect \`@lf/attio\` using acme_main
+team = connect \`@lf/slack\` using team_workspace
 
 function \`Wait For The Name\`(go: <manual-[:Invocation]->>) {
   co = write crm-[:Companies]-> {
@@ -617,9 +617,9 @@ listen to manual-[:Invocations]-> fire \`Wait For The Name\`
       construct: 'a Provide question with a literal Answer Type, its typed answer filled into a record with ?:',
       status: 'runs',
       probe: `
-team = connect slack using team_workspace
-crm  = connect attio using acme_main
-asks = connect ask
+team = connect \`@lf/slack\` using team_workspace
+crm  = connect \`@lf/attio\` using acme_main
+asks = connect \`@lf/ask\`
 
 function \`Record Headcount\`(go: <manual-[:Invocation]->>) {
   q = write asks-[:Provide]-> {
@@ -645,9 +645,9 @@ listen to manual-[:Invocations]-> fire \`Record Headcount\`
       construct: 'a Choose question over literal options, its answer compared against one of them',
       status: 'runs',
       probe: `
-team = connect slack using team_workspace
-crm  = connect attio using acme_main
-asks = connect ask
+team = connect \`@lf/slack\` using team_workspace
+crm  = connect \`@lf/attio\` using acme_main
+asks = connect \`@lf/ask\`
 
 function \`Decide Next Step\`(go: <manual-[:Invocation]->>) {
   q = write asks-[:Choose]-> {
@@ -674,8 +674,8 @@ listen to manual-[:Invocations]-> fire \`Decide Next Step\`
       construct: 'a Select question over literal options, its chosen subset joined into a message',
       status: 'runs',
       probe: `
-team = connect slack using team_workspace
-asks = connect ask
+team = connect \`@lf/slack\` using team_workspace
+asks = connect \`@lf/ask\`
 
 function \`Pick Channels\`(go: <manual-[:Invocation]->>) {
   q = write asks-[:Select]-> {
@@ -697,9 +697,9 @@ listen to manual-[:Invocations]-> fire \`Pick Channels\`
       construct: 'a Review question — an acknowledgement awaited before the work carries on',
       status: 'runs',
       probe: `
-team = connect slack using team_workspace
-crm  = connect attio using acme_main
-asks = connect ask
+team = connect \`@lf/slack\` using team_workspace
+crm  = connect \`@lf/attio\` using acme_main
+asks = connect \`@lf/ask\`
 
 function \`Acknowledge First\`(go: <manual-[:Invocation]->>) {
   q = write asks-[:Review]-> {
@@ -724,8 +724,8 @@ listen to manual-[:Invocations]-> fire \`Acknowledge First\`
       construct: 'a Draft question — a structured artifact composed by a person, awaited',
       status: 'runs',
       probe: `
-team = connect slack using team_workspace
-asks = connect ask
+team = connect \`@lf/slack\` using team_workspace
+asks = connect \`@lf/ask\`
 
 function \`Draft The Reply\`(go: <manual-[:Invocation]->>) {
   q = write asks-[:Draft]-> {
@@ -747,8 +747,8 @@ listen to manual-[:Invocations]-> fire \`Draft The Reply\`
       construct: 'a Correct question whose Rows are written as literal objects',
       status: 'runs',
       probe: `
-team = connect slack using team_workspace
-asks = connect ask
+team = connect \`@lf/slack\` using team_workspace
+asks = connect \`@lf/ask\`
 
 function \`Fix The Rows\`(go: <manual-[:Invocation]->>) {
   q = write asks-[:Correct]-> {
@@ -773,8 +773,8 @@ listen to manual-[:Invocations]-> fire \`Fix The Rows\`
       construct: 'a Form question collecting several named fields at once, one of them read back by name',
       status: 'runs',
       probe: `
-team = connect slack using team_workspace
-asks = connect ask
+team = connect \`@lf/slack\` using team_workspace
+asks = connect \`@lf/ask\`
 
 function \`Collect The Details\`(go: <manual-[:Invocation]->>) {
   q = write asks-[:Form]-> {
@@ -796,9 +796,9 @@ listen to manual-[:Invocations]-> fire \`Collect The Details\`
       construct: 'the pick idiom — Choose over options gathered at run time, the answer filtering the graph back to the record',
       status: 'runs',
       probe: `
-crm  = connect attio using acme_main
-team = connect slack using team_workspace
-asks = connect ask
+crm  = connect \`@lf/attio\` using acme_main
+team = connect \`@lf/slack\` using team_workspace
+asks = connect \`@lf/ask\`
 
 function \`Pick The Company\`(go: <manual-[:Invocation]->>) {
   found = crm-[c:Companies WHERE c.Categories == "Lead"]-> {
@@ -838,8 +838,8 @@ listen to manual-[:Invocations]-> fire \`Pick The Company\`
       construct: 'a host link: a form from @lf/forms, its Url sent, its typed submission raced against a sleep',
       status: 'runs',
       probe: `
-team  = connect slack using team_workspace
-forms = connect forms
+team  = connect \`@lf/slack\` using team_workspace
+forms = connect \`@lf/forms\`
 
 node Decision {
   Pursue: <boolean>
@@ -873,9 +873,9 @@ listen to manual-[:Invocations]-> fire \`Decide By Link\`
       construct: 'a form whose answer is typed by a node, its fields read after the await',
       status: 'runs',
       probe: `
-team  = connect slack using team_workspace
-crm   = connect attio using acme_main
-forms = connect forms
+team  = connect \`@lf/slack\` using team_workspace
+crm   = connect \`@lf/attio\` using acme_main
+forms = connect \`@lf/forms\`
 
 node Booking {
   Day: <date>
@@ -906,8 +906,8 @@ listen to manual-[:Invocations]-> fire \`Book The Follow Up\`
       construct: 'a named function called with the answer a form returned',
       status: 'runs',
       probe: `
-crm   = connect attio using acme_main
-forms = connect forms
+crm   = connect \`@lf/attio\` using acme_main
+forms = connect \`@lf/forms\`
 
 node Booking {
   Day: <date>

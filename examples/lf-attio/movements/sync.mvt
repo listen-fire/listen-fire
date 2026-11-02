@@ -1,4 +1,4 @@
-crm = connect attio using henry_attio
+crm = connect `@lf/attio` using henry_attio
 
 # A company created in Attio, or renamed, gets a description; the write finds
 # it by name, so it updates that record rather than making another. The write

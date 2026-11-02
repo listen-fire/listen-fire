@@ -87,6 +87,10 @@ export interface CatalogAdapterInput {
   /** How the adapter is connected — a product-shell fact (the hosted product's
    *  connect links); absent where the shell has no such affordance. */
   connect?: AdapterSpec['connect'];
+  /** The package the host installed the module from (`@lf/github`), which a
+   *  program's `connect` names it by; absent for a host's own module, named
+   *  `#` and its adapter type. */
+  package?: string;
   /** Instance schemas by `instanceSchemaKey`; absent ⇒ none introspected yet. */
   schemas?: Record<string, InstanceSchema>;
   /** Why a schema is missing, keyed like `schemas`. */
@@ -106,6 +110,7 @@ function adapterSnapshotOf(input: CatalogAdapterInput): AdapterSnapshot {
     .map((b) => ({ kind: b.actionKind, label: b.label }));
   return {
     constructionArgs: input.constructionArgs ?? constructionArgsOf(manifest),
+    ...(input.package !== undefined ? { package: input.package } : {}),
     ...(manifest.declaredCredentials !== undefined ? { declaredCredentials: [...manifest.declaredCredentials] } : {}),
     // A construction-free manifest fact: an adapter that names no trigger
     // type has no inbound surface to listen to. Only `true` projects — see

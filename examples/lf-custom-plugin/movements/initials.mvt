@@ -1,5 +1,5 @@
 import { `@acme/words` as words } from plugins
-crm = connect acme_crm using acme
+crm = connect #acme_crm using acme
 
 function tag(company: <crm-[:Company]->>) {
   write crm-[:Company]-> { Name: "${company.Name} (${words.initials(company.Name)})" }

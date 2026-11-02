@@ -12,8 +12,8 @@ Each connection's types are its server's tools, read from the server (`tools/lis
 - A call the server refuses (`isError`) fails the run with the server's text.
 
 ```
-crm = connect acme_crm using acme
-tracker = connect mcp using linear
+crm = connect #acme_crm using acme
+tracker = connect `@lf/mcp` using linear
 
 function triage(company: <crm-[:Company]->>) {
   issue = write tracker-[:create_issue]-> { title: "Follow up ${company.Name}", team: "ENG" }

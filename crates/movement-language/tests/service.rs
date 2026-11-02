@@ -151,12 +151,14 @@ fn credential_names_follow_using() {
 #[test]
 fn adapters_follow_connect_with_no_import() {
     let items = service().complete("chat = connect ", Pos { line: 0, character: 15 });
-    assert_eq!(labels(&items), ["slack"]);
+    assert_eq!(labels(&items), ["@lf/slack"]);
+    assert_eq!(items[0].insert.as_deref(), Some("`@lf/slack`"));
 }
 
 #[test]
 fn credential_names_follow_using_with_no_import() {
-    let items = service().complete("chat = connect slack using ", Pos { line: 0, character: 27 });
+    let source = "chat = connect `@lf/slack` using ";
+    let items = service().complete(source, Pos { line: 0, character: source.len() as u32 });
     assert_eq!(labels(&items), ["acme_bot"]);
 }
 

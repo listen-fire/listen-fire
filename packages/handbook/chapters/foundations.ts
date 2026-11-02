@@ -95,11 +95,12 @@ composition section). Two near-identical automations are a smell.
 
 These hold everywhere, in every chapter, and are not restated per situation:
 
-- No magic values: every adapter, credential, and plugin name is imported;
-  every other name is bound by assignment or received as a parameter.
+- No magic values: an adapter and a credential are named where they are
+  connected, every plugin name is imported, and every other name is bound by
+  assignment or received as a parameter.
 - Everything happens on a connected instance: parameter types, traversal
   roots, writes, and listens all name an instance you connected
-  (\`crm = connect attio using acme\`) — never a bare adapter type.
+  (\`\`crm = connect \`@lf/attio\` using acme\`\`) — never a bare adapter type.
 - Types always wear angle brackets (\`m: <inbox-[:Emails]->>\`, \`amount: <number>\`,
   \`rec is <crm-[:companies]->>\`); positions, values, and handles never do.
   Inside a type, \`-[:…]->\` names the edge the type sits behind; \`.\` is only
@@ -124,7 +125,7 @@ These hold everywhere, in every chapter, and are not restated per situation:
   plugins and credentials are imported.
 - Backticks wrap any name that isn't a bare identifier: a field with spaces
   (\`msg.\`Sender Name\`\`), a credential's saved name
-  (\`connect attio using \`Acme Prod\`\`), an automation's own name
+  (\`\`connect \`@lf/attio\` using \`Acme Prod\` \`\`), an automation's own name
   (\`function \`Unsnooze Actions\`(…)\`). Coin names the way the team already says
   them — \`Name: \`Subject Line\`\`, not \`Name: subject_line\` — so the brief, the
   page and the channel use the same words. Short instance names (\`crm = …\`)
