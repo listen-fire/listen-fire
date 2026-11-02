@@ -183,10 +183,6 @@ pub struct Typing<'a> {
     /// in it (a listen's hops judged on each arrival): what fetching them
     /// would cost is not said of them.
     pub unfetched_hops: Vec<usize>,
-    /// A hop's WHERE and ORDER BY may read an earlier hop's alias of the same
-    /// walk: a listen's, whose host lists its hops with each alias bound. A
-    /// run's walk binds a hop's alias only in the block the walk opens.
-    pub reads_earlier_hops: bool,
     narrowed_scalars: HashMap<String, Ty>,
     narrowed_roots: HashMap<String, Position>,
     read_types: HashMap<usize, Option<Ty>>,
@@ -224,7 +220,6 @@ impl<'a> Typing<'a> {
             bare_walk_names: IndexMap::new(),
             hop_where: None,
             unfetched_hops: Vec::new(),
-            reads_earlier_hops: false,
             narrowed_scalars: HashMap::new(),
             narrowed_roots: HashMap::new(),
             read_types: HashMap::new(),
@@ -434,26 +429,6 @@ impl<'a> Typing<'a> {
                 crate::families::names::spell_name(second)
             ),
         );
-    }
-
-    /// MOV_HOP_READS_EARLIER_HOP: `step`'s WHERE or ORDER BY reads the alias
-    /// of a hop before it in the same walk (`earlier`). A run's walk fetches
-    /// each hop closed over the scope it starts in, which an alias joins only
-    /// in the block the walk opens; a block opened on the earlier hop holds
-    /// its record, and a walk on from it there reads it.
-    fn refuse_earlier_hop_reads(&mut self, step: &EdgeStep, earlier: &[(&str, &str)]) {
-        let read = [step.expression_filter.as_deref(), step.cardinality.as_ref().and_then(|c| c.order_by.as_deref())]
-            .into_iter()
-            .flatten()
-            .flat_map(crate::families::walks::alias_reads)
-            .find_map(|name| earlier.iter().find(|(alias, _)| *alias == name));
-        let Some((alias, edge)) = read else { return };
-        let alias = crate::families::names::spell_name(alias);
-        let (edge, earlier) = (crate::families::names::spell_name(&step.edge_type_id), crate::families::names::spell_name(edge));
-        let message = format!(
-            "'-[:{edge}]->' reads `{alias}`, which an earlier hop of this walk names ('-[{alias}:{earlier}]->'), and a hop's WHERE reads only its own record, names in scope and literals — open a block on '-[{alias}:{earlier}]->' and walk on from `{alias}` inside it: `…-[{alias}:{earlier}]-> {{ {alias}-[:{edge} WHERE …]-> }}`"
-        );
-        self.report(codes::HOP_READS_EARLIER_HOP, message);
     }
 
     /// The type a node was read as (widened), once typed.
@@ -707,13 +682,9 @@ impl<'a> Typing<'a> {
         let mut last_edge_schema = None;
         let mut named: Vec<(&str, &str)> = Vec::new();
         let unfetched = std::mem::take(&mut self.unfetched_hops);
-        let reads_earlier = std::mem::take(&mut self.reads_earlier_hops);
         for (index, step) in steps.iter().enumerate() {
             self.awaited = awaited;
             if let TraversalStep::Edge(edge) = step {
-                if !reads_earlier {
-                    self.refuse_earlier_hop_reads(edge, &named);
-                }
                 if let Some(alias) = &edge.alias {
                     if let Some((_, first)) = named.iter().find(|(name, _)| name == alias) {
                         self.report_alias_repeated(alias, first, &edge.edge_type_id);

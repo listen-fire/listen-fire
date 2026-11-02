@@ -1139,7 +1139,7 @@ fn impure_key_call(expr: &Expression) -> Option<&'static str> {
 }
 
 /// `subExpressions`: every expression written inside one.
-pub(crate) fn sub_expressions(expr: &Expression) -> Vec<&Expression> {
+pub fn sub_expressions(expr: &Expression) -> Vec<&Expression> {
     use movement_parser::lowering::expression::{ListElement, ObjectMember, TraversalStep};
     match expr {
         Expression::Traverse { steps, expression, .. } => {

@@ -1340,21 +1340,16 @@ impl crate::checker::Checker<'_> {
     /// `walk_head` over `steps` in place of the hops `head` writes: a listen
     /// walks its own without what its WHERE refuses on its own account.
     pub(crate) fn walk_head_steps(&mut self, head: &PathHead, steps: &[TraversalStep], scope: ScopeId, awaited: bool) -> Option<HeadWalk> {
-        self.walk_steps_of(head, steps, scope, awaited, None)
+        self.walk_steps_of(head, steps, scope, awaited, Vec::new())
     }
 
     /// A listen's walk: its hops at `unfetched` fetched by nothing (judged on
-    /// each arrival), and each hop's WHERE free to read an earlier hop's
-    /// alias, which the host binds as it lists them.
+    /// each arrival).
     pub(crate) fn walk_listen_steps(&mut self, head: &PathHead, steps: &[TraversalStep], scope: ScopeId, unfetched: Vec<usize>) -> Option<HeadWalk> {
-        self.walk_steps_of(head, steps, scope, true, Some(unfetched))
+        self.walk_steps_of(head, steps, scope, true, unfetched)
     }
 
-    fn walk_steps_of(&mut self, head: &PathHead, steps: &[TraversalStep], scope: ScopeId, awaited: bool, listen: Option<Vec<usize>>) -> Option<HeadWalk> {
-        let (listen, unfetched) = match listen {
-            Some(unfetched) => (true, unfetched),
-            None => (false, Vec::new()),
-        };
+    fn walk_steps_of(&mut self, head: &PathHead, steps: &[TraversalStep], scope: ScopeId, awaited: bool, unfetched: Vec<usize>) -> Option<HeadWalk> {
         let start = self.head_root_type(head, scope)?;
         let recorded_start = self.recording().then(|| start.clone());
         let (walk, diagnostics, watchable, landings, observed) = {
@@ -1362,7 +1357,6 @@ impl crate::checker::Checker<'_> {
             let mut typing = Typing::new(&env, head.span);
             typing.observed = self.observing();
             typing.unfetched_hops = unfetched;
-            typing.reads_earlier_hops = listen;
             typing.step_root = match &head.root {
                 Some(PathRoot::Name { name }) => Some(crate::families::names::spell_name(name)),
                 _ => None,

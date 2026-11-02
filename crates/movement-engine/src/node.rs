@@ -199,6 +199,50 @@ impl Run<'_> {
         })
     }
 
+    /// `run_deferred_past` for a kept walk a path reached part-way through a
+    /// walk: `alias`, the hop onto the kept walk, names each record it lands
+    /// on, and the hops past it read that and the hops the path crossed
+    /// (`outer`) over the kept walk's own. Where they read neither, the hops
+    /// past are walked inside the kept walk, as it was written.
+    pub(crate) fn run_kept_past<'s>(
+        &'s self,
+        walk: &'s DeferredWalk,
+        extra: &'s [movement_parser::lowering::expression::TraversalStep],
+        outer: &'s [(String, Binding)],
+        alias: Option<&'s str>,
+    ) -> Iterations<'s> {
+        Box::pin(async move {
+            let named = |iterations: crate::traverse::Paths| -> crate::traverse::Paths {
+                let Some(alias) = alias else { return iterations };
+                iterations
+                    .into_iter()
+                    .map(|(mut aliases, landing)| {
+                        aliases.push((alias.to_string(), landing.clone()));
+                        (aliases, landing)
+                    })
+                    .collect()
+            };
+            let reads_path = alias.is_some()
+                || extra.iter().any(|hop| matches!(hop, movement_parser::lowering::expression::TraversalStep::Edge(step) if crate::traverse::reads_aliases(step, outer)));
+            if extra.is_empty() || !reads_path {
+                return Ok(named(self.run_deferred_past(walk, extra).await?));
+            }
+            let span = crate::env::js_of_serialized(&walk.head.span);
+            let root = crate::traverse::spell_path_head(&walk.head);
+            let past = crate::traverse::Probe::Walk(extra.to_vec());
+            let mut paths = Vec::new();
+            for (inner, landing) in named(self.run_deferred(walk).await?) {
+                let at = crate::traverse::path_scope(&crate::traverse::path_scope(&walk.captured, &inner), outer);
+                for (onward, last) in self.head_iterations_from(landing, &root, &past, &at, &span).await? {
+                    let mut aliases = inner.clone();
+                    aliases.extend(onward);
+                    paths.push((aliases, last));
+                }
+            }
+            Ok(paths)
+        })
+    }
+
     /// `walkLandings`: a traversal entry's landings, walked now as a block
     /// head walks, each mapped through the tail literal when it has one.
     async fn walk_landings(&self, head: &movement_parser::ast::PathHead, mapping: Option<&NodeLiteral>, scope: &Rc<Scope>, path: &str) -> Result<Vec<Binding>, Stop> {

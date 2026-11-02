@@ -64,6 +64,54 @@ use crate::write::spell_name;
 /// A path a head walked so far: each hop's alias with its record, and where it landed.
 type PathSoFar = (Vec<(String, Binding)>, Rc<Landed>);
 
+/// The scope a path's next hop reads in: the walk's scope with the alias of
+/// every hop the path crossed, each naming that path's own record.
+pub(crate) fn path_scope(scope: &Rc<Scope>, aliases: &[(String, Binding)]) -> Rc<Scope> {
+    if aliases.is_empty() {
+        return scope.clone();
+    }
+    let at = scope.child();
+    for (alias, binding) in aliases {
+        at.declare(alias.clone(), binding.clone());
+    }
+    at
+}
+
+/// Whether the hop's WHERE or ORDER BY reads one of `aliases`, the hops a
+/// path crossed before it, anywhere inside (a walk it reads included).
+pub(crate) fn reads_aliases(step: &EdgeStep, aliases: &[(String, Binding)]) -> bool {
+    if aliases.is_empty() {
+        return false;
+    }
+    let crossed = |name: &str| aliases.iter().any(|(alias, _)| alias == name);
+    [step.expression_filter.as_deref(), step.cardinality.as_ref().and_then(|c| c.order_by.as_deref())]
+        .into_iter()
+        .flatten()
+        .any(|read| reads_name(read, &crossed))
+}
+
+/// Whether `expr` reads a name `wanted` admits as a record: bare, or as the
+/// root of a dotted read or a walk, the hops of a walk inside it included.
+fn reads_name(expr: &Expression, wanted: &dyn Fn(&str) -> bool) -> bool {
+    let own = match expr {
+        Expression::AliasRef { name }
+        | Expression::Property { property_type_id: name, field_only: false }
+        | Expression::EdgeProperty { property_type_id: name, field_only: false } => Some(name.as_str()),
+        Expression::Traverse { alias_root: Some(root), .. } => Some(root.as_str()),
+        _ => None,
+    };
+    let hops = match expr {
+        Expression::Exists { steps, .. } => steps.as_slice(),
+        _ => &[],
+    };
+    own.is_some_and(wanted)
+        || movement_checker::families::values::sub_expressions(expr).into_iter().any(|inner| reads_name(inner, wanted))
+        || hops.iter().any(|hop| match hop {
+            TraversalStep::Edge(step) => step.expression_filter.as_deref().is_some_and(|filter| reads_name(filter, wanted)),
+            _ => false,
+        })
+}
+
 /// The most pages one traversal walks (adapter.ts `MAX_RELATED_PAGES`).
 const MAX_RELATED_PAGES: usize = 10_000;
 
@@ -323,24 +371,14 @@ pub(crate) fn head_probe(root: &str, hops_raw: &str, extra: &[TraversalStep]) ->
     Ok(probed)
 }
 
-/// An edge of a node's arrow plane: the node's kept walk, or the landings
-/// it holds.
-enum PlaneEdge {
-    Kept(Rc<crate::bindings::DeferredWalk>),
-    Landed(Vec<Binding>),
-}
-
 /// `continueDeferred`: a walk's iterations under the aliases bound on the
-/// way in, the hop's own alias naming each landing.
-fn continue_deferred(outer: Vec<(String, Binding)>, iterations: Paths, alias: Option<&str>) -> Paths {
+/// way in.
+fn continue_deferred(outer: Vec<(String, Binding)>, iterations: Paths) -> Paths {
     iterations
         .into_iter()
         .map(|(inner, landing)| {
             let mut aliases = outer.clone();
             aliases.extend(inner);
-            if let Some(alias) = alias {
-                aliases.push((alias.to_string(), landing.clone()));
-            }
             (aliases, landing)
         })
         .collect()
@@ -610,7 +648,7 @@ impl Run<'_> {
                         return Ok(vec![(aliases, old)]);
                     }
                     let rest = Probe::Walk(rest.to_vec());
-                    let onward = self.head_iterations_from(old, root, &rest, scope, span).await?;
+                    let onward = self.head_iterations_from(old, root, &rest, &path_scope(scope, &aliases), span).await?;
                     Ok(onward
                         .into_iter()
                         .map(|(bindings, landing)| {
@@ -670,25 +708,43 @@ impl Run<'_> {
                     &format!("source adapter '{}' cannot traverse incoming edges", read.adapter_type),
                 ));
             }
-            // Closed over the head's own scope, once for the hop.
-            let pushdown = self.pushdown_args(step, &read, scope, span).await?;
-            let mut next = Vec::new();
-            for (aliases, cursor) in &paths {
-                let kept = self.fetch(&cursor.position(), step, &read, Fetch { pushdown: &pushdown, paged: read.streams, stop_at: None }, scope, span).await?;
-                for landed in self.ordered(kept, step, scope, span).await? {
-                    let mut aliases = aliases.clone();
-                    if let Some(alias) = &step.alias {
-                        aliases.push((alias.clone(), Binding::Landed(landed.clone())));
-                    }
-                    next.push((aliases, landed));
-                }
-            }
-            paths = next;
+            paths = self.hop_paths(&paths, step, &read, read.streams, scope, span).await?;
             if paths.is_empty() {
                 return Ok(Vec::new());
             }
         }
         Ok(paths.into_iter().map(|(aliases, landed)| (aliases, Binding::Landed(landed))).collect())
+    }
+
+    /// One hop off every path a walk reached: each path's fetch, WHERE and
+    /// ORDER BY in that path's own scope (the hops it crossed named), the
+    /// hop's alias naming each record it keeps. The pushdown is closed over
+    /// the walk's scope once for the hop, and again for a path only where the
+    /// hop reads a hop that path crossed.
+    async fn hop_paths(&self, paths: &[PathSoFar], step: &EdgeStep, read: &Rc<Read>, paged: bool, scope: &Rc<Scope>, span: &Js) -> Result<Vec<PathSoFar>, Failure> {
+        let mut shared: Option<Vec<(String, Js)>> = None;
+        let mut next = Vec::new();
+        for (aliases, cursor) in paths {
+            let at = path_scope(scope, aliases);
+            let pushdown = if reads_aliases(step, aliases) {
+                self.pushdown_args(step, read, &at, span).await?
+            } else if let Some(pushdown) = &shared {
+                pushdown.clone()
+            } else {
+                let pushdown = self.pushdown_args(step, read, &at, span).await?;
+                shared = Some(pushdown.clone());
+                pushdown
+            };
+            let kept = self.fetch(&cursor.position(), step, read, Fetch { pushdown: &pushdown, paged, stop_at: None }, &at, span).await?;
+            for landed in self.ordered(kept, step, &at, span).await? {
+                let mut aliases = aliases.clone();
+                if let Some(alias) = &step.alias {
+                    aliases.push((alias.clone(), Binding::Landed(landed.clone())));
+                }
+                next.push((aliases, landed));
+            }
+        }
+        Ok(next)
     }
 
     /// `walkNodePlane`: each hop crosses one edge of a synthesised node,
@@ -709,21 +765,37 @@ impl Run<'_> {
             };
             let mut reached = Vec::new();
             for (aliases, binding) in paths {
-                let edge = match &binding {
+                // The hops this path crossed name its own records to the
+                // hops after them.
+                let at = path_scope(scope, &aliases);
+                let landings = match &binding {
                     Binding::LazyWalk(walk) => {
-                        reached.extend(continue_deferred(aliases, self.run_deferred_past(walk, steps).await?, None));
+                        let iterations = self.run_kept_past(walk, steps, &aliases, None).await?;
+                        reached.extend(continue_deferred(aliases, iterations));
                         continue;
                     }
                     Binding::Landed(landed) => {
-                        let onward = self.source_head_paths(&landed.position(), landed.read.clone(), steps, scope, span).await.map_err(Stop::Thrown)?;
-                        reached.extend(continue_deferred(aliases, onward, None));
+                        let onward = self.source_head_paths(&landed.position(), landed.read.clone(), steps, &at, span).await.map_err(Stop::Thrown)?;
+                        reached.extend(continue_deferred(aliases, onward));
                         continue;
                     }
                     Binding::Node(node) => {
                         let deferred = node.borrow().edges.iter().find(|(n, _)| *n == step.edge_type_id).and_then(|(_, e)| e.deferred.clone());
                         match deferred {
-                            Some(walk) => PlaneEdge::Kept(walk),
-                            None => PlaneEdge::Landed(node.borrow().landings(&step.edge_type_id)),
+                            None => node.borrow().landings(&step.edge_type_id),
+                            Some(walk) => {
+                                if step.expression_filter.is_some() {
+                                    return Err(Stop::Thrown(Failure::unsupported(
+                                        "WHERE filters on a lazy entry's hop",
+                                        "narrow the entry's own traversal instead — the WHERE belongs on the hop the node's edge is built from",
+                                    )));
+                                }
+                                // The kept walk's own iterations, the hop's
+                                // alias naming each record it lands on.
+                                let iterations = self.run_kept_past(&walk, rest, &aliases, step.alias.as_deref()).await?;
+                                reached.extend(continue_deferred(aliases, iterations));
+                                continue;
+                            }
                         }
                     }
                     other => {
@@ -733,33 +805,7 @@ impl Run<'_> {
                         )));
                     }
                 };
-                let landings = match edge {
-                    PlaneEdge::Landed(landings) => landings,
-                    kept => {
-                        if step.expression_filter.is_some() {
-                            return Err(Stop::Thrown(Failure::unsupported(
-                                "WHERE filters on a lazy entry's hop",
-                                "narrow the entry's own traversal instead — the WHERE belongs on the hop the node's edge is built from",
-                            )));
-                        }
-                        if let (false, Some(alias)) = (rest.is_empty(), &step.alias) {
-                            // The alias would name a position part-way through
-                            // the merged walk, and the walk binds its own hops'
-                            // aliases, not this one.
-                            return Err(Stop::Thrown(Failure::unsupported(
-                                &format!("naming a deferred edge's landing ('{alias}') while hopping past it"),
-                                "drop the alias, or bind the deferred traversal above and traverse from there",
-                            )));
-                        }
-                        let iterations = match kept {
-                            PlaneEdge::Kept(walk) => self.run_deferred_past(&walk, rest).await?,
-                            PlaneEdge::Landed(_) => unreachable!("taken above"),
-                        };
-                        reached.extend(continue_deferred(aliases, iterations, step.alias.as_deref()));
-                        continue;
-                    }
-                };
-                let kept = self.keep_in_memory_hop(landings, step, scope, span).await.map_err(Stop::Thrown)?;
+                let kept = self.keep_in_memory_hop(landings, step, &at, span).await.map_err(Stop::Thrown)?;
                 let next = kept
                     .into_iter()
                     .map(|landing| {
@@ -777,8 +823,8 @@ impl Run<'_> {
     }
 
     /// The extraction's paths: every hop an edge's children, kept by the
-    /// hop (`keepInMemoryHop`), each hop's alias binding its own level's
-    /// entity.
+    /// hop (`keepInMemoryHop`) in the scope of the hops its path crossed,
+    /// each hop's alias binding its own level's entity.
     async fn extract_paths(&self, root: Binding, steps: &[TraversalStep], scope: &Rc<Scope>, span: &Js) -> Result<Paths, Failure> {
         let mut paths: Paths = vec![(Vec::new(), root)];
         for step in steps {
@@ -789,7 +835,7 @@ impl Run<'_> {
             for (aliases, binding) in &paths {
                 let Binding::Extracted { emission, .. } = binding else { unreachable!("an extraction's paths hold its entities") };
                 let children = emission.children_of(&step.edge_type_id).iter().map(|child| Binding::Extracted { emission: child.clone(), root: false, id: crate::bindings::Identity::new() }).collect();
-                for landing in self.keep_in_memory_hop(children, step, scope, span).await? {
+                for landing in self.keep_in_memory_hop(children, step, &path_scope(scope, aliases), span).await? {
                     let mut aliases = aliases.clone();
                     if let Some(alias) = &step.alias {
                         aliases.push((alias.clone(), landing.clone()));
@@ -803,9 +849,12 @@ impl Run<'_> {
     }
 
     /// `walkExtractSteps`: hops down an extraction's result, each to the
-    /// children under that edge the hop keeps (`keepInMemoryHop`).
+    /// children under that edge the hop keeps (`keepInMemoryHop`), in the
+    /// scope of the hops its path crossed.
     pub(crate) async fn walk_extract(&self, root: &Rc<Emission>, steps: &[TraversalStep], name: &str, scope: &Rc<Scope>, span: &Js) -> Result<Vec<Rc<Emission>>, Failure> {
-        let mut current = vec![root.clone()];
+        /// Each entity reached, with the aliases of the hops its path crossed.
+        type Reached = Vec<(Vec<(String, Binding)>, Rc<Emission>)>;
+        let mut current: Reached = vec![(Vec::new(), root.clone())];
         for step in steps {
             let TraversalStep::Edge(step) = step else {
                 return Err(Failure::engine(
@@ -814,16 +863,20 @@ impl Run<'_> {
                 ));
             };
             let mut next = Vec::new();
-            for emission in &current {
+            for (aliases, emission) in &current {
                 let children = emission.children_of(&step.edge_type_id).iter().map(|child| Binding::Extracted { emission: child.clone(), root: false, id: crate::bindings::Identity::new() }).collect();
-                for kept in self.keep_in_memory_hop(children, step, scope, span).await? {
+                for kept in self.keep_in_memory_hop(children, step, &path_scope(scope, aliases), span).await? {
+                    let mut aliases = aliases.clone();
+                    if let Some(alias) = &step.alias {
+                        aliases.push((alias.clone(), kept.clone()));
+                    }
                     let Binding::Extracted { emission, .. } = kept else { unreachable!("an extraction's children are its entities") };
-                    next.push(emission);
+                    next.push((aliases, emission));
                 }
             }
             current = next;
         }
-        Ok(current)
+        Ok(current.into_iter().map(|(_, emission)| emission).collect())
     }
 
     /// Where a head walks from and through which graph (`headIterationsFrom`
@@ -1228,11 +1281,11 @@ impl Run<'_> {
         }
     }
 
-    /// `walkAdapterPositions`: plain edge hops from `start`, each hop's
-    /// pushdown closed over the scope once, each origin's fetch filtered,
-    /// ordered and bounded on its own. No hops: the start itself.
+    /// `walkAdapterPositions`: plain edge hops from `start`, each origin's
+    /// fetch filtered, ordered and bounded on its own, in the scope of the
+    /// hops its path crossed (`hop_paths`). No hops: the start itself.
     pub(crate) async fn walk_adapter(&self, start: &Js, read: &Rc<Read>, steps: &[TraversalStep], name: &str, scope: &Rc<Scope>, span: &Js) -> Result<Vec<Rc<Landed>>, Failure> {
-        let mut landed = vec![Rc::new(Landed::new(start.clone(), None, read.clone()))];
+        let mut paths: Vec<PathSoFar> = vec![(Vec::new(), Rc::new(Landed::new(start.clone(), None, read.clone())))];
         for step in steps {
             let TraversalStep::Edge(step) = step else {
                 return Err(Failure::engine(
@@ -1246,18 +1299,12 @@ impl Run<'_> {
                     &format!("source adapter '{}' cannot traverse incoming edges", read.adapter_type),
                 ));
             }
-            let pushdown = self.pushdown_args(step, read, scope, span).await?;
-            let mut next = Vec::new();
-            for cursor in &landed {
-                let kept = self.fetch(&cursor.position(), step, read, Fetch { pushdown: &pushdown, paged: false, stop_at: None }, scope, span).await?;
-                next.extend(self.ordered(kept, step, scope, span).await?);
-            }
-            landed = next;
-            if landed.is_empty() {
+            paths = self.hop_paths(&paths, step, read, false, scope, span).await?;
+            if paths.is_empty() {
                 break;
             }
         }
-        Ok(landed)
+        Ok(paths.into_iter().map(|(_, landed)| landed).collect())
     }
 
     /// `collapse`: nothing read is null, one read is itself, several are
@@ -1521,7 +1568,57 @@ fn stopped(stop: Stop) -> Failure {
 
 #[cfg(test)]
 mod tests {
-    use super::resources_alias;
+    use std::rc::Rc;
+
+    use super::{Probe, head_probe, resources_alias};
+    use crate::bindings::{Binding, Identity, Scope};
+    use crate::extract::emission::Emission;
+    use crate::js::{Js, JsObject};
+
+    /// A future that needs no host, run to its end.
+    fn settled<F: std::future::Future>(future: F) -> F::Output {
+        let mut future = std::pin::pin!(future);
+        match future.as_mut().poll(&mut std::task::Context::from_waker(std::task::Waker::noop())) {
+            std::task::Poll::Ready(output) => output,
+            std::task::Poll::Pending => panic!("an in-memory walk asked the host"),
+        }
+    }
+
+    fn entity(fields: &[(&str, &str)], children: Vec<(String, Vec<Rc<Emission>>)>) -> Rc<Emission> {
+        let mut object = JsObject::new();
+        for (name, value) in fields {
+            object.set((*name).to_string(), Js::str(*value));
+        }
+        Rc::new(Emission { node_name: "Entity".into(), fields: object, provenance: Vec::new(), origin: None, resources: Vec::new(), children })
+    }
+
+    /// An extraction's result walked two levels down, the second hop's WHERE
+    /// reading the first hop's entity: groups `B` and `A`, each holding items
+    /// `A` and `B`, so each group keeps only the item its own label names.
+    #[test]
+    fn a_walk_down_an_extraction_reads_each_path_s_own_entity() {
+        let items = || vec![("items".to_string(), vec![entity(&[("v", "A")], Vec::new()), entity(&[("v", "B")], Vec::new())])];
+        let groups = vec![("groups".to_string(), vec![entity(&[("label", "B")], items()), entity(&[("label", "A")], items())])];
+        let root = entity(&[], groups);
+        let Probe::Walk(steps) = head_probe("x", "-[g:groups]->-[i:items WHERE i.v == g.label]->", &[]).unwrap() else { panic!("a walk") };
+        let value = |binding: &Binding| match binding {
+            Binding::Extracted { emission, .. } => emission.fields.get("v").map(|v| v.to_js_string()),
+            _ => None,
+        };
+        crate::run::with_bare_run("function m() {\n  x = 1\n}", |run| {
+            let scope = Scope::root();
+            let span = Js::Undefined;
+            let probe = Probe::Walk(steps.clone());
+            let head = Binding::Extracted { emission: root.clone(), root: true, id: Identity::new() };
+            let paths = settled(run.head_iterations_from(head, "x", &probe, &scope, &span)).unwrap_or_else(|_| panic!("the block head's walk failed"));
+            let landed: Vec<Option<String>> = paths.iter().map(|(_, landing)| value(landing)).collect();
+            assert_eq!(landed, vec![Some("B".to_string()), Some("A".to_string())]);
+            let walked = settled(run.walk_extract(&root, &steps, "x", &scope, &span)).unwrap_or_else(|_| panic!("the expression's walk failed"));
+            let read: Vec<Option<String>> =
+                walked.into_iter().map(|emission| value(&Binding::Extracted { emission, root: false, id: Identity::new() })).collect();
+            assert_eq!(read, vec![Some("B".to_string()), Some("A".to_string())]);
+        });
+    }
 
     /// `RESOURCES_HEAD_ALIAS`: `^\s*-\[\s*(ident)\s*:\s*(?:_resources|#resources)\b`.
     #[test]

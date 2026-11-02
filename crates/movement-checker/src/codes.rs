@@ -28,8 +28,10 @@ pub const DUPLICATE_DECL: &str = "MOV_DUPLICATE_DECL";
 pub const SHADOWED_NAME: &str = "MOV_SHADOWED_NAME";
 /// One walk naming two of its hops alike (`-[c:Channels]->-[c:Messages]->`).
 pub const HOP_ALIAS_REPEATED: &str = "MOV_HOP_ALIAS_REPEATED";
-/// A run's walk whose hop reads an earlier hop's alias in its WHERE or
-/// ORDER BY (`-[t:Tables]->-[c:History WHERE c.Id == t.Name]->`).
+/// Raised by nothing after 0.13.0: a hop's WHERE or ORDER BY reads an
+/// earlier hop's alias (`-[t:Tables]->-[c:History WHERE c.Id == t.Name]->`)
+/// in a run as on a listen, each path's hops naming its own records. The
+/// name is never reused.
 pub const HOP_READS_EARLIER_HOP: &str = "MOV_HOP_READS_EARLIER_HOP";
 pub const CALL_NOT_MOVEMENT: &str = "MOV_CALL_NOT_MOVEMENT";
 pub const CALL_ARITY: &str = "MOV_CALL_ARITY";

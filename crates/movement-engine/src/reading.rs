@@ -18,6 +18,7 @@ use crate::executor::join_all;
 use crate::js::Js;
 use crate::record;
 use crate::run::{Failure, Run};
+use crate::traverse::{Paths, path_scope};
 
 type Reads<'s, T> = Pin<Box<dyn Future<Output = Result<T, Failure>> + 's>>;
 
@@ -366,22 +367,41 @@ impl Run<'_> {
     /// extraction's children, a list's members — and, from a record in a
     /// graph, the rest of the walk through that graph.
     pub(crate) fn walk_meta<'s>(&'s self, start: Vec<Binding>, steps: &'s [TraversalStep], name: &'s str, scope: &'s Rc<Scope>, span: &'s Js) -> Reads<'s, Vec<Binding>> {
+        self.walk_meta_paths(start.into_iter().map(|binding| (Vec::new(), binding)).collect(), steps, name, scope, span)
+    }
+
+    /// `walk_meta` over paths: each record in hand with the hops its path
+    /// crossed, which name their own records to the hops after them.
+    fn walk_meta_paths<'s>(&'s self, start: Paths, steps: &'s [TraversalStep], name: &'s str, scope: &'s Rc<Scope>, span: &'s Js) -> Reads<'s, Vec<Binding>> {
         Box::pin(async move {
-            let Some((step, rest)) = steps.split_first() else { return Ok(start) };
+            let Some((step, rest)) = steps.split_first() else { return Ok(start.into_iter().map(|(_, binding)| binding).collect()) };
             let TraversalStep::Edge(step) = step else {
                 return Err(unsupported(&format!("'{}' hops over a block meta-node ('{name}')", crate::traverse::step_type(step))));
             };
+            let crossed = |aliases: &Vec<(String, Binding)>, kept: Vec<Binding>| -> Paths {
+                kept.into_iter()
+                    .map(|landing| {
+                        let mut aliases = aliases.clone();
+                        if let Some(alias) = &step.alias {
+                            aliases.push((alias.clone(), landing.clone()));
+                        }
+                        (aliases, landing)
+                    })
+                    .collect()
+            };
             let mut reached = Vec::new();
-            for binding in start {
+            for (aliases, binding) in start {
+                let at = path_scope(scope, &aliases);
                 match &binding {
                     // A lazy binding IS the walk: the whole remaining chain,
                     // this hop included, continues from it.
                     Binding::LazyWalk(walk) => {
-                        reached.extend(self.deferred_landings(walk, steps).await?);
+                        let iterations = self.run_kept_past(walk, steps, &aliases, None).await.map_err(crate::write::failure_of)?;
+                        reached.extend(iterations.into_iter().map(|(_, landing)| landing));
                         continue;
                     }
                     Binding::Landed(landed) => {
-                        let walked = self.walk_adapter(&landed.position(), &landed.read, steps, name, scope, span).await?;
+                        let walked = self.walk_adapter(&landed.position(), &landed.read, steps, name, &at, span).await?;
                         reached.extend(walked.into_iter().map(Binding::Landed));
                         continue;
                     }
@@ -391,21 +411,22 @@ impl Run<'_> {
                     Binding::Handle(handle) if is_old_edge(step) => {
                         let mut kept = Vec::new();
                         for landed in Handle::old_landings(handle) {
-                            if self.hop_keeps_binding(step, &landed, scope, span).await? {
+                            if self.hop_keeps_binding(step, &landed, &at, span).await? {
                                 kept.push(landed);
                             }
                         }
-                        reached.extend(self.walk_meta(kept, rest, name, scope, span).await?);
+                        reached.extend(self.walk_meta_paths(crossed(&aliases, kept), rest, name, scope, span).await?);
                         continue;
                     }
                     Binding::Handle(_) => {
                         let (start, read, _) = self.walk_start(name, &binding).await?;
-                        let walked = self.walk_adapter(&start, &read, steps, name, scope, span).await?;
+                        let walked = self.walk_adapter(&start, &read, steps, name, &at, span).await?;
                         reached.extend(walked.into_iter().map(Binding::Landed));
                         continue;
                     }
                     Binding::Value(value) => {
-                        reached.extend(self.walk_meta(record::walk_starts(&value.value), steps, name, scope, span).await?);
+                        let members = record::walk_starts(&value.value).into_iter().map(|member| (aliases.clone(), member)).collect();
+                        reached.extend(self.walk_meta_paths(members, steps, name, scope, span).await?);
                         continue;
                     }
                     Binding::Node(node) => {
@@ -417,12 +438,13 @@ impl Run<'_> {
                                     "narrow the entry's own traversal instead — the WHERE belongs on the hop the node's edge is built from",
                                 ));
                             }
-                            reached.extend(self.deferred_landings(&walk, rest).await?);
+                            let iterations = self.run_kept_past(&walk, rest, &aliases, step.alias.as_deref()).await.map_err(crate::write::failure_of)?;
+                            reached.extend(iterations.into_iter().map(|(_, landing)| landing));
                             continue;
                         }
                         let landings = node.borrow().landings(&step.edge_type_id);
-                        let kept = self.keep_in_memory_hop(landings, step, scope, span).await?;
-                        reached.extend(self.walk_meta(kept, rest, name, scope, span).await?);
+                        let kept = self.keep_in_memory_hop(landings, step, &at, span).await?;
+                        reached.extend(self.walk_meta_paths(crossed(&aliases, kept), rest, name, scope, span).await?);
                         continue;
                     }
                     Binding::Extracted { emission, .. } => {
@@ -431,8 +453,8 @@ impl Run<'_> {
                             .iter()
                             .map(|child| Binding::Extracted { emission: child.clone(), root: false, id: Identity::new() })
                             .collect();
-                        let kept = self.keep_in_memory_hop(children, step, scope, span).await?;
-                        reached.extend(self.walk_meta(kept, rest, name, scope, span).await?);
+                        let kept = self.keep_in_memory_hop(children, step, &at, span).await?;
+                        reached.extend(self.walk_meta_paths(crossed(&aliases, kept), rest, name, scope, span).await?);
                         continue;
                     }
                     _ => {}
@@ -441,7 +463,10 @@ impl Run<'_> {
                     return Err(unsupported(&format!("WHERE filters on block meta-node hops ('{name}')")));
                 }
                 match binding {
-                    Binding::Positions(landings) => reached.extend(self.walk_meta(landings, steps, name, scope, span).await?),
+                    Binding::Positions(landings) => {
+                        let members = landings.into_iter().map(|member| (aliases.clone(), member)).collect();
+                        reached.extend(self.walk_meta_paths(members, steps, name, scope, span).await?);
+                    }
                     other => {
                         return Err(unsupported(&format!(
                             "traversing '{}' from {} inside a meta-node read",
@@ -558,29 +583,38 @@ impl Run<'_> {
     /// one reached record holds it (the first that does ends the reading).
     pub(crate) fn exists<'s>(&'s self, steps: &'s [TraversalStep], where_: Option<&'s Expression>, subjects: Vec<Binding>, scope: &'s Rc<Scope>, span: &'s Js) -> Reads<'s, bool> {
         Box::pin(async move {
-            let mut cursors = subjects;
+            // Each cursor with the hops its path crossed, which name their
+            // own records to the hops after them and to the WHERE.
+            let mut cursors: Paths = subjects.into_iter().map(|subject| (Vec::new(), subject)).collect();
             for step in steps {
                 let TraversalStep::Edge(step) = step else {
                     return Err(unsupported(&format!("'{}' hops inside EXISTS()", crate::traverse::step_type(step))));
                 };
                 let mut next = Vec::new();
-                for cursor in &cursors {
+                for (aliases, cursor) in &cursors {
+                    let at = path_scope(scope, aliases);
                     let gate = match cursor {
                         Binding::Landed(landed) => crate::traverse::member_gate(step, &landed.position(), &landed.read).map(|g| (g, landed.read.clone())),
                         _ => None,
                     };
                     let mut kept = Vec::new();
-                    for landed in self.step_cursor(cursor, step, scope, span).await? {
+                    for landed in self.step_cursor(cursor, step, &at, span).await? {
                         if let (Some((gate, read)), Binding::Landed(l)) = (&gate, &landed)
                             && !gate.admits(read.graph.schema.as_ref(), &l.position())
                         {
                             continue;
                         }
-                        if self.hop_keeps_binding(step, &landed, scope, span).await? {
+                        if self.hop_keeps_binding(step, &landed, &at, span).await? {
                             kept.push(landed);
                         }
                     }
-                    next.extend(self.ordered_bindings(kept, step, scope, span).await?);
+                    for landed in self.ordered_bindings(kept, step, &at, span).await? {
+                        let mut aliases = aliases.clone();
+                        if let Some(alias) = &step.alias {
+                            aliases.push((alias.clone(), landed.clone()));
+                        }
+                        next.push((aliases, landed));
+                    }
                 }
                 cursors = next;
                 if cursors.is_empty() {
@@ -591,8 +625,8 @@ impl Run<'_> {
                 return Ok(false);
             }
             let Some(where_) = where_ else { return Ok(true) };
-            for cursor in &cursors {
-                if self.decides(where_, scope, crate::traverse::scoped_at(cursor), span).await? {
+            for (aliases, cursor) in &cursors {
+                if self.decides(where_, &path_scope(scope, aliases), crate::traverse::scoped_at(cursor), span).await? {
                     return Ok(true);
                 }
             }

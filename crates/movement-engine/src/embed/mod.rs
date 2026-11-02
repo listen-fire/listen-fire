@@ -21,6 +21,8 @@
 
 mod data;
 #[cfg(test)]
+mod earlier_hops;
+#[cfg(test)]
 mod end_to_end;
 mod hosts;
 #[cfg(test)]

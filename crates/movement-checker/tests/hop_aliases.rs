@@ -1,5 +1,5 @@
-//! A hop's alias names its record to the block the walk opens (and, on a
-//! listen, to every hop after it). One walk naming two hops alike is refused where it is
+//! A hop's alias names its record to every hop after it and to the block the
+//! walk opens. One walk naming two hops alike is refused where it is
 //! written (MOV_HOP_ALIAS_REPEATED), on a block, inside an expression and on
 //! a listen (listen_traversal.rs) alike: each reader would otherwise have to
 //! guess which hop the name means.
@@ -48,24 +48,29 @@ fn distinct_aliases_and_one_alias_in_two_walks_are_accepted() {
     assert_eq!(check("  a = count(at-[t:Tables]->)\n  b = count(at-[t:Tables]->-[c:History]->)\n  return a + b"), Vec::<String>::new());
 }
 
-const READS_EARLIER: &str = "MOV_HOP_READS_EARLIER_HOP '-[:History]->' reads `t`, which an earlier hop of this walk names ('-[t:Tables]->'), and a hop's WHERE reads only its own record, names in scope and literals — open a block on '-[t:Tables]->' and walk on from `t` inside it: `…-[t:Tables]-> { t-[:History WHERE …]-> }`";
-
-/// A run's walk fetches each hop closed over the scope it starts in; a hop's
-/// alias joins it only in the block the walk opens. So a later hop's WHERE
-/// reading an earlier hop's alias would fail the run: refused where it is
-/// written, and the block opened on the earlier hop is the way to say it.
+/// A later hop's WHERE and ORDER BY read an earlier hop's alias, in a run as
+/// on a listen: each path through the walk carries its own records, so `t`
+/// is the Table that path crossed. Accepted in a block head, inside an
+/// expression, in a bound walk and inside `exists`, as from inside a block.
 #[test]
-fn a_hop_reading_an_earlier_hop_of_its_walk_is_refused_in_a_run() {
+fn a_hop_reading_an_earlier_hop_of_its_walk_is_accepted_in_a_run() {
     for body in [
         "  at-[t:Tables]->-[c:History WHERE c.Id == t.Name]-> {\n    y = c.Kind\n  }",
         "  n = count(at-[t:Tables]->-[c:History WHERE c.Id == t.Name]->)\n  return n",
         "  l = at-[t:Tables]->-[c:History ORDER BY t.Name LIMIT 2]->\n  return l",
+        "  found = exists(at-[t:Tables]->-[c:History WHERE c.Id == t.Name]->)\n  return found",
+        "  at-[t:Tables]-> {\n    t-[c:History WHERE c.Id == t.Name]-> {\n      y = c.Kind\n    }\n  }",
+        "  at-[t:Tables]-> {\n    n = count(t-[c:History WHERE c.Id == t.Name]->)\n  }",
     ] {
-        let found = check(body);
-        assert_eq!(found.iter().filter(|d| d.starts_with("MOV_HOP_READS_EARLIER_HOP")).count(), 1, "{body}: {found:?}");
-        assert!(found.iter().any(|d| d == READS_EARLIER), "{body}: {found:?}");
+        assert_eq!(check(body), Vec::<String>::new(), "{body}");
     }
-    // Walked on from inside the block, the Table is a record in scope.
-    assert_eq!(check("  at-[t:Tables]-> {\n    t-[c:History WHERE c.Id == t.Name]-> {\n      y = c.Kind\n    }\n  }"), Vec::<String>::new());
-    assert_eq!(check("  at-[t:Tables]-> {\n    n = count(t-[c:History WHERE c.Id == t.Name]->)\n  }"), Vec::<String>::new());
+}
+
+/// The earlier hop's record is typed as its own: a field it lacks is refused
+/// where the later hop reads it.
+#[test]
+fn an_earlier_hop_s_missing_field_is_refused_where_a_later_hop_reads_it() {
+    let found = check("  n = count(at-[t:Tables]->-[c:History WHERE c.Id == t.Nmae]->)\n  return n");
+    assert!(found.iter().any(|d| d.contains("Nmae")), "{found:?}");
+    assert!(!found.iter().any(|d| d.starts_with("MOV_HOP_READS_EARLIER_HOP")), "{found:?}");
 }

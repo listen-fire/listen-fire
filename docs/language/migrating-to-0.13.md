@@ -236,7 +236,7 @@ For module authors only.
 
 One walk names each hop once: `-[c:Channels]->-[c:Messages]->` is refused (`MOV_HOP_ALIAS_REPEATED`), on a listen, a block or a walk inside an expression. Under 0.12 a later read of `c` meant the nearest hop to the checker and the first to a listen's judge. Give each hop its own alias.
 
-In a run, a hop's `WHERE` reads its own record, names in scope and literals, not an earlier hop of the same walk: `at-[t:Tables]->-[c:History WHERE c.Id == t.Name]->` is refused (`MOV_HOP_READS_EARLIER_HOP`). Under 0.12 it checked clean and failed the run. Open a block on the earlier hop and walk on from it inside, where it is a record in scope: `at-[t:Tables]-> { t-[c:History WHERE c.Id == t.Name]-> { … } }`. A listen's hops may read earlier hops, which the host lists with each one named.
+A later hop's `WHERE` or `ORDER BY` may read an earlier hop of the same walk, in a run as on a listen: `at-[t:Tables]->-[c:History WHERE c.Id == t.Name]->` filters each Table's History by that Table's own Name. Under 0.12 it checked clean and failed the run.
 
 ### What the upgrade rewrites
 
@@ -465,7 +465,6 @@ listen to chat-[:Channels]->-[m:Messages WHERE m.Topic == "lunch-poll" AND m.Tim
 | `MOV_ABSENT_REQUIRED` (a wait off a record that may be missing) | error, by hand: guard the wait with `!= null` | [5](#5-what-a-wait-binds-is-always-there) |
 | `MOV_LISTEN_EDGE_NOT_LISTENABLE`, `MOV_LISTEN_HOP_NOT_ITERABLE`, `MOV_LISTEN_UNWATCHABLE`, `MOV_LISTEN_IMPURE_WHERE` | error, by hand, on a listen written or rewritten as a traversal | [8](#8-listens-are-traversals) |
 | `MOV_HOP_ALIAS_REPEATED` | error, by hand: give each hop of a walk its own alias | [8](#one-name-for-one-hop) |
-| `MOV_HOP_READS_EARLIER_HOP` | error, by hand: open a block on the earlier hop and walk on from it inside | [8](#one-name-for-one-hop) |
 | `MOV_UNBOUNDED_EDGE` | error, by hand: narrow the hop by a field its module takes, with literals (`-[t:Ticks WHERE t.Schedule == "…"]->`) | [changelog](../../CHANGELOG.md#0130) |
 | `MOV_FILTER_NOT_TAKEN` | error, by hand: compare a field only its module evaluates with a literal its module takes | [changelog](../../CHANGELOG.md#0130) |
 | `MOV_OWNED_VALUE_INVALID` | error, by hand: write a value its module accepts (a five-field schedule, a time zone) | [changelog](../../CHANGELOG.md#0130) |
