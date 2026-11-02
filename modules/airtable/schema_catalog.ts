@@ -112,6 +112,15 @@ export async function freshBases(input: {
   return bases.map((b) => ({ id: b.id, name: b.name }));
 }
 
+/** A base's name, as a change arriving from it carries it: from the cached
+ *  bases, read again once when the base is not among them (made since), or
+ *  undefined when no base by that id is visible. */
+export async function baseNameOf(input: { client: AirtableAPIClient; teamId: string; baseId: string }): Promise<string | undefined> {
+  const cached = (await cachedBases(input)).get(input.baseId);
+  if (cached !== undefined) return cached;
+  return (await freshBases(input)).find((base) => base.id === input.baseId)?.name;
+}
+
 /** The workspace's bases, cache-backed — `id → name`. The root hop reads them
  *  through here rather than firing its own `listBases`, so walking the root
  *  right after `listEntryPoints` (the ordinary case: the cache enumerates the
@@ -497,7 +506,9 @@ export function describeTableMeta(at: { positioned: boolean }): SchemaTypeDescri
  * the other. Off a base walked to, it is subscribed per base the listen's
  * `Bases` hop landed on (`scopedBy`); at a connection positioned at a base,
  * once for the connection. Each change names its table, and a listen keeps
- * only its own tables' changes.
+ * only its own tables' changes. Off a base walked to, each carries its base
+ * and table (`carries`), so a host that lists neither judges a listen
+ * narrowed by them from the change alone.
  */
 export function changesReference(at: { positioned: boolean; target?: string }): SchemaReferenceDescriptor {
   return {
@@ -510,7 +521,11 @@ export function changesReference(at: { positioned: boolean; target?: string }): 
     readable: false,
     writable: false,
     listenable: true,
-    ...(at.positioned ? { delivery: 'connection' as const } : { delivery: 'scope' as const, scopedBy: AIRTABLE_BASES_EDGE }),
+    // Positioned, it declares no `carries`: a change carries its base first,
+    // and that connection's path has no `Bases` hop to align it with.
+    ...(at.positioned
+      ? { delivery: 'connection' as const }
+      : { delivery: 'scope' as const, scopedBy: AIRTABLE_BASES_EDGE, carries: [AIRTABLE_BASES_EDGE, AIRTABLE_TABLES_EDGE] }),
     identity: 'Id',
     attributes: true,
     description: "What happens to the table's rows: one change per row an edit touched (created, updated or deleted), with the row before and after it (`Previous`, `Current`).",

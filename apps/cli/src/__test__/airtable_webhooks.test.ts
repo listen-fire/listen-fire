@@ -244,6 +244,40 @@ test('a listen on Expenses changes registers one data webhook on its base and fi
   }
 });
 
+/** The arrival that fired each completed run, as `runs show` holds it. */
+function firedArrivals(dir: string): Array<{ parents?: unknown[] }> {
+  const listed = JSON.parse(lfSync(dir, 'runs', '--json').out) as { runs: Array<{ runId: string; status: string }> };
+  return listed.runs
+    .filter((r) => r.status === 'completed')
+    .map((r) => (JSON.parse(lfSync(dir, 'runs', 'show', r.runId, '--json').out) as { run: { event: { arrival: { parents?: unknown[] } } } }).run.event.arrival);
+}
+
+// A change carries its base and table, by id and name, so any host judges a
+// listen narrowed by them from the change alone.
+test('a change carries its base and table, each by its id and name, to the run it fires', async () => {
+  const fake = await fakeChannels();
+  try {
+    const dir = await hiringProject(fake);
+    writeFileSync(join(dir, 'movements/hiring.mvt'), EXPENSES);
+    const server = await serving(dir);
+    try {
+      await until(() => server.lines.filter((l) => /registered webhook ach\d+/.test(l)).length >= 2, server.lines);
+      await deliver(fake, { changeType: 'add', tableId: 'tblEXPN01', recordId: 'recTAXI', fields: { Item: 'Taxi' } });
+      await until(() => server.lines.some((l) => /^run \S+ hiring:review completed$/.test(l)), server.lines);
+    } finally {
+      await server.stop();
+    }
+    assert.deepEqual(firedArrivals(dir).map((arrival) => arrival.parents), [
+      [
+        { recordId: 'appHIRE01', recordType: 'Base', fields: { Id: 'appHIRE01', Name: 'Hiring' } },
+        { recordId: 'tblEXPN01', recordType: 'Table', fields: { Id: 'tblEXPN01', Name: 'Expenses' } },
+      ],
+    ]);
+  } finally {
+    await fake.stop();
+  }
+});
+
 // Airtable's ping names no change: the module reads its payloads from the
 // cursor its webhook was at. Read again from the first delivery's cursor, the
 // feed holds the second delivery's change too. A replay of the first judges

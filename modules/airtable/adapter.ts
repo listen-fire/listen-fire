@@ -69,6 +69,7 @@ import {
   describeBase,
   describeTableAt,
   describeTableChangeAt,
+  baseNameOf,
   cachedTables,
   freshTables,
   invalidateTableCache,
@@ -731,19 +732,42 @@ export class AirtableAdapter extends BaseAdapter {
       invalidateTableCache(this.teamId, base.id);
       this.tableCatalogCache = undefined;
     }
-    const context = { baseId: base.id, positioned, ...(await this.fieldsOf(base.id)) };
+    const changedTables = new Set(payloads.flatMap((payload) => Object.keys(payload.changedTablesById ?? {})));
+    const baseName = await this.baseNameOf(base.id);
+    const context = { baseId: base.id, ...(baseName !== undefined ? { baseName } : {}), positioned, ...(await this.fieldsOf(base.id, changedTables)) };
     return { events: [], arrivals: payloads.flatMap((payload) => arrivalsFromPayload(payload, context)), checkpoint: cursor };
   }
 
+  /** The base's name, which each change carries on its base: read from the
+   *  meta API once per base and kept. A failure leaves it unknown on the
+   *  change rather than dropping the delivery. */
+  private async baseNameOf(baseId: string): Promise<string | undefined> {
+    try {
+      return await baseNameOf({ client: await this.getApiClient(), teamId: this.teamId, baseId });
+    } catch (err) {
+      logger.warn('[AirtableAdapter.preprocessInbound] base name unavailable — its changes carry it unknown', {
+        teamId: this.teamId,
+        baseId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return undefined;
+    }
+  }
+
   /** The base's `fieldId → { name, type }` maps and table names, so cells
-   *  (keyed by field id) are read by name. A metadata failure leaves them
-   *  keyed by id rather than dropping the delivery. */
-  private async fieldsOf(baseId: string): Promise<{ fieldsByTable: FieldsByTable; tableNamesById: Map<string, string> }> {
+   *  (keyed by field id) are read by name and each change carries its
+   *  table's. Kept per base; read again when a change names a table the
+   *  kept ones lack (made since). A metadata failure leaves them keyed by id
+   *  rather than dropping the delivery. */
+  private async fieldsOf(baseId: string, changedTables: ReadonlySet<string>): Promise<{ fieldsByTable: FieldsByTable; tableNamesById: Map<string, string> }> {
     const fieldsByTable: FieldsByTable = new Map();
     const tableNamesById = new Map<string, string>();
     try {
       const client = await this.getApiClient();
-      for (const table of await cachedTables({ client, teamId: this.teamId, baseId })) {
+      const cached = await cachedTables({ client, teamId: this.teamId, baseId });
+      const known = new Set(cached.map((table) => table.id));
+      const tables = [...changedTables].every((id) => known.has(id)) ? cached : await freshTables({ client, teamId: this.teamId, baseId });
+      for (const table of tables) {
         fieldsByTable.set(table.id, new Map(table.fields.map((f) => [f.id, { name: f.name, type: f.type }])));
         tableNamesById.set(table.id, table.name);
       }

@@ -16,9 +16,9 @@
 
 import { z } from 'zod';
 
-import type { Arrival } from 'engine-contracts';
+import type { Arrival, AwaitLanding } from 'engine-contracts';
 import type { AirtableWebhookPayload } from './api_client';
-import { TABLE_META_TYPE } from './types';
+import { BASE_META_TYPE, TABLE_META_TYPE } from './types';
 
 /** The Airtable ping POSTed to the callback URL. It carries only ids — the
  *  actual changes are pulled from the webhook's payload feed. */
@@ -193,6 +193,8 @@ function stableJson(value: unknown): string {
 /** What turning a payload into arrivals reads besides the payload. */
 export interface PayloadContext {
   baseId: string;
+  /** The base's name, from the meta API; absent when it could not be read. */
+  baseName?: string;
   fieldsByTable: FieldsByTable;
   /** `tableId → name`, from the same metadata the field map came from. */
   tableNamesById: Map<string, string>;
@@ -215,6 +217,7 @@ export function arrivalsFromPayload(payload: AirtableWebhookPayload, context: Pa
   for (const [tableId, changes] of Object.entries(payload.changedTablesById ?? {})) {
     const tableFields = context.fieldsByTable.get(tableId);
     const table = context.tableNamesById.get(tableId) ?? tableId;
+    const parents = carriedParents(context, tableId);
     const named = (cells: Record<string, unknown> | undefined): Record<string, unknown> => {
       const data: Record<string, unknown> = {};
       for (const [fieldId, value] of Object.entries(cells ?? {})) {
@@ -241,6 +244,7 @@ export function arrivalsFromPayload(payload: AirtableWebhookPayload, context: Pa
         key: tableId,
         identity: id,
         landing: { recordId: id, recordType: AIRTABLE_CHANGE_TYPE, fields: { ...data } },
+        parents,
         about: { recordType: table, externalId: recordId },
         ...(occurredAt !== undefined ? { occurredAt } : {}),
       };
@@ -277,6 +281,21 @@ export function arrivalsFromPayload(payload: AirtableWebhookPayload, context: Pa
     arrivals.push(tableArrival(context, tableId, undefined, transaction, occurredAt));
   }
   return arrivals;
+}
+
+/** The records a change carries, as a walked-to table's `Changes` declares
+ *  (`carries`): its base and its table, by their ids and names, so a listen
+ *  narrowed by either is judged from the arrival alone. The same whatever the
+ *  connection's position: a host reads a delivery for its install, not for
+ *  one connection, so the door cannot tell. A positioned table's `Changes`
+ *  declares none, and a host reads none of them there. A name that could not
+ *  be read is said unknown. */
+function carriedParents(context: PayloadContext, tableId: string): AwaitLanding[] {
+  return [metaRecord(BASE_META_TYPE, context.baseId, context.baseName), metaRecord(TABLE_META_TYPE, tableId, context.tableNamesById.get(tableId))];
+}
+
+function metaRecord(recordType: string, id: string, name: string | undefined): AwaitLanding {
+  return name === undefined ? { recordId: id, recordType, fields: { Id: id }, unknown: ['Name'] } : { recordId: id, recordType, fields: { Id: id, Name: name } };
 }
 
 /** Whether a payload changed the base's tables (any arrival on `Tables`):

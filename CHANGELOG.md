@@ -20,6 +20,10 @@ named in [`RELEASING.md`](RELEASING.md).
 
 <!-- add merged PRs here -->
 
+### Changed
+
+- **An Airtable change carries its base and table, so any host judges a listen narrowed by them from the change alone.** `@lf/airtable` reads the base's and its tables' names from Airtable's meta API at the door, once per base, and each change's `parents` hold a `Base` and a `Table` with `Id` and `Name`. The judge now judges an earlier hop against the record a change carries for it, even where `listen-fire` also lists that hop's members, so a host that lists none (the embedded host, the hosted product) accepts `listen to at-[b:Bases WHERE b.Name == "Hiring"]->-[t:Tables WHERE t.Name == "Deals"]->-[c:Changes]-> fire onDeal`. A listen on a connection positioned at a base is unchanged. Such a listen walked from the workspace gets a new pipeline with its plan, so its listen state starts afresh once.
+
 ## [0.14.1] - 2026-11-02
 
 A patch release of the 0.14 line: it reads the same pins as 0.14.0 (every `0.14.x`) and changes the meaning of no program.

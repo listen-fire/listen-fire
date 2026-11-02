@@ -7,6 +7,7 @@
 import type { FileRef } from 'movement-engine/public/adapter';
 
 import { AirtableAdapter } from './adapter';
+import type { AirtableWebhookPayload } from './api_client';
 
 /** The client every test replaces. */
 async function noClient(): Promise<never> {
@@ -154,7 +155,9 @@ export function makeMultiBaseAdapter(input: {
   records?: FakeRecord[];
   /** Webhooks already on the bases, by the door each notifies. */
   heldWebhooks?: Array<{ id: string; notificationUrl: string }>;
-}): { adapter: AirtableAdapter; listedTableBaseIds: string[]; webhooks: unknown[]; deletedWebhooks: string[] } {
+  /** What each webhook's payload feed answers, from any cursor. */
+  payloads?: AirtableWebhookPayload[];
+}): { adapter: AirtableAdapter; listedTableBaseIds: string[]; listedBases: { count: number }; webhooks: unknown[]; deletedWebhooks: string[] } {
   const adapter = new AirtableAdapter({
     tenant: input.teamId,
     client: noClient,
@@ -162,8 +165,12 @@ export function makeMultiBaseAdapter(input: {
     ...(input.base !== undefined ? { base: input.base } : {}),
   });
   const listedTableBaseIds: string[] = [];
+  const listedBases = { count: 0 };
   const fakeClient = {
-    listBases: async () => input.bases.map((b) => ({ id: b.id, name: b.name })),
+    listBases: async () => {
+      listedBases.count += 1;
+      return input.bases.map((b) => ({ id: b.id, name: b.name }));
+    },
     listTables: async ({ baseId }: { baseId: string }) => {
       listedTableBaseIds.push(baseId);
       return input.bases.find((b) => b.id === baseId)?.tables ?? [];
@@ -182,10 +189,11 @@ export function makeMultiBaseAdapter(input: {
     deleteWebhook: async ({ webhookId }: { webhookId: string }) => {
       deletedWebhooks.push(webhookId);
     },
+    listPayloads: async () => ({ payloads: input.payloads ?? [], cursor: (input.payloads ?? []).length + 1, mightHaveMore: false }),
   };
   const webhooks: unknown[] = [];
   const deletedWebhooks: string[] = [];
   (adapter as unknown as { getApiClient: () => Promise<typeof fakeClient> }).getApiClient = async () =>
     fakeClient;
-  return { adapter, listedTableBaseIds, webhooks, deletedWebhooks };
+  return { adapter, listedTableBaseIds, listedBases, webhooks, deletedWebhooks };
 }

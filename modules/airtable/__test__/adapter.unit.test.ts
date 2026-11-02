@@ -455,8 +455,10 @@ describe('AirtableAdapter entry-position (base) scoping', () => {
     });
     const table = await adapter.describe('Table');
     expect(table?.fields.map((f) => f.fieldId)).toEqual(['Name', 'Id']);
+    // A change carries its base and table, so a listen narrowed by them is
+    // judged from the arrival, by a host that lists neither.
     expect(table?.references.find((r) => r.name === 'Changes')).toMatchObject({
-      targetTypeId: 'Change', readable: false, listenable: true, delivery: 'scope', identity: 'Id', attributes: true,
+      targetTypeId: 'Change', readable: false, listenable: true, delivery: 'scope', identity: 'Id', attributes: true, carries: ['Bases', 'Tables'],
     });
     const change = await adapter.describe('Change');
     expect(change?.fields.map((f) => f.fieldId)).toEqual(['Id', 'Kind', 'Current', 'Previous', 'Changed Fields', 'Base Id', 'Table Id', 'Record Id']);
@@ -480,6 +482,10 @@ describe('AirtableAdapter entry-position (base) scoping', () => {
     expect(entries[3].externalId).toBe('tblTASKS01');
     // The other base's tables were never enumerated — this is the timeout fix.
     expect(listedTableBaseIds).toEqual(['appOPS01']);
+    // No `Bases` hop comes before it here, so it declares nothing carried.
+    const table = await adapter.describe('Table');
+    expect(table?.references.find((r) => r.name === 'Changes')).toMatchObject({ delivery: 'connection' });
+    expect(table?.references.find((r) => r.name === 'Changes')).not.toHaveProperty('carries');
   });
 
   it('resolves the base name case-insensitively', async () => {
@@ -830,6 +836,7 @@ describe('a change → its record', () => {
 describe('arrivalsFromPayload', () => {
   const context = (positioned: boolean) => ({
     baseId: 'appCRM01',
+    baseName: 'CRM',
     positioned,
     tableNamesById: new Map([['tblDEALS01', 'Deals']]),
     fieldsByTable: new Map([
@@ -983,6 +990,71 @@ describe('arrivalsFromPayload', () => {
       context(false),
     );
     expect(arrivals.map((a) => [a.landing.fields.Current, a.about])).toEqual([[{ fldQ: 1 }, { recordType: 'tblX', externalId: 'recA' }]]);
+    // Its table's name is not known, and says so: a listen filtering it is not judged on a guess.
+    expect(arrivals[0].parents?.[1]).toEqual({ recordId: 'tblX', recordType: 'Table', fields: { Id: 'tblX' }, unknown: ['Name'] });
+  });
+
+  // A host judges a listen narrowed by base or table from the arrival alone:
+  // each change carries the records the edge declares it carries, outermost first.
+  it('a change carries its base and table, with their ids and names, whatever the connection stands on', () => {
+    const payload = { baseTransactionNumber: 4, changedTablesById: { tblDEALS01: { createdRecordsById: { recNEW01: { cellValuesByFieldId: { fldNAME: 'Acme' } } } } } };
+    const base = { recordId: 'appCRM01', recordType: 'Base', fields: { Id: 'appCRM01', Name: 'CRM' } };
+    const table = { recordId: 'tblDEALS01', recordType: 'Table', fields: { Id: 'tblDEALS01', Name: 'Deals' } };
+    expect(arrivalsFromPayload(payload, context(false)).map((a) => a.parents)).toEqual([[base, table]]);
+    expect(arrivalsFromPayload(payload, context(true)).map((a) => a.parents)).toEqual([[base, table]]);
+    // A base whose name could not be read is carried by its id, its name unknown.
+    const { baseName: _unread, ...nameless } = context(false);
+    expect(arrivalsFromPayload(payload, nameless)[0].parents?.[0]).toEqual({ recordId: 'appCRM01', recordType: 'Base', fields: { Id: 'appCRM01' }, unknown: ['Name'] });
+    // A table's own arrival on Tables carries nothing.
+    const renamed = arrivalsFromPayload({ baseTransactionNumber: 5, changedTablesById: { tblDEALS01: { changedMetadata: { current: { name: 'Pipeline' } } } } }, context(false));
+    expect(renamed.map((a) => [a.edge, a.parents])).toEqual([['Tables', undefined]]);
+  });
+});
+
+// At the door: each ping's changes carry their base and table by name, read
+// from Airtable's meta API once per base and kept, not once per delivery.
+describe('preprocessInbound', () => {
+  const ping = (baseId: string) => ({ base: { id: baseId }, webhook: { id: 'achDATA01' } });
+  const created = (recordId: string) => ({ baseTransactionNumber: 1, changedTablesById: { tblDEALS01: { createdRecordsById: { [recordId]: { cellValuesByFieldId: { fldName: 'Acme' } } } } } });
+
+  it('a change arrives carrying its Base and Table, each with its Id and Name', async () => {
+    const { adapter } = makeMultiBaseAdapter({ teamId: 'team-air-door-parents', bases: [{ id: 'appHIRE01', name: 'Hiring', tables: [dealsTable()] }], payloads: [created('recA')] });
+    const { arrivals } = await adapter.preprocessInbound({ raw: ping('appHIRE01') });
+    expect(arrivals.map((a) => [a.edge, a.key, a.parents])).toEqual([
+      [
+        'Changes',
+        'tblDEALS01',
+        [
+          { recordId: 'appHIRE01', recordType: 'Base', fields: { Id: 'appHIRE01', Name: 'Hiring' } },
+          { recordId: 'tblDEALS01', recordType: 'Table', fields: { Id: 'tblDEALS01', Name: 'Deals' } },
+        ],
+      ],
+    ]);
+  });
+
+  it('reads the names once per base, however many deliveries come for it', async () => {
+    const { adapter, listedTableBaseIds, listedBases } = makeMultiBaseAdapter({
+      teamId: 'team-air-door-cached',
+      bases: [
+        { id: 'appHIRE01', name: 'Hiring', tables: [dealsTable()] },
+        { id: 'appOPS01', name: 'Ops', tables: [dealsTable()] },
+      ],
+      payloads: [created('recA')],
+    });
+    for (const baseId of ['appHIRE01', 'appHIRE01', 'appOPS01', 'appOPS01']) await adapter.preprocessInbound({ raw: ping(baseId) });
+    expect(listedTableBaseIds).toEqual(['appHIRE01', 'appOPS01']);
+    expect(listedBases.count).toBe(1);
+  });
+
+  it('a base made since the names were read is read again, once', async () => {
+    const bases = [{ id: 'appHIRE01', name: 'Hiring', tables: [dealsTable()] }];
+    const { adapter, listedBases } = makeMultiBaseAdapter({ teamId: 'team-air-door-new-base', bases, payloads: [created('recA')] });
+    await adapter.preprocessInbound({ raw: ping('appHIRE01') });
+    bases.push({ id: 'appNEW01', name: 'Fresh', tables: [dealsTable()] });
+    const { arrivals } = await adapter.preprocessInbound({ raw: ping('appNEW01') });
+    expect(arrivals[0].parents?.[0]).toEqual({ recordId: 'appNEW01', recordType: 'Base', fields: { Id: 'appNEW01', Name: 'Fresh' } });
+    await adapter.preprocessInbound({ raw: ping('appNEW01') });
+    expect(listedBases.count).toBe(2);
   });
 });
 

@@ -503,3 +503,130 @@ listen to d-[:Spaces]->-[:Subjects]->-[:Owner]->-[:Notes]-> fire noted
     ]);
   });
 });
+
+/** Bases of tables, shaped as Airtable is: the workspace's bases, each
+ *  base's tables, and each table's changes, pushed once per base (`scopedBy`)
+ *  and each carrying its base and table (`carries`). Notes are what a run
+ *  writes. */
+function basesModule(written: string[]) {
+  const field = (name: string) => ({ fieldId: name, displayName: name, kind: 'string' as const, writable: false, required: false });
+  const reference = (name: string, targetTypeId: string, more: { readable: boolean } & Record<string, unknown>) => ({
+    fieldId: name,
+    name,
+    targetTypeId,
+    cardinality: 'many' as const,
+    direction: 'outgoing' as const,
+    writable: false,
+    ...more,
+  });
+  const create = (): Adapter => ({
+    adapterType: 'sheets',
+    supportedTriggers: ['webhook'],
+    runtimeCapabilities: () => BASE_RUNTIME_CAPABILITIES,
+    listEntryPoints: async () => [
+      { typeId: 'Base', displayName: 'Base', collectionName: 'Bases', readable: true, writable: false, membersChange: { relistEverySeconds: 3600 } },
+      { typeId: 'Table', displayName: 'Table', readable: false, writable: false },
+      { typeId: 'Change', displayName: 'Change', readable: false, writable: false },
+      { typeId: 'Note', displayName: 'Note', collectionName: 'Notes', readable: false, writable: true },
+    ],
+    describe: async (typeId) => {
+      switch (typeId) {
+        case 'Base':
+          return { typeId, displayName: 'Base', fields: [field('Id'), field('Name')], references: [reference('Tables', 'Table', { readable: true, listenable: true, membersChange: 'pushed', delivery: 'scope', identity: 'Id' })] };
+        case 'Table':
+          return {
+            typeId,
+            displayName: 'Table',
+            fields: [field('Id'), field('Name')],
+            references: [reference('Changes', 'Change', { readable: false, listenable: true, delivery: 'scope', scopedBy: 'Bases', carries: ['Bases', 'Tables'], identity: 'Id', attributes: true })],
+          };
+        case 'Change':
+          return { typeId, displayName: 'Change', fields: [field('Id'), field('Kind')], references: [] };
+        case 'Note':
+          return { typeId, displayName: 'Note', fields: [{ ...field('Text'), writable: true }], references: [] };
+        default:
+          return null;
+      }
+    },
+    resolveEntity: async () => ({ candidates: [] }),
+    getFieldValue: async ({ position, fieldId }) => {
+      const data = position.identity.data;
+      return data !== null && typeof data === 'object' ? (Reflect.get(data, fieldId) ?? null) : null;
+    },
+    getRelated: async () => [],
+    createRecord: async ({ recordType, fields }) => {
+      written.push(String(fields.Text));
+      return { adapterType: 'sheets', externalId: `note-${written.length}`, recordType, data: { ...fields } };
+    },
+    updateRecord: async () => {
+      throw new Error('not used');
+    },
+    deleteRecord: async () => {
+      throw new Error('not used');
+    },
+  });
+  return defineModule({
+    kind: 'adapter',
+    name: '@test/sheets',
+    manifest: {
+      adapterType: 'sheets',
+      displayName: 'Sheets',
+      description: 'Bases of tables.',
+      supportedTriggers: ['webhook'],
+      methods: ['listEntryPoints', 'describe', 'resolveEntity', 'getFieldValue', 'getRelated', 'createRecord'],
+      declaredCredentials: ['sheets'],
+      introspectedSchema: true,
+    },
+    credentials: [{ name: 'sheets', kind: 'static', fields: [{ name: 'token' }] }],
+    create,
+  });
+}
+
+describe('a listen narrowed by the records its arrivals carry', () => {
+  it('judges a listen on the Deals table of the Hiring base from the base and table each change carries, listing neither', async () => {
+    const written: string[] = [];
+    const warned: string[] = [];
+    const sheets = basesModule(written);
+    const host = createEmbeddedHost({ modules: [sheets], store: memoryEmbeddedHostStore(), log: { warn: (message) => void warned.push(message) }, moduleHost: () => ({ validateResults: true }) });
+    await host.connect('acme', { name: 'main', module: sheets, credential: { token: 't' } });
+    const source = `import { sheets } from adapters
+import { main } from credentials
+
+at = connect sheets using main
+
+function onDeal(c: <at-[:Change]->>) {
+  write at-[:Notes]-> { Text: c.Id }
+}
+
+listen to at-[b:Bases WHERE b.Name == "Hiring"]->-[t:Tables WHERE t.Name == "Deals"]->-[c:Changes]-> fire onDeal
+`;
+    expect(await host.save('acme', { name: 'deals', source })).toEqual({ saved: true, listens: 1 });
+
+    const record = (recordType: string, id: string, name?: string) =>
+      name === undefined ? { recordId: id, recordType, fields: { Id: id }, unknown: ['Name'] } : { recordId: id, recordType, fields: { Id: id, Name: name } };
+    const change = (id: string, base: string, table?: string): Arrival => ({
+      edge: 'Changes',
+      key: `tbl-${id}`,
+      identity: id,
+      landing: { recordId: id, recordType: 'Change', fields: { Id: id, Kind: 'created' } },
+      parents: [record('Base', `app-${base}`, base), record('Table', `tbl-${id}`, table)],
+    });
+    const { runs } = await host.dispatch('acme', {
+      adapterType: 'sheets',
+      connection: 'main',
+      arrivals: [change('c1', 'Hiring', 'Deals'), change('c2', 'Hiring', 'Roles'), change('c3', 'Finance', 'Deals')],
+    });
+
+    expect(runs.map(({ movement, outcome }) => ({ movement, ok: outcome.ok }))).toEqual([{ movement: 'onDeal', ok: true }]);
+    expect(written).toEqual(['c1']);
+    expect(warned).toEqual([]);
+
+    // A change whose table name its module could not read is not judged on a guess.
+    const { runs: none, notJudged } = await host.dispatch('acme', { adapterType: 'sheets', connection: 'main', arrivals: [change('c4', 'Hiring')] });
+    expect(none).toEqual([]);
+    expect(notJudged.map(({ identity, reason }) => ({ identity, reason }))).toEqual([
+      { identity: 'c4', reason: "sheets could not read Name of the Tables record the arrival carries, which this listen's filter reads" },
+    ]);
+    expect(written).toEqual(['c1']);
+  });
+});

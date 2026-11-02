@@ -4,9 +4,12 @@
 //! packages/engine-contracts/conformance/listen-arrivals.json.
 //!
 //! The judge reads the listen's plan (crates/movement-parser/src/
-//! listen_plan.rs), never its source. Only hops judged on arrival are judged
-//! here, each against the record the arrival carries for it; a hop the host
-//! resolves by listing is the host's scope check. A hop's checked part is
+//! listen_plan.rs), never its source. Hops judged on arrival are judged
+//! here, each against the record the arrival carries for it; so is a hop the
+//! host resolves by listing whose record the listen's last edge carries, the
+//! carried record preferred to the listing, which a host that lists no
+//! members (an embedded one) cannot do. Any other hop the host resolves is
+//! the host's scope check. A hop's checked part is
 //! always evaluated, and its taken part too unless the arrival's module says
 //! it applied it: the host re-checks every conjunct the module did not
 //! confirm it took.
@@ -199,7 +202,7 @@ fn judge_traversal(whole: &ListenPlan, plan: &ListenPlan, arrival: &PlanArrival,
     let records: Vec<Option<Js>> = carried.iter().map(|record| record.map(|record| js_of_json(&record.fields))).collect();
     let unknown: Vec<&[String]> = carried.iter().map(|record| record.map_or(&[][..], |record| record.unknown.as_slice())).collect();
     let judge = Judge { plan, records: &records, unknown: &unknown, now_ms };
-    for (i, hop) in plan.hops.iter().enumerate().filter(|(_, hop)| hop.judged == HopJudged::Arrival) {
+    for (i, hop) in plan.hops.iter().enumerate().filter(|(i, hop)| judged_here(plan, *i, hop)) {
         match judge.hop(i, hop, arrival.taken_applied) {
             Judged::Holds => {}
             Judged::Fails => return Verdict::Skips { hop: i, reason: None },
@@ -209,6 +212,24 @@ fn judge_traversal(whole: &ListenPlan, plan: &ListenPlan, arrival: &PlanArrival,
         }
     }
     undecided.map_or(Verdict::Fires, |reason| Verdict::Undecided { reason })
+}
+
+/// Whether hop `i`'s filter is judged against the arrival: a hop judged on
+/// arrival, and a hop its host lists whose record the last edge carries.
+fn judged_here(plan: &ListenPlan, i: usize, hop: &PlanHop) -> bool {
+    match hop.judged {
+        HopJudged::Arrival => true,
+        HopJudged::Resolved => carries_hop(plan, i),
+        HopJudged::None => false,
+    }
+}
+
+/// Whether the listen's last edge carries hop `i`'s record: the k-th hop on
+/// an edge name is the k-th carried record of it.
+fn carries_hop(plan: &ListenPlan, i: usize) -> bool {
+    let edge = &plan.hops[i].edge;
+    let nth = plan.hops[..i].iter().filter(|earlier| earlier.edge == *edge).count();
+    plan.carries.iter().filter(|carried| *carried == edge).count() > nth
 }
 
 /// Why an arrival whose hop-`i` record states no record type cannot be

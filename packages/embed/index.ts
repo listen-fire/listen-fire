@@ -1272,14 +1272,24 @@ function headOf(landing: AwaitLanding | null): AwaitHead | undefined {
 
 /** Why this host would not fire `plan` as it is written, if it would not.
  *  listen-fire alone lists the members of an earlier hop whose WHERE an
- *  arrival cannot be judged by (a `resolved` hop): judged here with that hop
- *  unjudged, it would fire under every member. */
+ *  arrival cannot be judged by (a `resolved` hop the last edge does not
+ *  carry): judged here with that hop unjudged, it would fire under every
+ *  member. One whose record the arrival carries is judged on it. */
 function unfiredHere(plan: ListenPlan): string[] {
-  const resolved = [...new Set(memberPlans(plan).flatMap((member) => member.hops.filter((hop) => hop.judged === 'resolved').map((hop) => hop.edge)))];
+  const resolved = [...new Set(memberPlans(plan).flatMap((member) => member.hops.filter((hop, i) => hop.judged === 'resolved' && !carriesHop(member, i)).map((hop) => hop.edge)))];
   if (resolved.length === 0) return [];
   return [
     `the listen that fires ${plan.movement} filters ${resolved.map((edge) => `\`${edge}\``).join(', ')} by a WHERE its module's arrivals do not carry the record for: only listen-fire lists those members to judge it, and this host would fire under every one. Filter that hop on the landing's fields instead, or run the listen on listen-fire`,
   ];
+}
+
+/** Whether the last edge of `plan` (one traversal) carries hop `i`'s record:
+ *  the k-th hop on an edge name is the k-th carried record of it, as the
+ *  judge reads them. */
+function carriesHop(plan: ListenPlan, i: number): boolean {
+  const edge = plan.hops[i].edge;
+  const nth = plan.hops.slice(0, i).filter((earlier) => earlier.edge === edge).length;
+  return (plan.carries ?? []).filter((carried) => carried === edge).length > nth;
 }
 
 /** The work this host queues: the run host's, and the runs a delivery queued. */
