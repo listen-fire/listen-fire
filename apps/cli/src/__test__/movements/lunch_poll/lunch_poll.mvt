@@ -14,7 +14,7 @@ function ask_lunch(t: <cron-[:Ticks]->>) {
 function count_vote(press: <chat-[:Interaction]->>) {
   poll = only(press-[:Message]->)
   if (poll == null) { fail("a press with no message") }
-  answer = only(press-[:Actions]->).Value
+  answer = only(press-[:Actions]->)?.Value
   if (answer == null) { fail("a press with no answer") }
   person = only(press-[:By]->)
   if (person == null) { fail("a press by no one") }

@@ -489,7 +489,7 @@ hiring = connect airtable using henry_airtable { base: "Hiring" }
 
 function schedule_interview(c: <hiring-[:\`Candidates Change\`]->>) {
   write hiring-[:Interviews]-> {
-    Candidate: coalesce(only(c-[:Record]->).Name, "gone")
+    Candidate: coalesce(only(c-[:Record]->)?.Name, "gone")
     From: exists(c.Previous) ? coalesce(c.Previous.Stage, "nothing") : "nothing"
     Changed: exists(c.Current) ? coalesce(c.Current.Name, "nothing") : "nothing"
   }

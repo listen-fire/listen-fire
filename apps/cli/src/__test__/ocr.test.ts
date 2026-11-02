@@ -221,7 +221,7 @@ test('listen-fire run: extractOne over a deck of screenshots reads the text the 
     const dir = documentAiProject();
     appendFileSync(join(dir, '.lf/secrets.yaml'), `\nanthropic:\n  external: "@lf/anthropic"\n  api_key: test-key\n  base_url: ${anthropic.url}\n`);
     withScanner(dir);
-    movement(dir, '  deck = scanner.scan()\n  d = extractOne([deck], node D: "the company" { name: <text> "the company\'s name" })\n  write crm-[:Company]-> { Name: coalesce(d.name, "none") }');
+    movement(dir, '  deck = scanner.scan()\n  d = extractOne([deck], node D: "the company" { name: <text> "the company\'s name" })\n  write crm-[:Company]-> { Name: coalesce(d?.name, "none") }');
     const run = await lfRun(dir, documentAiEnv(api));
     assert.equal(run.code, 0, run.out);
     assert.equal(api.received.length, 1, run.out);

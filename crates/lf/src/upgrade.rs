@@ -446,7 +446,7 @@ mod tests {
 
     #[test]
     fn a_fixless_upgrade_note_is_listed_and_holds_the_pin() {
-        let source = "import { crm as crm_module, mail as mail_module } from adapters\ncrm = connect crm_module\nmail = connect mail_module\nfunction go(t: <text>) {\n  founder = only(crm-[:People]->)\n  m = write mail-[:Messages]-> { To: t }\n  r = await m-[x:Replies WHERE x.From == founder.Email]->\n}\n";
+        let source = "import { crm as crm_module, mail as mail_module } from adapters\ncrm = connect crm_module\nmail = connect mail_module\nfunction go(t: <text>) {\n  founder = only(crm-[:People]->)\n  m = write mail-[:Messages]-> { To: t }\n  r = await m-[x:Replies WHERE x.From == founder?.Email]->\n}\n";
         let catalog = CatalogSnapshot::load(CATALOG).unwrap();
         let upgraded = upgrade_source(source, &catalog, false, "0.12.13");
         assert_eq!(upgraded.source, source);
@@ -456,7 +456,7 @@ mod tests {
         // the wait no `sleep` races.
         assert_eq!(notes.len(), 2, "{notes:?}");
         assert!(notes.iter().any(|n| n.starts_with("go.mvt:7:13 warning MOV_AWAIT_VALUE_CAPTURED 'founder.Email' in this wait's WHERE is read once")), "{notes:?}");
-        assert!(notes.iter().any(|n| n.starts_with("go.mvt:7:7 warning MOV_AWAIT_MAY_HANG 'await m-[x:Replies WHERE x.From == founder.Email]->' is not in a `race` with a `sleep`")), "{notes:?}");
+        assert!(notes.iter().any(|n| n.starts_with("go.mvt:7:7 warning MOV_AWAIT_MAY_HANG 'await m-[x:Replies WHERE x.From == founder?.Email]->' is not in a `race` with a `sleep`")), "{notes:?}");
         assert!(matches!(pin_step("engine: 0.12.13\n", upgraded.remaining.len(), upgraded.notes.len()).unwrap(), PinStep::Held { remaining: 0, unchecked: 2 }));
         assert!(matches!(pin_step("engine: 0.12.13\n", upgraded.remaining.len(), 0).unwrap(), PinStep::Set(_)));
         // Under this release's own pin there is nothing to say.

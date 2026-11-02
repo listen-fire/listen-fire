@@ -59,7 +59,7 @@ import { my_airtable } from credentials
 finance = connect airtable using my_airtable { base: "${input.base}" }
 
 function \`Review Expense\`(change: <finance-[:Change]->>) {
-  return only(change-[:Record]->).Id
+  return only(change-[:Record]->)?.Id
 }
 
 listen to finance-[t:Tables WHERE t.Name == "${input.table}"]->-[c:Changes WHERE c.Kind == "${input.kind}"]-> fire \`Review Expense\`

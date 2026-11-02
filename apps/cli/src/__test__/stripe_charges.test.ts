@@ -95,7 +95,7 @@ test('listen-fire check passes both programs, and refuses a charge field Stripe 
       await world.close();
     }
   }
-  const world = await chargesWorld(FAILED_PAYMENT.replace('attempt.`Failure Message`', 'attempt.failure_message'));
+  const world = await chargesWorld(FAILED_PAYMENT.replace('attempt?.`Failure Message`', 'attempt?.failure_message'));
   try {
     const wrong = await run(world.dir, 'check');
     assert.equal(wrong.code, 1, wrong.out);
