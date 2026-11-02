@@ -701,6 +701,8 @@ impl<'c> Checker<'c> {
         };
         self.record_observed(slot.span, scope, observed);
         self.effects.note_watchable_reads(&watchable);
+        let mut diagnostics = diagnostics;
+        crate::families::walks::absent_read_fixes(slot, &mut diagnostics);
         self.push_typed(diagnostics);
         SlotTyped { expr: Some(parsed), ty, may_hold, held }
     }
@@ -864,6 +866,8 @@ impl<'c> Checker<'c> {
                 };
                 self.record_observed(slot.span, scope, observed);
                 self.effects.note_watchable_reads(&watchable);
+                let mut diagnostics = diagnostics;
+                crate::families::walks::absent_read_fixes(slot, &mut diagnostics);
                 self.push_typed(diagnostics);
                 // Gating on a structured value is always true, never a decision.
                 if let Some(message) = crate::families::values::json_opaque_message(ty.as_ref(), "used as a condition") {

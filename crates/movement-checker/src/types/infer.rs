@@ -94,6 +94,14 @@ impl TypeEnv for EmptyEnv {
     }
 }
 
+/// How a map's member is read (`read_dict_member`): inside a map already
+/// read, and through it with `?.`.
+#[derive(Clone, Copy)]
+struct DictRead {
+    within: bool,
+    optional: bool,
+}
+
 /// The identity of an expression node, for the per-node answers kept while
 /// typing (the TypeScript's `WeakMap`s). Never dereferenced.
 /// The hops a traversal walks: its own steps, or the ones an `exists(…)`
@@ -821,13 +829,13 @@ impl<'a> Typing<'a> {
     }
 
     /// `dictMemberRead`: `d.key` off a name holding a dict.
-    fn dict_member_read(&mut self, alias_root: Option<&str>, steps: &[TraversalStep], member: &Expression) -> Option<Option<Ty>> {
+    fn dict_member_read(&mut self, alias_root: Option<&str>, steps: &[TraversalStep], member: &Expression, optional: bool) -> Option<Option<Ty>> {
         let root = alias_root?;
         if !steps.is_empty() || self.root_type(root).is_some() {
             return None;
         }
         let held = self.scalar_type(root)?;
-        self.read_dict_member(&held, member, &crate::families::values::quote_name(root), false)
+        self.read_dict_member(&held, member, &crate::families::values::quote_name(root), DictRead { within: false, optional })
     }
 
     /// A dot read off a record, `root` (where no hop comes between), that is
@@ -843,7 +851,7 @@ impl<'a> Typing<'a> {
     fn read_off_record(&mut self, root: Option<&str>, record: &Position, terminal: &Expression, held: Option<&HeldRead>) -> Option<Option<Ty>> {
         let (property, past) = match terminal {
             Expression::Property { property_type_id, .. } => (property_type_id.as_str(), None),
-            Expression::Traverse { alias_root: Some(head), steps: past_steps, expression: past, .. } => (head.as_str(), Some((past_steps, &**past))),
+            Expression::Traverse { alias_root: Some(head), steps: past_steps, expression: past, optional } => (head.as_str(), Some((past_steps, &**past, *optional))),
             _ => return None,
         };
         let chain = dot_chain(terminal).unwrap_or_default();
@@ -851,7 +859,7 @@ impl<'a> Typing<'a> {
         if crate::families::walks::report_edge_read_as_field(self, record, &read, held) {
             return Some(None);
         }
-        let (past_steps, past) = past?;
+        let (past_steps, past, optional) = past?;
         let before = self.diagnostics.len();
         let field = self.read_property(Some(record), property);
         if self.diagnostics.len() > before {
@@ -861,7 +869,7 @@ impl<'a> Typing<'a> {
             && let Some(Ty::HeldRecord(fields)) = field.as_ref().map(strip_absent)
         {
             let held = HeldRead { spelled: format!("'{}'", read.label()), subject: read.label(), holder: read.root, held: fields };
-            return Some(self.read_off_held(&held, is_maybe_absent(field.as_ref()), past_steps, past));
+            return Some(self.read_off_held(&held, is_maybe_absent(field.as_ref()) && !optional, past_steps, past));
         }
         let next = match past {
             Expression::Property { property_type_id, .. } if past_steps.is_empty() => Some(property_type_id.as_str()),
@@ -960,17 +968,20 @@ impl<'a> Typing<'a> {
     }
 
     /// `subject` is the read's text up to the member (`d`, `d.a`).
-    fn read_dict_member(&mut self, held: &Ty, member: &Expression, subject: &str, within: bool) -> Option<Option<Ty>> {
+    /// `read`: whether `d` is read inside a map already read, and whether
+    /// through it with `?.`.
+    fn read_dict_member(&mut self, held: &Ty, member: &Expression, subject: &str, read: DictRead) -> Option<Option<Ty>> {
+        let DictRead { within, optional } = read;
         let Ty::Dict { of, shape } = strip_absent(held) else { return None };
-        let (key, member_steps, member_expression) = match member {
-            Expression::Property { property_type_id, .. } => (property_type_id.clone(), None, None),
-            Expression::Traverse { alias_root: Some(root), steps, expression, .. } => (root.clone(), Some(steps.as_slice()), Some(&**expression)),
+        let (key, member_steps, member_expression, member_optional) = match member {
+            Expression::Property { property_type_id, .. } => (property_type_id.clone(), None, None, false),
+            Expression::Traverse { alias_root: Some(root), steps, expression, optional } => (root.clone(), Some(steps.as_slice()), Some(&**expression), *optional),
             _ => return None,
         };
         if within && shape.as_ref().is_some_and(|s| !s.contains_key(&key)) {
             return None;
         }
-        if is_maybe_absent(Some(held)) {
+        if is_maybe_absent(Some(held)) && !optional {
             crate::families::walks::report_read_through_absent(self, subject, &key);
         }
         let known: Option<Ty> = match shape {
@@ -991,7 +1002,8 @@ impl<'a> Typing<'a> {
         };
         let (Some(steps), Some(expression)) = (member_steps, member_expression) else { return Some(ty) };
         if nested && let Some(inner_ty) = &ty {
-            if let Some(inner) = self.read_dict_member(inner_ty, expression, &format!("{subject}.{}", crate::families::values::quote_name(&key)), true) {
+            let read = DictRead { within: true, optional: member_optional };
+            if let Some(inner) = self.read_dict_member(inner_ty, expression, &format!("{subject}.{}", crate::families::values::quote_name(&key)), read) {
                 return Some(inner);
             }
         }
@@ -1007,7 +1019,9 @@ impl<'a> Typing<'a> {
             && is_maybe_absent(ty.as_ref())
             && let Some(field) = field_read_name(expression)
         {
-            crate::families::walks::report_read_through_absent(self, &format!("{subject}.{}", crate::families::values::quote_name(&key)), field);
+            if !member_optional {
+                crate::families::walks::report_read_through_absent(self, &format!("{subject}.{}", crate::families::values::quote_name(&key)), field);
+            }
             ty = ty.map(|t| strip_absent(&t).clone());
         }
         let record = record_head_position(ty.as_ref());
@@ -1043,8 +1057,8 @@ impl<'a> Typing<'a> {
                 }
                 Some(_) => (self.read_property(position, property_type_id), Vec::new()),
             },
-            Expression::Traverse { alias_root, steps, expression, .. } => {
-                if let Some(read) = self.dict_member_read(alias_root.as_deref(), steps, expression) {
+            Expression::Traverse { alias_root, steps, expression, optional } => {
+                if let Some(read) = self.dict_member_read(alias_root.as_deref(), steps, expression, *optional) {
                     return (read, Vec::new());
                 }
                 // Said, and then read as it always was (as nothing).
@@ -1058,7 +1072,7 @@ impl<'a> Typing<'a> {
                     && let Some((fields, maybe_absent)) = self.held_by_name(root)
                 {
                     let held = HeldRead { spelled: format!("'{root}'"), subject: crate::families::values::quote_name(root), holder: None, held: &fields };
-                    return (self.read_off_held(&held, maybe_absent, steps, expression), Vec::new());
+                    return (self.read_off_held(&held, maybe_absent && !optional, steps, expression), Vec::new());
                 }
                 if let Some(root) = alias_root.as_deref()
                     && let hops = walk_hops(steps, expression)
@@ -1078,6 +1092,14 @@ impl<'a> Typing<'a> {
                     self.report_undescribed_event(root);
                 }
                 self.report_walk_off_maybe_absent(alias_root.as_deref(), steps, expression, start.as_ref());
+                let start = match (alias_root.as_deref(), start) {
+                    (Some(root), Some(Position::MaybeEmpty(present))) if !optional && steps.is_empty() && let Some(field) = field_read_name(expression) => {
+                        crate::families::walks::report_read_through_absent(self, &crate::families::values::quote_name(root), field);
+                        // Read on as the record it is once there: one mistake, one diagnostic.
+                        Some(*present)
+                    }
+                    (_, start) => start,
+                };
                 let observed_start = self.observed.as_ref().map(|_| start.as_ref().and_then(crate::story::instance_of));
                 self.step_root = alias_root.as_deref().map(crate::families::names::spell_name);
                 let destination = self.walk_steps(start, steps, false);

@@ -354,28 +354,64 @@ impl HeldRead<'_> {
 }
 
 /// `MOV_ABSENT_REQUIRED`: a field read through a value that may be absent
-/// (`c.Previous.Stage`, where a created row has no previous), as TypeScript
-/// refuses `x.F` where `x` may be undefined. `exists(x)` proves it present in
-/// the right side of an AND, `NOT exists(x)` in the right side of an OR, and
-/// either in the arm of an `if` it decides.
+/// (`c.Previous.Stage`, where a created row has no previous; `x.Name`, where
+/// `x = only(…)` may find nothing), as TypeScript refuses `x.F` where `x` may
+/// be undefined. `x?.F` reads it, absent when `x` is; `exists(x)` proves it
+/// present in the right side of an AND, `NOT exists(x)` in the right side of
+/// an OR, and either in the arm of an `if` it decides. The fix, `?.`, is
+/// placed by the slot the read is in (`absent_read_fixes`).
 pub fn report_read_through_absent(typing: &mut Typing, subject: &str, field: &str) {
-    // A nested call's staged value (`r[0]`, `only(…)` read on): a test of
-    // the expression (`r[0] != null`) does not narrow the name it is staged
-    // under, so its read stays typed as it was.
-    if subject.chars().any(|c| crate::families::calls::is_nested_call_name(&c.to_string())) {
-        return;
-    }
     let read = format!("{subject}.{}", quote_name(field));
-    let message = if typing.hop_where.is_some() {
-        format!(
-            "'{subject}' may be absent, and '{read}' reads through it. Test it first: `exists({subject}) AND {read} …`, or `NOT exists({subject}) OR {read} …`."
-        )
-    } else {
-        format!(
-            "'{subject}' may be absent, and '{read}' reads through it. Test it first: `exists({subject}) && {read} …`, `!exists({subject}) || {read} …`, or read it inside `if (exists({subject})) {{ … }}`."
-        )
+    let optional = format!("{subject}?.{}", quote_name(field));
+    // A nested call's or an index's staged value (`only(…)`, `r[0]`) has no
+    // name to show.
+    let staged = subject.chars().any(|c| crate::families::calls::is_nested_call_name(&c.to_string()));
+    let message = match (staged, typing.hop_where.is_some()) {
+        (true, _) => format!(
+            "this value may be absent, and '.{}' reads through it. Read it with `?.{}` (absent when the value is), or test the value with `exists(…)` first.",
+            quote_name(field),
+            quote_name(field)
+        ),
+        (false, true) => format!(
+            "'{subject}' may be absent, and '{read}' reads through it. Read it with `{optional}` (absent when '{subject}' is), or test it first: `exists({subject}) AND {read} …`."
+        ),
+        (false, false) => format!(
+            "'{subject}' may be absent, and '{read}' reads through it. Read it with `{optional}` (absent when '{subject}' is), or test it first: `exists({subject}) && {read} …`, or read it inside `if (exists({subject})) {{ … }}`."
+        ),
     };
     typing.report(codes::ABSENT_REQUIRED, message);
+    if let Some(diagnostic) = typing.diagnostics.last_mut() {
+        diagnostic.read_through = Some((subject.to_string(), field.to_string()));
+    }
+}
+
+/// Places the fix of each read `report_read_through_absent` refused in
+/// `slot`: `?.` for its `.`. The two read alike (absent when the value is),
+/// so an upgrade applies it unasked. A read refused twice takes the places it
+/// is written in order.
+pub fn absent_read_fixes(slot: &movement_parser::ast::ExprSlot, diagnostics: &mut [crate::diagnostic::Diagnostic]) {
+    if !diagnostics.iter().any(|d| d.read_through.is_some()) {
+        return;
+    }
+    let Ok(tree) = movement_parser::expr::parse_expression_raw(&slot.raw) else { return };
+    let units: Vec<u16> = slot.raw.encode_utf16().collect();
+    let spelled = |text: &str| text.chars().filter(|c| !c.is_whitespace() && *c != '`').collect::<String>();
+    let reads = movement_parser::tree::member_reads(&tree);
+    let mut taken = vec![false; reads.len()];
+    for diagnostic in diagnostics.iter_mut() {
+        let Some((subject, field)) = diagnostic.read_through.take() else { continue };
+        let subject = spelled(&subject);
+        let found = reads.iter().enumerate().position(|(i, (object, name, optional))| {
+            let at = object.at();
+            !taken[i] && !optional && name.text == field && spelled(&String::from_utf16_lossy(&units[at.start..at.end])) == subject
+        });
+        let Some(i) = found else { continue };
+        taken[i] = true;
+        let (object, name, _) = reads[i];
+        let Some(dot) = (object.at().end..name.at.start).rev().find(|&u| units[u] == u16::from(b'.')) else { continue };
+        let span = crate::families::calls::span_of_extent(slot, movement_parser::tree::At { start: dot, end: dot });
+        diagnostic.fix = Some(serde_json::json!({ "edits": [{ "span": span, "text": "?" }], "safe": true }));
+    }
 }
 
 /// `MOV_WALK_OFF_HELD_RECORD`: a walk off what a `record` field holds. It
