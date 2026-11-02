@@ -1,8 +1,12 @@
 // The fake Affinity (modules/affinity/__test__/real_engine), serving a Master
-// Deals List and a Portfolio list, as a child process on a free port.
+// Deals List and a Portfolio list (and, asked, an opportunity list, Deals), as
+// a child process on a free port; a project connecting to it; and a delivery
+// signed as Affinity signs it.
 
 import { spawn, type ChildProcess } from 'node:child_process';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { createHmac } from 'node:crypto';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
 
@@ -14,7 +18,7 @@ export interface Fake {
   stop(): Promise<void>;
 }
 
-export async function fakeAffinity(dir: string, options: { twinPersons?: boolean } = {}): Promise<Fake> {
+export async function fakeAffinity(dir: string, options: { twinPersons?: boolean; opportunityList?: boolean } = {}): Promise<Fake> {
   const plan = join(dir, 'plan.json');
   const log = join(dir, 'requests.log');
   writeFileSync(
@@ -53,4 +57,31 @@ export async function fakeAffinity(dir: string, options: { twinPersons?: boolean
     requests: () => readFileSync(log, 'utf8').split('\n').filter((l) => l !== ''),
     stop: async () => (child.kill('SIGTERM'), exited),
   };
+}
+
+export const AFFINITY_SIGNING_KEY = 'affinity-signing-key';
+
+/** A project with one movement file connecting to the fake as `Affinity`. */
+export function affinityProject(fake: Fake, movement: string, lfYaml = ''): string {
+  const dir = mkdtempSync(join(tmpdir(), 'lf-affinity-'));
+  writeFileSync(join(dir, 'lf.yaml'), `engine: 0.13.0\nmovements: movements\nexternals: externals\n${lfYaml}`);
+  mkdirSync(join(dir, 'externals/affinity'), { recursive: true });
+  writeFileSync(join(dir, 'externals/affinity/lf-external.yaml'), `name: affinity\nkind: adapter\nprotocol: 2\nmodule: ${AFFINITY}\n`);
+  mkdirSync(join(dir, '.lf'));
+  writeFileSync(join(dir, '.lf/secrets.yaml'), `Affinity:\n  module: affinity\n  credential: affinity\n  apiKey: test-key\n  baseUrl: ${fake.url}\n  webhook_secret: ${AFFINITY_SIGNING_KEY}\n`);
+  chmodSync(join(dir, '.lf/secrets.yaml'), 0o600);
+  mkdirSync(join(dir, 'movements'));
+  writeFileSync(join(dir, 'movements/deal_date.mvt'), movement);
+  return dir;
+}
+
+/** One Affinity delivery, signed with the account's key as Affinity signs it. */
+export async function deliverAffinity(url: string, type: string, body: Record<string, unknown>): Promise<{ status: number; text: string }> {
+  const raw = JSON.stringify({ type, body, sent_at: Math.floor(Date.now() / 1000) });
+  const answer = await fetch(url, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-affinity-webhook-signature': createHmac('sha256', AFFINITY_SIGNING_KEY).update(raw).digest('hex') },
+    body: raw,
+  });
+  return { status: answer.status, text: await answer.text() };
 }

@@ -28,6 +28,9 @@ const ENTRY_TYPE = `List Entry — ${LIST_NAME}`;
 /** A second organization list, served only to a fake built with it: its own
  *  column, which no Master Deals entry has. */
 export const PORTFOLIO_LIST = { id: 11, name: 'Portfolio' } as const;
+/** An opportunity list, served only to a fake built with it: its column is an
+ *  opportunity's field, in neither the organizations' nor the people's catalog. */
+export const DEALS_LIST = { id: 12, name: 'Deals' } as const;
 
 const FIELD = {
   founders: 300,
@@ -41,6 +44,7 @@ const FIELD = {
   sourcing: 317,
   linkedin: 320,
   ownership: 330,
+  dealStage: 340,
 } as const;
 
 /** What a synced entry already holds for the fields `Upsert Deal` fills. */
@@ -55,7 +59,7 @@ export const SYNCED_ENTRY = {
 const field = (
   id: number,
   name: string,
-  entityType: 0 | 1,
+  entityType: EntityType,
   valueType: number,
   options: { listId?: number; multiple?: boolean } = {},
 ) => ({
@@ -83,6 +87,10 @@ const FIELDS = [
   field(FIELD.linkedin, 'LinkedIn URL', 0, 6),
 ];
 const PORTFOLIO_FIELDS = [field(FIELD.ownership, `[${PORTFOLIO_LIST.name}] Ownership %`, 1, 6, { listId: PORTFOLIO_LIST.id })];
+const DEALS_FIELDS = [field(FIELD.dealStage, `[${DEALS_LIST.name}] Deal Stage`, 8, 6, { listId: DEALS_LIST.id })];
+
+/** Affinity's entity types: a person, an organization, an opportunity. */
+type EntityType = 0 | 1 | 8;
 
 interface Org {
   id: number;
@@ -105,11 +113,17 @@ interface Entry {
   entity_id: number;
   created_at: string;
 }
+interface Opportunity {
+  id: number;
+  name: string;
+  organization_ids: number[];
+  person_ids: number[];
+}
 interface ValueRow {
   id: number;
   field_id: number;
   entity_id: number;
-  entity_type: 0 | 1;
+  entity_type: EntityType;
   list_entry_id: number | null;
   value: unknown;
 }
@@ -119,6 +133,7 @@ interface ValueRow {
 export class FakeAffinity {
   orgs = new Map<number, Org>();
   persons = new Map<number, Person>();
+  opportunities = new Map<number, Opportunity>();
   entries = new Map<number, Entry>();
   values = new Map<number, ValueRow>();
   /** The webhooks registered (`POST /webhooks`), by id. */
@@ -129,9 +144,13 @@ export class FakeAffinity {
   private readonly lists: { id: number; name: string; type: number }[];
   private readonly fields: ReturnType<typeof field>[];
 
-  constructor(options: { portfolio?: boolean } = {}) {
-    this.lists = [{ id: LIST_ID, name: LIST_NAME, type: 1 }, ...(options.portfolio ? [{ ...PORTFOLIO_LIST, type: 1 }] : [])];
-    this.fields = [...FIELDS, ...(options.portfolio ? PORTFOLIO_FIELDS : [])];
+  constructor(options: { portfolio?: boolean; opportunityList?: boolean } = {}) {
+    this.lists = [
+      { id: LIST_ID, name: LIST_NAME, type: 1 },
+      ...(options.portfolio ? [{ ...PORTFOLIO_LIST, type: 1 }] : []),
+      ...(options.opportunityList ? [{ ...DEALS_LIST, type: 8 }] : []),
+    ];
+    this.fields = [...FIELDS, ...(options.portfolio ? PORTFOLIO_FIELDS : []), ...(options.opportunityList ? DEALS_FIELDS : [])];
   }
 
   /** How many search results Affinity puts on a page when the request names
@@ -168,7 +187,13 @@ export class FakeAffinity {
     return entry;
   }
 
-  value(input: { fieldId: number; entityId: number; entityType: 0 | 1; listEntryId?: number; value: unknown }): ValueRow {
+  opportunity(input: { name: string; orgIds?: number[] }): Opportunity {
+    const opportunity: Opportunity = { id: this.id(), name: input.name, organization_ids: input.orgIds ?? [], person_ids: [] };
+    this.opportunities.set(opportunity.id, opportunity);
+    return opportunity;
+  }
+
+  value(input: { fieldId: number; entityId: number; entityType: EntityType; listEntryId?: number; value: unknown }): ValueRow {
     const row: ValueRow = {
       id: this.id(),
       field_id: input.fieldId,
@@ -281,6 +306,15 @@ export class FakeAffinity {
         return json(this.personBody(person));
       }
 
+      if ((m = path.match(/^\/opportunities\/(\d+)$/))) {
+        const opportunity = this.opportunities.get(Number(m[1]));
+        if (!opportunity) return json({ message: 'not found' }, 404);
+        return json({ ...opportunity, list_entries: [...this.entries.values()].filter((e) => e.entity_id === opportunity.id) });
+      }
+
+      if ((m = path.match(/^\/lists\/(\d+)\/list-entries$/)) && method === 'GET') {
+        return json([...this.entries.values()].filter((e) => e.list_id === Number(m![1])));
+      }
       if ((m = path.match(/^\/lists\/(\d+)\/list-entries$/)) && method === 'POST') {
         const entry = this.entry(Number(body.entity_id), Number(m[1]));
         return json(entry);
@@ -647,6 +681,14 @@ export function seedPortfolioEntry(
   const entry = fake.entry(seeded.org.id, PORTFOLIO_LIST.id);
   fake.value({ fieldId: FIELD.ownership, entityId: seeded.org.id, entityType: 1, listEntryId: entry.id, value: input.ownership });
   return entry;
+}
+
+/** An opportunity on the Deals list, its stage set. */
+export function seedDealsEntry(fake: FakeAffinity, input: { name: string; orgId: number; stage: string }) {
+  const opportunity = fake.opportunity({ name: input.name, orgIds: [input.orgId] });
+  const entry = fake.entry(opportunity.id, DEALS_LIST.id);
+  fake.value({ fieldId: FIELD.dealStage, entityId: opportunity.id, entityType: 8, listEntryId: entry.id, value: input.stage });
+  return { opportunity, entry };
 }
 
 export function dealFor(input: { name: string; host: string; founder: { first: string; last: string; linkedin: string } }): Deal {

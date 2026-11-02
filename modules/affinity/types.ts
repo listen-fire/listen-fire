@@ -140,6 +140,19 @@ export function listCatalogType(decoded: DecodedTypeId): 'ORGANIZATION' | 'PERSO
   return kind === 'organization' ? 'ORGANIZATION' : kind === 'person' ? 'PERSON' : null;
 }
 
+/**
+ * The `/fields` catalog a list entry's own columns are READ from: its list's
+ * entity kind's for an organization or a person list, and the workspace's
+ * whole catalog (no `type`) for an opportunity list, whose columns are in
+ * neither entity's. Null for an entry that names no list kind. Writes keep to
+ * `listCatalogType`: an opportunity list's columns are read-only here.
+ */
+export function listColumnCatalog(decoded: DecodedTypeId): { type?: 'ORGANIZATION' | 'PERSON' } | null {
+  const catalogType = listCatalogType(decoded);
+  if (catalogType !== null) return { type: catalogType };
+  return (decoded.listsFor ?? listEntityKind(decoded.listType)) === 'opportunity' ? {} : null;
+}
+
 /** The pretty display name each fixed entity carries as its framework identity
  *  (its `recordType` / entry `typeId`). The single source of truth shared by
  *  the schema catalog and the name cache. */

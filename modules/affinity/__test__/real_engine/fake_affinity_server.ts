@@ -8,7 +8,8 @@
 // portfolio?: { dealCreated, ownership } }], portfolio?: true }: with `portfolio`
 // the workspace has a second list, and a deal naming one sits on it too. With
 // `twinPersons` each organization has a person of the same id, as Affinity's
-// separately numbered records can.
+// separately numbered records can. With `opportunityList` the workspace has an
+// opportunity list, `Deals`, holding an opportunity for each seeded company.
 // Every request is appended to `requests.log`, one `METHOD /path?query` a line.
 // It prints `listening on <port>` once it is up.
 
@@ -16,7 +17,7 @@ import { appendFileSync, readFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 
-import { FakeAffinity, seedPortfolioEntry, seedSyncedDeal, seedWorkspace } from '../deal_sync_fixture';
+import { FakeAffinity, seedDealsEntry, seedPortfolioEntry, seedSyncedDeal, seedWorkspace } from '../deal_sync_fixture';
 
 interface PlanFounder {
   first: string;
@@ -34,17 +35,20 @@ interface Plan {
   }>;
   portfolio?: boolean;
   twinPersons?: boolean;
+  /** An opportunity list, `Deals`, with each seeded company's opportunity on it. */
+  opportunityList?: boolean;
 }
 
 const [planFile, logFile] = process.argv.slice(2);
 const plan = JSON.parse(readFileSync(planFile, 'utf8')) as Plan;
 
-const fake = new FakeAffinity({ portfolio: plan.portfolio });
+const fake = new FakeAffinity({ portfolio: plan.portfolio, opportunityList: plan.opportunityList });
 const { owners } = seedWorkspace(fake, plan.owners);
 for (const deal of plan.deals) {
   if (deal.seed === 'new') continue;
   const seeded = seedSyncedDeal(fake, owners, { ...deal, founder: deal.founders[0] }, { emptyDealSource: deal.seed === 'empty-field' });
   if (deal.portfolio) seedPortfolioEntry(fake, seeded, deal.portfolio);
+  if (plan.opportunityList) seedDealsEntry(fake, { name: `${deal.name} — Seed`, orgId: seeded.org.id, stage: 'Sourced' });
 }
 if (plan.twinPersons) {
   for (const org of [...fake.orgs.values()]) {

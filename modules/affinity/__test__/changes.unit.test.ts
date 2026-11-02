@@ -139,6 +139,60 @@ describe('@lf/affinity reports each event as the arrival on its record’s Chang
     }
   });
 
+  it('a field value’s change says how it changed and holds its value, typed by the field: new on a set or a change, removed on a clear', async () => {
+    const { adapter } = makeAdapter();
+    const landing = async (type: string, body: Record<string, unknown>) => {
+      const [arrival] = (await adapter.preprocessInbound({ raw: fieldValue(type, { entity_type: 1, entity_id: 7101, list_entry_id: null, ...body }) })).arrivals;
+      return arrival !== undefined && 'landing' in arrival ? arrival.landing : undefined;
+    };
+    // A ranked dropdown arrives as its option, a plain one as the option's id: each reads as its label.
+    expect(await landing('field_value.created', { id: 90, field_id: 100, value: { id: 2, text: 'Series A', rank: 1, color: 0 } })).toEqual({
+      recordId: expect.any(String),
+      recordType: 'OrganizationChange',
+      fields: expect.objectContaining({ Kind: 'updated', Field: 'Stage', 'Field Change': 'set', Current: { Stage: 'Series A' } }),
+    });
+    // Affinity does not send the value a change replaced: a filter on Previous is undecided.
+    expect(await landing('field_value.updated', { id: 91, field_id: 105, value: 8 })).toMatchObject({
+      fields: { Field: 'Segment', 'Field Change': 'changed', Current: { Segment: 'Enterprise' } },
+      unknown: ['Previous'],
+    });
+    const cleared = await landing('field_value.deleted', { id: 92, field_id: 101, value: 40 });
+    expect(cleared).toMatchObject({ fields: { Field: 'Employees', 'Field Change': 'cleared', Previous: { Employees: 40 } } });
+    expect(cleared?.fields).not.toHaveProperty('Current');
+    expect(cleared).not.toHaveProperty('unknown');
+    // A field holding several values holds the one added, as a list.
+    const [tag] = (await adapter.preprocessInbound({ raw: fieldValue('field_value.created', { id: 93, field_id: 110, entity_type: 1, entity_id: 7101, list_entry_id: 13, value: 'fintech' }) })).arrivals;
+    expect(tag).toMatchObject({ landing: { recordType: 'List Entry Change — Hot Leads', fields: { Field: 'Tags', Current: { Tags: ['fintech'] } } } });
+    // An organization's own update is no field's change.
+    const own = await landing('organization.updated', { id: 7101, name: 'Acme' });
+    expect(own?.fields).not.toHaveProperty('Field Change');
+    expect(own?.fields).not.toHaveProperty('Current');
+  });
+
+  it('a field value whose field the record type does not name has its Field, and what it held, unknown', async () => {
+    const { adapter } = makeAdapter();
+    const [arrival] = (await adapter.preprocessInbound({ raw: fieldValue('field_value.updated', { id: 94, field_id: 999, entity_type: 1, entity_id: 7101, list_entry_id: null, value: 'x' }) })).arrivals;
+    expect(arrival).toMatchObject({
+      key: 'organization:7101',
+      landing: { recordType: 'OrganizationChange', fields: { Kind: 'updated', 'Field Change': 'changed' }, unknown: ['Field', 'Current', 'Previous'] },
+    });
+    expect(arrival !== undefined && 'landing' in arrival ? arrival.landing.fields : {}).not.toHaveProperty('Field');
+  });
+
+  it("an opportunity list's columns are its entries' fields, read-only, and a change names one", async () => {
+    const { adapter } = makeAdapter({ fieldValues: [{ id: 95, field_id: 300, list_entry_id: 9302, value: { id: 30, text: 'Sourced', rank: 0, color: 0 } }] });
+    const entry = await adapter.describe('List Entry — Deals');
+    expect(entry?.fields.find((f) => f.displayName === 'Deal Stage')).toMatchObject({ kind: 'enum', enumValues: ['Sourced'], writable: false });
+    expect((await adapter.describe('List Entry Change — Deals'))?.fields.find((f) => f.displayName === 'Field')?.enumValues).toEqual(['Deal Stage']);
+    const [moved] = (await adapter.preprocessInbound({ raw: fieldValue('field_value.updated', { id: 95, field_id: 300, entity_type: 8, entity_id: 700, list_entry_id: 9302, value: 30 }) })).arrivals;
+    expect(moved).toMatchObject({
+      landing: { recordType: 'List Entry Change — Deals', fields: { Field: 'Deal Stage', Current: { 'Deal Stage': 'Sourced' } } },
+      parents: [{ recordType: 'List Entry — Deals', fields: { 'Deal Stage': 'Sourced', listName: 'Deals' } }],
+    });
+    const position = makeStablePosition({ adapterType: 'affinity', recordType: 'List Entry — Deals', recordId: '9302', data: {} });
+    expect(await adapter.getFieldValue({ position, fieldId: 'Deal Stage' })).toBe('Sourced');
+  });
+
   it("an opportunity list's column names its list from the workspace's whole field catalog", async () => {
     const { adapter } = makeAdapter();
     const moved = (await adapter.preprocessInbound({ raw: fieldValue('field_value.updated', { id: 91, field_id: 300, entity_type: 8, entity_id: 700, list_entry_id: 9302, value: 30 }) })).arrivals[0];
@@ -155,7 +209,11 @@ describe('@lf/affinity reports each event as the arrival on its record’s Chang
         key: 'list-entry:13',
         identity: expect.stringMatching(/^field_value\.updated:1:/),
         // Its field is named by a record type it has none of: a filter on `Field` is undecided, not false.
-        landing: { recordId: byField[0]?.identity, fields: { Id: byField[0]?.identity, Kind: 'updated', Record: '13' }, unknown: ['Field'] },
+        landing: {
+          recordId: byField[0]?.identity,
+          fields: { Id: byField[0]?.identity, Kind: 'updated', Record: '13', 'Field Change': 'changed' },
+          unknown: ['Field', 'Current', 'Previous'],
+        },
         parents: [null],
         occurredAt: '2026-09-21T14:13:20.000Z',
       },
@@ -256,5 +314,20 @@ listen to crm-[:\`List Entry — Hot Leads\`]->-[c:Changes WHERE c.Field == "${f
   it('checks clean naming one of the list’s fields, and refuses a field the list lacks', async () => {
     expect(await errors(program('List Score'))).toEqual([]);
     expect((await errors(program('Lst Score'))).join('\n')).toMatch(/MOV_ENUM_UNKNOWN_VALUE[\s\S]*Lst Score/);
+  });
+
+  const valued = (where: string) =>
+    program('List Score').replace('WHERE c.Field == "List Score"', `WHERE ${where}`);
+
+  it("checks a change's value against the record's own field, and how it changed against set, changed and cleared", async () => {
+    expect(await errors(valued('c.`Field Change` == "set" AND exists(c.Current) AND c.Current.`List Score` > 3'))).toEqual([]);
+    expect(await errors(valued('exists(c.Previous) AND c.Previous.Tags CONTAINS "fintech"'))).toEqual([]);
+    expect((await errors(valued('exists(c.Current) AND c.Current.`Lst Score` > 3'))).join('\n')).toMatch(/Lst Score/);
+    expect((await errors(valued('c.`Field Change` == "cleard"'))).join('\n')).toMatch(/MOV_ENUM_UNKNOWN_VALUE[\s\S]*cleard/);
+  });
+
+  it("checks a listen on an opportunity list's column", async () => {
+    const deals = program('List Score').replace(/Hot Leads/g, 'Deals').replace('e.`List Score`', 'e.`Deal Stage`').replace('c.Field == "List Score"', 'c.Field == "Deal Stage"');
+    expect(await errors(deals)).toEqual([]);
   });
 });

@@ -1,6 +1,6 @@
 // A record's `Changes`: what Affinity's webhook says happened to an
 // organization, a person, an opportunity or a list's entry (created, a field
-// value set or cleared, deleted), as an arrival on that record's `Changes`
+// value set, changed or cleared, deleted), as an arrival on that record's `Changes`
 // edge. Each record type's changes land on a record type of their own
 // (`OrganizationChange`, `List Entry Change — Master Deals List`), so a listen
 // on one list's entries is never fired by another list's or by a company's.
@@ -28,6 +28,19 @@ export const AFFINITY_CHANGES_REFERENCE = 'affinity:changes';
 
 export const AFFINITY_CHANGE_KINDS = ['created', 'updated', 'deleted'] as const;
 export type AffinityChangeKind = (typeof AFFINITY_CHANGE_KINDS)[number];
+
+/** How a field's value changed (`Field Change`), by Affinity's event: a value
+ *  given to the field, one replaced, one removed. */
+export const AFFINITY_FIELD_CHANGES = ['set', 'changed', 'cleared'] as const;
+export type AffinityFieldChange = (typeof AFFINITY_FIELD_CHANGES)[number];
+
+const FIELD_CHANGE_OF_KIND: Record<AffinityChangeKind, AffinityFieldChange> = { created: 'set', updated: 'changed', deleted: 'cleared' };
+
+/** The fields a field value's change holds its value in: the record with only
+ *  that field set, at its new value or at the value removed. */
+export const AFFINITY_CURRENT = 'Current';
+export const AFFINITY_PREVIOUS = 'Previous';
+export const AFFINITY_FIELD_CHANGE = 'Field Change';
 
 /** The entities whose own events Affinity's webhook sends. A list's entries
  *  change too, through `list_entry.*` and their field values. */
@@ -119,7 +132,7 @@ export function changesEdge(recordType: string): SchemaReferenceDescriptor {
     identity: 'Id',
     attributes: true,
     carries: [recordType],
-    description: `What happens to this ${noun} in Affinity, each change once: created, a field's value set or cleared (\`Field\` names it), deleted.`,
+    description: `What happens to this ${noun} in Affinity, each change once: created, a field's value set, changed or cleared (\`Field\` names it, \`Current\` and \`Previous\` hold its value), deleted.`,
   };
 }
 
@@ -133,7 +146,9 @@ export function changeableFields(record: SchemaTypeDescriptor): Array<{ fieldId:
 }
 
 /** A record type's change type. `Field` is an enum of the record's custom
- *  fields, so a listen naming one it lacks is refused at check. */
+ *  fields, so a listen naming one it lacks is refused at check. `Current` and
+ *  `Previous` are the record's own type, so a comparison of the value is
+ *  checked against its field (`c.Current.Status == "Won"`). */
 export function describeChange(record: SchemaTypeDescriptor): SchemaTypeDescriptor {
   const recordType = record.displayName;
   const noun = perListName(recordType) === undefined ? recordType.toLowerCase() : `entry on ${perListName(recordType)}`;
@@ -147,17 +162,32 @@ export function describeChange(record: SchemaTypeDescriptor): SchemaTypeDescript
     cardinality: 'one',
     ...more,
   });
+  const held = (fieldId: string, description: string): SchemaFieldDescriptor =>
+    field(fieldId, 'record', { record: { typeId: recordType }, mayBeAbsent: true, description });
   const edge = recordEdgeOf(recordType);
   return {
     typeId: changeTypeName(recordType),
     displayName: changeTypeName(recordType),
-    description: `A change to an Affinity ${noun}: what happened (\`Kind\`) and, when a field's value changed, which field (\`Field\`). Walk \`${edge}\` for the ${noun} as it is now.`,
+    description: `A change to an Affinity ${noun}: what happened (\`Kind\`) and, when a field's value changed, which field (\`Field\`), how (\`Field Change\`) and its value (\`Current\`, or \`Previous\` when it was cleared), each holding only that field. Walk \`${edge}\` for the ${noun} as it is now.`,
     fields: [
       field('Id', 'string', { required: true, description: 'Names the change: the same on every redelivery of it.' }),
-      field('Kind', 'enum', { required: true, enumValues: [...AFFINITY_CHANGE_KINDS], description: `What happened to the ${noun}: a field value set or cleared is \`updated\`.` }),
+      field('Kind', 'enum', { required: true, enumValues: [...AFFINITY_CHANGE_KINDS], description: `What happened to the ${noun}: a field value set, changed or cleared is \`updated\`.` }),
       titles.length > 0
         ? field('Field', 'enum', { enumValues: titles, description: 'When a field value changed, the field, by its name (`Status`).' })
         : field('Field', 'string', { description: 'When a field value changed, the field, by its name.' }),
+      field(AFFINITY_FIELD_CHANGE, 'enum', {
+        enumValues: [...AFFINITY_FIELD_CHANGES],
+        description:
+          'When a field value changed, how: `set` (a value given to the field), `changed` (its value replaced) or `cleared` (its value removed). For a field holding several values, each value added is `set` and each removed `cleared`.',
+      }),
+      held(
+        AFFINITY_CURRENT,
+        `When a field's value was set or changed, the ${noun} holding only that field, at its new value (\`exists(c.Current) AND c.Current.Status == "Won"\`); a field holding several values holds the one added. Absent otherwise.`,
+      ),
+      held(
+        AFFINITY_PREVIOUS,
+        `When a field's value was cleared, the ${noun} holding only that field, at the value removed. Absent otherwise. Affinity does not send the value a change replaced, so a filter reading it on a \`changed\` change cannot be judged.`,
+      ),
       field('Record', 'string', { required: true, description: `The ${noun}'s Affinity id.` }),
     ],
     references: [
@@ -198,8 +228,11 @@ export type ChangedRecord =
 export interface AffinityChange {
   record: ChangedRecord;
   kind: AffinityChangeKind;
-  /** The field whose value changed, for a field value's event. */
+  /** The field whose value changed, how, and the value Affinity sent (the
+   *  new one, or the one removed), for a field value's event. */
   fieldId?: number;
+  fieldChange?: AffinityFieldChange;
+  value?: unknown;
   identity: string;
   occurredAt?: string;
 }
@@ -243,10 +276,38 @@ export function changeOf(raw: unknown): AffinityChange | null {
   return {
     record,
     kind: subject === 'field_value' ? 'updated' : kind,
-    ...(subject === 'field_value' && typeof body.field_id === 'number' ? { fieldId: body.field_id } : {}),
+    ...(subject === 'field_value' && typeof body.field_id === 'number'
+      ? { fieldId: body.field_id, fieldChange: FIELD_CHANGE_OF_KIND[kind], value: body.value ?? null }
+      : {}),
     identity,
     ...(occurredAt !== undefined ? { occurredAt } : {}),
   };
+}
+
+/**
+ * A field value's change's own fields, beside `Kind`: the field, how it
+ * changed, and its value, under the name the record type publishes the field
+ * by. A field the record type does not name (one this connection cannot see,
+ * or one made since) is marked unknown, as is what it held, so a filter on
+ * them is undecided, never false. Affinity sends the new value of a set or a
+ * change and the value removed by a clear, never the value a change replaced:
+ * `Previous` is unknown on a change.
+ */
+export function fieldValueChange(change: AffinityChange, field: { name: string; value: unknown } | undefined): { fields: Record<string, unknown>; unknown: string[] } {
+  if (change.fieldChange === undefined) return { fields: {}, unknown: [] };
+  const how = { [AFFINITY_FIELD_CHANGE]: change.fieldChange };
+  if (field === undefined) return { fields: how, unknown: ['Field', AFFINITY_CURRENT, AFFINITY_PREVIOUS] };
+  const held = { [field.name]: field.value };
+  switch (change.fieldChange) {
+    case 'set':
+      return { fields: { Field: field.name, ...how, [AFFINITY_CURRENT]: held }, unknown: [] };
+    case 'changed':
+      return { fields: { Field: field.name, ...how, [AFFINITY_CURRENT]: held }, unknown: [AFFINITY_PREVIOUS] };
+    case 'cleared':
+      return { fields: { Field: field.name, ...how, [AFFINITY_PREVIOUS]: held }, unknown: [] };
+    default:
+      return change.fieldChange satisfies never;
+  }
 }
 
 /**
@@ -258,16 +319,17 @@ export function changeOf(raw: unknown): AffinityChange | null {
  * known.
  */
 export function unplacedChange(change: AffinityChange): ChangeArrival {
+  // The field is named by the record type it is on: a filter on it, or on
+  // what it held, is undecided, never false.
+  const { fields, unknown } = fieldValueChange(change, undefined);
   return {
     edge: AFFINITY_CHANGES_EDGE,
     key: changesKey(change.record),
     identity: change.identity,
     landing: {
       recordId: change.identity,
-      fields: { Id: change.identity, Kind: change.kind, Record: change.record.id },
-      // The field is named by the record type it is on: a filter on it is
-      // undecided, never false.
-      ...(change.fieldId !== undefined ? { unknown: ['Field'] } : {}),
+      fields: { Id: change.identity, Kind: change.kind, Record: change.record.id, ...fields },
+      ...(unknown.length > 0 ? { unknown } : {}),
     },
     parents: [null],
     ...(change.occurredAt !== undefined ? { occurredAt: change.occurredAt } : {}),

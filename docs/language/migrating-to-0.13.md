@@ -338,8 +338,12 @@ Each entry shows a 0.12 listen, the 0.13 listen `listen-fire upgrade` writes for
 
 - 0.12: `listen to crm { events: ["organization.created", "organization.updated"] } fire welcomed`
 - 0.13, under `listen-fire upgrade --all`: `listen to crm-[:Organization]->-[c:Changes WHERE c.Kind IN ["created", "updated"]]-> fire welcomed`, parameter `<crm-[:OrganizationChange]->>`
-- `Kind == "updated"` also hears each field value set or cleared on the organization, which 0.12 heard only as `field_value` events. Add `AND c.Field == null` to hear the organization's own changes alone. The same holds for a person and an opportunity.
-- A list entry's changes are written by hand, from the list: ``listen to crm-[:`List Entry — Master Deals List`]->-[c:Changes WHERE c.Field == "Status"]-> fire moved``, parameter ``<crm-[:`List Entry Change — Master Deals List`]->>``.
+- `Kind == "updated"` also hears each field value set, changed or cleared on the organization, which 0.12 heard only as `field_value` events. Add ``AND c.`Field Change` == null`` to hear the organization's own changes alone. The same holds for a person and an opportunity.
+- A list entry's changes are written by hand, from the list: ``listen to crm-[:`List Entry — Master Deals List`]->-[c:Changes WHERE c.Field == "Status"]-> fire moved``, parameter ``<crm-[:`List Entry Change — Master Deals List`]->>``. An opportunity list's columns are its entries' fields.
+- A 0.12 `field_value` event's type and value are read on the change (from listen-fire 0.13.1), by hand:
+  - `field_value.created`, `.updated` and `.deleted` become ``c.`Field Change` `` `set`, `changed` and `cleared`.
+  - The value set or changed to becomes `c.Current.Status`, and the value cleared `c.Previous.Status`, each tested present first and typed by the field (a dropdown by its label).
+  - Affinity sends no value a change replaced: a listen reading `c.Previous` on a `changed` change cannot be judged, and says so.
 - A listen naming a note's or a reminder's events has no rewrite: they run nothing in 0.13.
 
 #### `@lf/telegram` and `@lf/whatsapp`

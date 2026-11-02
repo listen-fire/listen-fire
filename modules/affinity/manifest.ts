@@ -17,7 +17,7 @@ function changesOf(entity: AffinityChangedEntity, kind: AffinityChangeKind) {
   const recordType = ENTITY_DISPLAY_NAMES[entity];
   return {
     ...(kind === 'updated'
-      ? { changed: `\`Kind == "updated"\` also hears each field value set or cleared on the ${recordType.toLowerCase()}, which 0.12 heard only as field_value events: add \`AND c.Field == null\` to hear the ${recordType.toLowerCase()}'s own updates alone` }
+      ? { changed: `\`Kind == "updated"\` also hears each field value set or cleared on the ${recordType.toLowerCase()}, which 0.12 heard only as field_value events: add \`\`AND c.\`Field Change\` == null\`\` to hear the ${recordType.toLowerCase()}'s own updates alone` }
       : {}),
     path: [recordType, AFFINITY_CHANGES_EDGE],
     aliases: [entity.charAt(0), 'c'],
@@ -63,8 +63,9 @@ export const AFFINITY_MANIFEST: AdapterManifest = {
   introspectedSchema: true,
   authoringHints:
     'Listen on a record’s Changes, narrowed by Kind (created, updated, deleted) and, when a field value ' +
-    'changed, by Field (the field’s name): crm-[:`List Entry — Master Deals List`]->-[c:Changes WHERE ' +
-    'c.Field == "Status"]->. An organization’s Changes are OrganizationChange (a person’s PersonChange, an ' +
+    'changed, by Field (the field’s name), Field Change (set, changed, cleared) and its value, Current (set or ' +
+    'changed to) or Previous (cleared), each holding only that field: crm-[:`List Entry — Master Deals List`]->-[c:Changes WHERE ' +
+    'c.Field == "Status"]->, or WHERE exists(c.Current) AND c.Current.Status == "Passed". An organization’s Changes are OrganizationChange (a person’s PersonChange, an ' +
     'opportunity’s OpportunityChange, a list’s entry’s `List Entry Change — <list>`); walk the change’s ' +
     'Organization (Person, Opportunity, List Entry) edge for the record as it is now.',
   // Each 0.12 listen naming an organization's, a person's or an opportunity's
@@ -82,8 +83,9 @@ export const AFFINITY_MANIFEST: AdapterManifest = {
     'Listen-Fire registers one Affinity webhook for a connection when a listen on a record’s Changes ' +
     'goes live (Affinity allows at most 3 per instance), taking every organization, person, opportunity, ' +
     'list entry and field value event. A change arrives on the Changes of the record it is about: created, ' +
-    'a field’s value set or cleared (updated, Field names the field: a deal’s stage is a field of its list ' +
-    'entry) or deleted. A redelivery of the same change runs nothing. It does not fire on notes, reminders, ' +
+    'a field’s value set, changed or cleared (updated, Field names the field, Field Change says which, and ' +
+    'Current or Previous holds the value: a deal’s stage is a field of its list entry) or deleted. Affinity ' +
+    'sends no value a change replaced. A redelivery of the same change runs nothing. It does not fire on notes, reminders, ' +
     'files or lists themselves.',
   vocabulary: {
     icon: {

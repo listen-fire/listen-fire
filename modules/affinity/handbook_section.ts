@@ -66,7 +66,15 @@ function moved(c: <crm-[:\`List Entry Change — Master Deals List\`]->>) {
 listen to crm-[:\`List Entry — Master Deals List\`]->-[c:Changes WHERE c.Field == "Status"]-> fire moved
 \`\`\`
 
-\`Kind\` says what happened (\`created\`, \`updated\`, \`deleted\`); a field's value set or cleared is \`updated\`, with \`Field\` naming the field the way the list shows it. Organizations, people and opportunities have \`Changes\` too. Walk the change's \`List Entry\` (\`Organization\`, …) for the record as it is now. The same change delivered twice runs once.
+\`Kind\` says what happened (\`created\`, \`updated\`, \`deleted\`); a field's value set, changed or cleared is \`updated\`, with \`Field\` naming the field the way the list shows it and \`Field Change\` saying which (\`set\`, \`changed\`, \`cleared\`). Organizations, people and opportunities have \`Changes\` too, and an opportunity list's entries have its columns. Walk the change's \`List Entry\` (\`Organization\`, …) for the record as it is now. The same change delivered twice runs once.
+
+A change holds the field's value too, as the record holding only that field: \`Current\` is the value set or changed to, \`Previous\` the value cleared, each read with \`.\` once tested present and checked against the field:
+
+\`\`\`
+listen to crm-[:\`List Entry — Master Deals List\`]->-[c:Changes WHERE exists(c.Current) AND c.Current.Status == "Passed"]-> fire passed
+\`\`\`
+
+Affinity does not send the value a change replaced, so a filter reading \`Previous\` on a \`changed\` change cannot be judged, and the listen says so rather than run. An organization's own update, not a field's, is the one with no \`Field Change\`: \`c.Kind == "updated" AND c.\`Field Change\` == null\`.
 
 ### Common mistakes
 

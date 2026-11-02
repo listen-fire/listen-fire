@@ -43,11 +43,13 @@ import {
 
 export async function cachedFields(input: {
   client: AffinityAPIClient;
-  type: 'ORGANIZATION' | 'PERSON';
+  /** Absent: the workspace's whole catalog (an opportunity list's columns are
+   *  in no entity's). */
+  type?: 'ORGANIZATION' | 'PERSON';
   listId?: number;
 }): Promise<AffinityFieldMeta[]> {
   return (await input.client.getFields({
-    type: input.type,
+    ...(input.type !== undefined ? { type: input.type } : {}),
     ...(input.listId != null ? { limitToListId: input.listId } : {}),
   })) as AffinityFieldMeta[];
 }
@@ -1070,11 +1072,20 @@ export async function describe(input: {
     // A pinned list entry's list-scoped custom fields are the fields of its
     // list's OWN entity kind — the list is typed, so we query exactly that one
     // (person list → PERSON fields, org list → ORGANIZATION fields), never the
-    // org∪person union. Opportunity lists carry no org/person-typed custom
-    // fields on this surface, so they contribute none.
+    // org∪person union. An opportunity list's columns are in neither: they are
+    // read from the workspace's whole catalog, and only read (the write path
+    // names an organization's or a person's fields), so only its scalar
+    // columns are published, none of them writable.
     const parent = listEntityKind(listType);
     const listCustomType = parent === 'organization' ? 'ORGANIZATION' : parent === 'person' ? 'PERSON' : null;
-    if (listCustomType) {
+    if (parent === 'opportunity') {
+      const custom = await cachedFields({ client: input.client, listId });
+      const displayNames = listName === undefined ? undefined : listScopedFieldDisplayNames({ catalog: custom, listId, listName });
+      for (const cf of custom) {
+        if (cf.list_id !== listId || isReferenceValueType(cf.value_type)) continue;
+        fields.push({ ...customFieldDescriptor(cf, displayNames?.get(cf.id) ?? cf.name), writable: false, uiHint: undefined });
+      }
+    } else if (listCustomType) {
       const custom = await cachedFields({
         client: input.client,
         type: listCustomType,

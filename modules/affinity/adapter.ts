@@ -65,9 +65,11 @@ import {
   changesKey,
   changeTypeName,
   describeChange,
+  fieldValueChange,
   recordEdgeOf,
   recordTypeOfChange,
   unplacedChange,
+  type AffinityChange,
   type ChangeArrival,
   type ChangedRecord,
 } from './changes';
@@ -89,6 +91,7 @@ import {
   decodedFixedType,
   ENTITY_DISPLAY_NAMES,
   listCatalogType,
+  listColumnCatalog,
   listEntityKind,
   listNameFromPerListType,
   perListTypeName,
@@ -140,6 +143,7 @@ import {
   canonicalPersonData,
   canonicalRelationshipStrengthData,
   canonicalReminderData,
+  decodeFieldValue,
   makeWebBaseUrlResolver,
   readCustomFieldValues,
   referenceFieldOn,
@@ -212,7 +216,8 @@ export class AffinityAdapter extends BaseAdapter {
    * A delivery: one Affinity event (`{ type, body, sent_at }`), the arrival on
    * the `Changes` of the record it is about (changes.ts), carrying that record
    * as Affinity holds it now (none for a deleted one). A field value's event
-   * names the field by the name its record publishes it under. An event about
+   * names the field by the name its record publishes it under, how it changed,
+   * and the value Affinity sent, typed by that field. An event about
    * anything else (a note, a reminder, a list) runs nothing. A list entry's
    * change whose list is not known arrives typed by nothing (`unplacedChange`).
    */
@@ -223,13 +228,8 @@ export class AffinityAdapter extends BaseAdapter {
     if (recordType === undefined) return { events: [], arrivals: [unplacedChange(change)] };
     const decoded = await this.structuredIdFor(recordType);
     const record = change.kind === 'deleted' || decoded === undefined ? null : await this.changedRecordNow(recordType, decoded, change.record.id);
-    const field = change.fieldId === undefined ? undefined : await this.fieldTitle(recordType, change.fieldId);
-    const fields: Record<string, unknown> = {
-      Id: change.identity,
-      Kind: change.kind,
-      Record: change.record.id,
-      ...(field !== undefined ? { Field: field } : {}),
-    };
+    const valued = fieldValueChange(change, await this.changedField(recordType, change));
+    const fields: Record<string, unknown> = { Id: change.identity, Kind: change.kind, Record: change.record.id, ...valued.fields };
     return {
       events: [],
       arrivals: [
@@ -237,7 +237,7 @@ export class AffinityAdapter extends BaseAdapter {
           edge: AFFINITY_CHANGES_EDGE,
           key: changesKey(change.record),
           identity: change.identity,
-          landing: { recordId: change.identity, recordType: changeTypeName(recordType), fields },
+          landing: { recordId: change.identity, recordType: changeTypeName(recordType), fields, ...(valued.unknown.length > 0 ? { unknown: valued.unknown } : {}) },
           parents: [record === null ? null : { recordId: change.record.id, recordType, fields: record }],
           about: { recordType, externalId: change.record.id },
           ...(change.occurredAt !== undefined ? { occurredAt: change.occurredAt } : {}),
@@ -275,6 +275,21 @@ export class AffinityAdapter extends BaseAdapter {
   private async listOfField(fieldId: number): Promise<number | undefined> {
     const client = await this.getApiClient();
     return (await client.getFields({})).find((f) => f.id === fieldId)?.list_id ?? undefined;
+  }
+
+  /** The field a field value's change is of, by the name its record type
+   *  publishes it under, and the value Affinity sent, as the record reads it
+   *  (a dropdown by its label; a field holding several values, as the list of
+   *  the one value added or removed). None for a field the record type does not
+   *  name. */
+  private async changedField(recordType: string, change: AffinityChange): Promise<{ name: string; value: unknown } | undefined> {
+    if (change.fieldId === undefined) return undefined;
+    const name = await this.fieldTitle(recordType, change.fieldId);
+    if (name === undefined) return undefined;
+    const meta = (await (await this.getApiClient()).getFields({})).find((f) => f.id === change.fieldId);
+    if (change.value == null || meta === undefined) return { name, value: change.value ?? null };
+    const value = decodeFieldValue(meta, change.value);
+    return { name, value: meta.allows_multiple ? [value] : value };
   }
 
   /** The name a record type publishes a custom field under, by its Affinity id. */
@@ -1776,16 +1791,9 @@ export class AffinityAdapter extends BaseAdapter {
     scope: AffinityCustomFieldScope,
   ): Promise<Map<string, AffinityCustomFieldValue>> {
     const operations = await this.getOperations();
-    const catalogType = scope.kind === 'list-entry' ? scope.catalogType : undefined;
+    const type = scope.kind === 'list-entry' ? scope.catalogType : scope.entityType === 'organization' ? 'ORGANIZATION' : 'PERSON';
     return readCustomFieldValues(operations, scope, {
-      catalog: await cachedFields({
-        client: await this.getApiClient(),
-        type:
-          catalogType ??
-          (scope.kind === 'entity' && scope.entityType === 'organization'
-            ? 'ORGANIZATION'
-            : 'PERSON'),
-      }),
+      catalog: await cachedFields({ client: await this.getApiClient(), ...(type !== undefined ? { type } : {}) }),
     });
   }
 
@@ -1819,12 +1827,12 @@ export class AffinityAdapter extends BaseAdapter {
       // from; a generic `List Entry` cannot commit to one. Mirrors the same
       // mapping in schema_catalog's per-list describe, so the fields we read
       // are exactly the fields we published.
-      const catalogType = listCatalogType(decoded);
-      if (!catalogType) return null;
+      const catalog = listColumnCatalog(decoded);
+      if (!catalog) return null;
       return {
         kind: 'list-entry',
         listEntryId: recordId,
-        catalogType,
+        ...(catalog.type !== undefined ? { catalogType: catalog.type } : {}),
         listId: decoded.listId,
         listName: decoded.listName,
       };
@@ -1873,18 +1881,19 @@ export class AffinityAdapter extends BaseAdapter {
     // A REHEARSED entry carries a synthetic handle, not an Affinity id. Nothing
     // to read, and nothing written yet to read against.
     if (!Number.isInteger(listEntryId)) return null;
-    const catalogType = listCatalogType(decoded);
-    if (!catalogType) return null;
+    const columns = listColumnCatalog(decoded);
+    if (!columns) return null;
+    const catalogType = columns.type;
 
     const client = await this.getApiClient();
     const [values, catalog] = await Promise.all([
       client.getFieldValues({ list_entry_id: listEntryId }),
-      cachedFields({ client, type: catalogType }),
+      cachedFields({ client, ...columns }),
     ]);
     const list = await this.listOfEntry(decoded, values, catalog);
     const grouped = await readCustomFieldValues(
       await this.getOperations(),
-      { kind: 'list-entry', listEntryId, catalogType, ...(list ?? {}) },
+      { kind: 'list-entry', listEntryId, ...(catalogType !== undefined ? { catalogType } : {}), ...(list ?? {}) },
       { catalog, values },
     );
 

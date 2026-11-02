@@ -9,20 +9,15 @@
 // is answered by its own next change, never by a person's of the same id.
 
 import assert from 'node:assert/strict';
-import { createHmac } from 'node:crypto';
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { test } from 'node:test';
 
-import { fakeAffinity, type Fake } from './affinity_fixture';
+import { affinityProject, deliverAffinity as deliver, fakeAffinity, type Fake } from './affinity_fixture';
 import { freePort, until } from './attio_fixture';
 import { lf, served } from './example';
-
-const REPO = resolve(__dirname, '../../../..');
-const AFFINITY = join(REPO, 'modules/affinity');
-
 
 const MOVEMENT = (hopWhere: string) => `import { affinity } from adapters
 import { Affinity } from credentials
@@ -38,19 +33,8 @@ function \`Deal Date\` (run: <manual-[:Invocations]->>) {
 listen to manual-[:Invocations]-> fire \`Deal Date\`
 `;
 
-const SIGNING_KEY = 'affinity-signing-key';
-
 function project(fake: Fake, hopWhere: string, movement = MOVEMENT(hopWhere), lfYaml = ''): string {
-  const dir = mkdtempSync(join(tmpdir(), 'lf-affinity-lists-'));
-  writeFileSync(join(dir, 'lf.yaml'), `engine: 0.13.0\nmovements: movements\nexternals: externals\n${lfYaml}`);
-  mkdirSync(join(dir, 'externals/affinity'), { recursive: true });
-  writeFileSync(join(dir, 'externals/affinity/lf-external.yaml'), `name: affinity\nkind: adapter\nprotocol: 2\nmodule: ${AFFINITY}\n`);
-  mkdirSync(join(dir, '.lf'));
-  writeFileSync(join(dir, '.lf/secrets.yaml'), `Affinity:\n  module: affinity\n  credential: affinity\n  apiKey: test-key\n  baseUrl: ${fake.url}\n  webhook_secret: ${SIGNING_KEY}\n`);
-  chmodSync(join(dir, '.lf/secrets.yaml'), 0o600);
-  mkdirSync(join(dir, 'movements'));
-  writeFileSync(join(dir, 'movements/deal_date.mvt'), movement);
-  return dir;
+  return affinityProject(fake, movement, lfYaml);
 }
 
 test("a List Entries hop pinned to one list checks against that list's columns and returns its entry's value", async () => {
@@ -106,17 +90,6 @@ function moved(c: <crm-[:\`List Entry Change — Master Deals List\`]->>) {
 
 listen to crm-[:\`List Entry — Master Deals List\`]->-[c:Changes WHERE c.Field == "Status"]-> fire moved
 `;
-
-/** One Affinity delivery, signed with the account's key as Affinity signs it. */
-async function deliver(url: string, type: string, body: Record<string, unknown>): Promise<{ status: number; text: string }> {
-  const raw = JSON.stringify({ type, body, sent_at: Math.floor(Date.now() / 1000) });
-  const answer = await fetch(url, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', 'x-affinity-webhook-signature': createHmac('sha256', SIGNING_KEY).update(raw).digest('hex') },
-    body: raw,
-  });
-  return { status: answer.status, text: await answer.text() };
-}
 
 test("a listen on the Deals list's entries runs on each Status change, naming the new status, and on no other change", async () => {
   const fake = await fakeAffinity(mkdtempSync(join(tmpdir(), 'lf-affinity-fake-')));
@@ -315,7 +288,7 @@ listen to crm { events: ${events} } fire welcomed
     const told = lf(dir, 'upgrade');
     assert.equal(told.code, 1, told.out);
     assert.ok(
-      told.out.includes('(`Kind == "updated"` also hears each field value set or cleared on the organization, which 0.12 heard only as field_value events: add `AND c.Field == null` to hear the organization\'s own updates alone)'),
+      told.out.includes('(`Kind == "updated"` also hears each field value set or cleared on the organization, which 0.12 heard only as field_value events: add ``AND c.`Field Change` == null`` to hear the organization\'s own updates alone)'),
       told.out,
     );
     assert.equal(readFileSync(file, 'utf8'), updated);
@@ -323,7 +296,7 @@ listen to crm { events: ${events} } fire welcomed
     assert.equal(applied.code, 0, applied.out);
     assert.equal(readFileSync(file, 'utf8'), rewritten('["created", "updated"]'));
     // The note's remedy checks.
-    writeFileSync(file, rewritten('["created", "updated"]').replace('c.Kind IN ["created", "updated"]', 'c.Kind IN ["created", "updated"] AND c.Field == null'));
+    writeFileSync(file, rewritten('["created", "updated"]').replace('c.Kind IN ["created", "updated"]', 'c.Kind IN ["created", "updated"] AND c.`Field Change` == null'));
     const narrowed = lf(dir, 'check');
     assert.equal(narrowed.code, 0, narrowed.out);
 

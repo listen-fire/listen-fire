@@ -618,7 +618,9 @@ export type AffinityCustomFieldScope =
   | {
       kind: 'list-entry';
       listEntryId: number;
-      catalogType: 'ORGANIZATION' | 'PERSON';
+      /** Absent: the workspace's whole catalog, where an opportunity list's
+       *  columns are. */
+      catalogType?: 'ORGANIZATION' | 'PERSON';
       listId?: number;
       listName?: string;
     };
@@ -667,7 +669,7 @@ export async function readCustomFieldValues(
         : 'PERSON'
       : scope.catalogType;
   const [fields, values] = await Promise.all([
-    options?.catalog ?? client.getFields({ type: catalogType }),
+    options?.catalog ?? client.getFields(catalogType !== undefined ? { type: catalogType } : {}),
     options?.values ??
       client.getFieldValues(
         scope.kind === 'list-entry'
