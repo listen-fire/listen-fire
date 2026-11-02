@@ -27,8 +27,8 @@ function `Enrich`(m: <inbox-[:Emails]->>) {
   })
 
   sender = extractOne(content, node Sender: "the company that sent this message" { name: <text> "its name" })
-  big    = coalesce(extractOne(content, CompanyDetail).employees, 0) > 50
-  write crm-[:Companies]-> { unique by (FUZZY Name) Name: coalesce(sender.name, "unknown"), Description: big ? "large" : "small" }
+  big    = coalesce(extractOne(content, CompanyDetail)?.employees, 0) > 50
+  write crm-[:Companies]-> { unique by (FUZZY Name) Name: coalesce(sender?.name, "unknown"), Description: big ? "large" : "small" }
 }
 
 listen to inbox-[e:Emails WHERE e.Key == "enrich"]-> fire `Enrich`

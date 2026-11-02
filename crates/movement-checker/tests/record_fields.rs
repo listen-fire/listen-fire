@@ -120,7 +120,7 @@ fn unnarrowed_the_row_is_the_generic_row() {
 fn a_field_is_never_read_through_a_row_that_may_be_absent() {
     let found = candidates("x = c.Previous.Stage");
     assert_eq!(codes(&found), ["MOV_ABSENT_REQUIRED"], "{found:#?}");
-    for told in ["`exists(c.Previous) && c.Previous.Stage …`", "`!exists(c.Previous) || c.Previous.Stage …`", "`if (exists(c.Previous)) { … }`"] {
+    for told in ["`c.Previous?.Stage`", "`exists(c.Previous) && c.Previous.Stage …`", "`if (exists(c.Previous)) { … }`"] {
         assert!(found[0].1.contains(told), "{told}: {found:#?}");
     }
     // Read on as present once refused: the arithmetic says nothing more.
@@ -185,7 +185,7 @@ fn read_through_stays_refused_past_any_other_field() {
 
 #[test]
 fn the_live_record_is_walked_in_the_function() {
-    assert_eq!(candidates("x = only(c-[:Record]->).Stage"), Vec::<(String, String)>::new());
+    assert_eq!(candidates("x = only(c-[:Record]->)?.Stage"), Vec::<(String, String)>::new());
 }
 
 /// The source's MOV_ABSENT_REQUIRED refusals, and the source with each
@@ -419,7 +419,7 @@ fn a_listen_reads_through_a_row_only_once_it_is_tested() {
     }
     let found = listen("c.Current.Stage == \"Interview\" AND c.Previous.Stage != \"Interview\"");
     assert_eq!(codes(&found), ["MOV_ABSENT_REQUIRED", "MOV_ABSENT_REQUIRED"], "{found:#?}");
-    assert!(found[1].1.contains("`exists(c.Previous) AND c.Previous.Stage …`, or `NOT exists(c.Previous) OR c.Previous.Stage …`"), "{found:#?}");
+    assert!(found[1].1.contains("Read it with `c.Previous?.Stage` (absent when 'c.Previous' is), or test it first: `exists(c.Previous) AND c.Previous.Stage …`"), "{found:#?}");
     for where_ in [
         "exists(c.Previous) OR c.Previous.Stage == \"Applied\"",
         "NOT exists(c.Previous) AND c.Previous.Stage == \"Applied\"",

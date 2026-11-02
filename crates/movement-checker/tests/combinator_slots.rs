@@ -136,18 +136,18 @@ fn a_map_or_reduce_member_that_awaits_answers_present() {
 #[test]
 fn a_slot_keeps_the_record_its_arm_returns() {
     let race = "function go(t: <text>) {\n  m = write $C { $N: t }\n  r = race(() => {\n    return $W m-[:Replies]->\n  }, () => { await sleep(1d) })\n  if (r[0] != null) {\n    write $C { $N: coalesce(r[0].$R, \"none\") }\n    write $C { $N: coalesce(r[0].Nonexistent, \"none\") }\n  }\n}\n";
-    let all = "function go(t: <text>) {\n  m = write $C { $N: t }\n  r = all(() => {\n    return only(m-[:Replies]->)\n  })\n  write $C { $N: coalesce(r[0].$R, \"none\") }\n  write $C { $N: coalesce(r[0].Nonexistent, \"none\") }\n}\n";
+    let all = "function go(t: <text>) {\n  m = write $C { $N: t }\n  r = all(() => {\n    return only(m-[:Replies]->)\n  })\n  write $C { $N: coalesce(r[0]?.$R, \"none\") }\n  write $C { $N: coalesce(r[0]?.Nonexistent, \"none\") }\n}\n";
     for shape in &SHAPES {
-        let unknown = |line: usize, indent: usize| {
+        let unknown = |line: usize, indent: usize, read: &str| {
             let col = indent + 12 + shape.collection.len() + shape.needs.len();
             let fields = if shape.catalog == MAIL { "To, Title, From, Sent" } else { "Text, Author, Ts" };
             format!(
                 "MOV_UNKNOWN_PROPERTY {line}:{col}-{line}:{} {} has no field 'Nonexistent' — it has: {fields}; and edges, walked (`-[:…]->`) rather than read: Replies",
-                col + "coalesce(r[0].Nonexistent, \"none\")".len(),
+                col + format!("coalesce({read}, \"none\")").len(),
                 shape.named
             )
         };
-        assert_eq!(found(shape, race), [unknown(9, 4)], "{}", shape.named);
-        assert_eq!(found(shape, all), [unknown(8, 2)], "{}", shape.named);
+        assert_eq!(found(shape, race), [unknown(9, 4, "r[0].Nonexistent")], "{}", shape.named);
+        assert_eq!(found(shape, all), [unknown(8, 2, "r[0]?.Nonexistent")], "{}", shape.named);
     }
 }
