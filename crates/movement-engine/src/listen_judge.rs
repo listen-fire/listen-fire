@@ -167,14 +167,25 @@ fn stated_at<'a>(plan: &ListenPlan, arrival: &'a PlanArrival, i: usize) -> Optio
     record?.record_type.as_deref()
 }
 
-/// The record an arrival carries for earlier hop `i`: an edge crossed twice
-/// (a folder in a folder) is carried twice, and the k-th hop on a name reads
-/// the k-th carried record of it.
+/// The record an arrival carries for earlier hop `i`, when its last edge
+/// carries that hop's: an edge crossed twice (a folder in a folder) is
+/// carried twice, and the k-th hop on a name reads the k-th carried record
+/// of it. Where the record in that place is missing or of another record
+/// type, the k-th one of the hop's own record type is read instead: a module
+/// that reports every arrival on an edge alike, whichever path its
+/// connection walked to it, carries more than one path declares (Airtable's
+/// change carries its base, which a connection positioned at the base has
+/// no hop for). With none of that type, the record in its place is read,
+/// and skips by its type.
 fn carried_record<'a>(plan: &ListenPlan, arrival: &'a PlanArrival, i: usize) -> Option<&'a ArrivedRecord> {
     let hop = &plan.hops[i];
     let nth = plan.hops[..i].iter().filter(|earlier| earlier.edge == hop.edge).count();
     let at = plan.carries.iter().enumerate().filter(|(_, edge)| **edge == hop.edge).nth(nth)?.0;
-    arrival.parents.get(at)?.as_ref()
+    let placed = arrival.parents.get(at).and_then(Option::as_ref);
+    if placed.is_some_and(|record| record.record_type.as_deref() == Some(hop.to.as_str())) {
+        return placed;
+    }
+    arrival.parents.iter().flatten().filter(|record| record.record_type.as_deref() == Some(hop.to.as_str())).nth(nth).or(placed)
 }
 
 /// Whether `arrival` fires one traversal of the listen `whole`: `plan`, the

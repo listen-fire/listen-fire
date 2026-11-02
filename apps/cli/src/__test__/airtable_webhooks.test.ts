@@ -278,6 +278,49 @@ test('a change carries its base and table, each by its id and name, to the run i
   }
 });
 
+// On a connection positioned at the base, a change carries its base too: the
+// listen's Tables hop reads the Table it carries, by its record type. It is
+// judged from the change, so listen-fire lists no tables for it and
+// registers no webhook on the base's schema.
+test('positioned at the base, a listen narrowed by table fires only for its table, judged from the table each change carries', async () => {
+  const fake = await fakeChannels();
+  try {
+    const dir = await hiringProject(fake);
+    writeFileSync(
+      join(dir, 'movements/hiring.mvt'),
+      `import { \`@lf/airtable\` as airtable } from adapters
+import { henry_airtable } from credentials
+
+hiring = connect airtable using henry_airtable { base: "Hiring" }
+
+function filed(c: <hiring-[:Change]->>) {
+  return c.Kind
+}
+
+listen to hiring-[t:Tables WHERE t.Name == "Expenses"]->-[c:Changes]-> fire filed
+`,
+    );
+    const checked = lfSync(dir, 'check');
+    assert.equal(checked.code, 0, checked.out);
+    assert.match(lfSync(dir, 'listens').out, /hiring:filed — .* — arrival, arrival — watching all of hiring — /);
+    const server = await serving(dir);
+    try {
+      const filed = () => server.lines.filter((l) => /^run \S+ hiring:filed completed$/.test(l)).length;
+      await until(() => server.lines.some((l) => /registered webhook ach\d+/.test(l)), server.lines);
+      await deliver(fake, { changeType: 'add', tableId: 'tblROLE01', recordId: 'recENG', fields: { Title: 'Engineer' } });
+      await deliver(fake, { changeType: 'add', tableId: 'tblEXPN01', recordId: 'recHOTEL', fields: { Item: 'Hotel' } });
+      await until(() => filed() === 1, server.lines);
+      const registered = await webhooksOf(fake);
+      assert.deepEqual([registered.data, registered.schemas], [['appHIRE01'], []], 'one webhook on the base\'s rows, none on its schema');
+      assert.equal(filed(), 1, 'the role made in another table ran nothing');
+    } finally {
+      await server.stop();
+    }
+  } finally {
+    await fake.stop();
+  }
+});
+
 // Airtable's ping names no change: the module reads its payloads from the
 // cursor its webhook was at. Read again from the first delivery's cursor, the
 // feed holds the second delivery's change too. A replay of the first judges
@@ -547,9 +590,9 @@ test('Stage coming to be Interview fires once per edit, on an update or a row cr
     writeFileSync(join(dir, 'movements/hiring.mvt'), STAGE);
     const server = await serving(dir);
     try {
-      await until(() => server.lines.filter((l) => /registered webhook ach\d+/.test(l)).length >= 2, server.lines);
+      await until(() => server.lines.filter((l) => /registered webhook ach\d+/.test(l)).length >= 1, server.lines);
       const registered = await webhooksOf(fake);
-      assert.deepEqual([registered.data, registered.schemas], [['appHIRE01'], ['appHIRE01']], 'positioned at Hiring: one webhook on its rows, one on its schema');
+      assert.deepEqual([registered.data, registered.schemas], [['appHIRE01'], []], 'positioned at Hiring: one webhook on its rows; none on its schema, as each change carries its table');
       const interviews = () => server.lines.filter((l) => /^run \S+ hiring:schedule_interview completed$/.test(l)).length;
       const written = async () => JSON.stringify(await fake.json('/airtable/v0/appHIRE01/tblINTV01'));
 
@@ -620,7 +663,7 @@ test('a row a change holds spreads into a map, read by the field names, whether 
     writeFileSync(join(dir, 'movements/hiring.mvt'), SPREAD);
     const server = await serving(dir);
     try {
-      await until(() => server.lines.filter((l) => /registered webhook ach\d+/.test(l)).length >= 2, server.lines);
+      await until(() => server.lines.filter((l) => /registered webhook ach\d+/.test(l)).length >= 1, server.lines);
       const interviews = () => server.lines.filter((l) => /^run \S+ hiring:schedule_interview completed$/.test(l)).length;
       const written = async () => JSON.stringify(await fake.json('/airtable/v0/appHIRE01/tblINTV01'));
 
@@ -672,7 +715,7 @@ test('an update that leaves a collaborator unchanged does not fire Owner changin
     assert.equal(checked.code, 0, checked.out);
     const server = await serving(dir);
     try {
-      await until(() => server.lines.filter((l) => /registered webhook ach\d+/.test(l)).length >= 2, server.lines);
+      await until(() => server.lines.filter((l) => /registered webhook ach\d+/.test(l)).length >= 1, server.lines);
       const runs = () => server.lines.filter((l) => /^run \S+ hiring:owner_changed completed$/.test(l)).length;
       // Stage changes; Owner rides along unchanged, an object in the row before and after.
       const unchanged = await deliver(fake, { changeType: 'update', tableId: 'tblCAND01', recordId: 'recADA', fields: { Stage: 'Interview' }, previous: { Stage: 'Applied' } });
@@ -716,7 +759,7 @@ test('a change names the fields it touched and its base, table and row ids, a de
     assert.equal(checked.code, 0, checked.out);
     const server = await serving(dir);
     try {
-      await until(() => server.lines.filter((l) => /registered webhook ach\d+/.test(l)).length >= 2, server.lines);
+      await until(() => server.lines.filter((l) => /registered webhook ach\d+/.test(l)).length >= 1, server.lines);
       const runs = () => server.lines.filter((l) => /^run \S+ hiring:touched completed$/.test(l)).length;
       await deliver(fake, { changeType: 'update', tableId: 'tblCAND01', recordId: 'recADA', fields: { Email: 'ada@new.example', Stage: 'Interview' }, previous: { Email: 'ada@example.com', Stage: 'Applied' } });
       await until(() => runs() === 1, server.lines);
@@ -848,7 +891,7 @@ test('a quiet webhook is refreshed a day before it lapses, and one that lapsed i
 
     // Registered, expiring in 7 days.
     let server = await serveAt(0);
-    await until(() => server.lines.filter((l) => /registered webhook ach\d+/.test(l)).length >= 2, server.lines);
+    await until(() => server.lines.filter((l) => /registered webhook ach\d+/.test(l)).length >= 1, server.lines);
     await server.stop();
     const registered = await tableHook();
     assert.ok(registered !== undefined);

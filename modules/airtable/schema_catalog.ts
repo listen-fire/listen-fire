@@ -506,9 +506,9 @@ export function describeTableMeta(at: { positioned: boolean }): SchemaTypeDescri
  * the other. Off a base walked to, it is subscribed per base the listen's
  * `Bases` hop landed on (`scopedBy`); at a connection positioned at a base,
  * once for the connection. Each change names its table, and a listen keeps
- * only its own tables' changes. Off a base walked to, each carries its base
- * and table (`carries`), so a host that lists neither judges a listen
- * narrowed by them from the change alone.
+ * only its own tables' changes. Each carries its base and table (`carries`),
+ * so a host that lists neither judges a listen narrowed by them from the
+ * change alone.
  */
 export function changesReference(at: { positioned: boolean; target?: string }): SchemaReferenceDescriptor {
   return {
@@ -521,10 +521,11 @@ export function changesReference(at: { positioned: boolean; target?: string }): 
     readable: false,
     writable: false,
     listenable: true,
-    // Positioned, it declares no `carries`: a change carries its base first,
-    // and that connection's path has no `Bases` hop to align it with.
+    // A change carries its base and table whatever the path (webhook.ts);
+    // a host reads each hop's by its record type, so a positioned path,
+    // which has no `Bases` hop, declares its table alone.
     ...(at.positioned
-      ? { delivery: 'connection' as const }
+      ? { delivery: 'connection' as const, carries: [AIRTABLE_TABLES_EDGE] }
       : { delivery: 'scope' as const, scopedBy: AIRTABLE_BASES_EDGE, carries: [AIRTABLE_BASES_EDGE, AIRTABLE_TABLES_EDGE] }),
     identity: 'Id',
     attributes: true,

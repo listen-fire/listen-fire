@@ -283,13 +283,13 @@ export function arrivalsFromPayload(payload: AirtableWebhookPayload, context: Pa
   return arrivals;
 }
 
-/** The records a change carries, as a walked-to table's `Changes` declares
- *  (`carries`): its base and its table, by their ids and names, so a listen
- *  narrowed by either is judged from the arrival alone. The same whatever the
- *  connection's position: a host reads a delivery for its install, not for
- *  one connection, so the door cannot tell. A positioned table's `Changes`
- *  declares none, and a host reads none of them there. A name that could not
- *  be read is said unknown. */
+/** The records a change carries (`carries`): its base and its table, by
+ *  their ids and names, so a listen narrowed by either is judged from the
+ *  arrival alone. The same whatever the connection's position: a host reads a
+ *  delivery for its install, not for one connection, so the door cannot tell.
+ *  A positioned table's `Changes` declares its table alone, and a host reads
+ *  each hop's record by its record type. A name that could not be read is
+ *  said unknown. */
 function carriedParents(context: PayloadContext, tableId: string): AwaitLanding[] {
   return [metaRecord(BASE_META_TYPE, context.baseId, context.baseName), metaRecord(TABLE_META_TYPE, tableId, context.tableNamesById.get(tableId))];
 }
@@ -310,7 +310,12 @@ export function changesTables(payload: AirtableWebhookPayload): boolean {
 
 /** A table created, changed or removed, as the arrival on its base's
  *  `Tables`: named by the transaction and the table, so each change of it
- *  arrives once. */
+ *  arrives once. Not yet right for a connection positioned at the base,
+ *  whose `Tables` is a root edge and so wants no key: a host reads a delivery
+ *  for its install (listen-fire calls this with no settings), so
+ *  `context.positioned` is false at the door and such an arrival is keyed by
+ *  the base. Telling them apart needs the host to hand the door the
+ *  subscription's position. */
 function tableArrival(context: PayloadContext, tableId: string, name: string | undefined, transaction: string, occurredAt: string | undefined): AirtableArrival {
   return {
     edge: AIRTABLE_TABLES_EDGE,

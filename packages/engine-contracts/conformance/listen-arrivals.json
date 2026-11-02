@@ -1,5 +1,5 @@
 {
-  "about": "Whether an arrival fires a listen, by its plan's filters. Each plan is the checker's answer for its listen's source against `catalog` (both runners check that it still is). Hops judged on arrival are judged, each against the record the arrival carries for it: `landing` for the last hop, `parents` (aligned to the plan's `carries`) for earlier ones. So is a hop the host resolves by listing (`resolved`) whose edge the plan's `carries` names: the carried record is preferred to the listing, so a host that lists no members judges it all the same; any other resolved hop is the host's scope check, not judged here. Each record states its `recordType`, which must be the record type its hop lands on (`to`): one edge name may hang off several record types (`pay`'s Customer and Invoice each have `Changes`), and a record of another type skips at its hop, the landing judged first; a record that states none is undecided. A hop's checked part is always evaluated; its taken part too, unless `takenApplied` says the module applied it. `now` is the instant WITHIN measures from. The verdict is `{fires: true}`, `{skips: n}` (the hop whose filter fails, outermost 0; with a `reason` when the record carried for that hop is of another record type, so no filter was read), or `{undecided: reason}` (the host logs it and runs nothing). A listen through or onto a union is one plan holding each member's traversal (`members`), judged once: it fires when one member's does, a record of another member's type being that member's to decide; it is undecided when one member cannot tell; it skips when every member does, by a filter when one member's record types matched, else by type, naming every member's. Held by listen-fire's Rust (crates/movement-engine/src/listen_judge.rs, judge_arrival), the engine's TypeScript (judgeArrival, through the wasm) and the hosted product. A read on through a record a field holds (`c.Current.Stage`) reads that field of the landing, then the member of what it holds; a record absent reads its members absent. The checker has the listen test a record present before it reads through it (`exists(c.Current) AND c.Current.Stage == …`), and an operand of AND or OR is read only when the operands before it leave the answer open, so a read the test guards is never read on an absent record. A record may name the fields its module could not read (`unknown`): a part of the filter reading one is undecided, whatever `fields` holds for it, never read as absent; AND, OR and NOT are three-valued, so an OR one side holds holds and an AND one side fails fails, in either order; a hop that fails still decides.",
+  "about": "Whether an arrival fires a listen, by its plan's filters. Each plan is the checker's answer for its listen's source against `catalog` (both runners check that it still is). Hops judged on arrival are judged, each against the record the arrival carries for it: `landing` for the last hop, `parents` (aligned to the plan's `carries`) for earlier ones; where the record in a hop's place is missing or of another record type, the one of the hop's own record type is read (the k-th, for the k-th hop on an edge name), so a module may carry more records than a path declares, in another order (plan `positioned`), and only with none of that type does the record in its place skip by its type. So is a hop the host resolves by listing (`resolved`) whose edge the plan's `carries` names: the carried record is preferred to the listing, so a host that lists no members judges it all the same; any other resolved hop is the host's scope check, not judged here. Each record states its `recordType`, which must be the record type its hop lands on (`to`): one edge name may hang off several record types (`pay`'s Customer and Invoice each have `Changes`), and a record of another type skips at its hop, the landing judged first; a record that states none is undecided. A hop's checked part is always evaluated; its taken part too, unless `takenApplied` says the module applied it. `now` is the instant WITHIN measures from. The verdict is `{fires: true}`, `{skips: n}` (the hop whose filter fails, outermost 0; with a `reason` when the record carried for that hop is of another record type, so no filter was read), or `{undecided: reason}` (the host logs it and runs nothing). A listen through or onto a union is one plan holding each member's traversal (`members`), judged once: it fires when one member's does, a record of another member's type being that member's to decide; it is undecided when one member cannot tell; it skips when every member does, by a filter when one member's record types matched, else by type, naming every member's. Held by listen-fire's Rust (crates/movement-engine/src/listen_judge.rs, judge_arrival), the engine's TypeScript (judgeArrival, through the wasm) and the hosted product. A read on through a record a field holds (`c.Current.Stage`) reads that field of the landing, then the member of what it holds; a record absent reads its members absent. The checker has the listen test a record present before it reads through it (`exists(c.Current) AND c.Current.Stage == …`), and an operand of AND or OR is read only when the operands before it leave the answer open, so a read the test guards is never read on an absent record. A record may name the fields its module could not read (`unknown`): a part of the filter reading one is undecided, whatever `fields` holds for it, never read as absent; AND, OR and NOT are three-valued, so an OR one side holds holds and an AND one side fails fails, in either order; a hop that fails still decides.",
   "catalog": {
     "adapters": {
       "chat": {
@@ -170,6 +170,61 @@
                 "membersChange": {
                   "relistEverySeconds": 300
                 },
+                "capability": {
+                  "filter": "native",
+                  "supportsLimit": false
+                }
+              }
+            },
+            "writableRoots": {}
+          }
+        }
+      },
+      "hiring": {
+        "canFire": false,
+        "constructionArgs": [],
+        "schemas": {
+          "": {
+            "positions": {
+              "Table": {
+                "properties": {
+                  "Name": "text"
+                },
+                "edges": {
+                  "Changes": {
+                    "target": "Change",
+                    "readable": false,
+                    "listenable": true,
+                    "identity": "Id",
+                    "delivery": "connection",
+                    "carries": [
+                      "Tables"
+                    ]
+                  }
+                },
+                "propertyCapabilities": {
+                  "Name": {
+                    "filterOperators": [
+                      "eq"
+                    ]
+                  }
+                }
+              },
+              "Change": {
+                "properties": {
+                  "Id": "text",
+                  "Kind": "text"
+                },
+                "edges": {}
+              }
+            },
+            "collections": {
+              "Tables": {
+                "target": "Table",
+                "membersChange": "pushed",
+                "listenable": true,
+                "identity": "Id",
+                "delivery": "connection",
                 "capability": {
                   "filter": "native",
                   "supportsLimit": false
@@ -842,6 +897,46 @@
             "edge": "Tables",
             "from": "Base",
             "judged": "resolved",
+            "taken": {
+              "left": {
+                "fieldOnly": true,
+                "propertyTypeId": "Name",
+                "type": "edge_property"
+              },
+              "op": "eq",
+              "right": {
+                "type": "static",
+                "value": "Deals"
+              },
+              "type": "compare"
+            },
+            "to": "Table"
+          },
+          {
+            "alias": "x",
+            "edge": "Changes",
+            "from": "Table",
+            "judged": "arrival",
+            "to": "Change"
+          }
+        ],
+        "movement": "changed"
+      }
+    },
+    "positioned": {
+      "source": "import { hiring as hiring_module } from adapters; hiring = connect hiring_module\nfunction changed(x: <hiring-[:Change]->>) { return x.Kind }\nlisten to hiring-[t:Tables WHERE t.Name == \"Deals\"]->-[x:Changes]-> fire changed\n",
+      "plan": {
+        "adapter": "hiring",
+        "carries": [
+          "Tables"
+        ],
+        "connection": "hiring",
+        "hops": [
+          {
+            "alias": "t",
+            "edge": "Tables",
+            "from": "",
+            "judged": "arrival",
             "taken": {
               "left": {
                 "fieldOnly": true,
@@ -1956,6 +2051,11 @@
     {"case": "a change carrying a base of another name skips at Bases, whether or not the host listed it", "plan": "carried", "arrival": {"edge": "Changes", "key": "tblDEALS", "landing": {"recordType": "Change", "fields": {"Id": "c1", "Kind": "created"}}, "parents": [{"recordType": "Base", "fields": {"Name": "Finance"}}, {"recordType": "Table", "fields": {"Name": "Deals"}}]}, "now": "2026-10-31T10:00:00Z", "verdict": {"skips": 0}},
     {"case": "a change carrying a table of another name skips at Tables", "plan": "carried", "arrival": {"edge": "Changes", "key": "tblDEALS", "landing": {"recordType": "Change", "fields": {"Id": "c1", "Kind": "created"}}, "parents": [{"recordType": "Base", "fields": {"Name": "Hiring"}}, {"recordType": "Table", "fields": {"Name": "Expenses"}}]}, "now": "2026-10-31T10:00:00Z", "verdict": {"skips": 1}},
     {"case": "a change whose table name its module could not read is undecided", "plan": "carried", "arrival": {"edge": "Changes", "key": "tblDEALS", "landing": {"recordType": "Change", "fields": {"Id": "c1", "Kind": "created"}}, "parents": [{"recordType": "Base", "fields": {"Name": "Hiring"}}, {"recordType": "Table", "fields": {"Id": "tblDEALS"}, "unknown": ["Name"]}]}, "now": "2026-10-31T10:00:00Z", "verdict": {"undecided": "air could not read Name of the Tables record the arrival carries, which this listen's filter reads"}},
-    {"case": "a change carrying no base, though its edge carries one, is undecided", "plan": "carried", "arrival": {"edge": "Changes", "key": "tblDEALS", "landing": {"recordType": "Change", "fields": {"Id": "c1", "Kind": "created"}}, "parents": [null, {"recordType": "Table", "fields": {"Name": "Deals"}}]}, "now": "2026-10-31T10:00:00Z", "verdict": {"undecided": "the arrival carries no Bases record, which this listen's filter on it reads"}}
+    {"case": "a change carrying no base, though its edge carries one, is undecided", "plan": "carried", "arrival": {"edge": "Changes", "key": "tblDEALS", "landing": {"recordType": "Change", "fields": {"Id": "c1", "Kind": "created"}}, "parents": [null, {"recordType": "Table", "fields": {"Name": "Deals"}}]}, "now": "2026-10-31T10:00:00Z", "verdict": {"undecided": "the arrival carries no Bases record, which this listen's filter on it reads"}},
+    {"case": "a change on a connection positioned at its base carries its base too: the Tables hop reads the Table it carries, by its record type", "plan": "positioned", "arrival": {"edge": "Changes", "key": "tblDEALS", "landing": {"recordType": "Change", "fields": {"Id": "c1", "Kind": "created"}}, "parents": [{"recordType": "Base", "fields": {"Name": "Hiring"}}, {"recordType": "Table", "fields": {"Name": "Deals"}}]}, "now": "2026-10-31T10:00:00Z", "verdict": {"fires": true}},
+    {"case": "a change on a connection positioned at its base, from another table, skips at Tables", "plan": "positioned", "arrival": {"edge": "Changes", "key": "tblDEALS", "landing": {"recordType": "Change", "fields": {"Id": "c1", "Kind": "created"}}, "parents": [{"recordType": "Base", "fields": {"Name": "Hiring"}}, {"recordType": "Table", "fields": {"Name": "Roles"}}]}, "now": "2026-10-31T10:00:00Z", "verdict": {"skips": 0}},
+    {"case": "a change on a connection positioned at its base carrying its table first fires the same", "plan": "positioned", "arrival": {"edge": "Changes", "key": "tblDEALS", "landing": {"recordType": "Change", "fields": {"Id": "c1", "Kind": "created"}}, "parents": [{"recordType": "Table", "fields": {"Name": "Deals"}}, {"recordType": "Base", "fields": {"Name": "Hiring"}}]}, "now": "2026-10-31T10:00:00Z", "verdict": {"fires": true}},
+    {"case": "a change carrying its table before its base is judged the same: each hop reads the record of its own type", "plan": "carried", "arrival": {"edge": "Changes", "key": "tblDEALS", "landing": {"recordType": "Change", "fields": {"Id": "c1", "Kind": "created"}}, "parents": [{"recordType": "Table", "fields": {"Name": "Deals"}}, {"recordType": "Base", "fields": {"Name": "Hiring"}}]}, "now": "2026-10-31T10:00:00Z", "verdict": {"fires": true}},
+    {"case": "a change carrying its table before its base, from another base, skips at Bases", "plan": "carried", "arrival": {"edge": "Changes", "key": "tblDEALS", "landing": {"recordType": "Change", "fields": {"Id": "c1", "Kind": "created"}}, "parents": [{"recordType": "Table", "fields": {"Name": "Deals"}}, {"recordType": "Base", "fields": {"Name": "Finance"}}]}, "now": "2026-10-31T10:00:00Z", "verdict": {"skips": 0}}
   ]
 }

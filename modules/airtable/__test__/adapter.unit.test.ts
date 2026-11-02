@@ -482,10 +482,9 @@ describe('AirtableAdapter entry-position (base) scoping', () => {
     expect(entries[3].externalId).toBe('tblTASKS01');
     // The other base's tables were never enumerated — this is the timeout fix.
     expect(listedTableBaseIds).toEqual(['appOPS01']);
-    // No `Bases` hop comes before it here, so it declares nothing carried.
+    // No `Bases` hop comes before it here: it declares its table alone.
     const table = await adapter.describe('Table');
-    expect(table?.references.find((r) => r.name === 'Changes')).toMatchObject({ delivery: 'connection' });
-    expect(table?.references.find((r) => r.name === 'Changes')).not.toHaveProperty('carries');
+    expect(table?.references.find((r) => r.name === 'Changes')).toMatchObject({ delivery: 'connection', carries: ['Tables'] });
   });
 
   it('resolves the base name case-insensitively', async () => {
