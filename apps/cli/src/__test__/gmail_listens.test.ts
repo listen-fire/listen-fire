@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { lf } from './example';
-import { fakeChannels, gmailProject } from './gmail_fixture';
+import { MAILBOX, fakeChannels, gmailProject } from './gmail_fixture';
 
 const program = (body: string) => `import { gmail } from adapters
 import { henry_mail } from credentials
@@ -76,6 +76,43 @@ listen to mail-[${where}]-> fire intros`),
     const fired = lf(dir, 'run', '--poll', 'deals');
     assert.match(fired.out, /MOVENG_ERROR: deals heard Figures/, fired.out);
     assert.match(fired.out, /MOVENG_ERROR: intros heard Figures/, fired.out);
+  } finally {
+    await fake.stop();
+  }
+});
+
+test('upgrade keeps a 0.12 gmail listen that named no labels on the inbox, never the whole mailbox', async () => {
+  const fake = await fakeChannels();
+  try {
+    const { dir } = await gmailProject(fake, 'gmail');
+    const file = join(dir, 'movements/hello.mvt');
+    const lfYaml = join(dir, 'lf.yaml');
+    const upgrades = (settings: string, where: string) => {
+      writeFileSync(file, program(`function triage(m: <mail-[:Message]->>) {
+  return m.Subject
+}
+
+listen to mail ${settings} fire triage`));
+      writeFileSync(lfYaml, readFileSync(lfYaml, 'utf8').replace(/^engine: .*$/m, 'engine: 0.12.13'));
+      const upgraded = lf(dir, 'upgrade');
+      assert.equal(upgraded.code, 0, `${settings}\n${upgraded.out}`);
+      assert.ok(readFileSync(file, 'utf8').includes(`listen to mail-[m:Messages WHERE ${where}]-> fire triage`), `${settings}\n${readFileSync(file, 'utf8')}`);
+      const checked = lf(dir, 'check');
+      assert.equal(checked.code, 0, checked.out);
+    };
+
+    upgrades('{ query: "from:acme" }', 'm.Query == "from:acme" AND m.Labels CONTAINS "INBOX"');
+    // It hears mail that arrived in the inbox, and not the mailbox's own sent mail.
+    const armed = lf(dir, 'run', '--poll', 'triage');
+    assert.match(armed.out, /armed; it fires on changes from now/, armed.out);
+    await fake.message({ id: 'm-sent', from: MAILBOX, to: 'rita@acme.example', subject: 'Sent from:acme', labelIds: ['SENT'] });
+    await fake.message({ id: 'm-in', from: 'rita@acme.example', subject: 'Arrived' });
+    const fired = lf(dir, 'run', '--poll', 'triage');
+    assert.equal(fired.out.split('hello:triage completed').length - 1, 1, fired.out);
+    assert.match(fired.out, /returned "Arrived"/, fired.out);
+
+    upgrades('{}', 'm.Labels CONTAINS "INBOX"');
+    upgrades('{ events: ["message_received"] }', 'm.Labels CONTAINS "INBOX"');
   } finally {
     await fake.stop();
   }
