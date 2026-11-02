@@ -168,10 +168,12 @@ You are given who they are, taken from their LinkedIn profile, and any other fie
 
 Return ONLY valid JSON, no markdown, with:
 - "queries": the ONE search query most likely to surface their RECENT activity — posts and articles under their name, press, funding or launch announcements naming them, event, podcast or conference appearances, pages of their organisation that list them. Pick the single query that best covers what this person is likely to have in the public record; only one is run. Quote the person's name. Do not search for their LinkedIn profile — we already have it. Each entry is an object: { "query": "...", "worth_reading": true|false } where worth_reading says whether a result from this query is likely to repay loading the whole page rather than reading its snippet.
-- "terms": the 2 or 3 terms from the headline — the organisation, the field, the location — that a search result must be consistent with to be about THIS person and not a namesake.
+- "terms": the 2 or 3 terms from the headline — the organisation, the field, the location — that a search result must be consistent with to be about THIS person and not a namesake. When the headline names no organisation and you are given the profile page, take them from the most recent roles it lists instead.
 - "organisation": the organisation the headline names, "" if it names none. A LinkedIn headline often reads as one phrase rather than segments, so this is where the organisation is read out of it.
 
-A headline saying "Stealth", "Stealth Startup", "Stealth Mode", "Confidential", "Self-employed", "Independent" or "Freelance" names no organisation: it is what someone writes when they will not say where they work. Report "" for "organisation" in that case, never search for the placeholder as if it were a company, and do not use it as a consistency term. Every query must name the person, or a real organisation they are attached to.`;
+A headline saying "Stealth", "Stealth Startup", "Stealth Mode", "Confidential", "Self-employed", "Independent" or "Freelance" names no organisation: it is what someone writes when they will not say where they work. Report "" for "organisation" in that case, never search for the placeholder as if it were a company, and do not use it as a consistency term. Every query must name the person, or a real organisation they are attached to.
+
+When the headline is such a placeholder and the profile page lists earlier roles, someone in stealth is most often building a successor to what they did last. Search on that history — the person's name with the most recent organisation they founded or led, and words like founder, startup or launch — rather than on the bare name: a bare name finds whoever else holds it.`;
 
 const SYNTHESIS_SYSTEM = `You are writing a short, honest account of what one person is currently doing, from their LinkedIn headline and a set of web search results.
 
@@ -181,8 +183,8 @@ Report your answer through the tool. Every field is required; when nothing survi
 
 - "found": true only if at least one source consistent with the headline was found.
 - "confidence": "high" when the headline and at least two independent recent sources agree; "medium" when the headline plus one recent source agree, or when several sources agree but nothing is dated within about a year; "low" when you have the headline only, or sources that are consistent but thin.
-- "current_role" and "current_organisation": as you read them, "" when unknown.
-- "summary": the answer, in prose. Their current role and organisation, what they appear to be doing or building now, recent notable activity with dates where you know them, and an explicit hedge where the public record ends ("appears to be starting something in X, unconfirmed"). Cite every claim with a bracketed number, [1], [2].
+- "current_role" and "current_organisation": as you read them, "" when unknown. When the headline is a placeholder ("Stealth", "Self-employed", "Independent") and the profile shows earlier founder, co-founder or CTO roles, report the most recent such venture as a likely guess: "current_organisation" is that venture's name and "current_role" says both, e.g. "Founder, in stealth (previously Co-founder & CTO)".
+- "summary": the answer, in prose. In that same placeholder case, lead with the history: "Previously co-founded Acme (industrial drones); now in stealth." Otherwise, their current role and organisation, what they appear to be doing or building now, recent notable activity with dates where you know them, and an explicit hedge where the public record ends ("appears to be starting something in X, unconfirmed"). Cite every claim with a bracketed number, [1], [2].
 - "sources": the addresses your citations refer to, in citation order.
 
 A bracketed number is a position in the "sources" list YOU build, counting from 1 — never the position of a result in the list you were given. Every number in the summary must have an entry in "sources", and every entry must be cited.`;
@@ -225,7 +227,9 @@ export const linkedinResearchPlugin: WebPlugin = {
       await readProfile(profileUrl, identity, run);
     }
 
-    const thinAfterIdentity = isThin(identity);
+    // The profile's own text is more than the index, even when its headline
+    // is a placeholder: the experience history is what the planner anchors on.
+    const thinAfterIdentity = isThin(identity) && !identity.profileText;
     if (!identity.name && thinAfterIdentity) {
       logger.info(`${LOG} No identity established — giving up before planning`, {
         slug,
@@ -415,7 +419,8 @@ async function identityFromIndex(
 
 /**
  * Read the profile itself. Only reached when the index gave nothing to check a
- * result against, because it costs a paid fetch and up to its whole wait. The
+ * result against — no headline, or a placeholder one — because it costs a
+ * paid fetch and up to its whole wait. The
  * text's first lines are the name and headline in every vintage the service
  * returns, so that is where identity comes from; the rest goes to the
  * synthesiser as evidence.
@@ -466,7 +471,10 @@ async function planQueries(
     ownFields.length
       ? `Other fields on the record about them:\n${describeFields(ownFields)}`
       : 'No other fields on the record about them.',
-  ].join('\n');
+    identity.profileText ? `Profile page:\n${identity.profileText}` : null,
+  ]
+    .filter((part): part is string => part != null)
+    .join('\n');
 
   try {
     const raw = await anthropicChat({
