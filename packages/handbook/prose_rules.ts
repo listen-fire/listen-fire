@@ -31,7 +31,7 @@ const AUTHORING_TOOL_NAMES = [
 const RETIRED_SURFACE: Array<{ pattern: RegExp; label: string }> = [
   { pattern: /EXTRACT_VALUE/, label: 'EXTRACT_VALUE' },
   { pattern: /#extract/, label: '#extract' },
-  { pattern: /\bfor each\b/, label: 'for each' },
+  { pattern: /\bfor\s+each\b/i, label: 'for each' },
   { pattern: /\bcallback\(/, label: 'callback(…) — buttons on the message, or a form from `@lf/forms`, then `await` the edge the answer lands on' },
   { pattern: /\bawait\s+first\(/, label: 'await first(…) — write `await x-[:Edge]->`' },
 ];

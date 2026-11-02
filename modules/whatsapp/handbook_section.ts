@@ -29,7 +29,7 @@ function answer(m: <wa-[:Messages]->>) {
 }
 \`\`\`
 
-A listen on \`Messages\` runs once for each message sent to the number, the message itself as the parameter. A reaction is not a message: it arrives on \`Reactions\` and runs only a listen there (\`wa-[r:Reactions WHERE r.Emoji == "👍"]->\`), with the \`Emoji\`, the \`Reacted Message Id\` it is on and who sent it (an \`Emoji\` of nothing is a reaction taken back). A shared location likewise runs only a listen on \`Locations\`. WhatsApp cannot list conversations, so a listen narrows to one by the sender's number, \`From\`, digits with the country code first and no plus, or takes every sender by leaving the WHERE out.
+A listen on \`Messages\` runs once per message sent to the number, the message itself as the parameter. A reaction is not a message: it arrives on \`Reactions\` and runs only a listen there (\`wa-[r:Reactions WHERE r.Emoji == "👍"]->\`), with the \`Emoji\`, the \`Reacted Message Id\` it is on and who sent it (an \`Emoji\` of nothing is a reaction taken back). A shared location likewise runs only a listen on \`Locations\`. WhatsApp cannot list conversations, so a listen narrows to one by the sender's number, \`From\`, digits with the country code first and no plus, or takes every sender by leaving the WHERE out.
 
 ### what-a-reply-carries
 
@@ -99,7 +99,7 @@ r = race(
 )
 \`\`\`
 
-A form also asks for what a button cannot carry, a picked date or a typed answer, since WhatsApp captures nothing at tap time. If nobody answers within a day, \`r[0]\` is null.
+A form also collects what a button cannot carry, a picked date or a typed answer, since WhatsApp captures nothing at tap time. If nobody answers within a day, \`r[0]\` is null.
 
 ### the-only-feedback-is-a-reply
 
@@ -109,7 +109,7 @@ WhatsApp cannot edit a message it already sent, and there is nothing like a toas
 
 - **Setting both \`Body\` and \`Interactive\`.** They're mutually exclusive — put the words inside \`interactive.body.text\`.
 - **More than three reply buttons, or a title over 20 characters.** Both are WhatsApp errors at send time.
-- **Expecting a button to capture typed text or a picked date.** WhatsApp buttons carry only what you wired in. Ask for it on the form.
+- **Expecting a button to capture typed text or a picked date.** WhatsApp buttons carry only what you wired in. Collect it on the form.
 - **Expecting the message to change, or a toast to appear.** Neither happens — the ack IS the reply that comes back.
 - **Reading \`File\` off a message.** It only ever goes out; what arrived is on \`Attachments\`.
 - **Binding the typing write.** It creates nothing, so there is nothing to name.
@@ -119,7 +119,7 @@ WhatsApp cannot edit a message it already sent, and there is nothing like a toas
       construct: 'a WhatsApp url button (cta_url) that opens a form from @lf/forms, the run waiting on its submission inside a race with a sleep',
       status: 'runs',
       probe: `
-wa = connect \`@lf/whatsapp\`
+wa = connect \`@lf/whatsapp\` using team_whatsapp
 forms = connect \`@lf/forms\`
 
 node Decision {

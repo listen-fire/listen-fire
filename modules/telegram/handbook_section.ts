@@ -47,7 +47,7 @@ function log_it(m: <tg-[:Messages]->>) {
 }
 \`\`\`
 
-A listen on \`Messages\` runs once for each message the bot receives, the message itself as the parameter: read its \`Text\`, \`Sender Username\` and the rest straight off it, and reply under it. Telegram cannot list chats, so a listen narrows to one by the message's own \`Chat Id\` (a private chat's is the person's user id, shown on their \`Linked Users\` row), or takes every chat the bot is in by leaving the WHERE out. Only plain messages arrive: an edited message, a channel post and a button tap run nothing.
+A listen on \`Messages\` runs once per message the bot receives, the message itself as the parameter: read its \`Text\`, \`Sender Username\` and the rest straight off it, and reply under it. Telegram cannot list chats, so a listen narrows to one by the message's own \`Chat Id\` (a private chat's is the person's user id, shown on their \`Linked Users\` row), or takes every chat the bot is in by leaving the WHERE out. Only plain messages arrive: an edited message, a channel post and a button tap run nothing.
 
 ### keyboards-are-verbatim
 
@@ -93,14 +93,14 @@ r = race(
 )
 \`\`\`
 
-Put the bare \`Url\` in the message text as well, so the question is still answerable wherever the buttons are not. A form also asks for what a button cannot carry, a picked date or a typed answer, since Telegram captures nothing at tap time. If nobody answers within a day, \`r[0]\` is null.
+Put the bare \`Url\` in the message text as well, so the question is still answerable wherever the buttons are not. A form also collects what a button cannot carry, a picked date or a typed answer, since Telegram captures nothing at tap time. If nobody answers within a day, \`r[0]\` is null.
 
 ### Common mistakes
 
 - **A flat list of buttons.** \`inline_keyboard\` is rows, so every button belongs inside a row list — a flat list is a Telegram error, not a single row.
 - **A button with no link in it.** The keyboard looks right and a tap does nothing. A \`url\` button opening the form's \`Url\` is the whole mechanism.
 - **Attaching a file to a send.** There is no field for one — put a link in the \`Text\`.
-- **Expecting a keyboard to capture a date or free text.** Telegram buttons carry only what you wired in. Ask for anything the person has to fill in on the form.
+- **Expecting a keyboard to capture a date or free text.** Telegram buttons carry only what you wired in. Collect anything the person has to fill in on the form.
 - **Expecting a bad keyboard to fail at save time.** Its contents are passed through untouched; Telegram is the one that validates them, at run time.
 - **Promising every message in a group.** What the bot sees depends on privacy mode and on being addressed, and on the shared bot the sender must have linked first.`,
   engineClaims: [

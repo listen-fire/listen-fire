@@ -121,7 +121,7 @@ Message: "Logged \${count(orgs)} companies"
 
 ### Pitfalls
 
-- **Reaching for a loop.** "For each attachment…" is a traversal-headed block. If you're trying to enumerate, you're describing an edge to traverse.
+- **Reaching for a loop.** Working through every attachment is a traversal-headed block. If you're trying to enumerate, you're describing an edge to traverse.
 - **Counting the wrong thing.** \`count\` over a *source* walk (\`count(msg-[:Attachments]->)\`) counts what the source holds; \`count\` over a bound block (\`count(orgs)\`) counts what the block *returned*. Both run — make sure you aggregate the one you mean.
 - **Reaching inside a block from outside it.** A name bound in the body — the head's alias \`a\` included — does not exist after the closing brace. \`return\` what the rest of the automation needs.`,
   engineClaims: [

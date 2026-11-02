@@ -5939,7 +5939,245 @@
         }
       },
       "package": "@lf/whatsapp",
-      "schemas": {}
+      "schemas": {
+        "team_whatsapp": {
+          "positions": {
+            "Message": {
+              "properties": {
+                "Message Id": "text",
+                "From": "text",
+                "To": "text",
+                "Body": "text",
+                "WhatsApp Id": "text",
+                "Profile Name": "text",
+                "Timestamp": "text"
+              },
+              "edges": {
+                "Attachments": {
+                  "target": "Attachment",
+                  "description": "Media attached to the message (zero or more)."
+                },
+                "Replies": {
+                  "target": "Message",
+                  "readable": false,
+                  "writable": true,
+                  "description": "Send a reply threaded to this message (write-only — Meta has no read API). The recipient derives from this message; sends only reach a conversation someone opened by messaging the number (Meta's 24-hour service window)."
+                },
+                "Reactions": {
+                  "target": "Reaction",
+                  "readable": false,
+                  "writable": true,
+                  "description": "React to this message with an emoji (write-only)."
+                },
+                "Typing": {
+                  "target": "Typing",
+                  "ephemeral": true,
+                  "readable": false,
+                  "writable": true,
+                  "description": "Show the typing indicator (and mark this message read) while a longer step runs. An action, not a record — nothing is created; do not bind the result."
+                }
+              },
+              "writeOnlyProperties": [
+                "File",
+                "Interactive"
+              ],
+              "description": "A single inbound WhatsApp message — what a listen on `Messages` delivers, whole: read `e.`Body`` straight off the arrival, reply along its `Replies` edge.",
+              "fieldDocs": {
+                "Message Id": "The WhatsApp message id — the value a reply or reaction addresses.",
+                "From": "The sender's phone number, digits with the country code first and no plus (`447700900001`): the conversation a message is in, so a listen narrows to one by it.",
+                "To": "Inbound: the team's own WhatsApp business number (the message's recipient). On a send: the other party's phone number, derived from the message the write is anchored on (an inbound parent's From, a sent parent's To) — read-only either way.",
+                "Body": "The message text. Empty for media-only messages. At least one of Body / File on a send (the Body captions the file).",
+                "File": "A file to send (image / PDF / audio / video, routed by content type). At least one of Body / File. Send-side only: a received message's media is on its Attachments edge — read `msg-[:Attachments]->.File`.",
+                "Interactive": "WhatsApp's `interactive` object, exactly as the Cloud API spells it — passed through verbatim (no wrapping, no typed shape here; a malformed object surfaces as a loud WhatsApp error at run time, not at save time). Sending this REPLACES a plain-text send: the interactive type carries its own `body.text`, so the message's words go inside `interactive.body.text`, never in `Body` on the same send. Reply buttons: up to 3, each `{ type: \"reply\", reply: { id, title } }` (`title` capped at 20 characters); a reply button's tap reaches no run. To make a tap DO something, write a form from the `@lf/forms` adapter (`form = write forms-[:Forms]-> { Title: …, Fields: … }`), send its `form.Url` on a url button (`type: \"cta_url\"`), and `await form-[:Submissions]->`: the form also asks for anything a person has to fill in, which WhatsApp does not capture at tap time. Build strings with \"${…}\" interpolation (never `+`, which is numeric addition). Example:\n{ type: \"cta_url\",\n  body: { text: \"Ship the release?\" },\n  action: { name: \"cta_url\", parameters: { display_text: \"Answer\", url: \"${form.Url}\" } } }",
+                "WhatsApp Id": "The sender's WhatsApp account id.",
+                "Profile Name": "The sender's WhatsApp profile display name.",
+                "Timestamp": "When the message was received (ISO-8601), when known."
+              },
+              "fieldIds": {
+                "Message Id": "messageId",
+                "From": "from",
+                "To": "to",
+                "Body": "body",
+                "WhatsApp Id": "waId",
+                "Profile Name": "profileName",
+                "Timestamp": "timestamp"
+              }
+            },
+            "Attachment": {
+              "properties": {
+                "Name": "text",
+                "Content Type": "text",
+                "URL": "text",
+                "File": "file"
+              },
+              "edges": {},
+              "fieldIds": {
+                "Name": "name",
+                "Content Type": "contentType",
+                "URL": "url",
+                "File": "data"
+              }
+            },
+            "Reaction": {
+              "properties": {
+                "Emoji": "text",
+                "Reacted Message Id": "text",
+                "Message Id": "text",
+                "From": "text",
+                "Profile Name": "text",
+                "Timestamp": "text"
+              },
+              "edges": {},
+              "description": "Someone reacted to a message in the team-number conversation. What a listen on `Reactions` delivers. Also the reaction WRITE: created along a message's `Reactions` edge.",
+              "fieldDocs": {
+                "Emoji": "The reaction emoji. Inbound: empty when the reaction was removed. On a write along msg-[:Reactions]->: the single emoji to react with — required.",
+                "Reacted Message Id": "The message the reaction is on.",
+                "Message Id": "The reaction event's own id.",
+                "From": "The reactor's phone number."
+              },
+              "fieldIds": {
+                "Emoji": "emoji",
+                "Reacted Message Id": "reactedMessageId",
+                "Message Id": "messageId",
+                "From": "from",
+                "Profile Name": "profileName",
+                "Timestamp": "timestamp"
+              }
+            },
+            "Location": {
+              "properties": {
+                "Latitude": "number",
+                "Longitude": "number",
+                "Name": "text",
+                "Address": "text",
+                "Message Id": "text",
+                "From": "text",
+                "Profile Name": "text",
+                "Timestamp": "text"
+              },
+              "edges": {},
+              "description": "Someone shared a location with the team number. What a listen on `Locations` delivers.",
+              "fieldDocs": {
+                "Name": "The place name, when the sender picked one."
+              },
+              "fieldIds": {
+                "Latitude": "latitude",
+                "Longitude": "longitude",
+                "Name": "name",
+                "Address": "address",
+                "Message Id": "messageId",
+                "From": "from",
+                "Profile Name": "profileName",
+                "Timestamp": "timestamp"
+              }
+            },
+            "Typing": {
+              "properties": {},
+              "edges": {},
+              "description": "The typing-indicator action, written along a message's `Typing` edge (`write msg-[:Typing]-> {}` — no fields; Meta's API is on-only, so there is no off to write). An action, not a record: nothing is created and nothing reads back. WhatsApp clears the indicator itself when your reply sends, or after ~25 seconds."
+            }
+          },
+          "collections": {
+            "Messages": {
+              "target": "Message",
+              "readable": false,
+              "listenable": true,
+              "identity": "Message Id",
+              "delivery": "connection"
+            },
+            "Reactions": {
+              "target": "Reaction",
+              "readable": false,
+              "listenable": true,
+              "identity": "Message Id",
+              "delivery": "connection",
+              "attributes": true
+            },
+            "Locations": {
+              "target": "Location",
+              "readable": false,
+              "listenable": true,
+              "identity": "Message Id",
+              "delivery": "connection"
+            }
+          },
+          "writableRoots": {},
+          "createShapes": {
+            "Message": {
+              "fields": {
+                "Body": "text",
+                "File": "file",
+                "Interactive": "json"
+              },
+              "resultShape": {
+                "externalId": "text",
+                "url": "text",
+                "Message Id": "text",
+                "From": "text",
+                "To": "text",
+                "Body": "text",
+                "WhatsApp Id": "text",
+                "Profile Name": "text",
+                "Timestamp": "text",
+                "File": "file",
+                "Interactive": "json"
+              },
+              "edges": {
+                "Attachments": {
+                  "target": "Attachment",
+                  "description": "Media attached to the message (zero or more)."
+                },
+                "Replies": {
+                  "target": "Message",
+                  "readable": false,
+                  "writable": true,
+                  "description": "Send a reply threaded to this message (write-only — Meta has no read API). The recipient derives from this message; sends only reach a conversation someone opened by messaging the number (Meta's 24-hour service window)."
+                },
+                "Reactions": {
+                  "target": "Reaction",
+                  "readable": false,
+                  "writable": true,
+                  "description": "React to this message with an emoji (write-only)."
+                },
+                "Typing": {
+                  "target": "Typing",
+                  "ephemeral": true,
+                  "readable": false,
+                  "writable": true,
+                  "description": "Show the typing indicator (and mark this message read) while a longer step runs. An action, not a record — nothing is created; do not bind the result."
+                }
+              },
+              "fieldDocs": {
+                "Body": "The message text. Empty for media-only messages. At least one of Body / File on a send (the Body captions the file).",
+                "File": "A file to send (image / PDF / audio / video, routed by content type). At least one of Body / File. Send-side only: a received message's media is on its Attachments edge — read `msg-[:Attachments]->.File`.",
+                "Interactive": "WhatsApp's `interactive` object, exactly as the Cloud API spells it — passed through verbatim (no wrapping, no typed shape here; a malformed object surfaces as a loud WhatsApp error at run time, not at save time). Sending this REPLACES a plain-text send: the interactive type carries its own `body.text`, so the message's words go inside `interactive.body.text`, never in `Body` on the same send. Reply buttons: up to 3, each `{ type: \"reply\", reply: { id, title } }` (`title` capped at 20 characters); a reply button's tap reaches no run. To make a tap DO something, write a form from the `@lf/forms` adapter (`form = write forms-[:Forms]-> { Title: …, Fields: … }`), send its `form.Url` on a url button (`type: \"cta_url\"`), and `await form-[:Submissions]->`: the form also asks for anything a person has to fill in, which WhatsApp does not capture at tap time. Build strings with \"${…}\" interpolation (never `+`, which is numeric addition). Example:\n{ type: \"cta_url\",\n  body: { text: \"Ship the release?\" },\n  action: { name: \"cta_url\", parameters: { display_text: \"Answer\", url: \"${form.Url}\" } } }"
+              }
+            },
+            "Reaction": {
+              "fields": {
+                "Emoji": "text"
+              },
+              "resultShape": {
+                "externalId": "text",
+                "url": "text",
+                "Emoji": "text",
+                "Reacted Message Id": "text",
+                "Message Id": "text",
+                "From": "text",
+                "Profile Name": "text",
+                "Timestamp": "text"
+              },
+              "requiredFields": [
+                "Emoji"
+              ],
+              "fieldDocs": {
+                "Emoji": "The reaction emoji. Inbound: empty when the reaction was removed. On a write along msg-[:Reactions]->: the single emoji to react with — required."
+              }
+            }
+          },
+          "supportsInPlaceUpdate": true
+        }
+      }
     },
     "system": {
       "canFire": true,
@@ -6653,206 +6891,6 @@
       "schemas": {
         "": {
           "positions": {
-            "Node Type": {
-              "properties": {},
-              "edges": {},
-              "undescribed": true
-            },
-            "Record Change": {
-              "properties": {
-                "action": {
-                  "kind": "enum",
-                  "options": [
-                    "record.created",
-                    "record.updated",
-                    "record.deleted"
-                  ]
-                },
-                "type": "text",
-                "record": "text"
-              },
-              "edges": {
-                "Record": {
-                  "target": "Node Type",
-                  "subject": true,
-                  "requiresLiveRecord": true
-                }
-              }
-            },
-            "[\"Record Change\",[[\"action\",\"record.created\"],[\"type\",\"Company\"]]]": {
-              "properties": {
-                "action": {
-                  "kind": "enum",
-                  "options": [
-                    "record.created",
-                    "record.updated",
-                    "record.deleted"
-                  ]
-                },
-                "type": "text",
-                "record": "text"
-              },
-              "edges": {
-                "Record": {
-                  "target": "Company",
-                  "subject": true
-                }
-              },
-              "displayName": "Record Change where action=record.created, type=Company"
-            },
-            "[\"Record Change\",[[\"action\",\"record.updated\"],[\"type\",\"Company\"]]]": {
-              "properties": {
-                "action": {
-                  "kind": "enum",
-                  "options": [
-                    "record.created",
-                    "record.updated",
-                    "record.deleted"
-                  ]
-                },
-                "type": "text",
-                "record": "text"
-              },
-              "edges": {
-                "Record": {
-                  "target": "Company",
-                  "subject": true
-                }
-              },
-              "displayName": "Record Change where action=record.updated, type=Company"
-            },
-            "[\"Record Change\",[[\"action\",\"record.deleted\"],[\"type\",\"Company\"]]]": {
-              "properties": {
-                "action": {
-                  "kind": "enum",
-                  "options": [
-                    "record.created",
-                    "record.updated",
-                    "record.deleted"
-                  ]
-                },
-                "type": "text",
-                "record": "text"
-              },
-              "edges": {},
-              "displayName": "Record Change where action=record.deleted, type=Company"
-            },
-            "[\"Record Change\",[[\"action\",\"record.created\"],[\"type\",\"Person\"]]]": {
-              "properties": {
-                "action": {
-                  "kind": "enum",
-                  "options": [
-                    "record.created",
-                    "record.updated",
-                    "record.deleted"
-                  ]
-                },
-                "type": "text",
-                "record": "text"
-              },
-              "edges": {
-                "Record": {
-                  "target": "Person",
-                  "subject": true
-                }
-              },
-              "displayName": "Record Change where action=record.created, type=Person"
-            },
-            "[\"Record Change\",[[\"action\",\"record.updated\"],[\"type\",\"Person\"]]]": {
-              "properties": {
-                "action": {
-                  "kind": "enum",
-                  "options": [
-                    "record.created",
-                    "record.updated",
-                    "record.deleted"
-                  ]
-                },
-                "type": "text",
-                "record": "text"
-              },
-              "edges": {
-                "Record": {
-                  "target": "Person",
-                  "subject": true
-                }
-              },
-              "displayName": "Record Change where action=record.updated, type=Person"
-            },
-            "[\"Record Change\",[[\"action\",\"record.deleted\"],[\"type\",\"Person\"]]]": {
-              "properties": {
-                "action": {
-                  "kind": "enum",
-                  "options": [
-                    "record.created",
-                    "record.updated",
-                    "record.deleted"
-                  ]
-                },
-                "type": "text",
-                "record": "text"
-              },
-              "edges": {},
-              "displayName": "Record Change where action=record.deleted, type=Person"
-            },
-            "[\"Record Change\",[[\"action\",\"record.created\"],[\"type\",\"Support Ticket\"]]]": {
-              "properties": {
-                "action": {
-                  "kind": "enum",
-                  "options": [
-                    "record.created",
-                    "record.updated",
-                    "record.deleted"
-                  ]
-                },
-                "type": "text",
-                "record": "text"
-              },
-              "edges": {
-                "Record": {
-                  "target": "Support Ticket",
-                  "subject": true
-                }
-              },
-              "displayName": "Record Change where action=record.created, type=Support Ticket"
-            },
-            "[\"Record Change\",[[\"action\",\"record.updated\"],[\"type\",\"Support Ticket\"]]]": {
-              "properties": {
-                "action": {
-                  "kind": "enum",
-                  "options": [
-                    "record.created",
-                    "record.updated",
-                    "record.deleted"
-                  ]
-                },
-                "type": "text",
-                "record": "text"
-              },
-              "edges": {
-                "Record": {
-                  "target": "Support Ticket",
-                  "subject": true
-                }
-              },
-              "displayName": "Record Change where action=record.updated, type=Support Ticket"
-            },
-            "[\"Record Change\",[[\"action\",\"record.deleted\"],[\"type\",\"Support Ticket\"]]]": {
-              "properties": {
-                "action": {
-                  "kind": "enum",
-                  "options": [
-                    "record.created",
-                    "record.updated",
-                    "record.deleted"
-                  ]
-                },
-                "type": "text",
-                "record": "text"
-              },
-              "edges": {},
-              "displayName": "Record Change where action=record.deleted, type=Support Ticket"
-            },
             "Company": {
               "properties": {
                 "Name": "text",
@@ -6865,14 +6903,34 @@
               "edges": {
                 "Team": {
                   "target": "Person",
-                  "readable": true,
                   "writable": true
                 },
                 "Support Tickets": {
                   "target": "Support Ticket",
-                  "readable": true,
                   "writable": true
+                },
+                "Resources": {
+                  "target": "Attached Resource",
+                  "resources": true
+                },
+                "Changes": {
+                  "target": "Company Change",
+                  "readable": false,
+                  "listenable": true,
+                  "identity": "Id",
+                  "delivery": "connection",
+                  "carries": [
+                    "Company"
+                  ],
+                  "attributes": true,
+                  "description": "What happens to a Company in the graph, each change once: created, updated (`Changed Fields` names what moved), deleted."
                 }
+              },
+              "deletable": true,
+              "fieldIds": {
+                "Name": "pt-company-name",
+                "Domains": "pt-company-domains",
+                "Stage": "pt-company-stage"
               }
             },
             "Person": {
@@ -6880,7 +6938,37 @@
                 "Name": "text",
                 "Email": "text"
               },
-              "edges": {}
+              "edges": {
+                "Companies": {
+                  "target": "Company",
+                  "writable": true
+                },
+                "Reported Tickets": {
+                  "target": "Support Ticket",
+                  "writable": true
+                },
+                "Resources": {
+                  "target": "Attached Resource",
+                  "resources": true
+                },
+                "Changes": {
+                  "target": "Person Change",
+                  "readable": false,
+                  "listenable": true,
+                  "identity": "Id",
+                  "delivery": "connection",
+                  "carries": [
+                    "Person"
+                  ],
+                  "attributes": true,
+                  "description": "What happens to a Person in the graph, each change once: created, updated (`Changed Fields` names what moved), deleted."
+                }
+              },
+              "deletable": true,
+              "fieldIds": {
+                "Name": "pt-person-name",
+                "Email": "pt-person-email"
+              }
             },
             "Support Ticket": {
               "properties": {
@@ -6890,28 +6978,194 @@
               "edges": {
                 "Reporter": {
                   "target": "Person",
-                  "readable": true,
                   "writable": true
+                },
+                "Company": {
+                  "target": "Company",
+                  "writable": true
+                },
+                "Resources": {
+                  "target": "Attached Resource",
+                  "resources": true
+                },
+                "Changes": {
+                  "target": "Support Ticket Change",
+                  "readable": false,
+                  "listenable": true,
+                  "identity": "Id",
+                  "delivery": "connection",
+                  "carries": [
+                    "Support Ticket"
+                  ],
+                  "attributes": true,
+                  "description": "What happens to a Support Ticket in the graph, each change once: created, updated (`Changed Fields` names what moved), deleted."
                 }
+              },
+              "deletable": true,
+              "fieldIds": {
+                "Status": "pt-ticket-status",
+                "Priority": "pt-ticket-priority"
               }
+            },
+            "Company Change": {
+              "properties": {
+                "Id": "text",
+                "Kind": {
+                  "kind": "enum",
+                  "options": [
+                    "created",
+                    "updated",
+                    "deleted"
+                  ]
+                },
+                "Changed Fields": {
+                  "kind": "list",
+                  "of": {
+                    "kind": "enum",
+                    "options": [
+                      "Name",
+                      "Domains",
+                      "Stage",
+                      "Team",
+                      "Support Tickets"
+                    ]
+                  }
+                },
+                "Record Id": "text",
+                "Current": {
+                  "kind": "maybeAbsent",
+                  "of": {
+                    "kind": "record",
+                    "position": {
+                      "kind": "position",
+                      "position": "Company"
+                    }
+                  }
+                }
+              },
+              "edges": {
+                "Record": {
+                  "target": "Company",
+                  "requiresLiveRecord": true,
+                  "description": "The record as it is now, read from the graph: none once it is deleted."
+                }
+              },
+              "description": "A change to a Company in the graph: what happened (`Kind`), which properties and edges moved (`Changed Fields`), and the record as the change left it (`Current`, absent once deleted; test it present before reading through it: `exists(c.Current) AND c.Current.Status == \"Open\"`). Walk `Record` for the record as it is now.",
+              "fieldDocs": {
+                "Id": "Names the change: the same each time the graph reports it.",
+                "Kind": "What happened to the record.",
+                "Changed Fields": "The properties and edges the change moved, by name: every one a created record was given, none for a deleted one.",
+                "Record Id": "The graph's id for the record, a deleted one's too.",
+                "Current": "The record as the change left it, every property by name. Absent when it was deleted."
+              }
+            },
+            "Person Change": {
+              "properties": {
+                "Id": "text",
+                "Kind": {
+                  "kind": "enum",
+                  "options": [
+                    "created",
+                    "updated",
+                    "deleted"
+                  ]
+                },
+                "Changed Fields": {
+                  "kind": "list",
+                  "of": {
+                    "kind": "enum",
+                    "options": [
+                      "Name",
+                      "Email",
+                      "Companies",
+                      "Reported Tickets"
+                    ]
+                  }
+                },
+                "Record Id": "text",
+                "Current": {
+                  "kind": "maybeAbsent",
+                  "of": {
+                    "kind": "record",
+                    "position": {
+                      "kind": "position",
+                      "position": "Person"
+                    }
+                  }
+                }
+              },
+              "edges": {
+                "Record": {
+                  "target": "Person",
+                  "requiresLiveRecord": true,
+                  "description": "The record as it is now, read from the graph: none once it is deleted."
+                }
+              },
+              "description": "A change to a Person in the graph: what happened (`Kind`), which properties and edges moved (`Changed Fields`), and the record as the change left it (`Current`, absent once deleted; test it present before reading through it: `exists(c.Current) AND c.Current.Status == \"Open\"`). Walk `Record` for the record as it is now.",
+              "fieldDocs": {
+                "Id": "Names the change: the same each time the graph reports it.",
+                "Kind": "What happened to the record.",
+                "Changed Fields": "The properties and edges the change moved, by name: every one a created record was given, none for a deleted one.",
+                "Record Id": "The graph's id for the record, a deleted one's too.",
+                "Current": "The record as the change left it, every property by name. Absent when it was deleted."
+              }
+            },
+            "Support Ticket Change": {
+              "properties": {
+                "Id": "text",
+                "Kind": {
+                  "kind": "enum",
+                  "options": [
+                    "created",
+                    "updated",
+                    "deleted"
+                  ]
+                },
+                "Changed Fields": {
+                  "kind": "list",
+                  "of": {
+                    "kind": "enum",
+                    "options": [
+                      "Status",
+                      "Priority",
+                      "Company",
+                      "Reporter"
+                    ]
+                  }
+                },
+                "Record Id": "text",
+                "Current": {
+                  "kind": "maybeAbsent",
+                  "of": {
+                    "kind": "record",
+                    "position": {
+                      "kind": "position",
+                      "position": "Support Ticket"
+                    }
+                  }
+                }
+              },
+              "edges": {
+                "Record": {
+                  "target": "Support Ticket",
+                  "requiresLiveRecord": true,
+                  "description": "The record as it is now, read from the graph: none once it is deleted."
+                }
+              },
+              "description": "A change to a Support Ticket in the graph: what happened (`Kind`), which properties and edges moved (`Changed Fields`), and the record as the change left it (`Current`, absent once deleted; test it present before reading through it: `exists(c.Current) AND c.Current.Status == \"Open\"`). Walk `Record` for the record as it is now.",
+              "fieldDocs": {
+                "Id": "Names the change: the same each time the graph reports it.",
+                "Kind": "What happened to the record.",
+                "Changed Fields": "The properties and edges the change moved, by name: every one a created record was given, none for a deleted one.",
+                "Record Id": "The graph's id for the record, a deleted one's too.",
+                "Current": "The record as the change left it, every property by name. Absent when it was deleted."
+              }
+            },
+            "Attached Resource": {
+              "properties": {},
+              "edges": {},
+              "undescribed": true
             }
-          },
-          "unions": {
-            "[\"Record Change\",[[\"type\",\"Company\"]]]": [
-              "[\"Record Change\",[[\"action\",\"record.created\"],[\"type\",\"Company\"]]]",
-              "[\"Record Change\",[[\"action\",\"record.updated\"],[\"type\",\"Company\"]]]",
-              "[\"Record Change\",[[\"action\",\"record.deleted\"],[\"type\",\"Company\"]]]"
-            ],
-            "[\"Record Change\",[[\"type\",\"Person\"]]]": [
-              "[\"Record Change\",[[\"action\",\"record.created\"],[\"type\",\"Person\"]]]",
-              "[\"Record Change\",[[\"action\",\"record.updated\"],[\"type\",\"Person\"]]]",
-              "[\"Record Change\",[[\"action\",\"record.deleted\"],[\"type\",\"Person\"]]]"
-            ],
-            "[\"Record Change\",[[\"type\",\"Support Ticket\"]]]": [
-              "[\"Record Change\",[[\"action\",\"record.created\"],[\"type\",\"Support Ticket\"]]]",
-              "[\"Record Change\",[[\"action\",\"record.updated\"],[\"type\",\"Support Ticket\"]]]",
-              "[\"Record Change\",[[\"action\",\"record.deleted\"],[\"type\",\"Support Ticket\"]]]"
-            ]
           },
           "collections": {
             "Company": {
@@ -6924,7 +7178,6 @@
               "target": "Support Ticket"
             }
           },
-          "supportsInPlaceUpdate": true,
           "writableRoots": {
             "Company": {
               "fields": {
@@ -6935,36 +7188,124 @@
                 },
                 "Stage": "text"
               },
-              "requiredFields": [],
-              "fuzzyResolution": true,
               "resultShape": {
                 "externalId": "text",
-                "Name": "text"
-              }
+                "url": "text",
+                "Name": "text",
+                "Domains": {
+                  "kind": "list",
+                  "of": "text"
+                },
+                "Stage": "text"
+              },
+              "edges": {
+                "Team": {
+                  "target": "Person",
+                  "writable": true
+                },
+                "Support Tickets": {
+                  "target": "Support Ticket",
+                  "writable": true
+                },
+                "Resources": {
+                  "target": "Attached Resource",
+                  "resources": true
+                },
+                "Changes": {
+                  "target": "Company Change",
+                  "readable": false,
+                  "listenable": true,
+                  "identity": "Id",
+                  "delivery": "connection",
+                  "carries": [
+                    "Company"
+                  ],
+                  "attributes": true,
+                  "description": "What happens to a Company in the graph, each change once: created, updated (`Changed Fields` names what moved), deleted."
+                }
+              },
+              "fuzzyResolution": true
             },
             "Person": {
               "fields": {
                 "Name": "text",
                 "Email": "text"
               },
-              "requiredFields": [],
               "resultShape": {
                 "externalId": "text",
-                "Name": "text"
-              }
+                "url": "text",
+                "Name": "text",
+                "Email": "text"
+              },
+              "edges": {
+                "Companies": {
+                  "target": "Company",
+                  "writable": true
+                },
+                "Reported Tickets": {
+                  "target": "Support Ticket",
+                  "writable": true
+                },
+                "Resources": {
+                  "target": "Attached Resource",
+                  "resources": true
+                },
+                "Changes": {
+                  "target": "Person Change",
+                  "readable": false,
+                  "listenable": true,
+                  "identity": "Id",
+                  "delivery": "connection",
+                  "carries": [
+                    "Person"
+                  ],
+                  "attributes": true,
+                  "description": "What happens to a Person in the graph, each change once: created, updated (`Changed Fields` names what moved), deleted."
+                }
+              },
+              "fuzzyResolution": true
             },
             "Support Ticket": {
               "fields": {
                 "Status": "text",
                 "Priority": "number"
               },
-              "requiredFields": [],
               "resultShape": {
                 "externalId": "text",
-                "Status": "text"
-              }
+                "url": "text",
+                "Status": "text",
+                "Priority": "number"
+              },
+              "edges": {
+                "Reporter": {
+                  "target": "Person",
+                  "writable": true
+                },
+                "Company": {
+                  "target": "Company",
+                  "writable": true
+                },
+                "Resources": {
+                  "target": "Attached Resource",
+                  "resources": true
+                },
+                "Changes": {
+                  "target": "Support Ticket Change",
+                  "readable": false,
+                  "listenable": true,
+                  "identity": "Id",
+                  "delivery": "connection",
+                  "carries": [
+                    "Support Ticket"
+                  ],
+                  "attributes": true,
+                  "description": "What happens to a Support Ticket in the graph, each change once: created, updated (`Changed Fields` names what moved), deleted."
+                }
+              },
+              "fuzzyResolution": true
             }
-          }
+          },
+          "supportsInPlaceUpdate": true
         }
       }
     }
@@ -7003,6 +7344,11 @@
     "team_telegram": {
       "adapters": [
         "telegram"
+      ]
+    },
+    "team_whatsapp": {
+      "adapters": [
+        "whatsapp"
       ]
     },
     "my_github": {

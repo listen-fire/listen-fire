@@ -72,6 +72,7 @@ const CREDENTIAL_ADAPTERS: Record<string, string> = {
   team_chat: 'slack',
   team_workspace: 'slack',
   team_telegram: 'telegram',
+  team_whatsapp: 'whatsapp',
   my_github: 'github',
   my_slack: 'slack',
 };

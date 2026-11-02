@@ -3,206 +3,6 @@
   "canFire": true,
   "schema": {
     "positions": {
-      "Node Type": {
-        "properties": {},
-        "edges": {},
-        "undescribed": true
-      },
-      "Record Change": {
-        "properties": {
-          "action": {
-            "kind": "enum",
-            "options": [
-              "record.created",
-              "record.updated",
-              "record.deleted"
-            ]
-          },
-          "type": "text",
-          "record": "text"
-        },
-        "edges": {
-          "Record": {
-            "target": "Node Type",
-            "subject": true,
-            "requiresLiveRecord": true
-          }
-        }
-      },
-      "[\"Record Change\",[[\"action\",\"record.created\"],[\"type\",\"Company\"]]]": {
-        "properties": {
-          "action": {
-            "kind": "enum",
-            "options": [
-              "record.created",
-              "record.updated",
-              "record.deleted"
-            ]
-          },
-          "type": "text",
-          "record": "text"
-        },
-        "edges": {
-          "Record": {
-            "target": "Company",
-            "subject": true
-          }
-        },
-        "displayName": "Record Change where action=record.created, type=Company"
-      },
-      "[\"Record Change\",[[\"action\",\"record.updated\"],[\"type\",\"Company\"]]]": {
-        "properties": {
-          "action": {
-            "kind": "enum",
-            "options": [
-              "record.created",
-              "record.updated",
-              "record.deleted"
-            ]
-          },
-          "type": "text",
-          "record": "text"
-        },
-        "edges": {
-          "Record": {
-            "target": "Company",
-            "subject": true
-          }
-        },
-        "displayName": "Record Change where action=record.updated, type=Company"
-      },
-      "[\"Record Change\",[[\"action\",\"record.deleted\"],[\"type\",\"Company\"]]]": {
-        "properties": {
-          "action": {
-            "kind": "enum",
-            "options": [
-              "record.created",
-              "record.updated",
-              "record.deleted"
-            ]
-          },
-          "type": "text",
-          "record": "text"
-        },
-        "edges": {},
-        "displayName": "Record Change where action=record.deleted, type=Company"
-      },
-      "[\"Record Change\",[[\"action\",\"record.created\"],[\"type\",\"Person\"]]]": {
-        "properties": {
-          "action": {
-            "kind": "enum",
-            "options": [
-              "record.created",
-              "record.updated",
-              "record.deleted"
-            ]
-          },
-          "type": "text",
-          "record": "text"
-        },
-        "edges": {
-          "Record": {
-            "target": "Person",
-            "subject": true
-          }
-        },
-        "displayName": "Record Change where action=record.created, type=Person"
-      },
-      "[\"Record Change\",[[\"action\",\"record.updated\"],[\"type\",\"Person\"]]]": {
-        "properties": {
-          "action": {
-            "kind": "enum",
-            "options": [
-              "record.created",
-              "record.updated",
-              "record.deleted"
-            ]
-          },
-          "type": "text",
-          "record": "text"
-        },
-        "edges": {
-          "Record": {
-            "target": "Person",
-            "subject": true
-          }
-        },
-        "displayName": "Record Change where action=record.updated, type=Person"
-      },
-      "[\"Record Change\",[[\"action\",\"record.deleted\"],[\"type\",\"Person\"]]]": {
-        "properties": {
-          "action": {
-            "kind": "enum",
-            "options": [
-              "record.created",
-              "record.updated",
-              "record.deleted"
-            ]
-          },
-          "type": "text",
-          "record": "text"
-        },
-        "edges": {},
-        "displayName": "Record Change where action=record.deleted, type=Person"
-      },
-      "[\"Record Change\",[[\"action\",\"record.created\"],[\"type\",\"Support Ticket\"]]]": {
-        "properties": {
-          "action": {
-            "kind": "enum",
-            "options": [
-              "record.created",
-              "record.updated",
-              "record.deleted"
-            ]
-          },
-          "type": "text",
-          "record": "text"
-        },
-        "edges": {
-          "Record": {
-            "target": "Support Ticket",
-            "subject": true
-          }
-        },
-        "displayName": "Record Change where action=record.created, type=Support Ticket"
-      },
-      "[\"Record Change\",[[\"action\",\"record.updated\"],[\"type\",\"Support Ticket\"]]]": {
-        "properties": {
-          "action": {
-            "kind": "enum",
-            "options": [
-              "record.created",
-              "record.updated",
-              "record.deleted"
-            ]
-          },
-          "type": "text",
-          "record": "text"
-        },
-        "edges": {
-          "Record": {
-            "target": "Support Ticket",
-            "subject": true
-          }
-        },
-        "displayName": "Record Change where action=record.updated, type=Support Ticket"
-      },
-      "[\"Record Change\",[[\"action\",\"record.deleted\"],[\"type\",\"Support Ticket\"]]]": {
-        "properties": {
-          "action": {
-            "kind": "enum",
-            "options": [
-              "record.created",
-              "record.updated",
-              "record.deleted"
-            ]
-          },
-          "type": "text",
-          "record": "text"
-        },
-        "edges": {},
-        "displayName": "Record Change where action=record.deleted, type=Support Ticket"
-      },
       "Company": {
         "properties": {
           "Name": "text",
@@ -215,14 +15,34 @@
         "edges": {
           "Team": {
             "target": "Person",
-            "readable": true,
             "writable": true
           },
           "Support Tickets": {
             "target": "Support Ticket",
-            "readable": true,
             "writable": true
+          },
+          "Resources": {
+            "target": "Attached Resource",
+            "resources": true
+          },
+          "Changes": {
+            "target": "Company Change",
+            "readable": false,
+            "listenable": true,
+            "identity": "Id",
+            "delivery": "connection",
+            "carries": [
+              "Company"
+            ],
+            "attributes": true,
+            "description": "What happens to a Company in the graph, each change once: created, updated (`Changed Fields` names what moved), deleted."
           }
+        },
+        "deletable": true,
+        "fieldIds": {
+          "Name": "pt-company-name",
+          "Domains": "pt-company-domains",
+          "Stage": "pt-company-stage"
         }
       },
       "Person": {
@@ -230,7 +50,37 @@
           "Name": "text",
           "Email": "text"
         },
-        "edges": {}
+        "edges": {
+          "Companies": {
+            "target": "Company",
+            "writable": true
+          },
+          "Reported Tickets": {
+            "target": "Support Ticket",
+            "writable": true
+          },
+          "Resources": {
+            "target": "Attached Resource",
+            "resources": true
+          },
+          "Changes": {
+            "target": "Person Change",
+            "readable": false,
+            "listenable": true,
+            "identity": "Id",
+            "delivery": "connection",
+            "carries": [
+              "Person"
+            ],
+            "attributes": true,
+            "description": "What happens to a Person in the graph, each change once: created, updated (`Changed Fields` names what moved), deleted."
+          }
+        },
+        "deletable": true,
+        "fieldIds": {
+          "Name": "pt-person-name",
+          "Email": "pt-person-email"
+        }
       },
       "Support Ticket": {
         "properties": {
@@ -240,28 +90,194 @@
         "edges": {
           "Reporter": {
             "target": "Person",
-            "readable": true,
             "writable": true
+          },
+          "Company": {
+            "target": "Company",
+            "writable": true
+          },
+          "Resources": {
+            "target": "Attached Resource",
+            "resources": true
+          },
+          "Changes": {
+            "target": "Support Ticket Change",
+            "readable": false,
+            "listenable": true,
+            "identity": "Id",
+            "delivery": "connection",
+            "carries": [
+              "Support Ticket"
+            ],
+            "attributes": true,
+            "description": "What happens to a Support Ticket in the graph, each change once: created, updated (`Changed Fields` names what moved), deleted."
           }
+        },
+        "deletable": true,
+        "fieldIds": {
+          "Status": "pt-ticket-status",
+          "Priority": "pt-ticket-priority"
         }
+      },
+      "Company Change": {
+        "properties": {
+          "Id": "text",
+          "Kind": {
+            "kind": "enum",
+            "options": [
+              "created",
+              "updated",
+              "deleted"
+            ]
+          },
+          "Changed Fields": {
+            "kind": "list",
+            "of": {
+              "kind": "enum",
+              "options": [
+                "Name",
+                "Domains",
+                "Stage",
+                "Team",
+                "Support Tickets"
+              ]
+            }
+          },
+          "Record Id": "text",
+          "Current": {
+            "kind": "maybeAbsent",
+            "of": {
+              "kind": "record",
+              "position": {
+                "kind": "position",
+                "position": "Company"
+              }
+            }
+          }
+        },
+        "edges": {
+          "Record": {
+            "target": "Company",
+            "requiresLiveRecord": true,
+            "description": "The record as it is now, read from the graph: none once it is deleted."
+          }
+        },
+        "description": "A change to a Company in the graph: what happened (`Kind`), which properties and edges moved (`Changed Fields`), and the record as the change left it (`Current`, absent once deleted; test it present before reading through it: `exists(c.Current) AND c.Current.Status == \"Open\"`). Walk `Record` for the record as it is now.",
+        "fieldDocs": {
+          "Id": "Names the change: the same each time the graph reports it.",
+          "Kind": "What happened to the record.",
+          "Changed Fields": "The properties and edges the change moved, by name: every one a created record was given, none for a deleted one.",
+          "Record Id": "The graph's id for the record, a deleted one's too.",
+          "Current": "The record as the change left it, every property by name. Absent when it was deleted."
+        }
+      },
+      "Person Change": {
+        "properties": {
+          "Id": "text",
+          "Kind": {
+            "kind": "enum",
+            "options": [
+              "created",
+              "updated",
+              "deleted"
+            ]
+          },
+          "Changed Fields": {
+            "kind": "list",
+            "of": {
+              "kind": "enum",
+              "options": [
+                "Name",
+                "Email",
+                "Companies",
+                "Reported Tickets"
+              ]
+            }
+          },
+          "Record Id": "text",
+          "Current": {
+            "kind": "maybeAbsent",
+            "of": {
+              "kind": "record",
+              "position": {
+                "kind": "position",
+                "position": "Person"
+              }
+            }
+          }
+        },
+        "edges": {
+          "Record": {
+            "target": "Person",
+            "requiresLiveRecord": true,
+            "description": "The record as it is now, read from the graph: none once it is deleted."
+          }
+        },
+        "description": "A change to a Person in the graph: what happened (`Kind`), which properties and edges moved (`Changed Fields`), and the record as the change left it (`Current`, absent once deleted; test it present before reading through it: `exists(c.Current) AND c.Current.Status == \"Open\"`). Walk `Record` for the record as it is now.",
+        "fieldDocs": {
+          "Id": "Names the change: the same each time the graph reports it.",
+          "Kind": "What happened to the record.",
+          "Changed Fields": "The properties and edges the change moved, by name: every one a created record was given, none for a deleted one.",
+          "Record Id": "The graph's id for the record, a deleted one's too.",
+          "Current": "The record as the change left it, every property by name. Absent when it was deleted."
+        }
+      },
+      "Support Ticket Change": {
+        "properties": {
+          "Id": "text",
+          "Kind": {
+            "kind": "enum",
+            "options": [
+              "created",
+              "updated",
+              "deleted"
+            ]
+          },
+          "Changed Fields": {
+            "kind": "list",
+            "of": {
+              "kind": "enum",
+              "options": [
+                "Status",
+                "Priority",
+                "Company",
+                "Reporter"
+              ]
+            }
+          },
+          "Record Id": "text",
+          "Current": {
+            "kind": "maybeAbsent",
+            "of": {
+              "kind": "record",
+              "position": {
+                "kind": "position",
+                "position": "Support Ticket"
+              }
+            }
+          }
+        },
+        "edges": {
+          "Record": {
+            "target": "Support Ticket",
+            "requiresLiveRecord": true,
+            "description": "The record as it is now, read from the graph: none once it is deleted."
+          }
+        },
+        "description": "A change to a Support Ticket in the graph: what happened (`Kind`), which properties and edges moved (`Changed Fields`), and the record as the change left it (`Current`, absent once deleted; test it present before reading through it: `exists(c.Current) AND c.Current.Status == \"Open\"`). Walk `Record` for the record as it is now.",
+        "fieldDocs": {
+          "Id": "Names the change: the same each time the graph reports it.",
+          "Kind": "What happened to the record.",
+          "Changed Fields": "The properties and edges the change moved, by name: every one a created record was given, none for a deleted one.",
+          "Record Id": "The graph's id for the record, a deleted one's too.",
+          "Current": "The record as the change left it, every property by name. Absent when it was deleted."
+        }
+      },
+      "Attached Resource": {
+        "properties": {},
+        "edges": {},
+        "undescribed": true
       }
-    },
-    "unions": {
-      "[\"Record Change\",[[\"type\",\"Company\"]]]": [
-        "[\"Record Change\",[[\"action\",\"record.created\"],[\"type\",\"Company\"]]]",
-        "[\"Record Change\",[[\"action\",\"record.updated\"],[\"type\",\"Company\"]]]",
-        "[\"Record Change\",[[\"action\",\"record.deleted\"],[\"type\",\"Company\"]]]"
-      ],
-      "[\"Record Change\",[[\"type\",\"Person\"]]]": [
-        "[\"Record Change\",[[\"action\",\"record.created\"],[\"type\",\"Person\"]]]",
-        "[\"Record Change\",[[\"action\",\"record.updated\"],[\"type\",\"Person\"]]]",
-        "[\"Record Change\",[[\"action\",\"record.deleted\"],[\"type\",\"Person\"]]]"
-      ],
-      "[\"Record Change\",[[\"type\",\"Support Ticket\"]]]": [
-        "[\"Record Change\",[[\"action\",\"record.created\"],[\"type\",\"Support Ticket\"]]]",
-        "[\"Record Change\",[[\"action\",\"record.updated\"],[\"type\",\"Support Ticket\"]]]",
-        "[\"Record Change\",[[\"action\",\"record.deleted\"],[\"type\",\"Support Ticket\"]]]"
-      ]
     },
     "collections": {
       "Company": {
@@ -274,7 +290,6 @@
         "target": "Support Ticket"
       }
     },
-    "supportsInPlaceUpdate": true,
     "writableRoots": {
       "Company": {
         "fields": {
@@ -285,35 +300,123 @@
           },
           "Stage": "text"
         },
-        "requiredFields": [],
-        "fuzzyResolution": true,
         "resultShape": {
           "externalId": "text",
-          "Name": "text"
-        }
+          "url": "text",
+          "Name": "text",
+          "Domains": {
+            "kind": "list",
+            "of": "text"
+          },
+          "Stage": "text"
+        },
+        "edges": {
+          "Team": {
+            "target": "Person",
+            "writable": true
+          },
+          "Support Tickets": {
+            "target": "Support Ticket",
+            "writable": true
+          },
+          "Resources": {
+            "target": "Attached Resource",
+            "resources": true
+          },
+          "Changes": {
+            "target": "Company Change",
+            "readable": false,
+            "listenable": true,
+            "identity": "Id",
+            "delivery": "connection",
+            "carries": [
+              "Company"
+            ],
+            "attributes": true,
+            "description": "What happens to a Company in the graph, each change once: created, updated (`Changed Fields` names what moved), deleted."
+          }
+        },
+        "fuzzyResolution": true
       },
       "Person": {
         "fields": {
           "Name": "text",
           "Email": "text"
         },
-        "requiredFields": [],
         "resultShape": {
           "externalId": "text",
-          "Name": "text"
-        }
+          "url": "text",
+          "Name": "text",
+          "Email": "text"
+        },
+        "edges": {
+          "Companies": {
+            "target": "Company",
+            "writable": true
+          },
+          "Reported Tickets": {
+            "target": "Support Ticket",
+            "writable": true
+          },
+          "Resources": {
+            "target": "Attached Resource",
+            "resources": true
+          },
+          "Changes": {
+            "target": "Person Change",
+            "readable": false,
+            "listenable": true,
+            "identity": "Id",
+            "delivery": "connection",
+            "carries": [
+              "Person"
+            ],
+            "attributes": true,
+            "description": "What happens to a Person in the graph, each change once: created, updated (`Changed Fields` names what moved), deleted."
+          }
+        },
+        "fuzzyResolution": true
       },
       "Support Ticket": {
         "fields": {
           "Status": "text",
           "Priority": "number"
         },
-        "requiredFields": [],
         "resultShape": {
           "externalId": "text",
-          "Status": "text"
-        }
+          "url": "text",
+          "Status": "text",
+          "Priority": "number"
+        },
+        "edges": {
+          "Reporter": {
+            "target": "Person",
+            "writable": true
+          },
+          "Company": {
+            "target": "Company",
+            "writable": true
+          },
+          "Resources": {
+            "target": "Attached Resource",
+            "resources": true
+          },
+          "Changes": {
+            "target": "Support Ticket Change",
+            "readable": false,
+            "listenable": true,
+            "identity": "Id",
+            "delivery": "connection",
+            "carries": [
+              "Support Ticket"
+            ],
+            "attributes": true,
+            "description": "What happens to a Support Ticket in the graph, each change once: created, updated (`Changed Fields` names what moved), deleted."
+          }
+        },
+        "fuzzyResolution": true
       }
-    }
+    },
+    "supportsInPlaceUpdate": true
   }
 }

@@ -117,7 +117,7 @@ This is the natural "I've picked this up" before a slower step runs, and reactin
 
 ### listening-to-a-channel
 
-A listen ends on the edge a record arrives on: a channel's \`Messages\` for each new message in it, a message's \`Replies\` for each reply in its thread, its \`Reactions\` for each emoji added, its \`Interactions\` for each press. What arrives carries the channel it is in, so a listen narrows by the channel's \`Name\` without listing anything:
+A listen ends on the edge a record arrives on, and runs once per record that arrives there: a channel's \`Messages\` for a new message in it, a message's \`Replies\` for a reply in its thread, its \`Reactions\` for an emoji added, its \`Interactions\` for a press. What arrives carries the channel it is in, so a listen narrows by the channel's \`Name\` without listing anything:
 
 \`\`\`
 function triage(m: <chat-[:Message]->>) {

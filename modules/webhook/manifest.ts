@@ -39,7 +39,7 @@ listen to stripe-[:Requests]-><Payment> fire \`Payment Failed\`
 - The node's fields are the body's top-level JSON keys.
 - A delivery whose body does not fit the node runs nothing. A field the node requires is missing or null, or holds another kind of value. When no listen on the connection takes it, the sender is answered 400, naming the fields.
 - A body that is not a JSON object is answered 400.
-- \`listen-fire credential add --module webhook <name>\` asks for the scheme and the secret:
+- \`listen-fire credential add --module webhook <name>\` prompts for the scheme and the secret:
   - \`stripe\`: the endpoint's signing secret (\`whsec_…\`). The \`Stripe-Signature\` header is checked, and a signature older than 5 minutes is refused.
   - \`hmac-sha256\`: the secret, the header the sender signs in (e.g. \`x-signature\`), and \`hex\` or \`base64\`. The header holds the HMAC-SHA256 of the exact body.
   - \`none\`: unsigned. Any POST to the URL runs. Choose it only for a sender that cannot sign.

@@ -15,7 +15,7 @@ export const FIELDS_FIELD = 'Fields';
 
 const HANDBOOK = `## Forms
 
-\`@lf/forms\` asks a person for an answer the program's other systems cannot take: a form at a link, answered once. The link is under \`listen-fire serve\`, at lf.yaml's \`publicUrl\`.
+\`@lf/forms\` puts a form in front of a person for an answer the program's other systems cannot supply: a form at a link, answered once. The link is under \`listen-fire serve\`, at lf.yaml's \`publicUrl\`.
 
 \`\`\`
 forms = connect \`@lf/forms\`
