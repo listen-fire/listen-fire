@@ -8,6 +8,8 @@
 // plugins reading a title differently would attribute the same page to two
 // different people, so there is one reading.
 
+import { distinctiveOrganisation } from './search_hygiene';
+
 const PROFILE_SLUG_REGEX = /^(?:https?:\/\/)?(?:[\w-]+\.)?linkedin\.com\/in\/([^/?#\s]+)/i;
 
 /** The slug the address anchors on, or null when it is not a profile address
@@ -90,7 +92,10 @@ export function readTitle(title: string): ProfileIdentity {
 
 /** Thin means the index told us nothing to check a search result against —
  *  no role and no organisation — which is exactly when the profile service
- *  is worth its wait. */
+ *  is worth its wait. A placeholder counts as nothing: "Stealth" or
+ *  "Self-employed" in the headline is what someone writes when they will not
+ *  say where they work, so the experience history is the only thing left to
+ *  anchor a search on. */
 export function isThin(identity: ProfileIdentity): boolean {
-  return !identity.role && !identity.organisation;
+  return !distinctiveOrganisation(identity.role) && !distinctiveOrganisation(identity.organisation);
 }

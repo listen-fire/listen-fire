@@ -1,4 +1,4 @@
-import { readTitle } from '../linkedin_identity';
+import { isThin, readTitle } from '../linkedin_identity';
 
 describe('readTitle', () => {
   it('strips a localised suffix: Norwegian', () => {
@@ -33,5 +33,19 @@ describe('readTitle', () => {
     const identity = readTitle('Jane Doe - Founder - Acme Corp');
     expect(identity.name).toBe('Jane Doe');
     expect(identity.organisation).toBe('Acme Corp');
+  });
+});
+
+describe('isThin', () => {
+  it.each([
+    'Jane Doe - Stealth | LinkedIn',
+    'Jane Doe - Stealth Startup | LinkedIn',
+    'Jane Doe - Self-employed | LinkedIn',
+  ])('counts a placeholder headline as nothing to check against: %s', (title) => {
+    expect(isThin(readTitle(title))).toBe(true);
+  });
+
+  it('counts a real role as something to check against', () => {
+    expect(isThin(readTitle('Jane Doe - Founder - Acme | LinkedIn'))).toBe(false);
   });
 });
