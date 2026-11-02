@@ -104,7 +104,8 @@ test('listen-fire upgrade leaves the pin where it was while fixes remain for the
 
 // A wait whose WHERE reads a field of a record the run holds: under 0.12 the
 // field was read again at every check; from 0.13 it is read once, when the
-// wait is reached. Nothing to rewrite, so the upgrade lists it and the pin moves.
+// wait is reached. Nothing to rewrite, so the upgrade lists it and holds the
+// pin until --all.
 const CAPTURING = `import { acme_crm } from adapters
 import { acme } from credentials
 
@@ -117,21 +118,28 @@ function welcome(company: <crm-[:Company]->>) {
 listen to crm-[:Company]-> fire welcome
 `;
 
-test('listen-fire upgrade lists a wait whose run value is now captured, and still moves the pin', () => {
+test('listen-fire upgrade lists a wait whose run value is now captured, and holds the pin until --all', () => {
   const dir = project();
   pinned(dir, '0.12.13');
   const file = join(dir, 'movements', 'companies.mvt');
   writeFileSync(file, CAPTURING);
 
   const { code, out } = lf(dir, 'upgrade');
-  assert.equal(code, 0, out);
+  assert.equal(code, 1, out);
   assert.match(
     out,
     /^movements\/companies\.mvt:7:17 warning MOV_AWAIT_VALUE_CAPTURED 'company\.Name' in this wait's WHERE is read once, when the wait is reached \(0\.13\); under 0\.12\.13 it was read again at every check, .* against `refresh\(company\)` \(see handbook: reviews#captured-values\)$/m,
   );
-  assert.match(out, /lf\.yaml: engine: 0\.13\.\d+(-[\w.]+)? \(was 0\.12\.13\)/);
-  assert.match(out, /1 file\(s\), 0 rewritten, 0 left to change by hand/);
+  assert.match(out, /^ {2}holds the pin: check it as the message says; `listen-fire upgrade --all` moves the pin once it is checked$/m);
+  assert.match(out, /lf\.yaml: engine: left at 0\.12\.13 until the 2 warning\(s\) are checked/);
+  assert.match(out, /1 file\(s\), 0 rewritten, 0 left to change by hand, 2 warning\(s\) to check/);
   assert.equal(readFileSync(file, 'utf8'), CAPTURING);
+  assert.match(readFileSync(join(dir, 'lf.yaml'), 'utf8'), /^engine: 0\.12\.13$/m);
+
+  const moved = lf(dir, 'upgrade', '--all');
+  assert.equal(moved.code, 0, moved.out);
+  assert.match(moved.out, /warning MOV_AWAIT_VALUE_CAPTURED/);
+  assert.match(moved.out, /lf\.yaml: engine: 0\.13\.\d+(-[\w.]+)? \(was 0\.12\.13\)/);
   assert.match(readFileSync(join(dir, 'lf.yaml'), 'utf8'), /^engine: 0\.13\.\d+(-[\w.]+)?$/m);
 
   const checked = lf(dir, 'check');
@@ -142,7 +150,8 @@ test('listen-fire upgrade lists a wait whose run value is now captured, and stil
 // An existing 0.12 program upgraded to 0.13: `await first(x)` is rewritten
 // to `await x`; a `callback(…)` has no rewrite, so it is listed by file and
 // line and holds the pin until the author replaces it; a wait whose WHERE
-// reads a run record's field is listed as a warning and holds nothing.
+// reads a run record's field is listed as a warning and holds the pin until
+// --all.
 const WAITS_012 = `import { acme_crm } from adapters
 import { acme } from credentials
 
@@ -184,7 +193,10 @@ test('listen-fire upgrade on a 0.12 project with waits and callbacks', () => {
   assert.match(readFileSync(join(dir, 'lf.yaml'), 'utf8'), /^engine: 0\.12\.13$/m);
 
   rmSync(asks);
-  const moved = lf(dir, 'upgrade');
+  const warned = lf(dir, 'upgrade');
+  assert.equal(warned.code, 1, warned.out);
+  assert.match(readFileSync(join(dir, 'lf.yaml'), 'utf8'), /^engine: 0\.12\.13$/m);
+  const moved = lf(dir, 'upgrade', '--all');
   assert.equal(moved.code, 0, moved.out);
   assert.match(moved.out, /lf\.yaml: engine: 0\.13\.0 \(was 0\.12\.13\)/);
   assert.match(readFileSync(join(dir, 'lf.yaml'), 'utf8'), /^engine: 0\.13\.0$/m);
@@ -196,7 +208,7 @@ test('listen-fire upgrade on a 0.12 project with waits and callbacks', () => {
 
 // A wait no `sleep` races: from 0.13 a wait whose record is deleted never
 // ends, where under 0.12 the code after it was skipped. Nothing to rewrite,
-// so the upgrade lists it and the pin moves; one raced with a sleep is not told.
+// so the upgrade lists it and holds the pin until --all; one raced with a sleep is not told.
 const UNRACED = `import { acme_crm } from adapters
 import { acme } from credentials
 
@@ -211,21 +223,25 @@ function decide(company: <crm-[:Company]->>) {
 listen to crm-[:Company]-> fire decide
 `;
 
-test('upgrade lists an unraced await as a warning and still moves the pin', () => {
+test('upgrade lists an unraced await as a warning and holds the pin until --all', () => {
   const dir = project();
   pinned(dir, '0.12.13');
   const file = join(dir, 'movements', 'companies.mvt');
   writeFileSync(file, UNRACED);
 
   const { code, out } = lf(dir, 'upgrade');
-  assert.equal(code, 0, out);
+  assert.equal(code, 1, out);
   assert.match(
     out,
     /^movements\/companies\.mvt:8:7 warning MOV_AWAIT_MAY_HANG 'await ask-\[:Approvals\]->' is not in a `race` with a `sleep`: from 0\.13 a wait whose record is deleted never ends \(under 0\.12\.13 the code after it was skipped\), so this run can wait forever\. Race it: `race\(\(\) => \{ return await ask-\[:Approvals\]-> \}, \(\) => \{ await sleep\(1d\) \}\)` — reviews#deleted-records$/m,
   );
-  assert.match(out, /lf\.yaml: engine: 0\.13\.0 \(was 0\.12\.13\)/);
-  assert.match(readFileSync(join(dir, 'lf.yaml'), 'utf8'), /^engine: 0\.13\.0$/m);
+  assert.match(out, /lf\.yaml: engine: left at 0\.12\.13 until the 1 warning\(s\) are checked/);
+  assert.match(readFileSync(join(dir, 'lf.yaml'), 'utf8'), /^engine: 0\.12\.13$/m);
   assert.equal(readFileSync(file, 'utf8'), UNRACED);
+  const moved = lf(dir, 'upgrade', '--all');
+  assert.equal(moved.code, 0, moved.out);
+  assert.match(moved.out, /lf\.yaml: engine: 0\.13\.0 \(was 0\.12\.13\)/);
+  assert.match(readFileSync(join(dir, 'lf.yaml'), 'utf8'), /^engine: 0\.13\.0$/m);
   const checked = lf(dir, 'check');
   assert.equal(checked.code, 0, checked.out);
   assert.doesNotMatch(checked.out, /MOV_AWAIT_MAY_HANG/);

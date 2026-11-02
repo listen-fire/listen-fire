@@ -408,7 +408,8 @@ reads every declaration from it, the listen declarations included.
   a release of yours changed what the field holds (gmail's `Labels`: label
   names where they were ids), so a check for an upgrade from before that
   release warns (`MOV_FIELD_MEANING_CHANGED`) wherever a program reads it,
-  and the pin still moves. A field with any other `kind` is silently dropped, and the
+  and the pin stays until the author has checked each read and confirmed the
+  upgrade (`--all`). A field with any other `kind` is silently dropped, and the
   type's position is then left open: automations may read any field name
   off it unchecked. Add `"cardinality": "many"` for a list.
 - Fields and references pass through with whatever extra keys you declare.

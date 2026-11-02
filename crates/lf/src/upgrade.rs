@@ -4,6 +4,8 @@
 //! not overlap, apply them, check again, until nothing fixable is left. Only
 //! fixes marked safe are applied unless `--all`; the rest are listed with their
 //! rewrite. Only the rewritten spans change, so comments and layout survive.
+//! The pin moves only when nothing is left to fix and no warning says the
+//! rewrite may have changed what the program does, unless `--all`.
 
 use std::io::Write;
 use std::path::Path;
@@ -69,7 +71,8 @@ fn edits_overlap(a: &Edit, b: &Edit) -> bool {
 
 /// A diagnostic that stands between a text and the target version: an
 /// error, or an upgrade note with a rewrite to take. An upgrade note with no
-/// rewrite says what changed meaning and is only listed.
+/// rewrite says what changed meaning: it is listed, and holds the pin until
+/// the author has checked it (`--all`).
 fn stands(d: &Diagnostic) -> bool {
     d.is_error() || (d.upgrade == Some(true) && d.fix.is_some())
 }
@@ -148,7 +151,8 @@ struct Upgraded {
     source: String,
     /// What stands between the text and this release (`stands`).
     remaining: Vec<Diagnostic>,
-    /// Upgrade notes with nothing to rewrite: listed, never holding the pin.
+    /// Upgrade notes with nothing to rewrite: each says a construct may now
+    /// behave otherwise, and holds the pin until checked.
     notes: Vec<Diagnostic>,
     settled: bool,
 }
@@ -268,16 +272,20 @@ enum PinStep {
     Current,
     /// The project validates clean under the current release: its `lf.yaml` with the new pin.
     Set(String),
-    /// Fixes remain for the author, so the movements still read as the old release.
-    Held { remaining: usize },
+    /// Fixes remain for the author, or warnings that a rewrite may have changed
+    /// what the program does: the movements still read as the old release.
+    Held { remaining: usize, unchecked: usize },
 }
 
 /// The pin moves only when the rewritten project validates clean under the
 /// current release; otherwise a later `listen-fire run` would read movements the
-/// current release still refuses.
-fn pin_step(lf_yaml: &str, remaining: usize) -> Result<PinStep, String> {
+/// current release still refuses. It also holds while a warning stands that
+/// the program may now do something else, since moving it is what puts the
+/// program live under the new meaning; `unchecked` counts those, and is 0 once
+/// the author has said (`--all`) they were checked.
+fn pin_step(lf_yaml: &str, remaining: usize, unchecked: usize) -> Result<PinStep, String> {
     let Some(repinned) = with_engine_pin(lf_yaml, LANGUAGE_VERSION)? else { return Ok(PinStep::Current) };
-    Ok(if remaining == 0 { PinStep::Set(repinned) } else { PinStep::Held { remaining } })
+    Ok(if remaining == 0 && unchecked == 0 { PinStep::Set(repinned) } else { PinStep::Held { remaining, unchecked } })
 }
 
 pub async fn run(project: &Project, options: UpgradeOptions, out: &mut impl Write) -> Result<i32, String> {
@@ -296,7 +304,7 @@ pub async fn run(project: &Project, options: UpgradeOptions, out: &mut impl Writ
     let mut held = checking.catalog.to_json();
     let mut catalog = load(&checking.catalog)?;
     let store = movements_slot::of_project(project, &std::env::vars().collect::<Vec<_>>())?;
-    let (mut changed, mut left) = (0usize, 0usize);
+    let (mut changed, mut left, mut warned) = (0usize, 0usize, 0usize);
     for file in &checking.files.clone() {
         let mut result = upgrade_source(&file.source, &catalog, options.all, &project.engine);
         // A rewrite walks hops the files did not (a listen's table, narrowed by
@@ -350,6 +358,10 @@ pub async fn run(project: &Project, options: UpgradeOptions, out: &mut impl Writ
         }
         for d in &result.notes {
             writeln!(out, "{}", listed(&shown, d)).map_err(io)?;
+            if !options.all {
+                warned += 1;
+                writeln!(out, "  holds the pin: check it as the message says; `listen-fire upgrade --all` moves the pin once it is checked").map_err(io)?;
+            }
         }
         if !result.settled {
             left += 1;
@@ -358,7 +370,7 @@ pub async fn run(project: &Project, options: UpgradeOptions, out: &mut impl Writ
     }
     let pin_file = project.root.join(PROJECT_FILE);
     let pinned = std::fs::read_to_string(&pin_file).map_err(|e| format!("{}: {e}", pin_file.display()))?;
-    match pin_step(&pinned, left)? {
+    match pin_step(&pinned, left, warned)? {
         PinStep::Current => {}
         PinStep::Set(_) if options.check_only => {
             writeln!(out, "{PROJECT_FILE}: would set engine: {LANGUAGE_VERSION} (the pin is {})", project.engine).map_err(io)?;
@@ -367,13 +379,21 @@ pub async fn run(project: &Project, options: UpgradeOptions, out: &mut impl Writ
             std::fs::write(&pin_file, repinned).map_err(|e| format!("{}: {e}", pin_file.display()))?;
             writeln!(out, "{PROJECT_FILE}: engine: {LANGUAGE_VERSION} (was {})", project.engine).map_err(io)?;
         }
-        PinStep::Held { remaining } => {
-            writeln!(out, "{PROJECT_FILE}: engine: left at {} until the {remaining} remaining diagnostic(s) are fixed; run `listen-fire upgrade` again", project.engine).map_err(io)?;
+        PinStep::Held { remaining, unchecked } => {
+            let fixes = format!("until the {remaining} remaining diagnostic(s) are fixed; run `listen-fire upgrade` again");
+            let checks = format!("until the {unchecked} warning(s) are checked: a rewrite may have changed what the program does, and `listen-fire upgrade --all` moves the pin once they are checked");
+            let held = match (remaining, unchecked) {
+                (_, 0) => fixes,
+                (0, _) => checks,
+                _ => format!("{fixes}, then {checks}"),
+            };
+            writeln!(out, "{PROJECT_FILE}: engine: left at {} {held}", project.engine).map_err(io)?;
         }
     }
     let verb = if options.check_only { "would be rewritten" } else { "rewritten" };
-    writeln!(out, "{} file(s), {changed} {verb}, {left} left to change by hand", checking.files.len()).map_err(io)?;
-    Ok(if left > 0 || (options.check_only && changed > 0) { 1 } else { 0 })
+    let to_check = if warned > 0 { format!(", {warned} warning(s) to check") } else { String::new() };
+    writeln!(out, "{} file(s), {changed} {verb}, {left} left to change by hand{to_check}", checking.files.len()).map_err(io)?;
+    Ok(if left > 0 || warned > 0 || (options.check_only && changed > 0) { 1 } else { 0 })
 }
 
 pub struct UpgradeOptions {
@@ -400,10 +420,17 @@ mod tests {
     #[test]
     fn the_pin_moves_only_when_nothing_is_left_to_fix() {
         let old = "engine: 0.11.0\nmovements: m\n";
-        let PinStep::Set(text) = pin_step(old, 0).unwrap() else { panic!("a clean project is repinned") };
+        let PinStep::Set(text) = pin_step(old, 0, 0).unwrap() else { panic!("a clean project is repinned") };
         assert_eq!(text, format!("engine: {LANGUAGE_VERSION}\nmovements: m\n"));
-        assert!(matches!(pin_step(old, 3).unwrap(), PinStep::Held { remaining: 3 }));
-        assert!(matches!(pin_step(&text, 3).unwrap(), PinStep::Current));
+        assert!(matches!(pin_step(old, 3, 0).unwrap(), PinStep::Held { remaining: 3, unchecked: 0 }));
+        assert!(matches!(pin_step(&text, 3, 0).unwrap(), PinStep::Current));
+    }
+
+    #[test]
+    fn the_pin_is_held_while_a_warning_is_unchecked() {
+        let old = "engine: 0.11.0\nmovements: m\n";
+        assert!(matches!(pin_step(old, 0, 2).unwrap(), PinStep::Held { remaining: 0, unchecked: 2 }));
+        assert!(matches!(pin_step(old, 1, 2).unwrap(), PinStep::Held { remaining: 1, unchecked: 2 }));
     }
 
     const CATALOG: &str = r#"{"adapters":{
@@ -418,7 +445,7 @@ mod tests {
     },"credentials":{},"plugins":{}}"#;
 
     #[test]
-    fn a_fixless_upgrade_note_is_listed_and_the_pin_moves() {
+    fn a_fixless_upgrade_note_is_listed_and_holds_the_pin() {
         let source = "import { crm as crm_module, mail as mail_module } from adapters\ncrm = connect crm_module\nmail = connect mail_module\nfunction go(t: <text>) {\n  founder = only(crm-[:People]->)\n  m = write mail-[:Messages]-> { To: t }\n  r = await m-[x:Replies WHERE x.From == founder.Email]->\n}\n";
         let catalog = CatalogSnapshot::load(CATALOG).unwrap();
         let upgraded = upgrade_source(source, &catalog, false, "0.12.13");
@@ -430,7 +457,8 @@ mod tests {
         assert_eq!(notes.len(), 2, "{notes:?}");
         assert!(notes.iter().any(|n| n.starts_with("go.mvt:7:13 warning MOV_AWAIT_VALUE_CAPTURED 'founder.Email' in this wait's WHERE is read once")), "{notes:?}");
         assert!(notes.iter().any(|n| n.starts_with("go.mvt:7:7 warning MOV_AWAIT_MAY_HANG 'await m-[x:Replies WHERE x.From == founder.Email]->' is not in a `race` with a `sleep`")), "{notes:?}");
-        assert!(matches!(pin_step("engine: 0.12.13\n", upgraded.remaining.len()).unwrap(), PinStep::Set(_)));
+        assert!(matches!(pin_step("engine: 0.12.13\n", upgraded.remaining.len(), upgraded.notes.len()).unwrap(), PinStep::Held { remaining: 0, unchecked: 2 }));
+        assert!(matches!(pin_step("engine: 0.12.13\n", upgraded.remaining.len(), 0).unwrap(), PinStep::Set(_)));
         // Under this release's own pin there is nothing to say.
         assert!(upgrade_source(source, &catalog, false, LANGUAGE_VERSION).notes.is_empty());
     }

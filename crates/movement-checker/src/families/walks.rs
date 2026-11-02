@@ -521,7 +521,8 @@ pub fn observe_read(typing: &mut Typing, position: Option<&Position>, property: 
 
 /// MOV_FIELD_MEANING_CHANGED: on a check for an upgrade from before the
 /// release its module says changed what the field holds (`changedFields`),
-/// a read of it. A warning with nothing to rewrite: the pin still moves.
+/// a read of it. A warning with nothing to rewrite, which holds the pin until
+/// the author has checked the read (`listen-fire upgrade --all`).
 pub(crate) fn report_meaning_changed(typing: &mut Typing, position: &Position, property: &str) {
     let Some(pin) = typing.env.upgrading_from().map(str::to_string) else { return };
     let Some(schema) = position_schema_of_ref(position) else { return };

@@ -169,7 +169,8 @@ pub const AWAIT_BARE_WALK: &str = "MOV_AWAIT_BARE_WALK";
 pub const AWAIT_UNORDERED: &str = "MOV_AWAIT_UNORDERED";
 /// A warning raised only by a check for an upgrade from before the release
 /// a module says changed a field's meaning (`changedIn`), where a program
-/// reads the field: nothing to rewrite, the author checks each read.
+/// reads the field: nothing to rewrite, the author checks each read before the
+/// upgrade moves the pin.
 pub const FIELD_MEANING_CHANGED: &str = "MOV_FIELD_MEANING_CHANGED";
 /// A warning raised only by a check for an upgrade from before 0.13, with
 /// nothing to rewrite: a wait's WHERE reads a run record's field once.

@@ -20,16 +20,19 @@ One idea runs through the release: **what happens outside arrives on an edge.** 
 ## 1. How the pin moves
 
 - `listen-fire upgrade` checks every movement file of the project as a move up from its pin, and applies the fixes marked safe. `--check` prints the diff and writes nothing; `--all` also applies the fixes that may change meaning.
-- The pin (`engine:` in `lf.yaml`) moves to `0.13.0` only when every file then checks clean. Otherwise it stays, and the command lists what is left to change by hand.
-- A change of meaning with nothing to rewrite is a warning: it is listed, and it never holds the pin (section 4).
+- The pin (`engine:` in `lf.yaml`) moves to `0.13.0` only when every file then checks clean and no warning stands. Otherwise it stays, and the command lists what is left to change by hand.
+- A change of meaning with nothing to rewrite is a warning: a wait's captured values (section 4), a wait no `sleep` races (section 5), a read of a field whose meaning changed (section 8).
+  - `listen-fire upgrade` lists each one and applies the rewrites it can.
+  - It leaves the pin where it was and exits 1, because moving the pin puts the program live under the new meaning.
+  - Check each read, then run `listen-fire upgrade --all`, which moves the pin past the warnings.
 - Until the pin moves, a 0.13 `listen-fire` refuses the project by name: "this automation pins language 0.12.13, which this release (0.13.0) does not read; validate it under 0.13.0 and upgrade it".
 
 The order that works:
 
 1. Run `listen-fire upgrade --check` and read what it lists.
 2. Replace each `callback(…)` by hand (section 3).
-3. Run `listen-fire upgrade`. It respells `await first(…)` (section 2) and each listen it can (section 8), lists the captured values (section 4), and moves the pin. If it lists a wait or a listen it cannot rewrite, rewrite it by hand (sections 2, 8 and 9) and run it again.
-4. Run `listen-fire upgrade --all` only once you have read what its remaining fixes change (section 8).
+3. Run `listen-fire upgrade`. It respells `await first(…)` (section 2) and each listen it can (section 8), lists the warnings (sections 4, 5 and 8), and moves the pin when none is left. If it lists a wait or a listen it cannot rewrite, rewrite it by hand (sections 2, 8 and 9) and run it again.
+4. Run `listen-fire upgrade --all` only once you have read what its remaining fixes change (section 8) and checked each warning: it applies those fixes and moves the pin past the warnings.
 5. Delete the `== null` guards after waits (section 5).
 
 ## 2. `await first(x)` is written `await x`
@@ -187,7 +190,7 @@ The body ran when the person acted. Write it after the wait instead, in the arm 
 - A wait's `WHERE` that reads a field of a record the run holds (`founder.Email` in `await m-[x:Replies WHERE x.From == founder.Email]->`) now reads it once, when the wait is reached, and keeps that value while the run waits.
 - Under 0.12 it was read again at every check, so a change to that record while the run waited changed which reply counted.
 - What the `WHERE` reads from a system, such as a walk off a connection, is still read at every check.
-- `listen-fire upgrade` lists each such wait as a warning (`MOV_AWAIT_VALUE_CAPTURED`), naming the fields. There is nothing to rewrite, and the pin still moves.
+- `listen-fire upgrade` lists each such wait as a warning (`MOV_AWAIT_VALUE_CAPTURED`), naming the fields. There is nothing to rewrite, and the pin stays until you have checked the wait and run `listen-fire upgrade --all`.
 - A wait that must follow the live value tests it after the wait, against the record re-read with `refresh`.
 - Why: a wait keeps the values it was written with, as a closure keeps what it closed over.
 
@@ -196,7 +199,7 @@ The body ran when the person acted. Write it after the wait instead, in the arm 
 - When the record a wait hangs off is deleted, the wait keeps waiting: the code after the `await` never runs, and the run stays parked. Many systems cannot say a record went, so no module is relied on to.
 - So race every wait on a person or a system with a `sleep`: `race(() => { return await msg-[:Replies]-> }, () => { await sleep(2d) })`. A deleted record's arm never settles, and the `sleep` takes the race.
 - `listen-fire runs` lists a run parked on a deleted record as `parked (stranded)`. A program hears of it on `@lf/system`: `listen to sys-[e:Events WHERE e.Kind == "Wait Lost Its Record"]-> fire f`.
-- `listen-fire upgrade` lists each `await` no `sleep` races as a warning (`MOV_AWAIT_MAY_HANG`), showing the race to write. A wait inside a function is listed once, at the unraced call that reaches it, with the calls down to the wait: race the call, and the wait inside is raced. It does not hold the pin.
+- `listen-fire upgrade` lists each `await` no `sleep` races as a warning (`MOV_AWAIT_MAY_HANG`), showing the race to write. A wait inside a function is listed once, at the unraced call that reaches it, with the calls down to the wait: race the call, and the wait inside is raced. The pin stays until you have raced the wait or decided it can wait forever, and run `listen-fire upgrade --all`.
 - What `await` binds is typed present. A guard after it can never run: delete it.
 
 | Before | After |
@@ -298,7 +301,8 @@ Each entry shows a 0.12 listen, the 0.13 listen `listen-fire upgrade` writes for
 - 0.13: `listen to mail-[l:Labelings WHERE l.Label IN ["Deals"]]-> fire filed`, parameter `<mail-[:Labelings]->>`
 - A label added to a message already there is its own arrival, on `Labelings`. Labels are compared by name (`Deals`), never by id.
 - A label removed and added again fires again, where 0.12 fired once, so `listen-fire upgrade` applies this rewrite only under `--all`.
-- `Labels` holds label names where it held ids: a 0.12 program that reads it is warned where it does (`MOV_FIELD_MEANING_CHANGED`).
+- `Labels` holds label names where it held ids: a 0.12 program that reads it is warned where it does (`MOV_FIELD_MEANING_CHANGED`), and the pin stays until you have checked each read and run `listen-fire upgrade --all`.
+  - A 0.12 listen on a custom label's id (`labels: ["Label_12"]`) is rewritten to compare that id with names, so it would never fire: write the label's name (`Deals`) before moving the pin.
 
 #### `@lf/granola`
 
@@ -455,13 +459,13 @@ listen to chat-[:Channels]->-[m:Messages WHERE m.Topic == "lunch-poll" AND m.Tim
 | --- | --- | --- |
 | `MOV_V5_SPELLING` (on `await first(…)`) | error, safe fix | [2](#2-await-firstx-is-written-await-x) |
 | `MOV_CALLBACK_RETIRED` | error, by hand | [3](#3-callback-is-retired) |
-| `MOV_AWAIT_VALUE_CAPTURED` | warning on an upgrade from 0.12 | [4](#4-a-waits-where-keeps-the-values-it-read-from-the-run) |
+| `MOV_AWAIT_VALUE_CAPTURED` | warning on an upgrade from 0.12, holds the pin until `--all` | [4](#4-a-waits-where-keeps-the-values-it-read-from-the-run) |
 | `MOV_AWAIT_UNORDERED` | error, by hand: write `await new` on an edge with no declared order | [2](#2-await-firstx-is-written-await-x) |
 | `MOV_AWAIT_BARE_WALK` | error, by hand: bind the record the last edge leaves from, then await that edge | [2](#2-await-firstx-is-written-await-x) |
-| `MOV_AWAIT_MAY_HANG` | warning on an upgrade from 0.12: race the wait with a `sleep` | [5](#5-what-a-wait-binds-is-always-there) |
+| `MOV_AWAIT_MAY_HANG` | warning on an upgrade from 0.12, holds the pin until `--all`: race the wait with a `sleep` | [5](#5-what-a-wait-binds-is-always-there) |
 | `MOV_LISTEN_SETTINGS_RETIRED` | error: a safe fix, a fix `--all` applies, or by hand | [8](#8-listens-are-traversals) |
 | `MOV_ABSENT_REQUIRED` (a field read through a value that may be missing) | error, by hand: test the value with `exists` | [9](#9-a-field-is-never-read-through-a-value-that-may-be-missing) |
-| `MOV_FIELD_MEANING_CHANGED` | warning on an upgrade from 0.12: the field holds something else now (gmail's `Labels`: names, not ids) | [8](#8-listens-are-traversals) |
+| `MOV_FIELD_MEANING_CHANGED` | warning on an upgrade from 0.12, holds the pin until `--all`: the field holds something else now (gmail's `Labels`: names, not ids) | [8](#8-listens-are-traversals) |
 | `MOV_ABSENT_REQUIRED` (a wait off a record that may be missing) | error, by hand: guard the wait with `!= null` | [5](#5-what-a-wait-binds-is-always-there) |
 | `MOV_LISTEN_EDGE_NOT_LISTENABLE`, `MOV_LISTEN_HOP_NOT_ITERABLE`, `MOV_LISTEN_UNWATCHABLE`, `MOV_LISTEN_IMPURE_WHERE` | error, by hand, on a listen written or rewritten as a traversal | [8](#8-listens-are-traversals) |
 | `MOV_HOP_ALIAS_REPEATED` | error, by hand: give each hop of a walk its own alias | [8](#one-name-for-one-hop) |

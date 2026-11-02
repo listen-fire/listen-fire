@@ -140,7 +140,7 @@ listen to mail { events: ["label_added"] } fire filed`));
   }
 });
 
-test('upgrade warns where a 0.12 program reads Labels, which holds label names now, and still moves the pin', async () => {
+test('upgrade holds the pin where a 0.12 program reads Labels, which holds label names now, until --all', async () => {
   const fake = await fakeChannels();
   try {
     const { dir } = await gmailProject(fake, 'gmail');
@@ -152,15 +152,71 @@ test('upgrade warns where a 0.12 program reads Labels, which holds label names n
 listen to mail { labels: ["INBOX"] } fire triage`));
     const lfYaml = join(dir, 'lf.yaml');
     writeFileSync(lfYaml, readFileSync(lfYaml, 'utf8').replace(/^engine: .*$/m, 'engine: 0.12.13'));
-    const upgraded = lf(dir, 'upgrade');
-    assert.equal(upgraded.code, 0, upgraded.out);
+    const held = lf(dir, 'upgrade');
+    assert.equal(held.code, 1, held.out);
     assert.match(
-      upgraded.out,
+      held.out,
       /warning MOV_FIELD_MEANING_CHANGED 'Labels' changed meaning in 0\.13\.0: it holds label names \(`Deals`\) where it held label ids \(`Label_12`\); Gmail’s own labels \(`INBOX`, `UNREAD`\) are spelled as before\. Under 0\.12\.13 it held what it held then: check this read before moving the pin/,
     );
-    assert.match(upgraded.out, /engine: 0\.13\.0 \(was 0\.12\.13\)/);
+    assert.match(held.out, /engine: left at 0\.12\.13 until the 2 warning\(s\) are checked/);
+    assert.match(held.out, /`listen-fire upgrade --all` moves the pin once they are checked/);
+    assert.match(readFileSync(lfYaml, 'utf8'), /^engine: 0\.12\.13$/m);
+
+    const moved = lf(dir, 'upgrade', '--all');
+    assert.equal(moved.code, 0, moved.out);
+    assert.match(moved.out, /warning MOV_FIELD_MEANING_CHANGED 'Labels'/);
+    assert.match(moved.out, /engine: 0\.13\.0 \(was 0\.12\.13\)/);
     // On the release itself the read says nothing.
     assert.doesNotMatch(lf(dir, 'check').out, /MOV_FIELD_MEANING_CHANGED/);
+  } finally {
+    await fake.stop();
+  }
+});
+
+test('upgrade holds the pin on a 0.12 listen on a custom label id, which 0.13 would compare with names and never hear', async () => {
+  const fake = await fakeChannels();
+  try {
+    const { dir } = await gmailProject(fake, 'gmail');
+    const file = join(dir, 'movements/hello.mvt');
+    writeFileSync(file, program(`function triage(m: <mail-[:Message]->>) {
+  return m.Subject
+}
+
+listen to mail { labels: ["Label_12"] } fire triage`));
+    const lfYaml = join(dir, 'lf.yaml');
+    writeFileSync(lfYaml, readFileSync(lfYaml, 'utf8').replace(/^engine: .*$/m, 'engine: 0.12.13'));
+    for (const _ of [1, 2]) {
+      const held = lf(dir, 'upgrade');
+      assert.equal(held.code, 1, held.out);
+      assert.match(held.out, /^movements\/hello\.mvt:\d+:\d+ warning MOV_FIELD_MEANING_CHANGED 'Labels' changed meaning in 0\.13\.0/m);
+      assert.match(held.out, /engine: left at 0\.12\.13 until the 1 warning\(s\) are checked/);
+      assert.match(readFileSync(lfYaml, 'utf8'), /^engine: 0\.12\.13$/m);
+      assert.match(readFileSync(file, 'utf8'), /listen to mail-\[m:Messages WHERE m\.Labels CONTAINS "Label_12"\]-> fire triage/);
+    }
+    const moved = lf(dir, 'upgrade', '--all');
+    assert.equal(moved.code, 0, moved.out);
+    assert.match(readFileSync(lfYaml, 'utf8'), /^engine: 0\.13\.0$/m);
+  } finally {
+    await fake.stop();
+  }
+});
+
+test('upgrade moves the pin of a 0.12 gmail program that reads no field whose meaning changed', async () => {
+  const fake = await fakeChannels();
+  try {
+    const { dir } = await gmailProject(fake, 'gmail');
+    const file = join(dir, 'movements/hello.mvt');
+    writeFileSync(file, program(`function triage(m: <mail-[:Messages]->>) {
+  return m.Subject
+}
+
+listen to mail-[m:Messages WHERE m.Query == "from:acme"]-> fire triage`));
+    const lfYaml = join(dir, 'lf.yaml');
+    writeFileSync(lfYaml, readFileSync(lfYaml, 'utf8').replace(/^engine: .*$/m, 'engine: 0.12.13'));
+    const upgraded = lf(dir, 'upgrade');
+    assert.equal(upgraded.code, 0, upgraded.out);
+    assert.doesNotMatch(upgraded.out, /MOV_FIELD_MEANING_CHANGED/);
+    assert.match(upgraded.out, /engine: 0\.13\.0 \(was 0\.12\.13\)/);
   } finally {
     await fake.stop();
   }
@@ -211,8 +267,12 @@ listen to mail { labels: ["Deals", "Hiring"] } fire triage`));
     const lfYaml = join(dir, 'lf.yaml');
     writeFileSync(lfYaml, readFileSync(lfYaml, 'utf8').replace(/^engine: .*$/m, 'engine: 0.12.13'));
 
-    // Gmail takes the labels together, by name: the fix is safe.
-    const upgraded = lf(dir, 'upgrade');
+    // Gmail takes the labels together, by name: the rewrite is applied as it is, and
+    // the pin waits until the author has checked that the names were not ids.
+    const held = lf(dir, 'upgrade');
+    assert.equal(held.code, 1, held.out);
+    assert.match(readFileSync(lfYaml, 'utf8'), /^engine: 0\.12\.13$/m);
+    const upgraded = lf(dir, 'upgrade', '--all');
     assert.equal(upgraded.code, 0, upgraded.out);
     assert.match(readFileSync(file, 'utf8'), /listen to mail-\[m:Messages WHERE m\.Labels CONTAINS "Deals" OR m\.Labels CONTAINS "Hiring"\]-> fire triage/);
     assert.equal(lf(dir, 'check').code, 0);
