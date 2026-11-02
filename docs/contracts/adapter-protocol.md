@@ -1,7 +1,7 @@
 # The adapter protocol
 
 Version: 2
-Minor: 6
+Minor: 7
 
 A remote adapter connects a system you run to Listen-Fire. It is an HTTP
 server you host, in any language. Listen-Fire calls it to learn your data
@@ -120,7 +120,7 @@ The protocol's version is 2.N: a major, 2, and a minor, N, counted within it.
   - A method you offer never raises it, whatever minor introduced the method: a host calls only the methods it speaks, so an older host leaves a newer one alone and your module works there as before.
   - So rebuilding a module with a newer kit, or offering a newer method, never makes an older host refuse it.
   - An absent `protocolMinor` is unstated, read as 2.0. Every module published up to 0.12.5 states none.
-- **What a host refuses, by name.** `listen-fire` and the engine speak 2.0 to 2.6. They refuse a manifest that states another major (newer or older), or a minor above 6. `listen-fire` reads a core module's manifest before any other method it asks of it: as `listen-fire drain` opens, for the modules it starts then, and at the first call otherwise. The text names the module, its package and version when the host finds them, what it speaks and what the host speaks, and what to upgrade. Installing probes your server the same way: Listen-Fire calls `manifest` with the secret and refuses it outside that range.
+- **What a host refuses, by name.** `listen-fire` and the engine speak 2.0 to 2.7. They refuse a manifest that states another major (newer or older), or a minor above 7. `listen-fire` reads a core module's manifest before any other method it asks of it: as `listen-fire drain` opens, for the modules it starts then, and at the first call otherwise. The text names the module, its package and version when the host finds them, what it speaks and what the host speaks, and what to upgrade. Installing probes your server the same way: Listen-Fire calls `manifest` with the secret and refuses it outside that range.
 - **The floor stays 2.0 within the major.** A host reads every minor from 2.0 up, so a module that predates a feature still loads. A method a host needs a module to have is checked by name where it is needed, never by the stated minor, and the refusal names the minor that introduced it: `listen-fire serve` refuses a movements module that does not answer `movements.watch` (adapter protocol 2.1), and arming a polled listen fails on a store module that does not answer `work.enqueueIfAbsent` (adapter protocol 2.2).
 - **An addition that names nothing in the manifest keeps the minor.** A new optional field or declaration is learned from the manifest, never from the version: a method is called only when it is listed in `methods`, and a declaration (`credentials`, `inbound`, `poll`, `periodic`) is acted on only when it is present. An older server sends neither and is unchanged; an older host ignores both.
 - An install made before its secret is supplied stores the version the manifest file claims. The probe runs when the secret is linked.
@@ -137,6 +137,7 @@ The protocol's version is 2.N: a major, 2, and a minor, N, counted within it.
 | 2.4 | `refreshEventSubscription` ([Event subscriptions that expire](#event-subscriptions-that-expire)) | listen-fire 0.12.10 |
 | 2.5 | `awaitKeys`, arrivals on a delivery's reading, the `wake` door's arrivals, the store slot's `waits.*` (`waits.log` names it) ([Waiting on your system](#waiting-on-your-system-awaits)) | listen-fire 0.13.0 |
 | 2.6 | arrivals for listens ([Reporting arrivals](#reporting-arrivals)): one on a root edge names no `key`; one may carry `parents`, `about`, `notFor`, `takenApplied`, `occurredAt` and, on its landing and each parent, `unknown`; the landing and each parent state their `recordType`, and an arrival that states none runs no listen. A host fires the listens on the edge it landed on. A polled listenable edge is polled as `poll({ edge, filter?, scope?, cursor? })`, once per connection, edge, taken filter and scope ([Polled sources](#polled-sources-and-periodic-tasks)); a pushed one is subscribed for as `ensureEventSubscription({ edge, filter?, scope?, callbackUrl, current? })`, once per the same ([Subscribing for an edge's arrivals](#subscribing-for-an-edges-arrivals)). Each head `awaitKeys` is asked about names its `recordType` where the host knows it. `checkInbound` may be handed `replayed: true`, when the host runs a request it kept itself again ([A module that checks its own inbound](#a-module-that-checks-its-own-inbound)); `inbound.captureHeaders` names the headers a kept request holds and `inbound.redactFields` the body and query fields it drops ([Declared inbound signatures](#declared-inbound-signatures)). **A module that uses any of these states `protocolMinor: 6`**: an older host would refuse a root arrival, judge without `unknown` or `recordType`, or keep a request whole | listen-fire 0.13.0 |
+| 2.7 | a host behaviour: a poll's answer may say when the edge is next worth polling (`pollAgainAt`), and a host polls it then when that is sooner than its interval ([Polled sources](#polled-sources-and-periodic-tasks)). An older host ignores the member and polls on its interval, so no module needs to state 2.7 | listen-fire 0.13.1 |
 
 A module offering one of these methods states no minor for it. Until 0.12.9 the kits stamped a module with the minor of the methods it offered; from 0.12.10 they stamp only what its author declares.
 
@@ -594,7 +595,7 @@ an automation cannot delete any other.
 | `describeOpaqueId` | `{ fieldPath, value }` | a label, or `null` |
 | `invokeFieldFunction` | `{ recordType, fieldId, functionName, args: { instructions, data } }` | the composed value |
 | `edgesFrom` | `{ position, cursor? }` | see [describe](#describe) |
-| `poll` | `{ edge, filter?, scope?, cursor? }` | `{ arrivals, cursor? }` ([Modules](#polled-sources-and-periodic-tasks)); needs `poll` declared; adapter protocol 2.6 |
+| `poll` | `{ edge, filter?, scope?, cursor? }` | `{ arrivals, cursor?, pollAgainAt? }` ([Modules](#polled-sources-and-periodic-tasks)); needs `poll` declared; adapter protocol 2.6 (`pollAgainAt` 2.7) |
 | `refreshCredential` | `{}` | `{ fields }` ([Modules](#credentials)); needs `credentials` declared |
 | `runPeriodic` | `{ name }` | `null` ([Modules](#polled-sources-and-periodic-tasks)); needs `periodic` declared |
 | `checkInbound` | `{ request, secret?, checkpoint?, replayed? }` | `accepted` / `refused` / `reply` ([Modules](#a-module-that-checks-its-own-inbound)); needs `inbound.scheme: module` |
@@ -1353,7 +1354,7 @@ listen on it ([Declaring a listenable edge](#declaring-a-listenable-edge);
 adapter protocol 2.6). The declaration says the module answers `poll`; the
 interval is the edge's own (below).
 
-- `poll`: `{ edge, filter?, scope?, cursor? }` → `{ arrivals, cursor? }`.
+- `poll`: `{ edge, filter?, scope?, cursor? }` → `{ arrivals, cursor?, pollAgainAt? }`.
   `edge` is the edge's name. `filter` is the part of the listens' `WHERE` on
   the edge that you take (an expression, as a hop's `where` hint is: a field
   your declaration gives `filterOperators`, on an edge whose `capability` says
@@ -1378,6 +1379,14 @@ interval is the edge's own (below).
   (`pollEvery: { <credential>: <duration> }`, the connection named by the
   credential it polls as, or by your module for one that uses none), else
   the edge's `pollEverySeconds`.
+- **`pollAgainAt`** (adapter protocol 2.7) is when the edge is next worth
+  polling, as an ISO instant: the time of the next thing you know is due. The
+  host polls that edge next at the earlier of it and one interval on, and
+  never sooner than a second after the poll, so a time already past is soon,
+  not at once. Answer it with every poll it applies to, the first included:
+  the host keeps no earlier answer. The cron unit answers its next tick, so a
+  schedule fires on time rather than up to an interval late. Leave it out to
+  be polled on the interval alone.
 - What a poll returns is handled as a pushed arrival is: logged for the
   waits, then judged against each listen sharing the poll, each running once
   per identity and version. A poll that fires a listen is kept as a delivery
@@ -1884,6 +1893,7 @@ from `apps/cli`.
 
 ## Changes
 
+- **Adapter protocol 2.7: a poll may say when to poll again** (within version 2; 2026-11-02; listen-fire 0.13.1; additive). `poll` may answer `pollAgainAt`, an ISO instant: the host polls that edge next at the earlier of it and its interval, never sooner than a second on ([Polled sources](#polled-sources-and-periodic-tasks)). The cron unit answers its next tick. Why: a schedule is cron's polled `Ticks` edge, and a tick seen only on the next poll fired up to an interval (60 seconds) late. It is a host behaviour, as 2.3 was: an older host ignores the member and polls on its interval, so a module that answers it states no minor for it.
 - **The settings poll and the events subscription leave the protocol** (adapter protocol 2.6, within version 2; 2026-11-01; listen-fire 0.13.0; breaking for a module that still answers them). `poll` is asked only as `{ edge, filter?, scope?, cursor? }` and answers `{ arrivals, cursor? }`; a 0.12 `{ events, checkpoint }` answer is refused, naming `arrivals`. `ensureEventSubscription` is asked only for an edge; `removeEventSubscription` keeps the 0.12 form only to remove a webhook a 0.12 listen registered, and a host removes such a webhook rather than refreshing it. `emit` is refused 410 (`emit_retired`), naming `wake`; it kept events that fired no listen. Why: a 0.13 listen is a traversal, and nothing a settings poll or an events webhook brings can fire one.
 - **`inbound.redactFields`** (adapter protocol 2.6, within version 2; 2026-11-01; listen-fire 0.13.0; additive). A module names the body and query fields that may carry a credential, and a kept request drops them ([Declared inbound signatures](#declared-inbound-signatures)); a header whose name holds `token`, `key`, `auth`, `hmac` or `password`, or `set-cookie`, is never kept either. A module that names one states `protocolMinor: 6`. Why: Slack sends its legacy verification `token` in the body, and a kept request is stored for days. `@lf/slack` names `token`.
 - **`membersChange`** (within version 2, no bump; 2026-11-01; listen-fire 0.13.0). One member, `"pushed"` or `{ relistEverySeconds }`, says how a listen learns a hop's members changed, where this release's earlier builds read three (`cheapToList`, `parentChanges`, `relistEverySeconds`) ([Declaring a listenable edge](#declaring-a-listenable-edge)). Why: the three described one choice, and two of them together meant nothing.

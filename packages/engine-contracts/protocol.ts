@@ -39,7 +39,7 @@ export const MANIFEST_PROTOCOL_VERSION = 2;
 
 /** The highest minor of version 2 this release speaks: a host reads 2.0 to
  *  2.`PROTOCOL_MINOR` (docs/contracts/adapter-protocol.md "Minors of version 2"). */
-export const PROTOCOL_MINOR = 6;
+export const PROTOCOL_MINOR = 7;
 
 /** The method that names a minor's feature, by name or by its ending
  *  (`<slot>.watch`). Data, so the Rust twin (module-wire
@@ -49,8 +49,8 @@ export type ProtocolMinorUse = { method: string } | { methodEndingWith: string }
 /** Each minor of version 2 whose hosts speak a method, and that method. A host
  *  speaking the minor may call it; a module offering it needs nothing of an
  *  older host, which never calls it, so offering one never raises the minor
- *  a module states. A minor that names no method has no row: 2.0, and 2.3
- *  (labelled poll events, a host behaviour). */
+ *  a module states. A minor that names no method has no row: 2.0, 2.3
+ *  (labelled poll events) and 2.7 (`pollAgainAt`), each a host behaviour. */
 export const PROTOCOL_MINORS: readonly { minor: number; feature: string; uses: ProtocolMinorUse }[] = [
   { minor: 1, feature: 'a <slot>.watch method', uses: { methodEndingWith: '.watch' } },
   { minor: 2, feature: 'work.enqueueIfAbsent', uses: { method: 'work.enqueueIfAbsent' } },
@@ -1309,10 +1309,14 @@ export const WirePollEdgeInput = z.object({
 export type WirePollEdgeInputShape = z.infer<typeof WirePollEdgeInput>;
 /** What arrived on the edge since `cursor`, and the cursor to hand back next
  *  time. An arrival says `takenApplied: true` only when the module applied
- *  `filter` to it; otherwise the host checks the whole filter itself. */
+ *  `filter` to it; otherwise the host checks the whole filter itself.
+ *  `pollAgainAt` (2.7), an ISO instant, is when the edge is next worth
+ *  polling: a host speaking 2.7 polls it then when that is sooner than its
+ *  interval (cron's next tick). */
 export const WirePollEdgeResult = z.object({
   arrivals: z.array(WireArrival),
   cursor: z.unknown().optional(),
+  pollAgainAt: z.string().min(1).optional(),
 });
 export type WirePollEdgeResultShape = z.infer<typeof WirePollEdgeResult>;
 

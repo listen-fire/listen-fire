@@ -604,6 +604,8 @@ struct EdgePolled {
     fired: Fired,
     polled_as: Option<String>,
     row: Option<NewWork>,
+    /// When the module said the edge is next worth polling (`pollAgainAt`).
+    poll_again_at: Option<i64>,
 }
 
 /// Which listens an arrival is judged against, and which it lists again.
@@ -1271,8 +1273,10 @@ impl Session {
     }
 
     /// A `poll_edge` row: poll its key's edge once for every listen sharing
-    /// it, and say when it is next due (crate::edge_polls::interval_ms). A
-    /// row no listen shares any more is done, and its cursor forgotten.
+    /// it, and say when it is next due: when its module said, if that is
+    /// within its interval (crate::edge_polls::next_poll_at), so a cron tick
+    /// is polled at its time. A row no listen shares any more is done, and
+    /// its cursor forgotten.
     async fn poll_edge_row(&self, set: &FileSet, subscription: &str) -> Result<(Next, Vec<RunOutcome>), String> {
         let keys = crate::edge_polls::polled_keys(set);
         let Some((key, shared)) = keys.iter().find(|(key, _)| crate::edge_polls::poll_subscription(key) == subscription) else {
@@ -1284,7 +1288,8 @@ impl Session {
             eprintln!("listen-fire: {line}");
         }
         let interval_ms = crate::edge_polls::interval_ms(&self.project.poll_every, key, polled.polled_as.as_deref(), shared.declared.as_ref())?;
-        Ok((Next::DueAt(iso(self.due_offset_ms + interval_ms)), polled.fired.outcomes))
+        let next = crate::edge_polls::next_poll_at(self.now_ms(), interval_ms, polled.poll_again_at);
+        Ok((Next::DueAt(iso_at(next)), polled.fired.outcomes))
     }
 
     /// One poll of a shared key's edge: `poll({ edge, filter?, scope?,
@@ -1343,6 +1348,10 @@ impl Session {
             }
         };
         let arrivals = crate::arrivals::arrivals_of(&answer).map_err(|e| format!("{}: a poll of '{}' answered {e}", key.adapter, key.edge))?;
+        let poll_again_at = match answer.get("pollAgainAt") {
+            None => None,
+            Some(at) => Some(at.as_str().and_then(crate::units::ms_of).ok_or_else(|| format!("{}: a poll of '{}' answered pollAgainAt {}: expected an instant (ISO 8601)", key.adapter, key.edge, at.to_json()))?),
+        };
         let arrivals = under_scope(&arrivals, key);
         let cursorless = shared.declared.as_ref().is_some_and(|d| d.cursorless);
         let mut cursor = obj! { "armed" => Js::Bool(true) };
@@ -1423,7 +1432,7 @@ impl Session {
                 if let Js::Obj(payload) = &mut row.payload {
                     payload.insert("arrivalMark".into(), Js::Num(kept.arrival_mark.into()));
                 }
-                return Ok(EdgePolled { fired, polled_as, row: Some(row) });
+                return Ok(EdgePolled { fired, polled_as, row: Some(row), poll_again_at });
             }
             // Logged, then the cursor kept, before any listen resolves again
             // (a call to the module that may outlast the row's lease): a
@@ -1435,10 +1444,10 @@ impl Session {
             let judged = self.fire_arrivals_to(set, &key.adapter, arrivals, Delivered { arrival_mark: Some(mark), ..came_for }, JudgedBy::Sharing(shared)).await?;
             fired.outcomes.extend(judged.outcomes);
             fired.redelivered.extend(judged.redelivered);
-            return Ok(EdgePolled { fired, polled_as, row: None });
+            return Ok(EdgePolled { fired, polled_as, row: None, poll_again_at });
         }
         self.store.save_inbound_checkpoint(subscription, &checkpoint).map_err(|e| e.to_string())?;
-        Ok(EdgePolled { fired, polled_as, row: None })
+        Ok(EdgePolled { fired, polled_as, row: None, poll_again_at })
     }
 
     /// What the arming poll of an edge with no cursor saw is what each
@@ -3294,6 +3303,46 @@ mod tests {
             put(&root, "extra.mvt", &MANUAL_V1.replace("hello", "extra").replace("v1", "extra"));
             assert_eq!(refreshed(session).await, "movements: extra.mvt added\n");
             assert_eq!(returns(session, "extra").await, "extra");
+        });
+    }
+
+    /// A cron's shared poll is next due at its schedule's next tick when that
+    /// comes within the poll's interval, so `serve` (draining every second)
+    /// fires it on time and a drain's wake slot is told that time; with no
+    /// tick near, at one interval, as before, never sooner.
+    #[test]
+    fn a_crons_poll_is_next_due_at_its_next_tick_within_its_interval() {
+        let ticking = |schedule: &str| format!("function tock(t: <cron-[:Ticks]->>) {{\n  fail(\"tick ${{t.`Fired at`}}\")\n}}\nlisten to cron-[t:Ticks WHERE t.Schedule == \"{schedule}\"]-> fire tock\n");
+        // The clock read 15 seconds before a minute's start.
+        let ahead = |real: i64| (45_000 - real.rem_euclid(60_000)).rem_euclid(60_000);
+        let next_due = |wake: &crate::wake::tests::Recording| {
+            wake.told.borrow().iter().filter(|(_, kind)| kind == EDGE_POLL_WORK_KIND).find_map(|(when, _)| match when {
+                crate::wake::When::At(at) => Some(*at),
+                crate::wake::When::Now => None,
+            })
+        };
+        let root = refresh_project(&[("tick.mvt", &ticking("* * * * *"))]);
+        with_session(&root.clone(), async |session| {
+            session.judge_due_ahead(ahead(crate::limiter::now_ms()));
+            let wake = crate::wake::tests::recording();
+            session.drain_work(WORK_ROWS_PER_DRAIN, &mut Vec::new()).await.unwrap();
+            let now = session.now_ms();
+            assert_eq!(next_due(&wake), Some(now - now.rem_euclid(60_000) + 60_000), "the arming poll says the next minute's start");
+            crate::wake::install(None);
+        });
+        // An hourly schedule half an hour off: polled on its interval, a minute on.
+        let real = crate::limiter::now_ms();
+        let minute = ((real + ahead(real)) / 60_000 + 30).rem_euclid(60);
+        let root = refresh_project(&[("tick.mvt", &ticking(&format!("{minute} * * * *")))]);
+        with_session(&root.clone(), async |session| {
+            session.judge_due_ahead(ahead(crate::limiter::now_ms()));
+            let wake = crate::wake::tests::recording();
+            let before = session.now_ms();
+            session.drain_work(WORK_ROWS_PER_DRAIN, &mut Vec::new()).await.unwrap();
+            let after = session.now_ms();
+            let due = next_due(&wake).expect("the poll was released for its next");
+            assert!((before + 60_000..=after + 60_000).contains(&due), "one interval on: {due} after {before}..{after}");
+            crate::wake::install(None);
         });
     }
 

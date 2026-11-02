@@ -155,6 +155,27 @@ test('listen-fire serve fires a cron listen when its schedule comes due', async 
   assert.equal(ticks(dir), 1);
 });
 
+test('listen-fire serve fires a schedule within about a second of its time, not on the next minute\'s poll', async () => {
+  const dir = initialised();
+  writeFileSync(join(dir, 'movements/tick.mvt'), TICK);
+  // The clock reads 15 seconds before a minute's start.
+  const ahead = (45_000 - (Date.now() % 60_000) + 60_000) % 60_000;
+  const armedAt = Date.now() + ahead;
+  assert.match(spawnLf(dir, ['drain', '--until-idle'], ahead), /armed/);
+  const server = await served(dir, [], { LF_CLOCK_AHEAD_MS: String(ahead) });
+  try {
+    const line = await server.waitFor(/^run \S+ tick:tock failed — MOVENG_ERROR: tick /, 30_000);
+    const seenAt = Date.now() + ahead;
+    const tick = Date.parse(/tick (\S+) on/.exec(line)?.[1] ?? '');
+    assert.equal(tick, armedAt - (armedAt % 60_000) + 60_000, `the next minute's start: ${line}`);
+    // Polled once a minute, it would have run 45 seconds after the tick.
+    assert.ok(seenAt - tick < 2_500, `ran ${seenAt - tick}ms after its tick`);
+  } finally {
+    await server.stop();
+  }
+  assert.equal(ticks(dir), 1);
+});
+
 test('a cron listen on one schedule ticks once per occurrence; two listens on one schedule and zone share a clock', () => {
   const dir = initialised();
   const zoned = 't.Schedule == "*/5 * * * *" AND t.Zone == "Europe/London"';

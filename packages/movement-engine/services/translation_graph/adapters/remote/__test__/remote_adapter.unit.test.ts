@@ -598,21 +598,21 @@ describe('fetchRemoteManifest refuses an older server', () => {
 
   it('refuses a newer major or a newer minor, naming what each side speaks', async () => {
     const v2 = { protocolVersion: 2, adapterType: 'remote-email', supportedTriggers: [], runtimeCapabilities, methods: [] };
-    const speaks = `this @listen-fire/engine (${LANGUAGE_VERSION}) speaks 2.0–2.6`;
+    const speaks = `this @listen-fire/engine (${LANGUAGE_VERSION}) speaks 2.0–2.7`;
     postRpcMock.mockResolvedValueOnce({ ...v2, protocolVersion: 3 });
     await expect(fetchRemoteManifest(config, 's3cr3t')).rejects.toThrow(
       `Remote adapter "remote-email" at ${config.baseUrl} refused: it speaks adapter protocol 3; ${speaks}. Upgrade @listen-fire/engine.`,
     );
-    postRpcMock.mockResolvedValueOnce({ ...v2, protocolMinor: 7 });
+    postRpcMock.mockResolvedValueOnce({ ...v2, protocolMinor: 8 });
     await expect(fetchRemoteManifest(config, 's3cr3t')).rejects.toThrow(
-      `Remote adapter "remote-email" at ${config.baseUrl} refused: it speaks adapter protocol 2.7; ${speaks}. ` +
-        "Upgrade @listen-fire/engine to a release that speaks 2.7 (the protocol's Changes list names it), or use a version of it that speaks 2.6 or lower.",
+      `Remote adapter "remote-email" at ${config.baseUrl} refused: it speaks adapter protocol 2.8; ${speaks}. ` +
+        "Upgrade @listen-fire/engine to a release that speaks 2.8 (the protocol's Changes list names it), or use a version of it that speaks 2.7 or lower.",
     );
   });
 
   it('reads an unstated minor, and every minor up to its own, as before', async () => {
     const v2 = { protocolVersion: 2, adapterType: 'remote-email', supportedTriggers: [], runtimeCapabilities, methods: [] };
-    for (const stated of [{}, { protocolMinor: 0 }, { protocolMinor: 2 }, { protocolMinor: 3 }, { protocolMinor: 4 }, { protocolMinor: 5 }, { protocolMinor: 6 }]) {
+    for (const stated of [{}, { protocolMinor: 0 }, { protocolMinor: 2 }, { protocolMinor: 3 }, { protocolMinor: 4 }, { protocolMinor: 5 }, { protocolMinor: 6 }, { protocolMinor: 7 }]) {
       postRpcMock.mockResolvedValueOnce({ ...v2, ...stated });
       await expect(fetchRemoteManifest(config, 's3cr3t')).resolves.toMatchObject({ adapterType: 'remote-email' });
     }

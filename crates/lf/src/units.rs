@@ -55,7 +55,8 @@ pub fn listen_vocabulary(unit: &str) -> Obj {
     })
 }
 
-/// `listEntryPoints`. A cron's ticks are polled every `pollEverySeconds`
+/// `listEntryPoints`. A cron's ticks are polled at its next tick (`poll_ticks`'s
+/// `pollAgainAt`) or every `pollEverySeconds`, whichever is sooner,
 /// unless lf.yaml's `pollEvery` names another interval for `cron`.
 pub fn entry_points(unit: &str) -> Vec<Js> {
     let entries = match unit {
@@ -215,35 +216,47 @@ pub struct Ticked {
 /// find it due, a listen runs it once. The first poll (no cursor) only sets
 /// the cursor: nothing before a listen is owed. The cursor is the instant it
 /// polled to. The unit applies the filter itself (`takenApplied`).
+///
+/// Each answer, the first included, says when the next occurrence is due
+/// (`pollAgainAt`, adapter protocol 2.7), so the host polls then rather than
+/// up to an interval after it. It looks no further than one interval
+/// ahead: the host polls by then anyway.
 pub fn poll_ticks(filter: Option<&serde_json::Value>, cursor: Option<&Js>, clock: PollClock) -> Result<Ticked, String> {
     let PollClock { now_ms, every_ms } = clock;
-    let now = iso_of(now_ms);
-    let Some(after_ms) = cursor.and_then(Js::as_str).and_then(ms_of) else {
-        return Ok(Ticked { answer: Js::Obj(obj! { "arrivals" => Js::Arr(Vec::new()), "cursor" => Js::str(&now) }), unread: Vec::new() });
-    };
     let filter: Expression = match filter {
         Some(filter) => serde_json::from_value(filter.clone()).map_err(|e| format!("cron: the filter on {TICKS} is not one it reads: {e}"))?,
         None => return Err(format!("cron: a poll of {TICKS} names no schedule")),
     };
     let schedules = values_of(&filter, "Schedule").ok_or_else(|| format!("cron: a poll of {TICKS} names no schedule it can read"))?;
     let zones = values_of(&filter, "Zone").unwrap_or_else(|| vec![DEFAULT_ZONE.to_string()]);
+    let mut unread = Vec::new();
+    let mut clocks: Vec<(&str, &str, Schedule)> = Vec::new();
+    for schedule in &schedules {
+        for zone in &zones {
+            match parse_schedule(schedule, Some(zone)) {
+                Ok(parsed) => clocks.push((schedule, zone, parsed)),
+                Err(e) => unread.push(format!("cron: schedule \"{schedule}\" in {zone} fires nothing: {e}")),
+            }
+        }
+    }
+    let next = clocks.iter().filter_map(|(_, _, parsed)| parsed.next_in(now_ms, now_ms + every_ms)).min();
+    let answer = |arrivals: Vec<Js>| {
+        let mut answer = obj! { "arrivals" => Js::Arr(arrivals), "cursor" => Js::str(&iso_of(now_ms)) };
+        if let Some(at) = next {
+            answer.insert("pollAgainAt".into(), Js::str(&iso_of(at)));
+        }
+        Js::Obj(answer)
+    };
+    let Some(after_ms) = cursor.and_then(Js::as_str).and_then(ms_of) else {
+        return Ok(Ticked { answer: answer(Vec::new()), unread });
+    };
     let backlog_until = now_ms - every_ms;
     // Each instant once, by the first schedule and zone the filter names that is due then.
     let mut due: std::collections::BTreeMap<i64, (&str, &str)> = std::collections::BTreeMap::new();
-    let mut unread = Vec::new();
-    for schedule in &schedules {
-        for zone in &zones {
-            let parsed = match parse_schedule(schedule, Some(zone)) {
-                Ok(parsed) => parsed,
-                Err(e) => {
-                    unread.push(format!("cron: schedule \"{schedule}\" in {zone} fires nothing: {e}"));
-                    continue;
-                }
-            };
-            let caught_up = (after_ms < backlog_until).then(|| parsed.latest_in(after_ms, backlog_until)).flatten();
-            for at in caught_up.into_iter().chain(parsed.occurrences_in(after_ms.max(backlog_until), now_ms)) {
-                due.entry(at).or_insert((schedule, zone));
-            }
+    for (schedule, zone, parsed) in &clocks {
+        let caught_up = (after_ms < backlog_until).then(|| parsed.latest_in(after_ms, backlog_until)).flatten();
+        for at in caught_up.into_iter().chain(parsed.occurrences_in(after_ms.max(backlog_until), now_ms)) {
+            due.entry(at).or_insert((schedule, zone));
         }
     }
     let arrivals = due
@@ -260,7 +273,7 @@ pub fn poll_ticks(filter: Option<&serde_json::Value>, cursor: Option<&Js>, clock
             })
         })
         .collect();
-    Ok(Ticked { answer: Js::Obj(obj! { "arrivals" => Js::Arr(arrivals), "cursor" => Js::str(&now) }), unread })
+    Ok(Ticked { answer: answer(arrivals), unread })
 }
 
 /// The literals `filter` compares `field` with, by `==` or `IN`, or an `OR`
@@ -406,6 +419,13 @@ impl Schedule {
         all
     }
 
+    /// The earliest occurrence after `after_ms` and no later than
+    /// `until_ms`, when there is one.
+    pub fn next_in(&self, after_ms: i64, until_ms: i64) -> Option<i64> {
+        let first = after_ms - after_ms.rem_euclid(60_000) + 60_000;
+        (0..).map(|n| first + n * 60_000).take_while(|at| *at <= until_ms).find(|at| self.matches(*at))
+    }
+
     /// The minutes' starts in (`after_ms`, `until_ms`], latest first, no
     /// further back than a worker looks.
     fn minutes_back(&self, after_ms: i64, until_ms: i64) -> impl Iterator<Item = i64> {
@@ -479,7 +499,7 @@ mod tests {
         let (armed, now) = (at("2026-10-19T08:30:00Z"), at("2026-10-19T09:30:00Z"));
         // The first poll only sets the cursor.
         let first = poll(r#"t.Schedule == "0 9 * * 1""#, None, armed, 60);
-        assert_eq!(first.answer.to_json(), r#"{"arrivals":[],"cursor":"2026-10-19T08:30:00.000Z"}"#);
+        assert_eq!(first.answer.to_json(), r#"{"arrivals":[],"cursor":"2026-10-19T08:30:00.000Z","pollAgainAt":"2026-10-19T09:00:00.000Z"}"#);
         let cursor = first.answer.get("cursor").cloned().unwrap();
         // 2026-10-19 is a Monday; with no zone, a schedule is read in UTC.
         let one = poll(r#"t.Schedule == "0 9 * * 1""#, Some(&cursor), now, 60);
@@ -519,6 +539,38 @@ mod tests {
         // A daily schedule missed for three days fires once.
         let daily = poll(r#"t.Schedule == "0 9 * * *""#, Some(&Js::str("2026-10-16T12:00:00.000Z")), at("2026-10-19T12:00:00Z"), 1);
         assert_eq!(identities(&daily), ["tick:0 9 * * *:UTC:2026-10-19T09:00:00.000Z"]);
+    }
+
+    fn poll_again_at(ticked: &Ticked) -> Option<&str> {
+        ticked.answer.get("pollAgainAt").and_then(Js::as_str)
+    }
+
+    /// Each answer says when the next occurrence is due, within one interval,
+    /// so the host polls then and the tick fires on time.
+    #[test]
+    fn a_poll_of_ticks_says_when_its_next_occurrence_is_due() {
+        let weekdays = r#"t.Schedule == "30 8 * * 1-5""#;
+        // 2026-10-19 is a Monday: armed at 08:29:45, the next tick is 15 seconds on.
+        let armed = poll(weekdays, None, at("2026-10-19T08:29:45Z"), 1);
+        assert_eq!(poll_again_at(&armed), Some("2026-10-19T08:30:00.000Z"), "the arming poll says it too");
+        let cursor = armed.answer.get("cursor").cloned().unwrap();
+        let on_time = poll(weekdays, Some(&cursor), at("2026-10-19T08:30:00.040Z"), 1);
+        assert_eq!(identities(&on_time), ["tick:30 8 * * 1-5:UTC:2026-10-19T08:30:00.000Z"], "polled at the tick, it fires");
+        assert_eq!(poll_again_at(&on_time), None, "tomorrow's is beyond the interval: the host polls on its cycle");
+        // The earliest of every schedule and zone named; one exactly at a minute's start is due now, so the next is after it.
+        let two = poll(r#"t.Schedule IN ["*/5 * * * *", "2 * * * *"]"#, Some(&cursor), at("2026-10-19T09:00:00Z"), 60);
+        assert_eq!(poll_again_at(&two), Some("2026-10-19T09:02:00.000Z"));
+        // In London's summer time, 09:00 there is 08:00 UTC.
+        let zoned = poll(r#"t.Schedule == "0 9 * * *" AND t.Zone == "Europe/London""#, None, at("2026-07-01T07:59:30Z"), 1);
+        assert_eq!(poll_again_at(&zoned), Some("2026-07-01T08:00:00.000Z"));
+    }
+
+    #[test]
+    fn the_next_occurrence_in_a_window_is_the_earliest_after_its_start() {
+        let hourly = parse_schedule("0 * * * *", None).unwrap();
+        assert_eq!(hourly.next_in(at("2026-10-19T08:59:59.999Z"), at("2026-10-19T10:00:00Z")).map(iso_of).as_deref(), Some("2026-10-19T09:00:00.000Z"));
+        assert_eq!(hourly.next_in(at("2026-10-19T09:00:00Z"), at("2026-10-19T10:00:00Z")).map(iso_of).as_deref(), Some("2026-10-19T10:00:00.000Z"), "its end is in the window, its start is not");
+        assert_eq!(hourly.next_in(at("2026-10-19T09:00:00Z"), at("2026-10-19T09:59:59Z")), None);
     }
 
     #[test]

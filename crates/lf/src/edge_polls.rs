@@ -333,6 +333,22 @@ pub fn interval_ms(poll_every: &BTreeMap<String, i64>, key: &PollKey, polled_as:
     }
 }
 
+/// The least time between two polls of one key, whatever its module
+/// answers: a `pollAgainAt` already past never has the host poll without pause.
+pub const POLL_AGAIN_FLOOR_MS: i64 = 1_000;
+
+/// When a key polled at `polled_at_ms` is polled next: when its module said
+/// the edge is next worth polling (`pollAgainAt`, adapter protocol 2.7), if
+/// that is sooner than its interval and no sooner than the floor; else one
+/// interval on.
+pub fn next_poll_at(polled_at_ms: i64, interval_ms: i64, poll_again_at: Option<i64>) -> i64 {
+    let usual = polled_at_ms + interval_ms;
+    match poll_again_at {
+        Some(at) => at.max(polled_at_ms + POLL_AGAIN_FLOOR_MS).min(usual),
+        None => usual,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -530,5 +546,15 @@ mod tests {
         assert_eq!(interval_ms(&poll_every, &key("", None), Some("work"), Some(&declared)), Ok(5_000));
         let undeclared = Declared { delivery: Some(Delivery::Polled), scoped_by: None, poll_every_seconds: None, cursorless: false };
         assert!(interval_ms(&poll_every, &key("", None), Some("other"), Some(&undeclared)).unwrap_err().contains("declares no pollEverySeconds"));
+    }
+
+    #[test]
+    fn a_key_is_polled_next_when_its_module_says_within_its_interval_and_never_without_pause() {
+        let polled = 1_000_000;
+        assert_eq!(next_poll_at(polled, 60_000, None), polled + 60_000, "said nothing: its interval");
+        assert_eq!(next_poll_at(polled, 60_000, Some(polled + 15_000)), polled + 15_000, "sooner: then");
+        assert_eq!(next_poll_at(polled, 60_000, Some(polled + 3_600_000)), polled + 60_000, "later: never past its interval");
+        assert_eq!(next_poll_at(polled, 60_000, Some(polled - 5_000)), polled + POLL_AGAIN_FLOOR_MS, "already past: after the floor");
+        assert_eq!(next_poll_at(polled, 500, Some(polled + 200)), polled + 500, "an interval under the floor is the operator's to keep");
     }
 }

@@ -95,18 +95,18 @@ function withManifestModule(answered: object): string {
 test('listen-fire connect refuses a slot module answering a newer protocol major, naming its slot', () => {
   const connected = lfIn(withManifestModule({ protocolVersion: 3 }), 'connect', 'acme_future');
   assert.equal(connected.code, 1, connected.out);
-  assert.match(connected.out, /core module "acme_future" \(models slot\) \(@acme\/future 3\.0\.0\): speaks adapter protocol 3; this listen-fire \([^)]+\) speaks 2\.0–2\.6\. Upgrade listen-fire\./);
+  assert.match(connected.out, /core module "acme_future" \(models slot\) \(@acme\/future 3\.0\.0\): speaks adapter protocol 3; this listen-fire \([^)]+\) speaks 2\.0–2\.7\. Upgrade listen-fire\./);
 });
 
 test('listen-fire drain refuses at open a slot module outside the protocol range listen-fire speaks, before it claims work', () => {
   const major = lfIn(withManifestModule({ protocolVersion: 3 }), 'drain', '--until-idle');
   assert.equal(major.code, 1, major.out);
-  assert.match(major.out, /^listen-fire: core module "acme_future" \(models slot\) \(@acme\/future 3\.0\.0\): speaks adapter protocol 3; this listen-fire \([^)]+\) speaks 2\.0–2\.6\. Upgrade listen-fire\.$/m);
+  assert.match(major.out, /^listen-fire: core module "acme_future" \(models slot\) \(@acme\/future 3\.0\.0\): speaks adapter protocol 3; this listen-fire \([^)]+\) speaks 2\.0–2\.7\. Upgrade listen-fire\.$/m);
   const minor = lfIn(withManifestModule({ protocolVersion: 2, protocolMinor: 99 }), 'drain', '--until-idle');
   assert.equal(minor.code, 1, minor.out);
   assert.match(
     minor.out,
-    /^listen-fire: core module "acme_future" \(models slot\) \(@acme\/future 3\.0\.0\) speaks adapter protocol 2\.99; this listen-fire \([^)]+\) speaks 2\.0–2\.6\. Upgrade listen-fire to a release that speaks 2\.99 \(the protocol's Changes list names it\), or use a @acme\/future that speaks 2\.6 or lower\.$/m,
+    /^listen-fire: core module "acme_future" \(models slot\) \(@acme\/future 3\.0\.0\) speaks adapter protocol 2\.99; this listen-fire \([^)]+\) speaks 2\.0–2\.7\. Upgrade listen-fire to a release that speaks 2\.99 \(the protocol's Changes list names it\), or use a @acme\/future that speaks 2\.7 or lower\.$/m,
   );
 });
 

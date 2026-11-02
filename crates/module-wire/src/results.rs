@@ -249,7 +249,8 @@ fn result_schema(method: &str) -> Option<S> {
         "iterateRelated" | "iterateRelatedPage" => related_page(),
         "preprocessInbound" => obj(vec![req("events", arr(discriminable_event())), opt("arrivals", arr(arrival())), opt("checkpoint", S::Unknown)]),
         // A poll of a listenable edge, shared by the listens on it (2.6).
-        "poll" => obj(vec![req("arrivals", arr(arrival())), opt("cursor", S::Unknown)]),
+        // `pollAgainAt` (2.7): when the edge is next worth polling.
+        "poll" => obj(vec![req("arrivals", arr(arrival())), opt("cursor", S::Unknown), opt("pollAgainAt", S::NonEmptyStr)]),
         "listEventTypes" => arr(obj(vec![
             req("tag", S::Str),
             req("positionType", S::Str),
@@ -532,6 +533,13 @@ mod tests {
         let unnamed = r#"{"arrivals":[{"edge":"Notes","landing":{"fields":{}}}]}"#;
         assert!(check("poll", "feed", &js(unnamed)).is_err(), "an arrival names its identity");
         assert!(check("poll", "feed", &js(r#"{"cursor":7}"#)).is_err(), "no arrivals");
+    }
+
+    #[test]
+    fn a_2_7_poll_answer_may_say_when_the_edge_is_next_worth_polling() {
+        let answer = r#"{"arrivals":[],"cursor":7,"pollAgainAt":"2026-11-02T08:30:00.000Z"}"#;
+        assert_eq!(check("poll", "feed", &js(answer)).unwrap().to_json(), answer);
+        assert!(check("poll", "feed", &js(r#"{"arrivals":[],"pollAgainAt":30}"#)).is_err(), "an instant, written as text");
     }
 
     #[test]

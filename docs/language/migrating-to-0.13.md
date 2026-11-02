@@ -263,7 +263,7 @@ Each entry shows a 0.12 listen, the 0.13 listen `listen-fire upgrade` writes for
 - 0.12: `listen to cron { schedule: "0 9 * * 1-5", timezone: "Europe/London" } fire digest`
 - 0.13: `listen to cron-[t:Ticks WHERE t.Schedule == "0 9 * * 1-5" AND t.Zone == "Europe/London"]-> fire digest`, parameter `<cron-[:Ticks]->>`
 - `Ticks` is unbounded: a listen names its schedules (`==` or `IN`). One naming no zone ticks in UTC.
-- The clock is polled every minute, so a tick fires up to a minute late. Each poll fires every occurrence since the last; after downtime only the latest missed one fires.
+- A tick fires on time: each poll of the clock says when its next tick is due, and the host polls then (adapter protocol 2.7). A host before 2.7 polls every minute, so a tick there fires up to a minute late. Each poll fires every occurrence since the last; after downtime only the latest missed one fires.
 
 #### `manual`
 

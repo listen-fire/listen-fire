@@ -232,6 +232,11 @@ export interface PollEdgeAnswer {
   arrivals: Arrival[];
   /** What to hand you back next time. */
   cursor?: unknown;
+  /** When the edge is next worth polling, as an ISO instant (adapter
+   *  protocol 2.7): a host polls then when that is sooner than its interval,
+   *  never sooner than a second on. Leave it out to be polled on the
+   *  interval; an older host ignores it. */
+  pollAgainAt?: string;
 }
 
 /** What every call about a subscription for one listenable edge's arrivals

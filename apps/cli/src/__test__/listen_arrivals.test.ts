@@ -270,18 +270,18 @@ test('an edit that adds a listen on a traversal that does not check is refused, 
   }
 });
 
-test('a 2.6 module stating minor 6 is read; one stating 7 is refused by name', () => {
+test('a 2.6 module stating minor 6 is read; one stating 8 is refused by name', () => {
   const dir = project('listen_arrivals');
   const read = lf(dir, 'check');
   assert.equal(read.code, 0, read.out);
   const server = join(dir, 'externals/acme_crm/server.mjs');
   const source = readFileSync(server, 'utf8');
   assert.ok(source.includes('protocolMinor: 6,'), 'the CRM states minor 6');
-  writeFileSync(server, source.replace('protocolMinor: 6,', 'protocolMinor: 7,'));
+  writeFileSync(server, source.replace('protocolMinor: 6,', 'protocolMinor: 8,'));
   const refused = lf(dir, 'check');
   assert.equal(refused.code, 1, refused.out);
   assert.match(
     refused.out,
-    /external "acme_crm" speaks adapter protocol 2\.7; this listen-fire \(\d+\.\d+\.\d+[^)]*\) speaks 2\.0–2\.6\. Upgrade listen-fire to a release that speaks 2\.7/,
+    /external "acme_crm" speaks adapter protocol 2\.8; this listen-fire \(\d+\.\d+\.\d+[^)]*\) speaks 2\.0–2\.7\. Upgrade listen-fire to a release that speaks 2\.8/,
   );
 });
