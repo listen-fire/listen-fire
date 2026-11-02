@@ -20,23 +20,6 @@ named in [`RELEASING.md`](RELEASING.md).
 
 <!-- add merged PRs here -->
 
-### Added
-
-- **A parameter can take one of several record types.** `function noted(n: <crm-[:Memo]-> | crm-[:Remark]->>)` takes a Memo or a Remark, as TypeScript's `Memo | Remark` does. Inside the angle brackets, record types are joined by `|`; a return type and a closure's parameter may be written the same way.
-  - Why: a listen through a union fires its function with whatever lands under each member, and a Person's notes may land on a Memo where a Company's land on a Remark. Before, no parameter type could say that.
-  - What it offers is what every member has: a field or an edge one member lacks is refused, as for any value that may be one of several records. `A | A` is `A`.
-  - A Memo is accepted where `<… Memo | … Remark>` is asked for. A Memo-or-Remark is accepted where a union holding both is asked for, and refused where a Memo alone is (`MOV_CALL_ARG_TYPE`, `MOV_LISTEN_PARAM_MISMATCH`).
-  - A function over any table's changes or one table's takes both: `<at-[:Change]-> | at-[:\`Candidates Change\`]->>`.
-  - Each member is a record type. A value type (`<text | number>`) is refused (`MOV_UNKNOWN_TYPE_NAME`): a closed set of values is declared as its own `type`. A function a listen fires is typed by records of the listen's own connection.
-  - For hosts: a parameter's type in the program tree may be `{ kind: "union", members: [TypeRef, …], span }` ([platform-adoption-0.13.md](docs/contracts/platform-adoption-0.13.md#after-0130)).
-
-- **A type a narrowing makes is known by its name alone.** `function stage_of(c: <hiring-[:\`Candidates Change\`]->>)` checks with no listen or walk in the program narrowing the base's `Tables` to Candidates. Its fields are typed, and so is the row its `Record` reaches; a misspelled field is refused. 0.13.0 refused the type as unknown (`MOV_UNKNOWN_POSITION`) unless something else narrowed to it.
-  - Why: the name is the type, as TypeScript's `CandidatesChange` is known wherever it is written. Before, a parameter's type was known only when a walk elsewhere happened to make it.
-  - How: listen-fire looks for the name among what the connection's members land on (each table's changes, and the row each change holds), and describes that member as a narrowing walk would. Only the members the connection's root hands over are looked through: for Airtable, a connection positioned at a base (`{ base: "Hiring" }`). A name more than one member lands on stays unknown.
-
-- **A record held as a value can be spread into a map.** `{ ...c.Current }`, or `r = c.Current` then `{ ...r }`, copies the row's fields into the map, each with its declared type, as spreading a map with known keys does. Later members override, a misspelled key is refused as for any map, and a row that may be absent gives fields that may be absent. 0.13.0 refused it (`MOV_MAP_SPREAD_NOT_KEYED`).
-  - Why: TypeScript allows `{ ...obj }` of a plain object, and a held record is a plain object type. Nothing else about it changes: it still has no edges and no identity, so no walk, write or record parameter takes it.
-
 ### Changed
 
 - **`connect` names the adapter and the credential itself, so neither is imported.** ``gh = connect `@lf/github` using my_github`` checks and runs with no `import … from adapters` and no `import … from credentials`. Why: an adapter and a credential are only ever named in a `connect`, so the checker types them there. Imports are for plugins and other files.
@@ -63,6 +46,23 @@ named in [`RELEASING.md`](RELEASING.md).
   - An edge each member announces arrivals on and lists nothing along is held to the rule it has off one record type: a listen ends on it and a wait takes it (0.13.0 refused both as write-only, `MOV_WRITE_ONLY_EDGE`), and any other read is told to wait (`MOV_AWAIT_REQUIRED`).
   - For hosts: the listen's one plan holds each member's traversal (`members`, each hop of one member's that lands on the union saying so, `memberOf`), and its identity is computed once over them. The judge decides an arrival once for the listen; a host resolves each member's heads by that member's traversal, keeps them in the listen's one state, and watches each head by its member's edge ([platform-adoption-0.13.md](docs/contracts/platform-adoption-0.13.md#after-0130)). A plan over no union is unchanged, byte for byte, so its pipeline, receipts and state are kept.
 
+### Added
+
+- **A parameter can take one of several record types.** `function noted(n: <crm-[:Memo]-> | crm-[:Remark]->>)` takes a Memo or a Remark, as TypeScript's `Memo | Remark` does. Inside the angle brackets, record types are joined by `|`; a return type and a closure's parameter may be written the same way.
+  - Why: a listen through a union fires its function with whatever lands under each member, and a Person's notes may land on a Memo where a Company's land on a Remark. Before, no parameter type could say that.
+  - What it offers is what every member has: a field or an edge one member lacks is refused, as for any value that may be one of several records. `A | A` is `A`.
+  - A Memo is accepted where `<… Memo | … Remark>` is asked for. A Memo-or-Remark is accepted where a union holding both is asked for, and refused where a Memo alone is (`MOV_CALL_ARG_TYPE`, `MOV_LISTEN_PARAM_MISMATCH`).
+  - A function over any table's changes or one table's takes both: `<at-[:Change]-> | at-[:\`Candidates Change\`]->>`.
+  - Each member is a record type. A value type (`<text | number>`) is refused (`MOV_UNKNOWN_TYPE_NAME`): a closed set of values is declared as its own `type`. A function a listen fires is typed by records of the listen's own connection.
+  - For hosts: a parameter's type in the program tree may be `{ kind: "union", members: [TypeRef, …], span }` ([platform-adoption-0.13.md](docs/contracts/platform-adoption-0.13.md#after-0130)).
+
+- **A type a narrowing makes is known by its name alone.** `function stage_of(c: <hiring-[:\`Candidates Change\`]->>)` checks with no listen or walk in the program narrowing the base's `Tables` to Candidates. Its fields are typed, and so is the row its `Record` reaches; a misspelled field is refused. 0.13.0 refused the type as unknown (`MOV_UNKNOWN_POSITION`) unless something else narrowed to it.
+  - Why: the name is the type, as TypeScript's `CandidatesChange` is known wherever it is written. Before, a parameter's type was known only when a walk elsewhere happened to make it.
+  - How: listen-fire looks for the name among what the connection's members land on (each table's changes, and the row each change holds), and describes that member as a narrowing walk would. Only the members the connection's root hands over are looked through: for Airtable, a connection positioned at a base (`{ base: "Hiring" }`). A name more than one member lands on stays unknown.
+
+- **A record held as a value can be spread into a map.** `{ ...c.Current }`, or `r = c.Current` then `{ ...r }`, copies the row's fields into the map, each with its declared type, as spreading a map with known keys does. Later members override, a misspelled key is refused as for any map, and a row that may be absent gives fields that may be absent. 0.13.0 refused it (`MOV_MAP_SPREAD_NOT_KEYED`).
+  - Why: TypeScript allows `{ ...obj }` of a plain object, and a held record is a plain object type. Nothing else about it changes: it still has no edges and no identity, so no walk, write or record parameter takes it.
+
 ### Deprecated
 
 - **The loop guard slot is retired.** A project whose `lf.yaml` names one (`core: { loopGuard: … }`) runs as before, but listen-fire starts no guard: it prints one notice naming it as it starts, and never calls `guard.open` or `guard.recordWrite`. It also no longer reads each record back after a write to hand it to the guard, which saves one `readRecord` call per write. listen-fire's loop breaker (`loopWindow`, `loopDepth`) already caps every chain of writes and arrivals, and nothing read what a guard remembered. Remove `core.loopGuard` from `lf.yaml`; 0.14.0 refuses it ([loop-guard-slot.md](docs/contracts/loop-guard-slot.md)).
@@ -75,6 +75,8 @@ named in [`RELEASING.md`](RELEASING.md).
 
 - **A function over one of several payload nodes runs.** `function settled(e: <Payment | Refund>)`, fired by `listen to hooks-[:Requests]-><Payment> fire settled`, takes the stated Payment, as TypeScript's `Payment | Refund` takes a Payment. Before, the check refused it as naming another connection, and a run of it failed (`MOVENG_UNSUPPORTED`) wherever the check did not see the function's type.
   - The stated node must fit some member (`MOV_LISTEN_PARAM_MISMATCH` otherwise), and every member is a declared node: the run holds the payload as a value, so a record member is refused where the listen names the function.
+
+- `movement-lang`'s shared comparison unit, which modules filter with, reads a date as the engine does: only an ISO 8601 text is a date, and one with no offset is UTC. Before, it read a text with no offset in the machine's own time zone, and read texts such as `Mar 5, 2024` as dates where the engine orders them as text, so a module could keep or drop a record the engine would have judged the other way. It is now held to the same comparison table as the engine (`engine-contracts/conformance/taken-comparisons.json`).
 
 ## [0.13.0] - 2026-11-02
 
