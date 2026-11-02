@@ -9,6 +9,7 @@ import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, 
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fakeAffinity } from './affinity_fixture';
+import { RELEASE_RE } from './release';
 import { lf, project } from './example';
 import { fakeChannels, gmailProject } from './gmail_fixture';
 import { freePort, lf as lfAsked, ok } from './interactive';
@@ -198,8 +199,8 @@ test('listen-fire upgrade on a 0.12 project with waits and callbacks', () => {
   assert.match(readFileSync(join(dir, 'lf.yaml'), 'utf8'), /^engine: 0\.12\.13$/m);
   const moved = lf(dir, 'upgrade', '--all');
   assert.equal(moved.code, 0, moved.out);
-  assert.match(moved.out, /lf\.yaml: engine: 0\.13\.0 \(was 0\.12\.13\)/);
-  assert.match(readFileSync(join(dir, 'lf.yaml'), 'utf8'), /^engine: 0\.13\.0$/m);
+  assert.match(moved.out, new RegExp(String.raw`lf\.yaml: engine: ${RELEASE_RE} \(was 0\.12\.13\)`));
+  assert.match(readFileSync(join(dir, 'lf.yaml'), 'utf8'), new RegExp(String.raw`^engine: ${RELEASE_RE}$`, 'm'));
 
   const again = lf(dir, 'upgrade', '--check');
   assert.equal(again.code, 0, again.out);
@@ -240,8 +241,8 @@ test('upgrade lists an unraced await as a warning and holds the pin until --all'
   assert.equal(readFileSync(file, 'utf8'), UNRACED);
   const moved = lf(dir, 'upgrade', '--all');
   assert.equal(moved.code, 0, moved.out);
-  assert.match(moved.out, /lf\.yaml: engine: 0\.13\.0 \(was 0\.12\.13\)/);
-  assert.match(readFileSync(join(dir, 'lf.yaml'), 'utf8'), /^engine: 0\.13\.0$/m);
+  assert.match(moved.out, new RegExp(String.raw`lf\.yaml: engine: ${RELEASE_RE} \(was 0\.12\.13\)`));
+  assert.match(readFileSync(join(dir, 'lf.yaml'), 'utf8'), new RegExp(String.raw`^engine: ${RELEASE_RE}$`, 'm'));
   const checked = lf(dir, 'check');
   assert.equal(checked.code, 0, checked.out);
   assert.doesNotMatch(checked.out, /MOV_AWAIT_MAY_HANG/);
@@ -255,7 +256,7 @@ test('upgrade lists an unraced await as a warning and holds the pin until --all'
   const told = lf(raced, 'upgrade');
   assert.equal(told.code, 0, told.out);
   assert.doesNotMatch(told.out, /MOV_AWAIT_MAY_HANG/);
-  assert.match(told.out, /lf\.yaml: engine: 0\.13\.0 \(was 0\.12\.13\)/);
+  assert.match(told.out, new RegExp(String.raw`lf\.yaml: engine: ${RELEASE_RE} \(was 0\.12\.13\)`));
 });
 
 // A 0.12 settings listen on a module that declares what its settings become
@@ -294,7 +295,7 @@ test('listen-fire upgrade rewrites a 0.12 listen and its parameter, and a second
       'listen to gh-[n:Notifications WHERE n.Reason IN ["mention", "assign"]]-> fire triage',
     ),
   );
-  assert.match(upgraded.out, /lf\.yaml: engine: 0\.13\.0 \(was 0\.12\.13\)/);
+  assert.match(upgraded.out, new RegExp(String.raw`lf\.yaml: engine: ${RELEASE_RE} \(was 0\.12\.13\)`));
 
   const checked = lf(dir, 'check');
   assert.equal(checked.code, 0, checked.out);
@@ -338,7 +339,7 @@ function upgradesTo(dir: string, file: string, expected: string): void {
   const upgraded = lf(dir, 'upgrade');
   assert.equal(upgraded.code, 0, upgraded.out);
   assert.equal(readFileSync(file, 'utf8'), expected);
-  assert.match(upgraded.out, /lf\.yaml: engine: 0\.13\.0 \(was 0\.12\.13\)/);
+  assert.match(upgraded.out, new RegExp(String.raw`lf\.yaml: engine: ${RELEASE_RE} \(was 0\.12\.13\)`));
   const checked = lf(dir, 'check');
   assert.equal(checked.code, 0, checked.out);
   assert.doesNotMatch(checked.out, /MOV_LISTEN_SETTINGS_RETIRED/);

@@ -8,6 +8,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { RELEASE_RE } from './release';
 import { lf } from './example';
 import { MAILBOX, fakeChannels, gmailProject } from './gmail_fixture';
 
@@ -202,7 +203,7 @@ listen to mail { labels: ["INBOX"] } fire triage`));
     const moved = lf(dir, 'upgrade', '--all');
     assert.equal(moved.code, 0, moved.out);
     assert.match(moved.out, /warning MOV_FIELD_MEANING_CHANGED 'Labels'/);
-    assert.match(moved.out, /engine: 0\.13\.0 \(was 0\.12\.13\)/);
+    assert.match(moved.out, new RegExp(String.raw`engine: ${RELEASE_RE} \(was 0\.12\.13\)`));
     // On the release itself the read says nothing.
     assert.doesNotMatch(lf(dir, 'check').out, /MOV_FIELD_MEANING_CHANGED/);
   } finally {
@@ -232,7 +233,7 @@ listen to mail { labels: ["Label_12"] } fire triage`));
     }
     const moved = lf(dir, 'upgrade', '--all');
     assert.equal(moved.code, 0, moved.out);
-    assert.match(readFileSync(lfYaml, 'utf8'), /^engine: 0\.13\.0$/m);
+    assert.match(readFileSync(lfYaml, 'utf8'), new RegExp(String.raw`^engine: ${RELEASE_RE}$`, 'm'));
   } finally {
     await fake.stop();
   }
@@ -254,7 +255,7 @@ listen to mail { labels: ["INBOX", "UNREAD"] } fire triage`));
     assert.equal(upgraded.code, 0, upgraded.out);
     assert.doesNotMatch(upgraded.out, /MOV_FIELD_MEANING_CHANGED/);
     assert.match(readFileSync(file, 'utf8'), /listen to mail-\[m:Messages WHERE m\.Labels CONTAINS "INBOX" OR m\.Labels CONTAINS "UNREAD"\]-> fire triage/);
-    assert.match(upgraded.out, /engine: 0\.13\.0 \(was 0\.12\.13\)/);
+    assert.match(upgraded.out, new RegExp(String.raw`engine: ${RELEASE_RE} \(was 0\.12\.13\)`));
     assert.equal(lf(dir, 'check').code, 0);
   } finally {
     await fake.stop();
@@ -297,7 +298,7 @@ listen to mail-[m:Messages WHERE m.Query == "from:acme"]-> fire triage`));
     const upgraded = lf(dir, 'upgrade');
     assert.equal(upgraded.code, 0, upgraded.out);
     assert.doesNotMatch(upgraded.out, /MOV_FIELD_MEANING_CHANGED/);
-    assert.match(upgraded.out, /engine: 0\.13\.0 \(was 0\.12\.13\)/);
+    assert.match(upgraded.out, new RegExp(String.raw`engine: ${RELEASE_RE} \(was 0\.12\.13\)`));
   } finally {
     await fake.stop();
   }
