@@ -761,12 +761,7 @@ export interface Adapter {
    * unset. This mirrors `PollSource.getEvents` — the two seams differ only in
    * what wakes them (a delivery vs a timer).
    */
-  preprocessInbound?(input: { raw: unknown; checkpoint?: unknown }): Promise<{
-    events: DiscriminableEvent[];
-    /** What the delivery says landed on listenable edges (2.5). */
-    arrivals?: Arrival[];
-    checkpoint?: unknown;
-  }>;
+  preprocessInbound?(input: { raw: unknown; checkpoint?: unknown }): Promise<PreprocessedInbound>;
 
   /**
    * The module checks its own inbound requests (its manifest declares
@@ -1795,6 +1790,14 @@ export interface ReadInput {
   externalId: string;
   /** When set, request only these fields (adapter may ignore and return all). */
   fieldIds?: string[];
+}
+
+/** What a delivery turned into (`Adapter.preprocessInbound`). */
+export interface PreprocessedInbound {
+  events: DiscriminableEvent[];
+  /** What the delivery says landed on listenable edges (2.5). */
+  arrivals?: Arrival[];
+  checkpoint?: unknown;
 }
 
 /**

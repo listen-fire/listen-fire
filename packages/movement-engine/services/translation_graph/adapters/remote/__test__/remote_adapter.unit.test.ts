@@ -4,6 +4,7 @@
 // re-wrapping of paged streams + manifest-gated optional methods. Names on the
 // wire are the caller's natural names, forwarded untranslated.
 
+import type { Arrival } from 'engine-contracts/arrivals';
 import type { FileRef, RuntimeCapabilities } from '../../../adapter';
 import type { DocumentStore } from '../../../engine/files/document_store';
 import { redeemFileRef } from '../../../engine/files/redeem';
@@ -332,6 +333,22 @@ describe('RemoteAdapter v2 forwarders', () => {
     expect(adapter.unlinkRecords).toBeUndefined();
     expect(adapter.ensureEventSubscription).toBeUndefined();
     expect(adapter.removeEventSubscription).toBeUndefined();
+  });
+});
+
+describe('RemoteAdapter.preprocessInbound answers what the wire does: events and arrivals', () => {
+  // The type is the test: `arrivals` is typed as the arrivals an adapter
+  // reports, so reading it compiles; a result typed without it would not.
+  type Answer = Awaited<ReturnType<RemoteAdapter['preprocessInbound']>>;
+  const arrivalsAreTyped: Answer['arrivals'] extends Arrival[] | undefined ? true : never = true;
+
+  it('hands back the arrivals beside the events, and the checkpoint', async () => {
+    expect(arrivalsAreTyped).toBe(true);
+    const arrival: Arrival = { edge: 'Messages', identity: 'm1', landing: { recordId: 'm1', recordType: 'Message', fields: {} } };
+    enqueue({ events: [], arrivals: [arrival], checkpoint: 'c2' });
+    const answer: Answer = await buildAdapter().preprocessInbound({ raw: {}, checkpoint: 'c1' });
+    expect(answer.arrivals).toEqual([arrival]);
+    expect(answer.checkpoint).toBe('c2');
   });
 });
 

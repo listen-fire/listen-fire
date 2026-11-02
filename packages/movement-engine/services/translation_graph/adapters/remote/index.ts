@@ -45,8 +45,8 @@ import type {
   GetFieldValueInput,
   GetRelatedInput,
   InvokeFieldFunctionInput,
-  DiscriminableEvent,
   EventType,
+  PreprocessedInbound,
   RelatedPage,
   RelatedResult,
   ResolveEntityInput,
@@ -642,14 +642,8 @@ export class RemoteAdapter implements Adapter {
 
   // ── Optional forwarders (pruned by the factory when unadvertised) ──────
 
-  preprocessInbound(input: {
-    raw: unknown;
-    checkpoint?: unknown;
-  }): Promise<{ events: DiscriminableEvent[]; checkpoint?: unknown }> {
-    return this.call('preprocessInbound', input) as Promise<{
-      events: DiscriminableEvent[];
-      checkpoint?: unknown;
-    }>;
+  preprocessInbound(input: { raw: unknown; checkpoint?: unknown }): Promise<PreprocessedInbound> {
+    return this.call('preprocessInbound', input) as Promise<PreprocessedInbound>;
   }
 
   listEventTypes(): Promise<EventType[]> {
