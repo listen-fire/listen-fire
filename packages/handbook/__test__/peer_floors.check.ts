@@ -3,7 +3,9 @@
 // section) must check under the OLDEST core the range admits, or a host on that
 // core installs the package cleanly and then fails on its content. Each
 // package's programs are checked by that release's checker, installed from npm
-// into node_modules/.cache (the first run needs the network).
+// into node_modules/.cache (the first run needs the network). Run by
+// scripts/release/check-peer-floors.mjs, not by the handbook's unit tests,
+// which run offline.
 //
 // A failure here means the package now teaches something an older core does not
 // read: raise its peer floor on the core packages (`peerDependencies` of
