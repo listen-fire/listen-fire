@@ -55,7 +55,7 @@ test('listen-fire run --dry-run rehearses past a wait: a refresh of a rehearsed 
   // The external reads a record by its id, so a refresh asks it.
   const server = join(dir, 'externals/acme_crm/server.mjs');
   const source = readFileSync(server, 'utf8');
-  const anchor = '  createRecord: async ({ recordType, fields: written }) => {\n';
+  const anchor = '  createRecord: async ({ recordType, fields: written, mutationContext }) => {\n';
   assert.ok(source.includes(anchor), 'the example external changed; update this test patch');
   writeFileSync(
     server,

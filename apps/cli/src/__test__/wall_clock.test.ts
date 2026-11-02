@@ -15,7 +15,7 @@ const WRITE_SECONDS = 7;
 test('past its wall clock a segment fails, and the write in flight still lands', () => {
   const dir = project();
   const server = join(dir, 'externals', 'acme_crm', 'server.mjs');
-  const createRecord = 'createRecord: async ({ recordType, fields: written }) => {';
+  const createRecord = 'createRecord: async ({ recordType, fields: written, mutationContext }) => {';
   const source = readFileSync(server, 'utf8');
   assert.ok(source.includes(createRecord), 'the sample external still has its createRecord');
   writeFileSync(server, source.replace(createRecord, `${createRecord}\n    await new Promise((r) => setTimeout(r, ${WRITE_SECONDS * 1000}));`));
