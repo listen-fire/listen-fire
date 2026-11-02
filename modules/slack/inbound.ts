@@ -456,27 +456,11 @@ async function eventArrivals(event: z.infer<typeof slackInnerEventSchema>, looku
   // named by its record id, `channel:ts`: the name the same message has
   // when its channel's history or its thread is listed, so a message both
   // listed and announced counts once.
+  const parents = [slackChannelRecord(channel, await lookups.channelName(channel))];
   if (event.thread_ts === undefined || event.thread_ts === event.ts) {
-    return [
-      {
-        edge: SLACK_MESSAGES_EDGE_NAME,
-        key: channel,
-        identity: message.recordId,
-        landing: message,
-        parents: [slackChannelRecord(channel, await lookups.channelName(channel))],
-        ...when,
-      },
-    ];
+    return [{ edge: SLACK_MESSAGES_EDGE_NAME, key: channel, identity: message.recordId, landing: message, parents, ...when }];
   }
-  return [
-    {
-      edge: SLACK_REPLIES_EDGE_NAME,
-      key: slackMessageKey(channel, event.thread_ts),
-      identity: message.recordId,
-      landing: message,
-      ...when,
-    },
-  ];
+  return [{ edge: SLACK_REPLIES_EDGE_NAME, key: slackMessageKey(channel, event.thread_ts), identity: message.recordId, landing: message, parents, ...when }];
 }
 
 /** What one delivery says arrived on the workspace's listenable edges. */

@@ -656,6 +656,8 @@ export class SlackAdapter extends BaseAdapter {
           // reply already there or else the next to arrive. A deleted message
           // ends its thread's waits empty. No cursor: an announcement missed
           // is not listed back, though the listing still finds the reply.
+          // A reply is announced with the channel it is in, as a message is,
+          // not with its root's text: it carries the channel only.
           {
             fieldId: SLACK_MESSAGE_THREAD_EDGES.replies,
             targetTypeId: SLACK_MESSAGE_TYPE_ID,
@@ -664,6 +666,7 @@ export class SlackAdapter extends BaseAdapter {
             name: SLACK_MESSAGE_THREAD_EDGE_NAMES.replies,
             writable: true,
             listenable: true,
+            carries: [SLACK_CHANNELS_COLLECTION],
             cursor: false,
             // No identity field: a reply's record id, `channel:ts`, names it
             // both listed and announced. Its `Timestamp` reads as an instant

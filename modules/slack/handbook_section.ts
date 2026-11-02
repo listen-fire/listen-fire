@@ -117,7 +117,7 @@ This is the natural "I've picked this up" before a slower step runs, and reactin
 
 ### listening-to-a-channel
 
-A listen ends on the edge a record arrives on: a channel's \`Messages\` for each new message in it, a message's \`Reactions\` for each emoji added, its \`Interactions\` for each press. What arrives carries the channel it is in, so a listen narrows by the channel's \`Name\` without listing anything:
+A listen ends on the edge a record arrives on: a channel's \`Messages\` for each new message in it, a message's \`Replies\` for each reply in its thread, its \`Reactions\` for each emoji added, its \`Interactions\` for each press. What arrives carries the channel it is in, so a listen narrows by the channel's \`Name\` without listing anything:
 
 \`\`\`
 function triage(m: <chat-[:Message]->>) {
@@ -128,8 +128,8 @@ listen to chat-[ch:Channels WHERE ch.Name IN ["deals"]]->-[m:Messages WHERE m.\`
 \`\`\`
 
 - \`Mentions App\` is true when the message @-mentions the app — the usual way to run on Slack, since many workspaces send the app only the messages that mention it.
-- A thread reply is not one of a channel's \`Messages\`: it is its thread's \`Replies\`.
-- A reaction arrives with its channel but not its message, so a listen on \`Reactions\` narrows by channel only; a filter on the message it is under is refused while you write it.
+- A thread reply is not one of a channel's \`Messages\`: it is its thread's \`Replies\`, heard in the channels you name with \`chat-[ch:Channels WHERE ch.Name == "deals"]->-[:Messages]->-[:Replies]->\`.
+- A reply or a reaction arrives with its channel but not the message it is under, so a listen on \`Replies\` or \`Reactions\` narrows by channel only; a filter on that message is refused while you write it.
 
 ### a-poll-that-keeps-answering
 

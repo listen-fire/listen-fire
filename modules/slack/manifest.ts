@@ -66,11 +66,12 @@ export const SLACK_MANIFEST: AdapterManifest = {
     'outside the team.',
   authoringHints:
     'Listen on the edge the record arrives on, each its own record type: a channel\'s ' +
-    'Messages (a Message), a message\'s Reactions (a Reaction) or Interactions (an ' +
-    'Interaction, a button press). Each arrives with its channel, and a press with its ' +
-    'message too, so narrow on them in the traversal: ' +
+    'Messages (a Message), a message\'s Replies (a Message in its thread), Reactions (a ' +
+    'Reaction) or Interactions (an Interaction, a button press). Each arrives with its ' +
+    'channel, and a press with its message too, so narrow on them in the traversal: ' +
     'chat-[ch:Channels WHERE ch.Name IN ["deals"]]->-[m:Messages WHERE m.`Mentions App` == true]->. ' +
-    'A reaction does not carry its message: filter a Reactions listen by channel only. ' +
+    'A reply or a reaction does not carry the message it is under: filter a Replies or ' +
+    'Reactions listen by channel only (chat-[ch:Channels WHERE ch.Name == "deals"]->-[:Messages]->-[:Replies]->). ' +
     'Write a Topic with a message\'s Buttons to listen to its presses alone: ' +
     'chat-[:Channels]->-[m:Messages WHERE m.Topic == "lunch-poll" AND m.Timestamp WITHIN 3d]->-[:Interactions]->.',
   inboundRequiresRegisteredActor: true,

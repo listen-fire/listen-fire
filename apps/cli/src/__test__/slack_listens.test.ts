@@ -401,6 +401,53 @@ listen to chat-[:Channels]->-[:Messages]-> fire every
   }
 });
 
+const DEALS_REPLIES = `${HEADER}
+function answered(r: <chat-[:Message]->>) {
+  return "answered \${r.Message} in \${r.Channel}"
+}
+
+listen to chat-[ch:Channels WHERE ch.Name IN ["deals"]]->-[:Messages]->-[:Replies]-> fire answered
+`;
+
+// A reply carries its channel as a message does, so a listen on a thread's
+// Replies narrows by the channel's name the way one on Messages does.
+test('a reply in a #deals thread fires a channel-filtered Replies listen; one in #random does not', async () => {
+  const world = await slackWorld(DEALS_REPLIES);
+  try {
+    await seedSlack(world.channels, [
+      { entity_type: 'channel', id: 'C0DEALS', data: { id: 'C0DEALS', name: 'deals', is_private: false, is_member: true } },
+      { entity_type: 'channel', id: 'C0RANDOM', data: { id: 'C0RANDOM', name: 'random', is_private: false, is_member: true } },
+    ]);
+    const checked = lfSync(world.dir, 'check');
+    assert.equal(checked.code, 0, checked.out);
+    const serving = await served(world.dir);
+    try {
+      const root = (Date.now() / 1000).toFixed(6);
+      const reply = (channel: string, text: string) => eventCallback({ type: 'message', channel, user: 'U001', text, ts: `${Number(root) + 1}`, thread_ts: root });
+      for (const body of [
+        reply('C0RANDOM', 'random thread reply'),
+        // A top-level message in #deals is one of the channel's Messages, not a reply.
+        eventCallback({ type: 'message', channel: 'C0DEALS', user: 'U001', text: 'a new thread', ts: root }),
+        reply('C0DEALS', 'deals thread reply'),
+      ]) {
+        const delivered = await deliver(serving, body, 'application/json');
+        assert.ok(delivered.status >= 200 && delivered.status < 300, delivered.body);
+      }
+      await until(() => completed(serving, 'answered') === 1, serving.lines);
+      await new Promise((settle) => setTimeout(settle, 500));
+      assert.equal(completed(serving, 'answered'), 1, serving.lines.join('\n'));
+    } finally {
+      await serving.stop();
+    }
+    const listed = JSON.parse(lfSync(world.dir, 'runs', '--json').out) as { runs: Array<{ runId: string }> };
+    const returned = listed.runs.map((r) => lfSync(world.dir, 'runs', 'show', r.runId).out).join('\n');
+    assert.match(returned, /answered deals thread reply in C0DEALS/);
+    assert.doesNotMatch(returned, /random thread reply|a new thread/);
+  } finally {
+    await world.close();
+  }
+});
+
 test('a reaction listen filtered on its message is refused: arrivals do not carry the message and messages are not cheap to list', async () => {
   const program = `${HEADER}
 function seen(r: <chat-[:Reaction]->>) {
