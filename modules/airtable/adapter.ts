@@ -70,6 +70,7 @@ import {
   describeTableAt,
   describeTableChangeAt,
   baseNameOf,
+  doorTables,
   cachedTables,
   freshTables,
   invalidateTableCache,
@@ -739,7 +740,7 @@ export class AirtableAdapter extends BaseAdapter {
   }
 
   /** The base's name, which each change carries on its base: read from the
-   *  meta API once per base and kept. A failure leaves it unknown on the
+   *  meta API and kept a minute (`baseNameOf`). A failure leaves it unknown on the
    *  change rather than dropping the delivery. */
   private async baseNameOf(baseId: string): Promise<string | undefined> {
     try {
@@ -756,18 +757,15 @@ export class AirtableAdapter extends BaseAdapter {
 
   /** The base's `fieldId → { name, type }` maps and table names, so cells
    *  (keyed by field id) are read by name and each change carries its
-   *  table's. Kept per base; read again when a change names a table the
-   *  kept ones lack (made since). A metadata failure leaves them keyed by id
-   *  rather than dropping the delivery. */
+   *  table's: kept per base, and read again when a minute old or when a
+   *  change names a table the kept ones lack (`doorTables`). A metadata
+   *  failure leaves them keyed by id rather than dropping the delivery. */
   private async fieldsOf(baseId: string, changedTables: ReadonlySet<string>): Promise<{ fieldsByTable: FieldsByTable; tableNamesById: Map<string, string> }> {
     const fieldsByTable: FieldsByTable = new Map();
     const tableNamesById = new Map<string, string>();
     try {
       const client = await this.getApiClient();
-      const cached = await cachedTables({ client, teamId: this.teamId, baseId });
-      const known = new Set(cached.map((table) => table.id));
-      const tables = [...changedTables].every((id) => known.has(id)) ? cached : await freshTables({ client, teamId: this.teamId, baseId });
-      for (const table of tables) {
+      for (const table of await doorTables({ client, teamId: this.teamId, baseId, tableIds: changedTables })) {
         fieldsByTable.set(table.id, new Map(table.fields.map((f) => [f.id, { name: f.name, type: f.type }])));
         tableNamesById.set(table.id, table.name);
       }

@@ -59,6 +59,21 @@ function tableCacheKey(teamId: string, baseId: string): string {
   return `${teamId}:${baseId}`;
 }
 
+/** How old the names a change carries may be. Airtable says a table was
+ *  renamed only to a base's schema webhook, which a host registers only for
+ *  a listen that lists tables, and says nothing of a base renamed: past this
+ *  age the door reads the names again (one call per base a minute at most). */
+const DOOR_NAMES_MAX_AGE_MS = 60 * 1000;
+
+/** When each cache entry above was read from Airtable, by `tables:<key>` or
+ *  `bases:<team>`. */
+const readAt = new LRUCache<string, number>({ max: 250 });
+
+function readRecently(key: string): boolean {
+  const at = readAt.get(key);
+  return at !== undefined && Date.now() - at <= DOOR_NAMES_MAX_AGE_MS;
+}
+
 export async function cachedTables(input: {
   client: AirtableAPIClient;
   teamId: string;
@@ -69,6 +84,7 @@ export async function cachedTables(input: {
   if (hit) return hit;
   const tables = await input.client.listTables({ baseId: input.baseId });
   tableCatalogCache.set(key, tables as AirtableTableMeta[]);
+  readAt.set(`tables:${key}`, Date.now());
   return tables as AirtableTableMeta[];
 }
 
@@ -84,7 +100,18 @@ export async function freshTables(input: {
 }): Promise<AirtableTableMeta[]> {
   const tables = (await input.client.listTables({ baseId: input.baseId })) as AirtableTableMeta[];
   tableCatalogCache.set(tableCacheKey(input.teamId, input.baseId), tables);
+  readAt.set(`tables:${tableCacheKey(input.teamId, input.baseId)}`, Date.now());
   return tables;
+}
+
+/** A base's tables as the changes a delivery brings carry them: the kept
+ *  ones while read within the last minute and naming every table the
+ *  changes do, else read again (a table renamed or made since). */
+export async function doorTables(input: { client: AirtableAPIClient; teamId: string; baseId: string; tableIds: ReadonlySet<string> }): Promise<AirtableTableMeta[]> {
+  const key = tableCacheKey(input.teamId, input.baseId);
+  const kept = readRecently(`tables:${key}`) ? tableCatalogCache.get(key) : undefined;
+  if (kept !== undefined && [...input.tableIds].every((id) => kept.some((table) => table.id === id))) return kept;
+  return freshTables(input);
 }
 
 async function cachedBases(input: {
@@ -97,6 +124,7 @@ async function cachedBases(input: {
   const map = new Map<string, string>();
   for (const b of bases) map.set(b.id, b.name);
   baseCatalogCache.set(input.teamId, map);
+  readAt.set(`bases:${input.teamId}`, Date.now());
   return map;
 }
 
@@ -109,15 +137,16 @@ export async function freshBases(input: {
 }): Promise<{ id: string; name: string }[]> {
   const bases = await input.client.listBases();
   baseCatalogCache.set(input.teamId, new Map(bases.map((b) => [b.id, b.name])));
+  readAt.set(`bases:${input.teamId}`, Date.now());
   return bases.map((b) => ({ id: b.id, name: b.name }));
 }
 
-/** A base's name, as a change arriving from it carries it: from the cached
- *  bases, read again once when the base is not among them (made since), or
- *  undefined when no base by that id is visible. */
+/** A base's name, as a change arriving from it carries it: the kept one
+ *  while read within the last minute, else read again (a base renamed or
+ *  made since); undefined when no base by that id is visible. */
 export async function baseNameOf(input: { client: AirtableAPIClient; teamId: string; baseId: string }): Promise<string | undefined> {
-  const cached = (await cachedBases(input)).get(input.baseId);
-  if (cached !== undefined) return cached;
+  const kept = readRecently(`bases:${input.teamId}`) ? baseCatalogCache.get(input.teamId)?.get(input.baseId) : undefined;
+  if (kept !== undefined) return kept;
   return (await freshBases(input)).find((base) => base.id === input.baseId)?.name;
 }
 

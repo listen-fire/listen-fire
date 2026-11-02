@@ -1045,6 +1045,28 @@ describe('preprocessInbound', () => {
     expect(listedBases.count).toBe(1);
   });
 
+  // No schema webhook may reach this module (a positioned listen registers
+  // none), so a name is kept a minute at most.
+  it('a table or base renamed is carried by its new name once the names are a minute old', async () => {
+    jest.useFakeTimers({ now: Date.parse('2026-11-02T09:00:00Z'), doNotFake: ['nextTick', 'setImmediate', 'queueMicrotask'] });
+    try {
+      const deals = dealsTable();
+      const bases = [{ id: 'appHIRE01', name: 'Hiring', tables: [deals] }];
+      const { adapter, listedTableBaseIds, listedBases } = makeMultiBaseAdapter({ teamId: 'team-air-door-renamed', bases, payloads: [created('recA')] });
+      const names = async () => (await adapter.preprocessInbound({ raw: ping('appHIRE01') })).arrivals[0].parents?.map((parent) => parent?.fields.Name);
+      expect(await names()).toEqual(['Hiring', 'Deals']);
+      bases[0].name = 'Recruiting';
+      bases[0].tables = [{ ...deals, name: 'Pipeline' }];
+      jest.setSystemTime(Date.parse('2026-11-02T09:00:59Z'));
+      expect(await names()).toEqual(['Hiring', 'Deals']);
+      jest.setSystemTime(Date.parse('2026-11-02T09:01:01Z'));
+      expect(await names()).toEqual(['Recruiting', 'Pipeline']);
+      expect([listedBases.count, listedTableBaseIds.length]).toEqual([2, 2]);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
   it('a base made since the names were read is read again, once', async () => {
     const bases = [{ id: 'appHIRE01', name: 'Hiring', tables: [dealsTable()] }];
     const { adapter, listedBases } = makeMultiBaseAdapter({ teamId: 'team-air-door-new-base', bases, payloads: [created('recA')] });
