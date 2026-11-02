@@ -20,6 +20,18 @@ named in [`RELEASING.md`](RELEASING.md).
 
 <!-- add merged PRs here -->
 
+### Breaking (0.14.0)
+
+- **A field is never read with `.` through a value that may be missing, wherever the value comes from**, as TypeScript refuses `x.F` under strict null checks where `x` may be undefined. 0.13 refused it through a change's row and a map member. 0.14 refuses it too through a graph record that may be missing (`t = only(…)`, `first(…)`, a named `match`, then `t.Name`), through a call's result (`only(…).F`) and through an index read (`l[1].F`, `d["a"].F`), with `MOV_ABSENT_REQUIRED`. In 0.13 these read absent and checked clean, so a lookup that found nothing went unseen.
+  - `x?.F` is added. It reads a field through a value that may be missing, and is absent when the value is, so `x?.F == null` holds then. It runs exactly as `x.F` ran in 0.13.
+  - Narrowing still proves a value present: `exists(x)`, `x != null`, an `if`, a guard clause. `x?.F != null` proves `x` present too.
+  - An index read at a literal is narrowed by what it reads: `l[1] != null` proves every later `l[1]`.
+  - The refusal carries a safe rewrite, `.` to `?.` at the refused read. It keeps what the program does, so `listen-fire upgrade` applies it unasked: `only(walk).F` becomes `only(walk)?.F`, and a presence test `x.F != null` becomes `x?.F != null`, which narrows `x` as before.
+  - Not added: `?.` through an edge (`x?-[:E]->`). A walk off a record that may be missing stays refused; walk it inside `if (exists(x)) { … }`.
+  - **Which pins it reads.** `0.14.x` only: the compatibility key moves, so a project or an automation pinned to `0.13.x` is refused by name ("validate it under 0.14.0 and upgrade it"). `listen-fire upgrade` rewrites each refused read and moves the pin.
+  - **For embedders.** A lowered field read written with `?.` carries `optional: true` (`engine-contracts`' expression schema; omitted when false). The engine evaluates it as a plain read. The wasm artifacts are rebuilt.
+  - **Known gap.** The language server completes no field names after `?.` yet.
+
 ## [0.13.1] - 2026-11-02
 
 A patch release of the 0.13 line: it reads the same pins as 0.13.0 (every `0.13.x`) and changes the meaning of no program that checks under 0.13.0. It mainly fixes what 0.13.0 stopped passing from a module to a run: who acted (Slack, email, Telegram, WhatsApp, Granola and Attio reported nobody, so a host that runs only registered senders dropped their runs), the record a fired record links to (Dealroom, Evertrace), Affinity's changed values and Airtable's ids. It also makes schedules fire on time, lets `connect` name a module without importing it, and stops `listen-fire upgrade` moving a pin past a rewrite that may change behaviour. Adapter protocol 2.7 adds `pollAgainAt` and an arrival's `actor`; a host that ignores them behaves as 0.13.0.
