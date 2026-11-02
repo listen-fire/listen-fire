@@ -20,13 +20,12 @@ import type {
   WirePluginResultShape,
 } from 'engine-contracts';
 import type { ZodType } from 'zod';
-import type {
-  AdapterManifest,
-  Arrival,
-  EventSubscriptionRefresh,
-  EventSubscriptionRegistration,
-  RefreshEventSubscriptionInput,
-  RemoveEventSubscriptionInput,
+import type { AdapterManifest, Arrival } from 'engine-contracts';
+export type {
+  EdgeSubscription,
+  EnsureEdgeSubscriptionInput,
+  RefreshEdgeSubscriptionInput,
+  RemoveEdgeSubscriptionInput,
 } from 'engine-contracts';
 import type { Adapter } from 'module-runtime/adapter';
 import type { BrowserSlot } from 'module-runtime/browser';
@@ -239,49 +238,8 @@ export interface PollEdgeAnswer {
   pollAgainAt?: string;
 }
 
-/** What every call about a subscription for one listenable edge's arrivals
- *  says it is for (adapter protocol 2.6): the edge, the filter you take and
- *  the scope, as its poll would be (PollEdgeInput). The host makes one for
- *  every listen on the same connection, edge, filter and scope, when the
- *  edge declares `delivery: connection` or `scope`. */
-export interface EdgeSubscription {
-  /** The edge, by its name in the schema (`Notes`). */
-  edge: string;
-  /** The part of the listens' WHERE on the edge you take; absent when you
-   *  take none of it. Set `takenApplied: true` on an arrival you deliver only
-   *  when you applied it. */
-  filter?: unknown;
-  /** The record the edge hangs off, by its id, when the listens watch it
-   *  under one; absent for the whole connection. */
-  scope?: string;
-}
-
-/** `ensureEventSubscription` for an edge's arrivals: deliver each one that
- *  lands on the edge to `callbackUrl`, signed with the secret you answer. */
-export interface EnsureEdgeSubscriptionInput extends EdgeSubscription {
-  callbackUrl: string;
-  /** The subscription held for this URL, when one is: keep it rather than
-   *  adding another. */
-  current?: { externalId?: string };
-}
-
-export interface RemoveEdgeSubscriptionInput extends EdgeSubscription {
-  callbackUrl: string;
-  externalId?: string;
-}
-
-export interface RefreshEdgeSubscriptionInput extends EdgeSubscription {
-  externalId: string;
-}
-
-/** An adapter, plus the methods its declarations pair with. The event
- *  subscription methods are an edge's (adapter protocol 2.6); removing and
- *  refreshing one may also be asked of a webhook a 0.12 settings listen
- *  registered (its `scope` a record), told apart by `edge`. */
-export type AdapterModuleMethods = Omit<Adapter, 'ensureEventSubscription' | 'removeEventSubscription' | 'refreshEventSubscription'> & {
-  ensureEventSubscription?(input: EnsureEdgeSubscriptionInput): Promise<EventSubscriptionRegistration | undefined>;
-  removeEventSubscription?(input: RemoveEventSubscriptionInput | RemoveEdgeSubscriptionInput): Promise<void>;
-  refreshEventSubscription?(input: RefreshEventSubscriptionInput | RefreshEdgeSubscriptionInput): Promise<EventSubscriptionRefresh | undefined>;
+/** An adapter, plus the methods its declarations pair with. */
+export type AdapterModuleMethods = Adapter & {
   /** Paired with the `poll` declaration: a poll of a listenable edge
    *  (adapter protocol 2.6), which answers its arrivals. */
   poll?(input: PollEdgeInput): Promise<PollEdgeAnswer>;

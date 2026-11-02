@@ -419,24 +419,33 @@ interface PositionArg {
 // DOCUMENTED no-ops (return undefined) or omit them entirely; the KG needs
 // neither (mutation dispatch is in-process).
 
-/** A subscription for one listenable edge's arrivals (adapter protocol
- *  2.6), made once for every listen on the same connection, edge, filter and
- *  scope, when the edge declares `delivery: connection` or `scope`. */
-export interface EnsureEventSubscriptionInput {
+/** What every call about a subscription for one listenable edge's arrivals
+ *  says it is for (adapter protocol 2.6): made once for every listen on the
+ *  same connection, edge, filter and scope, when the edge declares
+ *  `delivery: connection` or `scope`. */
+export interface EdgeSubscription {
   /** The edge, by its name in the schema (`Notes`). */
   edge: string;
   /** The part of the listens' WHERE on the edge the adapter takes; absent
-   *  when it takes none of it. */
+   *  when it takes none of it. Set `takenApplied: true` on an arrival
+   *  delivered only when it was applied. */
   filter?: unknown;
   /** The record the edge hangs off, by its id, when the listens watch it
    *  under one; absent for the whole connection. */
   scope?: string;
+}
+
+/** A subscription for one listenable edge's arrivals (adapter protocol
+ *  2.6). */
+export interface EnsureEventSubscriptionInput extends EdgeSubscription {
   /** The stable per-subscription URL the source should POST to. */
   callbackUrl: string;
   /** The registration currently held for this URL, when one exists: keep
    *  it rather than adding another. */
   current?: { externalId?: string };
 }
+
+export type EnsureEdgeSubscriptionInput = EnsureEventSubscriptionInput;
 
 /** What the source issued — the platform persists it on the subscription
  *  row (the secret verifies inbound signatures). Returning `undefined`
@@ -452,6 +461,14 @@ export interface EventSubscriptionRegistration {
   expiresAt?: string;
 }
 
+/** Refreshing a subscription for an edge's arrivals (adapter protocol 2.6). */
+export interface RefreshEdgeSubscriptionInput extends EdgeSubscription {
+  /** The source-issued id of the subscription to extend. */
+  externalId: string;
+}
+
+/** Refreshing the webhook a 0.12 settings listen registered, told apart
+ *  from an edge's by naming no `edge`. */
 export interface RefreshEventSubscriptionInput {
   /** The source-issued id of the subscription to extend. */
   externalId: string;
@@ -464,6 +481,15 @@ export interface EventSubscriptionRefresh {
   expiresAt?: string;
 }
 
+/** Removing a subscription for an edge's arrivals (adapter protocol 2.6). */
+export interface RemoveEdgeSubscriptionInput extends EdgeSubscription {
+  callbackUrl: string;
+  /** The source-issued id held for this URL, when one exists. */
+  externalId?: string;
+}
+
+/** Removing the webhook a 0.12 settings listen registered, told apart from
+ *  an edge's by naming no `edge`. */
 export interface RemoveEventSubscriptionInput {
   callbackUrl: string;
   /** The source-issued id held for this URL, when one exists. */
@@ -646,13 +672,15 @@ export interface Adapter {
 
   /** Tear down the registration `ensureEventSubscription` created — called
    *  when the last listen on the (adapter, credential) channel retires. */
-  removeEventSubscription?(input: RemoveEventSubscriptionInput): Promise<void>;
+  removeEventSubscription?(input: RemoveEventSubscriptionInput | RemoveEdgeSubscriptionInput): Promise<void>;
 
   /** Extend a subscription the source lets lapse (Airtable's webhooks expire
    *  7 days after their last refresh): the host calls it before the
    *  `expiresAt` the registration or the last refresh returned. Adapter
    *  protocol 2.4. */
-  refreshEventSubscription?(input: RefreshEventSubscriptionInput): Promise<EventSubscriptionRefresh | undefined>;
+  refreshEventSubscription?(
+    input: RefreshEventSubscriptionInput | RefreshEdgeSubscriptionInput,
+  ): Promise<EventSubscriptionRefresh | undefined>;
 
   // ── 2. Entity resolution ──────────────────────────────────────────────
   /**
