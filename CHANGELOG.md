@@ -20,6 +20,11 @@ named in [`RELEASING.md`](RELEASING.md).
 
 <!-- add merged PRs here -->
 
+### Added
+
+- **A record held as a value can be spread into a map.** `{ ...c.Current }`, or `r = c.Current` then `{ ...r }`, copies the row's fields into the map, each with its declared type, as spreading a map with known keys does. Later members override, a misspelled key is refused as for any map, and a row that may be absent gives fields that may be absent. 0.13.0 refused it (`MOV_MAP_SPREAD_NOT_KEYED`).
+  - Why: TypeScript allows `{ ...obj }` of a plain object, and a held record is a plain object type. Nothing else about it changes: it still has no edges and no identity, so no walk, write or record parameter takes it.
+
 ### Changed
 
 - **`connect` names the adapter and the credential itself, so neither is imported.** ``gh = connect `@lf/github` using my_github`` checks and runs with no `import … from adapters` and no `import … from credentials`. Why: an adapter and a credential are only ever named in a `connect`, so the checker types them there. Imports are for plugins and other files.

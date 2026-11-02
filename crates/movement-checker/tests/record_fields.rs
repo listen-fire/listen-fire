@@ -371,6 +371,40 @@ fn a_field_is_never_read_through_a_map_member_that_may_be_absent() {
     assert_eq!(candidates("d = { a: c.Previous }\n  if (exists(d.a)) {\n    x = d.a.Score\n  }"), Vec::<(String, String)>::new());
 }
 
+/// A row held as a value is a plain object type, so `{ ...c.Current }` copies
+/// its fields, each with its type, as spreading a map with known keys does.
+#[test]
+fn a_row_held_as_a_value_spreads_into_a_map_with_its_typed_fields() {
+    for spread in ["m = { ...c.Current }", "r = c.Current\n  m = { ...r }"] {
+        let body = |read: &str| present("c.Current", &format!("{spread}\n    {read}"));
+        assert_eq!(body("x = m.Stage"), Vec::<(String, String)>::new(), "{spread}");
+        // The field's own type: its enum refuses a value it does not hold.
+        assert_eq!(codes(&body("x = m.Stage == \"Intervew\"")), ["MOV_ENUM_UNKNOWN_VALUE"], "{spread}");
+        let misspelt = body("x = m.Stagee");
+        assert_eq!(codes(&misspelt), ["MOV_DICT_UNKNOWN_KEY"], "{spread}: {misspelt:#?}");
+        assert!(misspelt[0].1.contains("Stagee") && misspelt[0].1.contains("Stage"), "{misspelt:#?}");
+    }
+}
+
+#[test]
+fn a_member_after_a_spread_of_a_held_row_overrides_it() {
+    let overridden = |read: &str| present("c.Current", &format!("m = {{ ...c.Current, Stage: 3 }}\n    {read}"));
+    assert_eq!(overridden("x = m.Stage + 1"), Vec::<(String, String)>::new());
+    let found = overridden("x = m.Stage == \"Applied\"");
+    assert_ne!(codes(&found), Vec::<&str>::new(), "the override is a number, not the field's enum");
+    // A member written before a spread that always has the key is overwritten.
+    let before = present("c.Current", "m = { Stage: 3, ...c.Current }");
+    assert_eq!(codes(&before), ["MOV_MAP_KEY_OVERWRITTEN"], "{before:#?}");
+}
+
+#[test]
+fn a_held_row_that_may_be_absent_spreads_its_fields_as_maybe_absent() {
+    let found = candidates("m = { ...c.Current }\n  x = m.Stage");
+    assert_eq!(found, Vec::<(String, String)>::new(), "{found:#?}");
+    let compared = candidates("m = { ...c.Current }\n  x = m.Stage == \"Intervew\"");
+    assert_eq!(codes(&compared), ["MOV_ENUM_UNKNOWN_VALUE"], "{compared:#?}");
+}
+
 /// Two rows are not compared whole: the refusal says each is a record held
 /// as a value, and to read the fields meant off it.
 #[test]

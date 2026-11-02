@@ -553,6 +553,67 @@ test('Stage coming to be Interview fires once per edit, on an update or a row cr
   }
 });
 
+/** The same listen, its function spreading the rows a change holds into maps
+ *  and reading the fields off the maps: `{ ...c.Current }` and, through a
+ *  name, `{ ...r }`. A created row has no row before, which spreads to a map
+ *  with no fields. */
+const SPREAD = STAGE.replace(
+  /function schedule_interview[\s\S]*?\n}\n/,
+  `function schedule_interview(c: <hiring-[:\`Candidates Change\`]->>) {
+  after = { ...c.Current }
+  r = c.Previous
+  before = { ...r }
+  write hiring-[:Interviews]-> {
+    Candidate: coalesce(only(c-[:Record]->).Name, "gone")
+    From: coalesce(before.Stage, "nothing")
+    Changed: coalesce(after.Name, "nothing")
+  }
+}
+`,
+);
+
+test('a row a change holds spreads into a map, read by the field names, whether or not the change had one before', async () => {
+  const fake = await fakeChannels();
+  try {
+    const dir = await hiringProject(fake);
+    writeFileSync(join(dir, 'movements/hiring.mvt'), SPREAD);
+    const checked = lfSync(dir, 'check');
+    assert.equal(checked.code, 0, checked.out);
+    writeFileSync(join(dir, 'movements/hiring.mvt'), SPREAD.replace('after.Name', 'after.Nme'));
+    const refused = lfSync(dir, 'check');
+    assert.equal(refused.code, 1, refused.out);
+    assert.match(refused.out, /error MOV_DICT_UNKNOWN_KEY .*Nme/);
+    writeFileSync(join(dir, 'movements/hiring.mvt'), SPREAD);
+    const server = await serving(dir);
+    try {
+      await until(() => server.lines.filter((l) => /registered webhook ach\d+/.test(l)).length >= 2, server.lines);
+      const interviews = () => server.lines.filter((l) => /^run \S+ hiring:schedule_interview completed$/.test(l)).length;
+      const written = async () => JSON.stringify(await fake.json('/airtable/v0/appHIRE01/tblINTV01'));
+
+      await deliver(fake, {
+        changeType: 'update', tableId: 'tblCAND01', recordId: 'recADA',
+        fields: { Name: 'Ada', Email: 'ada@new.example', Stage: 'Interview' },
+        previous: { Name: 'Ada Lovelace', Email: 'ada@example.com', Stage: 'Applied' },
+      });
+      await until(() => interviews() === 1, server.lines);
+      const runId = /^run (\S+) hiring:schedule_interview completed$/.exec(server.lines.find((l) => /^run \S+ hiring:schedule_interview completed$/.test(l)) ?? '')?.[1];
+      assert.ok(runId !== undefined);
+      assert.match(lfSync(dir, 'runs', 'show', runId).out, /"writes": 1/);
+      assert.match(await written(), /"fldIFrom":"Applied"/, 'it read Stage off the map spread from the row before');
+      assert.match(await written(), /"fldIChanged":"Ada"/, 'it read Name off the map spread from the row the edit left');
+
+      await deliver(fake, { changeType: 'add', tableId: 'tblCAND01', recordId: 'recCY', fields: { Name: 'Cy', Stage: 'Interview' } });
+      await until(() => interviews() === 2, server.lines);
+      assert.match(await written(), /"fldIFrom":"nothing"/, 'no row before spreads to a map with no Stage');
+      assert.match(await written(), /"fldIChanged":"Cy"/);
+    } finally {
+      await server.stop();
+    }
+  } finally {
+    await fake.stop();
+  }
+});
+
 /** Owner changing: what 0.12's `field: "Owner"` becomes. A collaborator
  *  arrives as an object; the module reads it as its email, so the row
  *  before and after compare by value. */

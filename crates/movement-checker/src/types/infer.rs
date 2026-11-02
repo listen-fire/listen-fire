@@ -1524,6 +1524,9 @@ impl<'a> Typing<'a> {
                         Ty::Record(Some(record)) if crate::families::records::holds_spelled_fields(self, Some(record), "copies its fields into a map with '...'") => {
                             super::position::record_field_types(record)
                         }
+                        // A record held as a value is a plain object type: its typed fields copy
+                        // as a map with known keys does. It has no edges to copy.
+                        Ty::HeldRecord(held) => super::position::record_field_types(&held.position),
                         present => {
                             crate::families::values::map_spread_not_keyed(self, present);
                             keys_named = false;
