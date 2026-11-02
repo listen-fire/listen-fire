@@ -114,15 +114,15 @@ export const CONCEPTS: readonly FrontEntry[] = [
   {
     anchor: 'systems',
     title: 'Connect each system once',
-    text: 'Connect a system once, naming its adapter and the stored connection it signs in with (``crm = connect `@lf/attio` using acme``); neither is imported. A change\'s record may be missing: test it. A channel found by name takes its post inside its block.',
+    text: 'Connect a system once, naming its adapter and the stored connection it signs in with (``gh = connect `@lf/github` using my_github``); neither is imported. What `only` returns may be missing: test it. A channel found by name takes its post inside its block.',
     example: {
-      file: 'crm = connect `@lf/attio` using acme\nmail = connect `@lf/gmail` using team_mail\nchat = connect `@lf/slack` using team_chat\n\nfunction `Renamed`(c: <crm-[:CompanyChange]->>) {\n  co = only(c-[:Company]->)\n  if (co == null) { fail("no company") }\n  write mail-[:Messages]-> { To: ["ops@example.com"], Subject: "Renamed", Body: co.Name }\n  chat-[ch:Channels WHERE ch.Name == "general"]-> {\n    write ch-[:Messages]-> { Message: co.Name }\n  }\n}\n\nlisten to crm-[:Companies]->-[c:Changes WHERE c.Field == "Name"]-> fire `Renamed`',
+      file: 'gh = connect `@lf/github` using my_github\nmail = connect `@lf/gmail` using team_mail\nchat = connect `@lf/slack` using team_chat\n\nfunction `Assigned`(n: <gh-[:Notification]->>) {\n  issue = only(n-[:Issue]->)\n  if (issue == null) { fail("not an issue") }\n  write mail-[:Messages]-> { To: ["ops@example.com"], Subject: "Assigned", Body: issue.Title }\n  chat-[ch:Channels WHERE ch.Name == "general"]-> {\n    write ch-[:Messages]-> { Message: issue.Title }\n  }\n}\n\nlisten to gh-[n:Notifications WHERE n.Reason == "assign"]-> fire `Assigned`',
     },
   },
   {
     anchor: 'graph-and-paths',
     title: 'Systems are graphs; paths are values',
-    text: '`crm-[:Companies]->` is a path to its records; `-[c:Companies WHERE c.Name == n]->` filters the hop. A `listen` fires a function whose one parameter is the record it lands on, typed by its record type (`<crm-[:CompanyChange]->>`), not by the walk.',
+    text: '`crm-[:Companies]->` is a path to its records; `-[c:Companies WHERE c.Name == n]->` filters the hop. A `listen` fires a function whose one parameter is the record it lands on, typed by its record type (`<gh-[:Notification]->>`), not by the walk.',
   },
   {
     anchor: 'identity',
