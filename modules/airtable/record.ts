@@ -37,6 +37,7 @@ import {
 } from 'movement-engine/public/catalog';
 import {
   AIRTABLE_ADAPTER_TYPE,
+  BASE_META_TYPE,
   LINK_FIELD_TYPE,
   NUMERIC_FIELD_TYPES,
   READ_ONLY_FIELD_TYPES,
@@ -747,8 +748,18 @@ async function buildWritePayload(input: {
   // all. On a create that only cost the edge; on an UPDATE the write reports
   // itself as an attach, so the fact has to travel: `unsupported`, and the
   // engine fails the write rather than claiming a link nobody made.
+  //
+  // A base is no link field: a row is in its base by being in one of the
+  // base's tables, so a write along this table's edge off this base is
+  // attached `already`, and one off another base or table cannot be.
   let association: ParentAssociation = 'none';
   for (const parentLink of input.parentLinks ?? []) {
+    if (parentLink.recordType === BASE_META_TYPE) {
+      const contains = parentLink.externalId === input.baseId && (parentLink.edgeName === ctx.table.name || parentLink.edgeName === ctx.table.id);
+      if (!contains) association = 'unsupported';
+      else if (association === 'none') association = 'already';
+      continue;
+    }
     const linkField = resolveParentLinkField({ ctx, edgeName: parentLink.edgeName });
     if (linkField) {
       fields[linkField] = [parentLink.externalId];

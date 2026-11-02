@@ -107,3 +107,45 @@ test('a Base narrowed by name is typed by its own tables, and the write reaches 
     await fake.stop();
   }
 });
+
+// A row is in its base by being in one of the base's tables: an update found
+// by `unique by` along a base's table edge is attached to that base already.
+test('a `unique by` write along a narrowed base\'s table edge creates the row, then updates it in place', async () => {
+  const fake = await fakeChannels();
+  try {
+    const dir = await connected(fake.url);
+    const upsert = (stage: string) => `import { \`@lf/airtable\` as airtable } from adapters
+import { my_airtable } from credentials
+
+pipeline = connect airtable using my_airtable
+
+function track(run: <manual-[:Invocations]->>) {
+  base = only(pipeline-[b:Bases WHERE b.Name == "Pipeline Tracker"]->)
+  if (base == null) { fail("no base") }
+  write base-[:Companies]-> {
+    unique by (Name)
+    Name: "Acme Upserted"
+    Stage: "${stage}"
+  }
+}
+
+listen to manual-[:Invocations]-> fire track
+`;
+    const rows = async () =>
+      ((await fetch(`${fake.url}/airtable/v0/appTEST001/tblCOMPANIES`).then((r) => r.json())) as { records: Array<{ fields: Record<string, unknown> }> }).records.filter((row) =>
+        JSON.stringify(row.fields).includes('Acme Upserted'),
+      );
+    for (const stage of ['Open', 'Won']) {
+      writeFileSync(join(dir, 'movements/pipeline.mvt'), upsert(stage));
+      const checked = lfSync(dir, 'check');
+      assert.equal(checked.code, 0, checked.out);
+      const ran = lfSync(dir, 'run', 'track');
+      assert.equal(ran.code, 0, ran.out);
+    }
+    const kept = await rows();
+    assert.equal(kept.length, 1, JSON.stringify(kept));
+    assert.match(JSON.stringify(kept[0].fields), /Won/);
+  } finally {
+    await fake.stop();
+  }
+});
