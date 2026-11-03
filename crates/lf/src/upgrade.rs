@@ -580,4 +580,22 @@ mod tests {
         assert_eq!(upgraded.source, source.replace("LOWER(", "Text.lower(").replace("EXISTS(", "exists("));
         assert!(upgraded.remaining.iter().all(|d| d.code != "MOV_V5_SPELLING"), "{:?}", upgraded.remaining);
     }
+
+    /// The walk word `LENGTH` of text is rewritten to `Text.length` unasked;
+    /// of a list it is left with its diagnostic, which names `count(xs)`:
+    /// `count` lowers to a fold, not to the walk word's function.
+    #[test]
+    fn a_walk_s_length_of_a_list_is_left_for_the_author() {
+        const LISTS: &str = r#"{"adapters":{
+          "store":{"canFire":false,"constructionArgs":[],"schemas":{"":{"positions":{
+            "Table":{"properties":{"Name":"text","Tags":{"kind":"list","of":"text"}},"edges":{}}},
+            "collections":{"Tables":{"target":"Table"}},"writableRoots":{}}}}
+        },"credentials":{},"plugins":{}}"#;
+        let catalog = CatalogSnapshot::load(LISTS).unwrap();
+        let source = "import { store } from adapters\ns = connect store\n\nfunction f() {\n  return count(s-[t:Tables WHERE LENGTH(t.Name) > 1 AND LENGTH(t.Tags) > 0]->)\n}\n";
+        let upgraded = upgrade_source(source, &catalog, false, "0.14.0");
+        assert_eq!(upgraded.source, source.replacen("LENGTH(", "Text.length(", 1));
+        let left: Vec<&str> = upgraded.remaining.iter().filter(|d| d.code == "MOV_V5_SPELLING").map(|d| d.message.as_str()).collect();
+        assert_eq!(left, ["inside walk brackets `LENGTH` of a list is written `count(xs)`, as it is outside them"]);
+    }
 }

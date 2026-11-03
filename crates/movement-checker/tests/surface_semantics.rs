@@ -143,6 +143,33 @@ fn a_list_s_length_membership_and_presence_follow_the_operand_s_type() {
     assert_eq!(fixes_of(&walk("m.Tags CONTAINS \"x\" AND LENGTH(m.Text) > 2")), ["Text.length"]);
 }
 
+/// Inside walk brackets the walk word `LENGTH` of a list is written
+/// `count(xs)`, as it is outside them, and of text `Text.length(t)`. The
+/// list's fix is not marked safe: `count` lowers to a fold, not to the walk
+/// word's function, so `listen-fire upgrade` leaves it to the author.
+#[test]
+fn inside_a_walk_a_list_s_length_is_count() {
+    let walk = |predicate: &str| format!("{HEAD5}function go(c: <chat-[:channel]->>, xs: <text[]>) {{\n  ms = c-[m:Messages WHERE {predicate}]->\n}}");
+    let found = check(&walk("LENGTH(m.Tags) > 2"));
+    assert_eq!(found.iter().map(|d| d.code.as_str()).collect::<Vec<_>>(), ["MOV_V5_SPELLING"], "{found:?}");
+    assert_eq!(found[0].message, "inside walk brackets `LENGTH` of a list is written `count(xs)`, as it is outside them");
+    let fix = found[0].fix.as_ref().unwrap();
+    assert_eq!(fix["edits"][0]["text"], "count(m.Tags)");
+    assert_ne!(fix["safe"], serde_json::json!(true), "{fix}");
+    // The diagnostic names the walk word, as the parser's does; the fix
+    // rewrites the whole call.
+    assert_eq!(found[0].span.end.col - found[0].span.start.col, "LENGTH".len());
+    assert_eq!(fix["edits"][0]["span"]["end"]["col"].as_u64().unwrap() - fix["edits"][0]["span"]["start"]["col"].as_u64().unwrap(), "LENGTH(m.Tags)".len() as u64);
+    assert_eq!(fixes_of(&walk("length(m.Tags) > 2")), ["count(m.Tags)"]);
+    assert_eq!(fixes_of(&walk("LENGTH(xs) > 2")), ["count(xs)"]);
+    assert_eq!(fixes_of(&walk("LENGTH(m.Text) > 2")), ["Text.length"]);
+    assert_eq!(fixes_of(&walk("Text.length(m.Tags) > 2")), ["count(m.Tags)"]);
+    assert_eq!(codes(&walk("count(m.Tags) > 2 AND Text.length(m.Text) > 2")), Vec::<String>::new());
+    // A field read through an earlier hop's alias is typed at that hop.
+    let hops = |predicate: &str| format!("{HEAD5}function go() {{\n  ms = chat-[ch:Channels]->-[m:Messages WHERE {predicate}]->\n}}");
+    assert_eq!(fixes_of(&hops("LENGTH(ch.Name) > 2 AND LENGTH(m.Tags) > 0")), ["Text.length", "count(m.Tags)"]);
+}
+
 #[test]
 fn a_walk_s_fields_are_read_through_the_hop_s_alias() {
     let current_form = |body: &str| format!("{HEAD5}function go(c: <chat-[:channel]->>, cutoff: <text>) {{\n{body}\n}}");

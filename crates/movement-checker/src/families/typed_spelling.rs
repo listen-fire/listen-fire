@@ -40,6 +40,9 @@ pub enum Found {
 pub struct TypedSpelling {
     pub found: Found,
     pub at: At,
+    /// What the fix rewrites: `at`, or the whole call where `at` is only its
+    /// name (a walk word, which the parser's finding names alone).
+    pub fix_at: At,
     pub message: String,
     pub text: String,
     /// The fix keeps the meaning: from 5 `count` counts every item, as
@@ -47,52 +50,131 @@ pub struct TypedSpelling {
     pub safe: bool,
 }
 
-/// Every typed respelling in `tree` (outside walk brackets), `kind_of`
-/// giving what an operand is where the checker can tell.
+/// A walk read up to and including one hop (its WHERE, ORDER BY and LIMIT
+/// left out): a field read off that hop's record is typed as this walk read
+/// for the field (`ch-[m:Messages]->.Tags`).
+type WalkTo = MExpr;
+
+/// What is in scope inside walk brackets: each alias and the walk to its
+/// hop, and the walk to the hop whose brackets these are (a hop's alias read
+/// there is parsed as the bare field, `MExpr::Name::field`).
+#[derive(Clone, Default)]
+struct WalkScope {
+    aliases: Vec<(String, WalkTo)>,
+    hop: Option<WalkTo>,
+}
+
+impl WalkScope {
+    fn alias(&self, name: &str) -> Option<&WalkTo> {
+        self.aliases.iter().rev().find(|(alias, _)| alias == name).map(|(_, walk)| walk)
+    }
+}
+
+/// Every typed respelling in `tree`, `kind_of` giving what an operand is
+/// where the checker can tell.
 pub fn typed_spellings(tree: &MExpr, raw: &str, kind_of: &mut dyn FnMut(&MExpr) -> Option<ValueKind>) -> Vec<TypedSpelling> {
     let src = Utf16::new(raw);
     let mut out = Vec::new();
-    visit(tree, false, &src, kind_of, &mut out);
+    visit(tree, None, &src, kind_of, &mut out);
     out
 }
 
-fn visit(e: &MExpr, in_walk: bool, src: &Utf16, kind_of: &mut dyn FnMut(&MExpr) -> Option<ValueKind>, out: &mut Vec<TypedSpelling>) {
+/// `walk` is `None` outside walk brackets.
+fn visit(e: &MExpr, walk: Option<&WalkScope>, src: &Utf16, kind_of: &mut dyn FnMut(&MExpr) -> Option<ValueKind>, out: &mut Vec<TypedSpelling>) {
     match e {
-        MExpr::Path { root, hops, .. } => {
+        MExpr::Path { root, hops, at } => {
             if let Some(root) = root {
-                visit(root, in_walk, src, kind_of, out);
+                visit(root, walk, src, kind_of, out);
             }
+            let mut scope = walk.cloned().unwrap_or_default();
+            // A walk off an alias continues that alias's walk.
+            let (base_root, mut prefix) = match (root.as_deref(), &scope) {
+                (Some(MExpr::Name { name, field: false, .. }), scope) => match scope.alias(&name.text) {
+                    Some(MExpr::Path { root, hops, .. }) => (root.clone(), hops.clone()),
+                    _ => (root.clone(), Vec::new()),
+                },
+                _ => (root.clone(), Vec::new()),
+            };
             for hop in hops {
+                prefix.push(movement_parser::tree::Hop { where_: None, order_by: None, limit: None, ..hop.clone() });
+                let to_here = MExpr::Path { root: base_root.clone(), hops: prefix.clone(), at: *at };
+                if let Some(alias) = &hop.alias {
+                    scope.aliases.push((alias.text.clone(), to_here.clone()));
+                }
+                scope.hop = Some(to_here);
                 if let Some(w) = &hop.where_ {
-                    visit(w, true, src, kind_of, out);
+                    visit(w, Some(&scope), src, kind_of, out);
                 }
                 if let Some(config) = &hop.config {
                     for member in &config.entries {
                         match member {
-                            movement_parser::tree::MapMember::Entry { value, .. } => visit(value, in_walk, src, kind_of, out),
-                            movement_parser::tree::MapMember::Spread(s) => visit(&s.expr, in_walk, src, kind_of, out),
+                            movement_parser::tree::MapMember::Entry { value, .. } => visit(value, walk, src, kind_of, out),
+                            movement_parser::tree::MapMember::Spread(s) => visit(&s.expr, walk, src, kind_of, out),
                         }
                     }
                 }
                 if let Some(order) = &hop.order_by {
-                    visit(&order.key, true, src, kind_of, out);
+                    visit(&order.key, Some(&scope), src, kind_of, out);
                 }
             }
             return;
         }
         MExpr::Where { source, predicate, .. } => {
-            visit(source, in_walk, src, kind_of, out);
-            visit(predicate, true, src, kind_of, out);
+            visit(source, walk, src, kind_of, out);
+            visit(predicate, Some(&walk.cloned().unwrap_or_default()), src, kind_of, out);
             return;
         }
         _ => {}
     }
     for child in expression_children(e) {
-        visit(child, in_walk, src, kind_of, out);
+        visit(child, walk, src, kind_of, out);
     }
-    if !in_walk {
-        out.extend(here(e, src, kind_of));
+    match walk {
+        None => out.extend(here(e, src, kind_of)),
+        Some(scope) => out.extend(in_walk(e, scope, src, kind_of)),
     }
+}
+
+/// Inside walk brackets, a length is spelled as outside them: a list's is
+/// `count(xs)`, text's `Text.length(t)`. The parser respells the walk word
+/// `LENGTH` to `Text.length`, whose tree is the walk word's; on a list that
+/// is a misuse, so the checker, which can see the field's type, names
+/// `count`. `count` lowers to a fold, not to the walk word's function, so its
+/// fix is the author's to take, not one `listen-fire upgrade` applies unasked.
+fn in_walk(e: &MExpr, scope: &WalkScope, src: &Utf16, kind_of: &mut dyn FnMut(&MExpr) -> Option<ValueKind>) -> Option<TypedSpelling> {
+    let MExpr::Call { callee, args, at } = e else { return None };
+    let (MExpr::Name { name, .. }, [arg]) = (callee.as_ref(), args.as_slice()) else { return None };
+    if !name.text.eq_ignore_ascii_case("LENGTH") {
+        return None;
+    }
+    let arg = &arg.value;
+    let text = |at: At| src.text(at.start, at.end);
+    let written = text(callee.at());
+    let read_off = |walk: &WalkTo, property: &movement_parser::tree::Name, at: At| MExpr::Member { object: Box::new(walk.clone()), property: property.clone(), optional: false, at };
+    let typed = match arg {
+        MExpr::Name { name, field: true, at } => scope.hop.as_ref().map(|walk| read_off(walk, name, *at)),
+        MExpr::Member { object, property, optional: false, at } => match object.as_ref() {
+            MExpr::Name { name, field: false, .. } => scope.alias(&name.text).map(|walk| read_off(walk, property, *at)),
+            _ => None,
+        },
+        _ => None,
+    };
+    if kind_of(typed.as_ref().unwrap_or(arg)) != Some(ValueKind::List) {
+        return None;
+    }
+    let fix = format!("count({})", text(arg.at()));
+    Some(if written == "Text.length" {
+        TypedSpelling { found: Found::Misuse, at: *at, fix_at: *at, message: "`Text.length` takes text; a list's length is `count(xs)`".into(), text: fix, safe: false }
+    } else {
+        TypedSpelling {
+            found: Found::Respell,
+            at: callee.at(),
+            fix_at: *at,
+            message: format!("inside walk brackets `{written}` of a list is written `count(xs)`, as it is outside them"),
+            text: fix,
+            safe: false,
+        }
+    })
 }
 
 fn here(e: &MExpr, src: &Utf16, kind_of: &mut dyn FnMut(&MExpr) -> Option<ValueKind>) -> Option<TypedSpelling> {
@@ -106,29 +188,29 @@ fn here(e: &MExpr, src: &Utf16, kind_of: &mut dyn FnMut(&MExpr) -> Option<ValueK
             if canonical == "LENGTH" && kind_of(arg) == Some(ValueKind::List) {
                 let fix = format!("count({})", text(arg.at()));
                 return Some(if written == "Text.length" {
-                    TypedSpelling { found: Found::Misuse, at: *at, message: "`Text.length` takes text; a list's length is `count(xs)`".into(), text: fix, safe: false }
+                    TypedSpelling { found: Found::Misuse, at: *at, fix_at: *at, message: "`Text.length` takes text; a list's length is `count(xs)`".into(), text: fix, safe: false }
                 } else {
-                    TypedSpelling { found: Found::Respell, at: *at, message: format!("the retired spelling `{written}` of a list is written `count(xs)`"), text: fix, safe: true }
+                    TypedSpelling { found: Found::Respell, at: *at, fix_at: *at, message: format!("the retired spelling `{written}` of a list is written `count(xs)`"), text: fix, safe: true }
                 });
             }
             if canonical == "EXISTS" && !matches!(arg, MExpr::Path { .. } | MExpr::Where { .. }) && kind_of(arg) == Some(ValueKind::List) {
                 let fix = format!("count({}) > 0", text(arg.at()));
                 let text = if whole(src, *at) { fix } else { format!("({fix})") };
-                return Some(TypedSpelling { found: Found::Respell, at: *at, message: format!("the retired spelling `{written}` of a list is written `count(xs) > 0`"), text, safe: true });
+                return Some(TypedSpelling { found: Found::Respell, at: *at, fix_at: *at, message: format!("the retired spelling `{written}` of a list is written `count(xs) > 0`"), text, safe: true });
             }
             None
         }
         MExpr::Binary { op: BinaryOp::Contains, left, right, at } if kind_of(left) == Some(ValueKind::List) => {
             let fix = format!("List.includes({}, {})", text(left.at()), text(right.at()));
             Some(if text(*at).starts_with("Text.includes") {
-                TypedSpelling { found: Found::Misuse, at: *at, message: "`Text.includes` takes text; a list holds a value by `List.includes(xs, v)`".into(), text: fix, safe: false }
+                TypedSpelling { found: Found::Misuse, at: *at, fix_at: *at, message: "`Text.includes` takes text; a list holds a value by `List.includes(xs, v)`".into(), text: fix, safe: false }
             } else {
-                TypedSpelling { found: Found::Respell, at: *at, message: "the retired spelling `CONTAINS` on a list is written `List.includes(xs, v)`".into(), text: fix, safe: false }
+                TypedSpelling { found: Found::Respell, at: *at, fix_at: *at, message: "the retired spelling `CONTAINS` on a list is written `List.includes(xs, v)`".into(), text: fix, safe: false }
             })
         }
         MExpr::Binary { op: BinaryOp::In, left, right, at } if text(*at).starts_with("List.includes") && kind_of(right) == Some(ValueKind::Text) => {
             let fix = format!("Text.includes({}, {})", text(right.at()), text(left.at()));
-            Some(TypedSpelling { found: Found::Misuse, at: *at, message: "`List.includes` takes a list; text holds text by `Text.includes(t, v)`".into(), text: fix, safe: false })
+            Some(TypedSpelling { found: Found::Misuse, at: *at, fix_at: *at, message: "`List.includes` takes a list; text holds text by `Text.includes(t, v)`".into(), text: fix, safe: false })
         }
         _ => None,
     }
@@ -170,10 +252,11 @@ impl Checker<'_> {
         };
         for f in found {
             let span = span_of_extent(slot, f.at);
+            let fix_span = span_of_extent(slot, f.fix_at);
             let fix = if f.safe {
-                serde_json::json!({ "edits": [{ "span": span, "text": f.text }], "safe": true })
+                serde_json::json!({ "edits": [{ "span": fix_span, "text": f.text }], "safe": true })
             } else {
-                serde_json::json!({ "edits": [{ "span": span, "text": f.text }] })
+                serde_json::json!({ "edits": [{ "span": fix_span, "text": f.text }] })
             };
             match f.found {
                 Found::Respell => {
