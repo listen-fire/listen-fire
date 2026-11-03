@@ -99,7 +99,7 @@ async function lunchWorld(): Promise<LunchWorld> {
       // The module writes a row's cells by their field ids.
       votes: async () => {
         const rows = (await (await fetch(`${url}/admin/airtable/record:appOFFICE:tblLUNCH/state`)).json()) as Array<{ fields: Record<string, unknown> }>;
-        return rows.map(({ fields }) => ({ Poll: fields.fldPoll, PersonId: fields.fldPersonId, Person: fields.fldPerson, Answer: fields.fldAnswer }));
+        return rows.map(({ fields }) => ({ Poll: fields.Poll, PersonId: fields['Person Id'], Person: fields.Person, Answer: fields.Answer }));
       },
     };
   } catch (error) {
