@@ -1,7 +1,6 @@
 //! What `List.groupBy` and `List.keyBy` file each member under. A run refuses
 //! a member whose key answers nothing, so a key that may be absent is
-//! warned of where it is written (a warning under this release's
-//! compatibility key, which accepts what it did).
+//! refused where it is written (from 0.15; 0.14 warned of it).
 
 use movement_checker::{CheckOptions, Diagnostic, check_source};
 use movement_checker::Severity;
@@ -20,10 +19,10 @@ fn codes(found: &[Diagnostic]) -> Vec<(&str, Option<Severity>)> {
 }
 
 #[test]
-fn a_key_that_may_answer_nothing_is_warned_of() {
+fn a_key_that_may_answer_nothing_is_refused() {
     for op in ["List.groupBy", "List.keyBy"] {
         let found = check(&format!("  by = {op}([\"a\", \"b\"], (s) => s == \"a\" ? null : s)\n  return count(by)"));
-        assert_eq!(codes(&found), [("MOV_DICT_KEY_MAY_BE_ABSENT", Some(Severity::Warning))], "{op}: {found:?}");
+        assert_eq!(codes(&found), [("MOV_DICT_KEY_MAY_BE_ABSENT", None)], "{op}: {found:?}");
         assert!(found[0].message.contains("coalesce("), "{}", found[0].message);
     }
 }

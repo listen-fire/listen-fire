@@ -122,7 +122,7 @@ lines   = map(sort(Dict.keys(by)), (a) => "\${a}: \${count(by[a])}")
 
 - \`Dict.keys(by)\` is each author once, in no order, as a walk answers its records. The \`sort\` is what puts the lines in order for \`Text.join\`; \`first\`, \`Text.join\` and \`reduce\` are refused on it unsorted.
 - \`by[a]\` may be absent, as any lookup by a computed key is; \`count\` of nothing is \`0\`. \`Dict.entries(by)\` hands each key with its group instead: \`map(sort(Dict.entries(by), (e) => e.key), (e) => "\${e.key}: \${count(e.value)}")\`.
-- A key that may be missing takes a fallback, or the run fails on it: \`List.groupBy(open, (t) => coalesce(t.Assignee, "Unassigned"))\`.
+- A key that may be missing takes a fallback, or the checker refuses it (the run would fail on it): \`List.groupBy(open, (t) => coalesce(t.Assignee, "Unassigned"))\`.
 - The distinct values alone are \`List.distinct(authors)\`, kept in the order they first appear.
 - When the keys are a type's values, *sections-from-a-type* walks them instead, so a key nothing matched still gets its line.
 

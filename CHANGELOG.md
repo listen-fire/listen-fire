@@ -35,6 +35,10 @@ A new compatibility key: 0.15.0 reads `0.15.x` pins only, and refuses a project 
   - Arguments of one kind type as before: `coalesce(x.Tags, [])` is a list of text, and an enum with a text fallback is text.
   - The fix, by hand: give `coalesce` a fallback of the kind the value has (`coalesce(n, 0)`), or convert first (`coalesce(Text.from(n), "n/a")`).
 
+- **A `List.groupBy` or `List.keyBy` key that may answer nothing is refused** (`MOV_DICT_KEY_MAY_BE_ABSENT`, an error; 0.14 warned of it). `List.groupBy(tickets, (t) => t.Assignee)`, where `Assignee` may be empty, fails the run at the first member without one, so the checker refuses it where it is written, as TypeScript refuses `string | undefined` where an object key is needed. Introduced by 0.15.0, a new compatibility key, since 0.14 accepts these programs.
+  - Why: the warning was added within 0.14 because an error would have refused programs 0.14 accepted. With the Airtable fields that may be empty now typed so (below), grouping rows by such a field is the common case, and it fails the run.
+  - The fix, by hand: give the key a fallback, `(t) => coalesce(t.Assignee, "unassigned")`. `listen-fire upgrade` does not add one: the fallback names a group, which is the author's to choose.
+
 ### Added
 
 - **`listen-fire example <words>`: unsure how to write something? Ask in your own words, get a few lines doing it.** `listen-fire example create or update` answers with the snippet that does it, under a comment saying what it does, and at most one more comment where the code cannot speak; never more than three examples, and one when one clearly answers. With no words it lists what every example does. The 51 examples cover listening, the schedule, writing, walking, absence, grouping, dates, text, extraction and waiting, each with the words authors were seen to ask with ("dict keys entries groupBy", "if then else expression", "connect airtable base"). Every one is checked: by the handbook's tests against its catalog, or, where it names Airtable, by `listen-fire check` against the fake. The authoring tools serve the same lookup as `showExample`, and the handbook's front page points at both.

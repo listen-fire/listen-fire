@@ -626,16 +626,15 @@ impl Checker<'_> {
             for diagnostic in diagnostics {
                 self.push(diagnostic);
             }
-            // The run refuses a member whose key answers nothing. A warning
-            // under this release's key, which accepts the programs it did.
+            // The run refuses a member whose key answers nothing, so a key
+            // that may is refused here, as TypeScript refuses `string |
+            // undefined` where an object key is needed (a warning in 0.14).
             if matches!(returned, Some(Ty::MaybeAbsent(_) | Ty::Absent)) {
-                let mut warning = crate::diagnostic::Diagnostic::error(
+                self.push(crate::diagnostic::Diagnostic::error(
                     codes::DICT_KEY_MAY_BE_ABSENT,
                     format!("'{spelling}' files each member under its key, and this key may answer nothing, which fails the run when it does. Give it a fallback: `coalesce(…, \"none\")`."),
                     arm_span(&op.r#fn),
-                );
-                warning.severity = Some(crate::diagnostic::Severity::Warning);
-                self.push(warning);
+                ));
             }
         }
         let value = match op.op {
