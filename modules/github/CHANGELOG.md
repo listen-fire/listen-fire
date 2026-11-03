@@ -1,5 +1,11 @@
 # @listen-fire/github
 
+## 0.13.3
+
+### Patch Changes
+
+- 7bc3590: A `Repositories` walk whose WHERE pins `Full Name` to a repository GitHub does not know (404) now answers nothing, as any filter that matches nothing does, so `only(...)` is null and the program's own check runs. Before, the run failed with GitHub's 404 error.
+
 ## 0.13.2
 
 ### Patch Changes
