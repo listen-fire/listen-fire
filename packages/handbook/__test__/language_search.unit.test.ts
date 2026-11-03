@@ -89,12 +89,13 @@ describe('ranking', () => {
     expect(top('scheduled digest', 'recipe')[0]).toBe('patterns#scheduled-digest');
   });
 
-  // Grouping and counting is a walk over records filed in the run's own
-  // graph; a reader asks for it in the words of a dict or a GROUP BY.
-  it('answers grouping, distinct values and a dict\'s keys with the run\'s own graph', () => {
-    for (const query of ['group', 'distinct', 'count per', 'keys', 'dict keys', 'distinct unique', 'group count by key']) {
-      expect([query, top(query).slice(0, 3)]).toEqual([query, expect.arrayContaining(['patterns#group-and-count'])]);
-    }
+  // A reader asks for grouping and counting in the words of a dict or a
+  // GROUP BY: the recipe, and the functions it is made of, answer them.
+  it('answers grouping, distinct values and a dict\'s keys with the recipe and its functions', () => {
+    const answers = (query: string, wanted: string) => expect([query, top(query).slice(0, 3)]).toEqual([query, expect.arrayContaining([wanted])]);
+    for (const query of ['group', 'count per', 'distinct unique', 'group count by key']) answers(query, 'patterns#group-and-count');
+    for (const query of ['keys', 'dict keys']) answers(query, 'Dict.keys');
+    for (const query of ['distinct', 'distinct unique']) answers(query, 'List.distinct');
   });
 
   it('filters by kind, caps the results, and is deterministic', () => {

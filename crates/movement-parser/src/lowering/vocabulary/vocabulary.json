@@ -63,6 +63,18 @@
     {
       "namespace": "NUMBER",
       "functions": [{ "name": "FORMAT", "params": ["number", "style"] }]
+    },
+    {
+      "namespace": "LIST",
+      "functions": [{ "name": "DISTINCT", "params": ["list"] }]
+    },
+    {
+      "namespace": "DICT",
+      "functions": [
+        { "name": "KEYS", "params": ["dict"] },
+        { "name": "VALUES", "params": ["dict"] },
+        { "name": "ENTRIES", "params": ["dict"] }
+      ]
     }
   ]
 }

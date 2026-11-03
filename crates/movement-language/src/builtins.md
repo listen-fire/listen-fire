@@ -492,7 +492,7 @@ Tags: List.compact("inbound", region, [`Sub Tag`])
 
 ### List.groupBy
 
-`List.groupBy(list, key)` → a dict of lists, always present — files each member under the key its function answers. The values carry the members' own shape (a dict literal's fields read straight off a group); the keys are data, so a lookup with `by[key]` is always `T | absent` even against a literal string. A dict never lists its keys: for a line per key, file the members under one record per key in the run's own graph and walk those (patterns#group-and-count).
+`List.groupBy(list, key)` → a dict of lists, always present — files each member under the key its function answers. The values carry the members' own shape (a dict literal's fields read straight off a group); the keys are data, so a lookup with `by[key]` is always `T | absent` even against a literal string. `Dict.keys(by)` lists the keys and `Dict.entries(by)` each key with its group, in no order: `sort` them for a line per key (patterns#group-and-count).
 
 ```
 by = List.groupBy(rows, (r) => { return r.thesis })
@@ -504,6 +504,41 @@ by = List.groupBy(rows, (r) => { return r.thesis })
 
 ```
 byId = List.keyBy(co-[p:People]->, (p) => { return p.Email })
+```
+
+### List.distinct
+
+`List.distinct(list)` → a list, always present — each member once, two members the same when `==` says so. The members are plain values (text, numbers, dates): a walk already reaches each record once. Each is kept where it first appears, so an ordered list stays in order; a walk's members, which come in no order, stay in none, and need a `sort` before `first`, `Text.join` or `reduce`.
+
+```
+owners = sort(List.distinct(map(open, (t) => coalesce(t.Assignee, "Unassigned"))))
+```
+
+## Dict
+
+### Dict.keys
+
+`Dict.keys(dict)` → a list of `text`, always present — each key once, in no order (a dict holds its keys as a set, as a walk answers its records). `sort` it before `first`, `Text.join` or `reduce`; each is refused on it unsorted.
+
+```
+by    = List.groupBy(open, (t) => coalesce(t.Assignee, "Unassigned"))
+lines = map(sort(Dict.keys(by)), (k) => "${k}: ${count(coalesce(by[k], []))}")
+```
+
+### Dict.values
+
+`Dict.values(dict)` → a list of the dict's values, always present, in no order — for a `List.groupBy` dict, a list of its groups.
+
+```
+largest = List.max(map(Dict.values(by), (g) => count(g)))
+```
+
+### Dict.entries
+
+`Dict.entries(dict)` → a list of `{ key, value }`, always present, in no order — each key with its value, read as `e.key` and `e.value` (`e.value` always present). `sort` by the key for an order.
+
+```
+lines = map(sort(Dict.entries(by), (e) => e.key), (e) => "${e.key}: ${count(e.value)}")
 ```
 
 ## File

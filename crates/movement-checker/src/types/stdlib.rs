@@ -20,6 +20,8 @@ pub enum ParamType {
     List,
     Any,
     Record,
+    /// A dict: what `List.groupBy` or `List.keyBy` answers, or a `{ … }` literal.
+    Dict,
     Options,
     Function,
     Type,
@@ -39,6 +41,7 @@ impl ParamType {
             ParamType::List => "list",
             ParamType::Any => "any",
             ParamType::Record => "record",
+            ParamType::Dict => "dict",
             ParamType::Options => "options",
             ParamType::Function => "function",
             ParamType::Type => "type",
@@ -257,6 +260,10 @@ pub static STANDARD_LIBRARY: &[Builtin] = &[
     b!("TEXT.PAIRS", [p("record", T::Record), opt("separator", T::Text)], R::Text, "a record or dict rendered as key=value pairs, keys in written order, joined by `separator` (default \" | \") — TEXT.PAIRS({ name: \"Acme\", url: \"acme.com\" }) is \"name=Acme | url=acme.com\"; a nested node/edge field is skipped, not stringified", family),
     b!("TEXT.SERIALISE", [p("value", T::Any), p("format", T::Text)], R::Text, "any value written out as text for a prompt, the same bytes every time it is the same value — TEXT.SERIALISE(deal, \"JSON\") is the record's fields as indented JSON with keys sorted, its nested nodes under their edge names as lists; an absent value is null, a file is its name/type/size and never its contents. The format is written down; \"JSON\" is the only one so far", family),
     b!("URL.HOST", [p("text", T::Text)], R::MaybeAbsentText, "the host of a URL or a scheme-less address, lowercased and otherwise verbatim (`www.` kept, no port, no path) — URL.HOST(\"https://WWW.Acme.com:8080/x\") is \"www.acme.com\", URL.HOST(\"acme.com:8080\") is \"acme.com\"; an email (`joe@acme.com`) is not a host, and text that names no address at all is absent", family),
+    b!("LIST.DISTINCT", [p("list", T::List)], R::Derived, "a list of plain values with repeats removed (equal as `==` compares them), each kept where it first appears — an ordered list stays in order, one in no order stays in none", family),
+    b!("DICT.KEYS", [p("dict", T::Dict)], R::Derived, "a dict's keys, as a list of text in no order — each key once; sort them before taking the first, joining or folding", family),
+    b!("DICT.VALUES", [p("dict", T::Dict)], R::Derived, "a dict's values, as a list in no order — a dict of groups answers its groups", family),
+    b!("DICT.ENTRIES", [p("dict", T::Dict)], R::Derived, "a dict's entries, each a `{ key, value }` dict, as a list in no order — sort them by their key before taking the first, joining or folding", family),
     b!("NUMBER.FORMAT", [p("number", T::Number), p("style", T::Text)], R::MaybeAbsentText, "a number written out — \"compact\" abbreviates with K/M/B/T (NUMBER.FORMAT(1200000, \"compact\") is \"1.2M\"); \"grouped\" adds thousands separators (NUMBER.FORMAT(1200000, \"grouped\") is \"1,200,000\")", family),
 ];
 
@@ -332,7 +339,8 @@ pub fn param_accepts(param: ParamType, ty: &Ty) -> bool {
         Ty::Date | Ty::Datetime => matches!(param, T::Scalar | T::Temporal),
         Ty::File => param == T::File,
         Ty::List { .. } | Ty::Tuple { .. } => matches!(param, T::List | T::TextOrList),
-        Ty::Json | Ty::Record(_) | Ty::Dict { .. } | Ty::HeldRecord(_) => false,
+        Ty::Dict { .. } => param == T::Dict,
+        Ty::Json | Ty::Record(_) | Ty::HeldRecord(_) => false,
     }
 }
 
@@ -348,6 +356,7 @@ pub fn describe_param_type(param: ParamType) -> &'static str {
         T::List => "a list",
         T::Any => "any value",
         T::Record => "a record or a dict",
+        T::Dict => "a dict (what `List.groupBy` or `List.keyBy` answers, or a `{ … }` literal)",
         T::Options => "a map of settings",
         T::Function => "a function",
         T::Type => "a type",

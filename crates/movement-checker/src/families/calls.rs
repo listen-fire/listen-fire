@@ -133,10 +133,13 @@ fn refuse_closure_operands(typing: &mut Typing, builtin: &Builtin, whole: &Expre
 fn check_builtin_args(typing: &mut Typing, builtin: &Builtin, args: &[Option<Ty>], exprs: &[Expression]) {
     for (index, ty) in args.iter().enumerate() {
         let Some(param) = builtin.param_at(index) else { continue };
-        if !reads_as_value(param.ty) {
+        // A dict is read for its keys and values, whose shapes it carries: it
+        // is checked as a dict, not as one plain value.
+        let read_whole = reads_as_value(param.ty);
+        if !read_whole && param.ty != ParamType::Dict {
             continue;
         }
-        if ty.as_ref().is_some_and(|ty| crate::families::values::require_transparent(typing, Some(ty), &format!("handed to {}", builtin.name))) {
+        if read_whole && ty.as_ref().is_some_and(|ty| crate::families::values::require_transparent(typing, Some(ty), &format!("handed to {}", builtin.name))) {
             continue;
         }
         if let Some(expr) = exprs.get(index)

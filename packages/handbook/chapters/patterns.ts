@@ -112,31 +112,44 @@ function \`Thesis Recap\`(go: <manual-[:Invocation]->>) {
 
 ### group-and-count
 
-A line per distinct value with its count (group by a key, count per group, the keys a dict can't list): file each record under one record per key in the run's own graph, then walk the keys.
+A line per distinct value with its count (group by a key, count per group, distinct values): group with \`List.groupBy\`, then list the dict's keys in order.
+
+\`\`\`
+authors = gh-[r:Repositories WHERE r.Name == "api"]->-[i:Issues WHERE i.State == "open"]-> { return i.Author }
+by      = List.groupBy(authors, (a) => a)
+lines   = map(sort(Dict.keys(by)), (a) => "\${a}: \${count(by[a])}")
+\`\`\`
+
+- \`Dict.keys(by)\` is each author once, in no order, as a walk answers its records. The \`sort\` is what puts the lines in order for \`Text.join\`; \`first\`, \`Text.join\` and \`reduce\` are refused on it unsorted.
+- \`by[a]\` may be absent, as any lookup by a computed key is; \`count\` of nothing is \`0\`. \`Dict.entries(by)\` hands each key with its group instead: \`map(sort(Dict.entries(by), (e) => e.key), (e) => "\${e.key}: \${count(e.value)}")\`.
+- A key that may be missing takes a fallback, or the run fails on it: \`List.groupBy(open, (t) => coalesce(t.Assignee, "Unassigned"))\`.
+- The distinct values alone are \`List.distinct(authors)\`, kept in the order they first appear.
+- When the keys are a type's values, *sections-from-a-type* walks them instead, so a key nothing matched still gets its line.
+
+Grouping deeper than one level (people, then each person's repositories, then the issues in each) files each record under one record per key in the run's own graph, then walks the keys:
 
 \`\`\`
 node Board {
   node people {
     name: <text>
-    node issues {
-      title: <text>
+    node repos {
+      name: <text>
+      node issues { title: <text> }
     }
   }
 }
 
 board = graph<Board> {}
-gh-[r:Repositories WHERE r.Name == "api"]->-[i:Issues WHERE i.State == "open"]-> {
+gh-[r:Repositories]->-[i:Issues WHERE i.State == "open"]-> {
   p = write board-[:people]-> { unique by (name), name: i.Author }
-  write p-[:issues]-> { title: i.Title }
+  q = write p-[:repos]-> { unique by (name), name: r.Name }
+  write q-[:issues]-> { title: i.Title }
 }
-lines = board-[p:people ORDER BY p.name]-> { return "\${p.name}: \${count(p-[:issues]->)}" }
+lines = board-[p:people ORDER BY p.name]->-[q:repos ORDER BY q.name]-> { return "\${p.name} in \${q.name}: \${count(q-[:issues]->)}" }
 \`\`\`
 
-- \`unique by (name)\` makes one \`people\` record per name. A second issue by the same author lands on the record the first one made, and is filed under it.
-- The keys are records, so they are walked, ordered and counted like any others: \`count(p-[:issues]->)\` is one person's issues, \`count(board-[:people]->)\` the distinct names, \`count(board-[:people]->-[:issues]->)\` every issue.
-- A key that may be missing takes a fallback before it is filed: \`name: coalesce(t.Assignee, "Unassigned")\`.
-- A walk answers a set, in no order. The \`ORDER BY\` on the people is what puts the lines in order for \`Text.join\`.
-- A \`List.groupBy\` dict is looked up by a key you already hold, and never lists its keys. When the keys are a type's values, *sections-from-a-type* walks them instead.
+- \`unique by (name)\` makes one record per name under its parent. A second issue by the same author in the same repository lands on the records the first one made, and is filed under them.
+- The keys are records, so they are walked, ordered and counted like any others: \`count(board-[:people]->)\` is the distinct authors, \`count(board-[:people]->-[:repos]->-[:issues]->)\` every issue.
 - The graph is the run's own: nothing reaches a system, and \`listen-fire run\` lists each filing as a write into the run's own graph.
 
 ### extract-and-connect
@@ -281,7 +294,29 @@ listen to manual-[:Invocations]-> fire \`Thesis Recap\`
 `,
     },
     {
-      construct: 'group-and-count (records filed under one record per key in the run\'s own graph by unique by, the keys walked in order and each counted)',
+      construct: 'group-and-count (List.groupBy, then the dict\'s keys sorted, each looked up and counted)',
+      status: 'runs',
+      probe: `
+gh   = connect \`@lf/github\` using my_github
+chat = connect \`@lf/slack\` using team_workspace
+
+function \`Open Issues By Author\`(t: <cron-[:Ticks]->>) {
+  authors = gh-[r:Repositories WHERE r.Name == "api"]->-[i:Issues WHERE i.State == "open"]-> { return i.Author }
+  by      = List.groupBy(authors, (a) => a)
+  lines   = map(sort(Dict.keys(by)), (a) => "\${a}: \${count(by[a])}")
+
+  ops = only(chat-[ch:Channels WHERE ch.Name == "ops"]->)
+  if (ops == null) { fail("no #ops channel") }
+  write ops-[:Messages]-> {
+    Message: "\${count(authors)} open by \${count(List.distinct(authors))} authors:\\n\${Text.join(lines, "\\n")}"
+  }
+}
+
+listen as "Open issues by author" to cron-[k:Ticks WHERE k.Schedule == "0 9 * * 1"]-> fire \`Open Issues By Author\`
+`,
+    },
+    {
+      construct: 'group-and-count, deeper than one level (records filed under one record per key, per parent, in the run\'s own graph by unique by; the keys walked in order and each counted)',
       status: 'runs',
       probe: `
 gh   = connect \`@lf/github\` using my_github
@@ -290,28 +325,30 @@ chat = connect \`@lf/slack\` using team_workspace
 node Board {
   node people {
     name: <text>
-    node issues {
-      title: <text>
+    node repos {
+      name: <text>
+      node issues { title: <text> }
     }
   }
 }
 
-function \`Open Issues By Author\`(t: <cron-[:Ticks]->>) {
+function \`Open Issues By Author And Repo\`(t: <cron-[:Ticks]->>) {
   board = graph<Board> {}
-  gh-[r:Repositories WHERE r.Name == "api"]->-[i:Issues WHERE i.State == "open"]-> {
+  gh-[r:Repositories]->-[i:Issues WHERE i.State == "open"]-> {
     p = write board-[:people]-> { unique by (name), name: i.Author }
-    write p-[:issues]-> { title: i.Title }
+    q = write p-[:repos]-> { unique by (name), name: r.Name }
+    write q-[:issues]-> { title: i.Title }
   }
-  lines = board-[p:people ORDER BY p.name]-> { return "\${p.name}: \${count(p-[:issues]->)}" }
+  lines = board-[p:people ORDER BY p.name]->-[q:repos ORDER BY q.name]-> { return "\${p.name} in \${q.name}: \${count(q-[:issues]->)}" }
 
   ops = only(chat-[ch:Channels WHERE ch.Name == "ops"]->)
   if (ops == null) { fail("no #ops channel") }
   write ops-[:Messages]-> {
-    Message: "\${count(board-[:people]->-[:issues]->)} open:\\n\${Text.join(lines, "\\n")}"
+    Message: "\${count(board-[:people]->-[:repos]->-[:issues]->)} open:\\n\${Text.join(lines, "\\n")}"
   }
 }
 
-listen as "Open issues by author" to cron-[k:Ticks WHERE k.Schedule == "0 9 * * 1"]-> fire \`Open Issues By Author\`
+listen as "Open issues by author and repo" to cron-[k:Ticks WHERE k.Schedule == "0 9 * * 1"]-> fire \`Open Issues By Author And Repo\`
 `,
     },
     {

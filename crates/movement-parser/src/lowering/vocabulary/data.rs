@@ -99,5 +99,19 @@ pub static VOCABULARY: Vocabulary = Vocabulary {
                 FamilyFunction { name: "FORMAT", id: "number.format", signature: "NUMBER.FORMAT(number, style)", arity: Arity { min: 2, max: 2 } },
             ],
         },
+        Family {
+            namespace: "LIST",
+            functions: &[
+                FamilyFunction { name: "DISTINCT", id: "list.distinct", signature: "LIST.DISTINCT(list)", arity: Arity { min: 1, max: 1 } },
+            ],
+        },
+        Family {
+            namespace: "DICT",
+            functions: &[
+                FamilyFunction { name: "KEYS", id: "dict.keys", signature: "DICT.KEYS(dict)", arity: Arity { min: 1, max: 1 } },
+                FamilyFunction { name: "VALUES", id: "dict.values", signature: "DICT.VALUES(dict)", arity: Arity { min: 1, max: 1 } },
+                FamilyFunction { name: "ENTRIES", id: "dict.entries", signature: "DICT.ENTRIES(dict)", arity: Arity { min: 1, max: 1 } },
+            ],
+        },
     ],
 };

@@ -155,7 +155,7 @@ mod tests {
         assert_eq!(v.ai_tiers, ["quick", "careful", "thorough"]);
         assert_eq!(v.family("currency").map(|f| f.namespace), Some("CURRENCY"));
         assert!(v.family("NOPE").is_none());
-        assert_eq!(v.namespaces(), ["CURRENCY", "DATE", "DATETIME", "TEXT", "URL", "NUMBER"]);
+        assert_eq!(v.namespaces(), ["CURRENCY", "DATE", "DATETIME", "TEXT", "URL", "NUMBER", "LIST", "DICT"]);
         assert_eq!(
             v.family("TEXT").unwrap().describe(),
             "REGEX_EXTRACT(text, pattern, group?), SLUG(text), PAIRS(record, separator?), SERIALISE(value, format)"

@@ -5217,7 +5217,7 @@ mod tests {
 
     #[test]
     fn a_statement_keyword_bound_as_a_name_is_reserved() {
-        let words = "ai, all, await, callback, coalesce, count, Currency, Date, DateTime, delete, edge, else, exists, export, extract, extractOne, fail, File, filter, first, function, if, import, Json, link, List, listen, map, members, movement, Number, only, race, reduce, refresh, return, run, shape, sleep, sort, Text, unlink, until, Url, write";
+        let words = "ai, all, await, callback, coalesce, count, Currency, Date, DateTime, delete, Dict, edge, else, exists, export, extract, extractOne, fail, File, filter, first, function, if, import, Json, link, List, listen, map, members, movement, Number, only, race, reduce, refresh, return, run, shape, sleep, sort, Text, unlink, until, Url, write";
         assert_eq!(
             error("function m() {\n  link = 1\n}\n"),
             json!({ "message": format!("'link' starts a statement, so it can't be a name: call the value something else, such as `theLink`, here and where it is read. Words that can't be names: {words}"), "loc": { "line": 2, "col": 3 } })

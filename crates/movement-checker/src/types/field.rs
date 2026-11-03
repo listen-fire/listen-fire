@@ -823,6 +823,38 @@ pub fn multi_type(args: &[Option<Ty>]) -> Option<Ty> {
     Some(list_of(shared, CollectionOrder::Ordered))
 }
 
+/// What `Dict.keys`, `Dict.values` and `Dict.entries` answer. A dict holds
+/// its keys as a set, as a walk holds its landings: the list comes back in no
+/// order, so `first`, a join and a fold need a `sort` first.
+pub fn dict_view_type(function: &str, dict: Option<&Ty>) -> Option<Ty> {
+    let Ty::Dict { of, shape } = strip_absent(dict?) else { return None };
+    let value = match shape {
+        Some(keys) if keys.values().all(Option::is_some) => value_union(&keys.values().flatten().cloned().collect::<Vec<_>>()).unwrap_or_else(|| (**of).clone()),
+        _ => (**of).clone(),
+    };
+    let member = match function {
+        "dict.keys" => Ty::Text,
+        "dict.values" => value,
+        // Each entry is the dict literal `{ key: k, value: v }` would be.
+        _ => {
+            let of = if field_type_equals(&value, &Ty::Text) { Ty::Text } else { Ty::Json };
+            let entry: JsMap<Option<Ty>> = JsMap([("key".to_string(), Some(Ty::Text)), ("value".to_string(), Some(value))].into_iter().collect());
+            Ty::Dict { of: Rc::new(of), shape: Some(Rc::new(entry)) }
+        }
+    };
+    Some(list_of(member, CollectionOrder::Unordered))
+}
+
+/// What `List.distinct` answers: the list it is handed, each member once and
+/// where it first appears, so its order (or its lack of one) is the list's.
+pub fn distinct_type(list: Option<&Ty>) -> Option<Ty> {
+    match strip_absent(list?) {
+        list @ Ty::List { .. } => Some(list.clone()),
+        Ty::Tuple { of, rest } => tuple_as_list(of, rest.as_ref()),
+        _ => None,
+    }
+}
+
 // ── Kinds and categories ──
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
