@@ -50,7 +50,7 @@ export const TS_EXCEPT: readonly FrontEntry[] = [
   {
     anchor: 'statements',
     title: 'Statements',
-    text: 'Comments start with `#`; no semicolons. A name is bound once, `name = value`, with no `let` or `const`. Never names: `all`, `await`, `callback`, `delete`, `edge`, `else`, `export`, `extract`, `function`, `if`, `import`, `link`, `listen`, `movement`, `refresh`, `return`, `run`, `shape`, `unlink`, `write`, or core words, namespaces and the words an expression reads as themselves (`count`, `Text`, `true`, `null`, `in`, `end`).',
+    text: 'Comments start with `#`; no semicolons. A name is bound once, `name = value`, with no `let` or `const`. Never names: `all`, `await`, `callback`, `delete`, `edge`, `else`, `export`, `extract`, `function`, `if`, `import`, `link`, `listen`, `movement`, `refresh`, `return`, `run`, `shape`, `unlink`, `write`, or core words and namespaces (`count`, `Text`).',
   },
   {
     anchor: 'operators',
