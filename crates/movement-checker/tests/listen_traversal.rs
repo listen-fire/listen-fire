@@ -226,11 +226,11 @@ fn a_listen_where_reads_only_its_hops_and_literals() {
     // A walk is only a run's to take, whatever it starts from: off a hop's
     // alias, or inside EXISTS. It is refused once, as the listen's.
     assert_eq!(
-        check("listen to chat-[h:Channels WHERE EXISTS(h-[:Messages]->)]->-[m:Messages]->-[:Interactions]-> fire f\n"),
+        check("listen to chat-[h:Channels WHERE exists(h-[:Messages]->)]->-[m:Messages]->-[:Interactions]-> fire f\n"),
         ["MOV_LISTEN_IMPURE_WHERE 6:11-6:93 a listen's WHERE reads only its hops and literals — 'h-[:Messages]->' is neither"]
     );
     assert_eq!(
-        check("listen to chat-[:Channels]->-[m:Messages WHERE EXISTS(m-[:Reactions]->)]->-[:Interactions]-> fire f\n"),
+        check("listen to chat-[:Channels]->-[m:Messages WHERE exists(m-[:Reactions]->)]->-[:Interactions]-> fire f\n"),
         ["MOV_LISTEN_IMPURE_WHERE 6:11-6:93 a listen's WHERE reads only its hops and literals — 'm-[:Reactions]->' is neither"]
     );
     assert_eq!(
@@ -239,7 +239,7 @@ fn a_listen_where_reads_only_its_hops_and_literals() {
     );
     // What the rest of a WHERE says is still checked.
     assert_eq!(
-        check("listen to chat-[h:Channels]->-[m:Messages WHERE EXISTS(m-[:Reactions]->) AND m.Nope == \"x\"]->-[:Interactions]-> fire f\n")
+        check("listen to chat-[h:Channels]->-[m:Messages WHERE exists(m-[:Reactions]->) AND m.Nope == \"x\"]->-[:Interactions]-> fire f\n")
             .iter()
             .map(|d| d.split(' ').next().unwrap().to_string())
             .collect::<Vec<_>>(),

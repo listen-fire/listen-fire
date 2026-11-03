@@ -112,7 +112,7 @@ These hold everywhere, in every chapter, and are not restated per situation:
   (\`map(xs, (x) => x.Name, { concurrency: 2 })\`). A plugin is called the
   same way (\`fetchUrl(c.website)\`, \`fetchUrl(u, { email: @user_email })\`). A function, a plugin, a built-in and a
   closure bound to a name are all called the same way. Names are exact in
-  case outside walk brackets. Braces are declarative bodies.
+  case, inside walk brackets too. Braces are declarative bodies.
 - Fields read with a dot (\`msg.Subject\`); "double quotes" are strings;
   \${…} interpolates into them; == compares, = binds.
 - Outside walk brackets the code reads like TypeScript (\`&&\`, \`||\`, \`!\`,

@@ -2,7 +2,7 @@
 
 Every built-in function, one section each — fetch one by name (`builtins#List.sum`) instead of the whole chapter. Each entry gives the signature, what it means, whether the result is always there or `T | absent`, an ordering requirement where one exists, and an example. The reference chapter's *operators-and-functions* is the one-page version of this list. Entries run in groups: the core words, then each namespace with its members. Core words are always there and never qualified; a namespace member is always written with its namespace (`Text.upper(x)`). Every argument is checked when you save, and a call is typed by what it gives back (`Text.upper(x)` is text), so a built-in's call written into a number field is refused. A call can sit inside any expression and runs left to right.
 
-Inside walk brackets `-[…]->` these functions are spelled in capitals: `LOWER UPPER TRIM LENGTH ABS ROUND FLOOR CEIL DATE DATETIME NUMBER COALESCE EXISTS`, as in `ch-[m:Messages WHERE LOWER(m.Text) CONTAINS "urgent"]->`. Each section is headed by the name you write outside brackets (`Text.upper`, `List.sum`), which is what you fetch it by; the capitals names above are only the spellings inside walk brackets.
+Inside walk brackets `-[…]->` a function is spelled as it is outside them, as in `ch-[m:Messages WHERE Text.lower(m.Text) CONTAINS "urgent"]->`; only the logic words keep their capitals there (`AND`, `OR`, `NOT`). Each section is headed by the name you write (`Text.upper`, `List.sum`), which is what you fetch it by.
 
 ## Core words
 
@@ -302,11 +302,11 @@ batches = Number.ceil(count(rows) / 50)
 
 ### Number.parse
 
-`Number.parse(value)` → `number | absent` — coerces text to a number, and is absent when the text is no number. Guard it (`n != null`) or give it a fallback (`coalesce`, `?:`) where a value is required. `NUMBER(value)` is its spelling inside walk brackets.
+`Number.parse(value)` → `number | absent` — coerces text to a number, and is absent when the text is no number. Guard it (`n != null`) or give it a fallback (`coalesce`, `?:`) where a value is required.
 
 ```
 n = Number.parse(msg.Subject) ?: 0
-crm-[t:Teams WHERE t.`Team Size` <= NUMBER(m.Body)]->
+crm-[t:Teams WHERE t.`Team Size` <= Number.parse(m.Body)]->
 ```
 
 ### Number.format
@@ -322,10 +322,10 @@ long  = Number.format(1200000, "grouped")   # "1,200,000"
 
 ### Date.from
 
-`Date.from(value)` → `date` — coerces any readable date or timestamp to a calendar day (midnight UTC). Reach for it when a comparison spans two kinds of value; `DATE(value)` is its spelling inside walk brackets.
+`Date.from(value)` → `date` — coerces any readable date or timestamp to a calendar day (midnight UTC). Reach for it when a comparison spans two kinds of value.
 
 ```
-crm-[s:Tasks WHERE s.`Snoozed Until` <= DATE(m.Body)]->
+crm-[s:Tasks WHERE s.`Snoozed Until` <= Date.from(m.Body)]->
 ```
 
 ### Date.parse
@@ -364,7 +364,7 @@ today = Date.today("Europe/Berlin")
 
 ### DateTime.from
 
-`DateTime.from(value)` → `datetime` — coerces to a full UTC instant; `DATETIME(value)` is its spelling inside walk brackets.
+`DateTime.from(value)` → `datetime` — coerces to a full UTC instant.
 
 ```
 sent = DateTime.from(m.Date)

@@ -201,8 +201,10 @@ pub fn expression_words() -> impl Iterator<Item = String> {
 /// The standard namespaces (§2.2): values that hold functions.
 pub const NAMESPACES: &[&str] = &["Text", "Number", "Date", "DateTime", "Currency", "Url", "Json", "List", "Dict", "File"];
 
-/// The closed CAPS set read inside walk brackets (§4.1): each the member name
-/// of one everyday function, upper-cased, namespace dropped. Any letter case.
+/// The CAPS walk words 0.14 read inside walk brackets (§4.1): each the member
+/// name of one everyday function, upper-cased, namespace dropped, in any
+/// letter case. From 0.15 the brackets take the everyday spelling and refuse
+/// these by name; each still names the tree the everyday spelling reads into.
 pub const WALK_CAPS: &[(&str, &str)] = &[
     ("LOWER", "Text.lower"),
     ("UPPER", "Text.upper"),
@@ -335,8 +337,9 @@ pub fn spell_message(message: &str) -> String {
     let mut out = String::with_capacity(message.len());
     let mut chars = message.char_indices().peekable();
     let mut previous: Option<char> = None;
-    // Inside walk brackets (`-[c:Companies WHERE LOWER(c.Name) …]->`) a
-    // built-in keeps its CAPS walk word (§2.5).
+    // Inside walk brackets (`-[c:Companies WHERE c.Name AND …]->`) the
+    // logic words keep their CAPS; a built-in is spelled as outside them
+    // (0.15; 0.14 kept its CAPS walk word there).
     let mut walk_depth = 0usize;
     while let Some((i, c)) = chars.next() {
         let next = chars.peek().map(|&(_, d)| d);
@@ -345,7 +348,7 @@ pub fn spell_message(message: &str) -> String {
         } else if c == ']' && walk_depth > 0 && next == Some('-') {
             walk_depth -= 1;
         }
-        let starts_word = walk_depth == 0 && c.is_ascii_uppercase() && !previous.is_some_and(|p| is_word(p) || p == '.');
+        let starts_word = c.is_ascii_uppercase() && !previous.is_some_and(|p| is_word(p) || p == '.');
         if !starts_word {
             out.push(c);
             previous = Some(c);
@@ -367,8 +370,9 @@ pub fn spell_message(message: &str) -> String {
             word = stripped;
             trailing = ".";
         }
+        let respelled_here = walk_depth == 0 || WALK_CAPS.iter().any(|(caps, _)| *caps == word);
         match by_canonical(word) {
-            Some(s) if !next_is_word && s.canonical == word && !s.old_only && !s.new_only => out.push_str(s.current),
+            Some(s) if respelled_here && !next_is_word && s.canonical == word && !s.old_only && !s.new_only => out.push_str(s.current),
             _ => out.push_str(word),
         }
         out.push_str(trailing);
@@ -450,8 +454,8 @@ mod tests {
         let product = "a movement run does not have it; No movement file named \"x\"; the movement engine";
         assert_eq!(spell_message(product), product);
         assert_eq!(
-            spell_message("`COUNT(crm-[c:Companies WHERE LOWER(c.Name) == \"x\"]->)` and LOWER"),
-            "`count(crm-[c:Companies WHERE LOWER(c.Name) == \"x\"]->)` and Text.lower"
+            spell_message("`COUNT(crm-[c:Companies WHERE LOWER(c.Name) == \"x\" AND NOT c.Done]->)` and LOWER"),
+            "`count(crm-[c:Companies WHERE Text.lower(c.Name) == \"x\" AND NOT c.Done]->)` and Text.lower"
         );
     }
 }

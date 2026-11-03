@@ -137,8 +137,10 @@ fn a_list_s_length_membership_and_presence_follow_the_operand_s_type() {
     assert_eq!(fixes_of(&fn5("  c = Text.includes(xs, s)")), ["List.includes(xs, s)"]);
     assert_eq!(fixes_of(&fn5("  c = List.includes(t, s)")), ["Text.includes(t, s)"]);
     assert_eq!(codes(&fn5("  a = count(xs)\n  b = Text.length(t)\n  c = List.includes(xs, s)\n  d = Text.includes(t, s)")), Vec::<String>::new());
-    let walk = format!("{HEAD5}function go(c: <chat-[:channel]->>) {{\n  ms = c-[m:Messages WHERE m.Tags CONTAINS \"x\" AND LENGTH(m.Text) > 2]->\n}}");
-    assert_eq!(fixes_of(&walk), Vec::<String>::new());
+    // Inside walk brackets a built-in is spelled as outside them (0.15).
+    let walk = |predicate: &str| format!("{HEAD5}function go(c: <chat-[:channel]->>) {{\n  ms = c-[m:Messages WHERE {predicate}]->\n}}");
+    assert_eq!(fixes_of(&walk("m.Tags CONTAINS \"x\" AND Text.length(m.Text) > 2")), Vec::<String>::new());
+    assert_eq!(fixes_of(&walk("m.Tags CONTAINS \"x\" AND LENGTH(m.Text) > 2")), ["Text.length"]);
 }
 
 #[test]

@@ -134,8 +134,8 @@ fn a_part_computed_from_several_fields_names_each() {
 
 #[test]
 fn a_walk_off_a_connection_is_read_at_every_check_and_not_told() {
-    let mail = "  m = write mail-[:Messages]-> { To: t }\n  r = await m-[x:Replies WHERE EXISTS(crm-[c:People WHERE c.Email == x.From]->)]->\n";
-    let chat = "  post = write chat-[:Posts]-> { Text: t }\n  r = await new post-[x:Replies WHERE EXISTS(desk-[k:Tickets WHERE k.Owner == x.Author]->)]->\n";
+    let mail = "  m = write mail-[:Messages]-> { To: t }\n  r = await m-[x:Replies WHERE exists(crm-[c:People WHERE c.Email == x.From]->)]->\n";
+    let chat = "  post = write chat-[:Posts]-> { Text: t }\n  r = await new post-[x:Replies WHERE exists(desk-[k:Tickets WHERE k.Owner == x.Author]->)]->\n";
     let codes = |catalog, body| diagnostics(catalog, body, Some("0.12.13")).into_iter().map(|d| d.code).collect::<Vec<_>>();
     assert_eq!(codes(MAIL, mail), ["MOV_AWAIT_IMPURE_WHERE"]);
     assert_eq!(codes(CHAT, chat), ["MOV_AWAIT_IMPURE_WHERE"]);
@@ -143,8 +143,8 @@ fn a_walk_off_a_connection_is_read_at_every_check_and_not_told() {
 
 #[test]
 fn a_run_record_read_inside_a_nested_walk_is_told() {
-    let mail = "  founder = only(crm-[:People]->)\n  m = write mail-[:Messages]-> { To: t }\n  r = await m-[x:Replies WHERE EXISTS(crm-[c:People WHERE c.Email == founder.Email]->)]->\n";
-    let chat = "  ticket = only(desk-[:Tickets]->)\n  post = write chat-[:Posts]-> { Text: t }\n  r = await new post-[x:Replies WHERE EXISTS(desk-[k:Tickets WHERE k.Owner == ticket.Owner]->)]->\n";
+    let mail = "  founder = only(crm-[:People]->)\n  m = write mail-[:Messages]-> { To: t }\n  r = await m-[x:Replies WHERE exists(crm-[c:People WHERE c.Email == founder.Email]->)]->\n";
+    let chat = "  ticket = only(desk-[:Tickets]->)\n  post = write chat-[:Posts]-> { Text: t }\n  r = await new post-[x:Replies WHERE exists(desk-[k:Tickets WHERE k.Owner == ticket.Owner]->)]->\n";
     let told = |catalog, body| named(catalog, body).into_iter().filter(|d| d.starts_with("MOV_AWAIT_VALUE_CAPTURED")).collect::<Vec<_>>();
     assert_eq!(told(MAIL, mail), ["MOV_AWAIT_VALUE_CAPTURED 4:13-4:90 'founder.Email'"]);
     assert_eq!(told(CHAT, chat), ["MOV_AWAIT_VALUE_CAPTURED 4:17-4:98 'ticket.Owner'"]);

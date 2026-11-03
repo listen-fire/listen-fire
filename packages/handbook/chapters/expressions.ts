@@ -177,7 +177,7 @@ Because a function's arguments are ordinary expressions, a call can sit inside a
 - **Order is left to right, as the text reads.** Every operand before a nested call is read before the call runs, and a call's arguments are all evaluated before its body runs, so \`Text.concat(mark("a"), mark("b"))\` writes \`a\` and then \`b\`.
 - **\`? :\`, \`&&\`, \`||\` and \`coalesce\` short-circuit**, as TypeScript's \`? :\`, \`&&\`, \`||\` and \`??\` do. An operand they do not need is never evaluated, so a call in an arm that is not taken never runs and its writes never happen. \`coalesce(x, only(list))\` does not fail when \`x\` is present, however many values \`list\` holds.
 - **Suspension is for statements only.** A call that may wait (a function that \`await\`s) is refused inside an expression, because a wait parks the run where it is written and a place inside an expression has nowhere to come back to. Call it on its own line and use the name.
-- **A walk's \`WHERE\`, \`ORDER BY\` and settings are read once per landing**, so a function call, \`map\`, \`filter\`, \`reduce\`, \`List.groupBy\`, \`List.keyBy\` or \`members\` inside one is refused, naming the binding to write instead. A built-in that only computes a value (\`LENGTH(p.Name)\`) is fine there.
+- **A walk's \`WHERE\`, \`ORDER BY\` and settings are read once per landing**, so a function call, \`map\`, \`filter\`, \`reduce\`, \`List.groupBy\`, \`List.keyBy\` or \`members\` inside one is refused, naming the binding to write instead. A built-in that only computes a value (\`Text.length(p.Name)\`) is fine there.
 
 ### lists-spread-and-tuples
 

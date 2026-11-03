@@ -285,7 +285,7 @@ fn reads_on_bounded_edges_keep_todays_filter_messages() {
         ["MOV_HOP_FILTER_RESIDUAL 2:8-2:90 `Subject` (contains) on 'Messages' can't be filtered by the source, so those run here on what comes back — the rest of the WHERE narrows it first. The records you get are the same either way; the fetch is bigger."]
     );
     assert_eq!(
-        check("  xs = gmail-[m:Messages WHERE EXISTS(crm-[:Orgs]->)]->\n"),
+        check("  xs = gmail-[m:Messages WHERE exists(crm-[:Orgs]->)]->\n"),
         ["MOV_HOP_FILTER_UNSUPPORTED 2:8-2:56 This filter has to run in the app (it uses ai() or exists), which isn't possible over 'Messages' — an unbounded source. Narrow to a bounded relationship first, then filter."]
     );
     assert_eq!(

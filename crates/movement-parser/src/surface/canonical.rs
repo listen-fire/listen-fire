@@ -291,21 +291,32 @@ impl<'s> Canon<'s> {
         }
     }
 
-    // ── Inside walk brackets: CAPS words in any case; the everyday spelling is refused ──
+    // ── Inside walk brackets: the everyday spelling, as outside; a CAPS walk word is retired ──
 
     fn inside_walk(&mut self, e: &mut MExpr) {
         let MExpr::Call { callee, .. } = e else { return };
+        // `LOWER(x)` (any letter case), the walk word 0.14 read here, is
+        // written as outside the brackets (0.15). It reads into the tree it
+        // always did, so the fix is safe.
+        if let MExpr::Name { name, at, .. } = callee.as_ref()
+            && !name.quoted
+            && let Some((_, everyday)) = table::WALK_CAPS.iter().find(|(caps, everyday)| caps.eq_ignore_ascii_case(&name.text) && name.text != *everyday)
+        {
+            let (at, written) = (*at, name.text.clone());
+            let message = format!("inside walk brackets `{written}` is written `{everyday}`, as it is outside them");
+            self.old(at, message, Some(Edit { at, text: everyday.to_string() }));
+            if let Some(finding) = self.findings.last_mut() {
+                finding.unless_bound = Some(written);
+            }
+            return;
+        }
         let MExpr::Member { object, property, at, optional: false } = callee.as_ref() else { return };
         let MExpr::Name { name: ns, .. } = object.as_ref() else { return };
         let written = format!("{}.{}", ns.text, property.text);
+        // `Text.lower(x)` reads into the walk word's tree, as the lowering
+        // and every adapter that pushes a predicate down have always read it.
         if let Some((caps, _)) = table::WALK_CAPS.iter().find(|(_, everyday)| *everyday == written) {
-            let at = *at;
-            let message = format!("inside walk brackets `{written}` is written `{caps}`");
-            self.old(at, message, Some(Edit { at, text: caps.to_string() }));
-            // Read as the walk word it means, so the refusal is this one
-            // finding, not a second one from a lowering that knows no such
-            // name.
-            **callee = canonical_callee(caps, at);
+            **callee = canonical_callee(caps, *at);
             return;
         }
         // `Text.includes(t, v)` and `List.includes(xs, v)` read inside the

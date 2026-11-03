@@ -696,7 +696,7 @@ expression.ts and run.ts run it:
   (`EXISTS(x)`: not null, not an empty list); over an extraction its
   entities, the WHERE reading their fields. The TypeScript fetches every hop
   of every subject before the WHERE is read; so does this engine. A hop or a
-  target WHERE may hold one (`crm-[c:companies WHERE EXISTS(c-[:deals]->)]->`).
+  target WHERE may hold one (`crm-[c:companies WHERE exists(c-[:deals]->)]->`).
 - **Folds** (`case 'aggregate'`, `applyAggregation`): `FIRST`, `LAST`,
   `ONLY` (more than one present fails, quoting its argument as written), `COUNT` (what is present), `SUM`/`AVG`
   (`Number(v) || 0`), `MIN`/`MAX` (`Math.min`/`Math.max`: NaN if any is),

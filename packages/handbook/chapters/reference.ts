@@ -63,7 +63,7 @@ Types **always** wear angle brackets; positions, scalar values, and handles **ne
 
 ### operators-and-functions
 
-- Compare: \`==\` \`!=\` \`<\` \`<=\` \`>\` \`>=\`. Binding is \`=\` (never a comparison). Logic outside walk brackets: \`&&\` \`||\` \`!\`, \`x != null\`, \`exists(walk)\` or \`exists(x)\`, \`rec is <type>\`. Inside walk brackets it is SQL: \`AND\` \`OR\` \`NOT\` \`CONTAINS\` \`IN\` \`IS\` \`EXISTS(…)\`, and a field is read through the alias.
+- Compare: \`==\` \`!=\` \`<\` \`<=\` \`>\` \`>=\`. Binding is \`=\` (never a comparison). Logic outside walk brackets: \`&&\` \`||\` \`!\`, \`x != null\`, \`exists(walk)\` or \`exists(x)\`, \`rec is <type>\`. Inside walk brackets the logic is SQL: \`AND\` \`OR\` \`NOT\` \`CONTAINS\` \`IN\` \`IS\`; a function is spelled as outside them (\`Text.lower(c.Name)\`, \`exists(c-[:Team]->)\`), and a field is read through the alias.
 - Containment outside brackets: \`Text.includes(x, "pdf")\` on text, \`List.includes(xs, v)\` on a list.
 - \`is\` also takes a declared node (\`rec is <Contact>\`): true when the record carries every field that structure declares — nested nodes don't gate it, extras allowed. Narrows the same way.
 - Aggregates / lists: \`Text.concat(a, b)\`, \`coalesce(a, b)\` (the first that has a value, as \`??\`: an empty text is a value, so \`coalesce(pr.Body, pr.Title)\` answers an empty body; typed as \`a ?? b\`, so \`coalesce(n, \"n/a\")\` is a number or a text, and is no number), \`only(…)\` (the one that matched — fails the run on more than one), \`count(…)\` (a walk or a list), \`List.sum(…)\`, \`List.avg(…)\` (always present), \`List.min(…)\`, \`List.max(…)\` (\`T | absent\`), \`List.from(…)\`, \`List.compact(a, b)\` (flat, nulls dropped), \`Text.join(list, ", ")\`, \`sort(list)\` / \`sort(list, { order: "desc" })\` / \`sort(list, (r) => r.score)\` / \`sort(list, (r) => r.score, { order: "desc" })\`, \`[a, b]\` (list literal). \`Text.join\` / \`first\` / \`List.last\` / \`xs[n]\` need a sequence: a \`sort\`, an \`ORDER BY\` on the hop, or a relationship the source keeps in order.
@@ -122,7 +122,7 @@ Connecting records (write related records **along their edges**, never as flat r
 - \`write (a-[:agreements]->, b-[:agreements]->) { … }\` — one record under several parents; \`unique by (a, b)\`.
 - \`link champion -[:led]-> part\` — connect two records already bound.
 - \`p = match c-[:portfolio]-> { unique by (Name), Name: "Fund III" }\` — find by identity, never create or write; the result is the record or absent, so test it (\`if (p != null) { … }\`) before reading it.
-- \`match crm-[c:Companies WHERE EXISTS(c-[:Team]->)]-> { … }\` — a \`WHERE\` on the target's final hop limits which existing records may be matched (\`write\` still creates when none is left).
+- \`match crm-[c:Companies WHERE exists(c-[:Team]->)]-> { … }\` — a \`WHERE\` on the target's final hop limits which existing records may be matched (\`write\` still creates when none is left).
 - \`if (p != null) { link c -[:portfolio]-> p }\` — \`match\` first, then link the guarded record.
 - \`write record { Status: "Customer" }\` — in-place update of a held/traversed record (no \`unique by\`).
 - \`unlink a -[:related]-> b\` — sever an edge. \`delete stale\` — remove a record (only when removal is the automation's purpose).

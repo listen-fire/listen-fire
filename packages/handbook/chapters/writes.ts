@@ -100,7 +100,7 @@ unique by (\`First Name\`, \`Last Name\`)
 - A \`FUZZY\` match is settled in two steps: the target surfaces the candidates by its own means, and a judge picks the best one, if any. A record the run built judges the same way.
 - A component may pin a value: \`unique by (parent, Stage == "Seed")\` matches only a record whose Stage is Seed.
 - A component that is not an equality narrows the candidates after the lookup: \`unique by (Name, Updated WITHIN 30d)\` matches by Name, and only a record updated in the last 30 days. With several \`unique by\` lines, each line's test narrows only the records its own key found.
-- Such a test reads only the candidate's own fields, and a candidate without the field fails it unless the test is \`!=\`. To test anything else (a hop such as \`EXISTS(…)\`, a value from earlier in the run), use a \`WHERE\` on the target instead.
+- Such a test reads only the candidate's own fields, and a candidate without the field fails it unless the test is \`!=\`. To test anything else (a hop such as \`exists(…)\`, a value from earlier in the run), use a \`WHERE\` on the target instead.
 
 Identity at write time is the **union** of the target's own rules and your \`unique by\`, so author only the identity the target lacks: compound business keys, parent-scoped identity, fields it treats as ordinary.
 
@@ -127,7 +127,7 @@ if (company == null) {
 - The fields are the values to match on, and nothing is written, so \`?:\`, \`+:\` and \`+?:\` are refused.
 - A matched record is the old record: it has no \`@old\`.
 - The handle reads like a write's. A polymorphic edge takes the type explicitly: \`match a-[:related]-><Companies> { … }\`.
-- A \`WHERE\` on the target's hop says which existing records may be matched: \`match crm-[c:Companies WHERE EXISTS(c-[:Team]->)]-> { … }\` considers only companies with someone on their team. Each candidate is read the way a traversal's \`WHERE\` reads a record, before the identity is settled. On \`write\` the \`WHERE\` limits what may be updated, never whether to write: with no candidate left, the write creates.
+- A \`WHERE\` on the target's hop says which existing records may be matched: \`match crm-[c:Companies WHERE exists(c-[:Team]->)]-> { … }\` considers only companies with someone on their team. Each candidate is read the way a traversal's \`WHERE\` reads a record, before the identity is settled. On \`write\` the \`WHERE\` limits what may be updated, never whether to write: with no candidate left, the write creates.
 - Use \`write … unique by\` instead when the record should be created if it is missing.
 
 \`FUZZY\` works only on the fields a target lists for similarity, and the save check names them. A valuations Legal Entity lists \`Name\`, \`Legal Name\`, \`Also Known As\` and \`Other Names\`: its shortlist searches the words in all four, plus near spellings of \`Name\` and \`Legal Name\`. Every other field matches exactly, and \`Website\` ignores the scheme, \`www.\` and a trailing slash.
@@ -288,7 +288,7 @@ inbox = connect \`@lf/email\`
 crm   = connect \`@lf/attio\` using acme
 
 function \`Intake\`(m: <inbox-[:Emails]->>) {
-  company = match crm-[c:Companies WHERE EXISTS(c-[:Team]->)]-> {
+  company = match crm-[c:Companies WHERE exists(c-[:Team]->)]-> {
     unique by (FUZZY Name)
     Name: m.Subject
   }

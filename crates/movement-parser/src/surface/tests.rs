@@ -261,32 +261,35 @@ fn presence_and_walks() {
     assert_eq!(upgraded("exists(f(x))"), "f(x) != null");
     assert_eq!(upgraded("exists(f(x)[1])"), "f(x)[1] != null");
     assert_eq!(upgraded("exists(l[i])"), "l[i] != null");
-    // Inside walk brackets nothing is respelled: CAPS words, AND, any case.
-    let walk = "crm-[c:Companies WHERE c.Categories == \"Customer\" AND LOWER(c.Name) CONTAINS \"x\" ORDER BY c.`Created At` DESC LIMIT 10]->";
+    // Inside walk brackets a built-in is spelled as outside them; the logic
+    // words keep their CAPS (AND, any case).
+    let walk = "crm-[c:Companies WHERE c.Categories == \"Customer\" AND Text.lower(c.Name) CONTAINS \"x\" ORDER BY c.`Created At` DESC LIMIT 10]->";
     assert!(findings(walk).is_empty(), "{:?}", findings(walk));
     // A field read through the hop's alias is the bare field (the gates and
     // the pushdown see the field they always saw), marked as only ever the
     // field: never a variable of the same name.
-    let bare = "crm-[c:Companies WHERE Categories == \"Customer\" AND LOWER(Name) CONTAINS \"x\" ORDER BY `Created At` DESC LIMIT 10]->";
+    let bare = "crm-[c:Companies WHERE Categories == \"Customer\" AND Text.lower(Name) CONTAINS \"x\" ORDER BY `Created At` DESC LIMIT 10]->";
     let read = lowered(walk);
     assert_eq!(read.to_string().matches(r#""fieldOnly":true"#).count(), 3, "{read}");
     assert_eq!(without_field_only(read), lowered(bare));
     // Another hop's alias, and a walk nested in the WHERE, keep their reads.
-    let nested = "crm-[c:Companies]->-[t:Team WHERE c.Name == t.Name AND EXISTS(t-[p:Posts WHERE t.Name == Title]->)]->";
-    let nested_bare = "crm-[c:Companies]->-[t:Team WHERE c.Name == Name AND EXISTS(t-[p:Posts WHERE t.Name == Title]->)]->";
+    let nested = "crm-[c:Companies]->-[t:Team WHERE c.Name == t.Name AND exists(t-[p:Posts WHERE t.Name == Title]->)]->";
+    let nested_bare = "crm-[c:Companies]->-[t:Team WHERE c.Name == Name AND exists(t-[p:Posts WHERE t.Name == Title]->)]->";
     let read = lowered(nested);
     assert_eq!(read.to_string().matches(r#""fieldOnly":true"#).count(), 1, "{read}");
     assert_eq!(without_field_only(read), lowered(nested_bare));
-    assert!(findings("ch-[m:Messages WHERE lower(m.Text) CONTAINS \"urgent\"]->").is_empty());
-    let everyday = findings("ch-[m:Messages WHERE Text.lower(m.Text) CONTAINS \"urgent\"]->");
-    assert_eq!(everyday.len(), 1);
-    assert_eq!(everyday[0].edits.as_ref().unwrap()[0].text, "LOWER");
-    // The refused spelling reads as the walk word it means: the one finding,
-    // and no lowering refusal beside it.
-    assert_eq!(
-        lowered("ch-[m:Messages WHERE Text.lower(m.Text) CONTAINS \"urgent\"]->"),
-        lowered("ch-[m:Messages WHERE LOWER(m.Text) CONTAINS \"urgent\"]->")
-    );
+    assert!(findings("ch-[m:Messages WHERE Text.lower(m.Text) CONTAINS \"urgent\"]->").is_empty());
+    // A CAPS walk word, in any letter case, is retired (0.15): refused with
+    // the everyday spelling, and read into the tree it always was, so an
+    // adapter that pushes the predicate down sees the same one.
+    for (written, everyday) in [("LOWER", "Text.lower"), ("lower", "Text.lower"), ("TRIM", "Text.trim"), ("COALESCE", "coalesce"), ("EXISTS", "exists"), ("ROUND", "Number.round")] {
+        let walk = format!("ch-[m:Messages WHERE {written}(m.Text) CONTAINS \"urgent\"]->");
+        let found = findings(&walk);
+        assert_eq!(found.len(), 1, "{written}: {found:?}");
+        assert_eq!(found[0].message, format!("inside walk brackets `{written}` is written `{everyday}`, as it is outside them"));
+        assert_eq!(found[0].edits.as_ref().unwrap()[0].text, everyday);
+        assert_eq!(lowered(&walk), lowered(&format!("ch-[m:Messages WHERE {everyday}(m.Text) CONTAINS \"urgent\"]->")), "{written}");
+    }
 }
 
 #[test]

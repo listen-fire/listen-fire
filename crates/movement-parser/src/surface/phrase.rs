@@ -210,7 +210,7 @@ mod tests {
             ("TRUE", "true"),
             ("EXISTS(h-[:@old]->)", "exists(h-[:@old]->)"),
             ("FIRST(h-[:@old]->) == h", "first(h-[:@old]->) == h"),
-            ("crm-[c:Companies WHERE LOWER(c.Name) CONTAINS \"x\"]->", "crm-[c:Companies WHERE LOWER(c.Name) CONTAINS \"x\"]->"),
+            ("crm-[c:Companies WHERE LOWER(c.Name) CONTAINS \"x\"]->", "crm-[c:Companies WHERE Text.lower(c.Name) CONTAINS \"x\"]->"),
             ("if ISNULL(x) { ERROR(\"…\") }", "if (x == null) { fail(\"…\") }"),
             ("if EXISTS(x) { … }", "if (x != null) { … }"),
             ("not code at all, really", "not code at all, really"),

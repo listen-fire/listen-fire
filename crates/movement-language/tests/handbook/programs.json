@@ -167,7 +167,7 @@
   {
     "chapter": "writes",
     "construct": "a WHERE on a match target's hop, narrowing which existing records may be matched",
-    "source": "\ninbox = connect `@lf/email`\ncrm   = connect `@lf/attio` using acme\n\nfunction `Intake`(m: <inbox-[:Emails]->>) {\n  company = match crm-[c:Companies WHERE EXISTS(c-[:Team]->)]-> {\n    unique by (FUZZY Name)\n    Name: m.Subject\n  }\n  if (company != null) {\n    write company-[:Notes]-> { Title: \"Seen again\", Content: m.Subject }\n  }\n}\n"
+    "source": "\ninbox = connect `@lf/email`\ncrm   = connect `@lf/attio` using acme\n\nfunction `Intake`(m: <inbox-[:Emails]->>) {\n  company = match crm-[c:Companies WHERE exists(c-[:Team]->)]-> {\n    unique by (FUZZY Name)\n    Name: m.Subject\n  }\n  if (company != null) {\n    write company-[:Notes]-> { Title: \"Seen again\", Content: m.Subject }\n  }\n}\n"
   },
   {
     "chapter": "writes",

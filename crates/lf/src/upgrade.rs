@@ -569,4 +569,15 @@ mod tests {
         assert_eq!(upgraded.source, source);
         assert_eq!(upgraded.remaining.iter().map(|d| d.code.as_str()).collect::<Vec<_>>(), ["MOV_LAZY_RETIRED"; 3]);
     }
+
+    /// A walk word retired in 0.15 (`LOWER`) is rewritten to the everyday
+    /// spelling unasked: the rewrite reads into the same predicate.
+    #[test]
+    fn a_walk_word_is_respelled_as_outside_the_brackets() {
+        let catalog = CatalogSnapshot::load(STORE).unwrap();
+        let source = "import { store } from adapters\ns = connect store\n\nfunction f() {\n  return count(s-[t:Tables WHERE LOWER(t.Name) == \"a\" AND EXISTS(t.Name)]->)\n}\n";
+        let upgraded = upgrade_source(source, &catalog, false, "0.14.0");
+        assert_eq!(upgraded.source, source.replace("LOWER(", "Text.lower(").replace("EXISTS(", "exists("));
+        assert!(upgraded.remaining.iter().all(|d| d.code != "MOV_V5_SPELLING"), "{:?}", upgraded.remaining);
+    }
 }

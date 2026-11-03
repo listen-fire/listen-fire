@@ -73,6 +73,8 @@ const NOT_RECOMMENDED: Array<{ pattern: RegExp; label: string }> = [
   { pattern: /\bIF\b[^\n]*\bTHEN\b/, label: '`IF … THEN … ELSE … END` — write `c ? a : b`' },
   { pattern: /\bISNULL\(/, label: '`ISNULL(x)` — write `x == null`' },
   { pattern: /\bAT\(/, label: '`AT(xs, i)` — write `xs[i]`' },
+  // 0.15: inside walk brackets too.
+  { pattern: /\b(?:LOWER|UPPER|TRIM|LENGTH|ABS|ROUND|FLOOR|CEIL|DATETIME|DATE|NUMBER|COALESCE|EXISTS)\(/, label: 'a CAPS walk word (`LOWER(x)`) — write the built-in as outside walk brackets: `Text.lower(x)`' },
   { pattern: /\b(?:parallel|race)\s*\{/, label: 'a `parallel { … }` / `race { … }` block — write `all(f, g)` / `race(f, g)`' },
   { pattern: /\bparallel\s*\(/, label: '`parallel(…)` — write `all(f, g)`' },
   { pattern: /\b(?:race|all)\s*\(\s*\[/, label: 'a combinator over a list — pass the arms as arguments: `race(f, g)`' },
