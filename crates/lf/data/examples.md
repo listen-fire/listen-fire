@@ -261,11 +261,11 @@ search: read rows table list records all rows walk query airtable sheet select f
 ops = connect `@lf/airtable` using my_airtable { base: "Ops" }
 
 function `Vendors`(i: <manual-[:Invocations]->>) {
-  return ops-[v:Vendors WHERE v.Spend > 0]-> { return v.Vendor }
+  return ops-[v:Vendors WHERE v.Spend != null && v.Spend > 0]-> { return v.Vendor }
 }
 ```
 
-A table's rows are the records along its edge off the base, not a field of the table.
+A table's rows are the records along its edge off the base; a cell left empty is absent, so test it before comparing.
 
 ### list-contains
 

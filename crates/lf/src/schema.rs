@@ -447,7 +447,10 @@ pub fn instance_schema_from_descriptors(input: &ProjectionInput) -> Projection {
                 }
             }
             if truthy(field.get("writable")) {
-                writable_fields.insert(field_name.clone(), type_);
+                // `mayBeAbsent` is a read's promise (a record may not hold the
+                // field); a write gives the field a value.
+                let written = if Js::is_true(field.get("mayBeAbsent")) { type_.get("of").cloned().unwrap_or(type_) } else { type_ };
+                writable_fields.insert(field_name.clone(), written);
                 write_field_name_by_id.insert(key(field.get("fieldId")), field_name.clone());
                 if Js::is_true(field.get("required")) {
                     required_fields.push(field_name.clone());
@@ -1603,6 +1606,20 @@ mod tests {
             field_type_from_descriptor(&field, &Projecting { owner: "airtable", position_of: &position_of }).unwrap().to_json(),
             r#"{"kind":"maybeAbsent","of":{"kind":"record","position":{"kind":"position","position":"Candidates"}}}"#
         );
+    }
+
+    #[test]
+    fn a_field_that_may_be_absent_is_written_with_a_value() {
+        let entries = [js(r#"{"typeId":"Deals","displayName":"Deals","writable":true,"readable":true}"#)];
+        let descriptors: IndexMap<String, Js> = [(
+            "Deals".to_string(),
+            js(r#"{"typeId":"Deals","displayName":"Deals","fields":[{"fieldId":"Name","displayName":"Name","kind":"string","mayBeAbsent":true,"writable":true,"required":false}],"references":[]}"#),
+        )]
+        .into_iter()
+        .collect();
+        let schema = describe_external_schema("airtable", &entries, &descriptors);
+        assert_eq!(schema.get("positions").and_then(|p| p.get("Deals")).and_then(|d| d.get("properties")).and_then(|p| p.get("Name")).map(Js::to_json).as_deref(), Some(r#"{"kind":"maybeAbsent","of":"text"}"#));
+        assert_eq!(schema.get("writableRoots").and_then(|w| w.get("Deals")).and_then(|d| d.get("fields")).and_then(|f| f.get("Name")).map(Js::to_json).as_deref(), Some(r#""text""#));
     }
 
     #[test]

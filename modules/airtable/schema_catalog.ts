@@ -20,6 +20,7 @@ import {
   READ_ONLY_FIELD_TYPES,
   RECORD_ID_FIELD,
   TABLE_META_TYPE,
+  mayBeEmpty,
   type AirtableTableId,
   type AirtableFieldMeta,
   type AirtableTableMeta,
@@ -312,6 +313,9 @@ function fieldDescriptor(field: AirtableFieldMeta): SchemaFieldDescriptor {
     kind: choices.length > 0 ? 'enum' : shape.kind,
     ...(choices.length > 0 ? { enumValues: choices } : {}),
     cardinality: shape.cardinality,
+    // Airtable leaves an empty cell out of a row. A checkbox and a list type
+    // are read back as `false` and `[]`; any other may have no value.
+    ...(mayBeEmpty(field.type) ? { mayBeAbsent: true } : {}),
     writable: !READ_ONLY_FIELD_TYPES.has(field.type ?? ''),
     required: false,
     description: field.description,

@@ -43,6 +43,7 @@ import {
 import { coerceAirtableValue } from '../record';
 import { makeStablePosition, makeMetaPosition, makeUnstablePosition, positionData } from 'movement-engine/public/catalog';
 import { arrivalsFromPayload, changeDataOf, changesTables } from '../webhook';
+import { mayBeEmpty, withEmptyCells } from '../types';
 import { instanceSchemaFromDescriptors } from 'movement-engine/public/catalog';
 
 
@@ -202,6 +203,41 @@ function constraints(entries: Array<{ fieldId: string; fuzzy?: boolean }>): Reso
     any: [{ all: entries.map((e) => ({ field: e.fieldId, fuzzy: e.fuzzy })) }],
   };
 }
+
+// Airtable leaves an empty cell out of a row ("", [], false). Which fields
+// may then have no value, and what a left-out cell is read back as.
+describe('empty cells', () => {
+  it('a field that may be empty reads as maybe absent; a checkbox, a list and a stamp do not', () => {
+    for (const type of ['singleLineText', 'multilineText', 'richText', 'email', 'url', 'phoneNumber', 'number', 'percent', 'currency', 'duration', 'rating', 'date', 'dateTime', 'singleSelect', 'singleCollaborator', 'barcode', 'formula', 'rollup', 'aiText', 'lastModifiedTime', 'lastModifiedBy']) {
+      expect([type, mayBeEmpty(type)]).toEqual([type, true]);
+    }
+    for (const type of ['checkbox', 'multipleSelects', 'multipleCollaborators', 'multipleAttachments', 'multipleLookupValues', 'lookup', 'multipleRecordLinks', 'autoNumber', 'count', 'createdTime', 'createdBy', 'button']) {
+      expect([type, mayBeEmpty(type)]).toEqual([type, false]);
+    }
+  });
+
+  it('a left-out checkbox is unchecked and a left-out list holds none; any other stays left out', () => {
+    const fields = [
+      { name: 'Name', type: 'singleLineText' },
+      { name: 'Done', type: 'checkbox' },
+      { name: 'Tags', type: 'multipleSelects' },
+      { name: 'Links', type: 'multipleRecordLinks' },
+      { name: 'Seen', type: 'checkbox' },
+    ];
+    expect(withEmptyCells({ Seen: true }, fields)).toEqual({ Seen: true, Done: false, Tags: [], Links: [] });
+  });
+
+  it('the catalog marks each field a row may leave empty, the primary field by its type', async () => {
+    const { adapter } = makeAdapter();
+    const descriptor = await adapter.describe(DEALS_TYPE);
+    const absent = new Map(descriptor!.fields.map((f) => [f.displayName, f.mayBeAbsent === true]));
+    expect(absent.get('Name')).toBe(true);
+    expect(absent.get('Amount')).toBe(true);
+    expect(absent.get('Stage')).toBe(true);
+    expect(absent.get('Closed')).toBe(false);
+    expect(absent.get('Tags')).toBe(false);
+  });
+});
 
 describe('AirtableAdapter.resolveEntity', () => {
   it('builds a {fieldName} = "value" formula from an exact constraint and attributes exactness', async () => {
@@ -818,7 +854,9 @@ describe('a change → its record', () => {
     const { adapter } = makeMultiBaseAdapter({ teamId: 'team-air-change-rec', bases: [crm()], records: [{ id: 'recOLD01', fields: { Name: 'Acme', Stage: 'Won' } }] });
     const results = await adapter.getRelated({ position: change(updated), fieldId: 'Record', direction: 'outgoing' });
     expect(results.map((r) => [r.position.recordType, r.position.identity.kind === 'stable' && r.position.identity.recordId, positionData(r.position)])).toEqual([
-      ['Deals', 'recOLD01', { Name: 'Acme', Stage: 'Won' }],
+      // Airtable leaves an empty cell out: the unchecked checkbox and the
+      // empty lists are read back as such, the rest are absent.
+      ['Deals', 'recOLD01', { Name: 'Acme', Stage: 'Won', Closed: false, Deck: [], Owner: [], Source: [], Tags: [] }],
     ]);
   });
 
@@ -842,6 +880,26 @@ describe('arrivalsFromPayload', () => {
     fieldsByTable: new Map([
       ['tblDEALS01', new Map([['fldNAME', { name: 'Name', type: 'singleLineText' }], ['fldSTAGE', { name: 'Stage', type: 'singleSelect' }]])],
     ]),
+  });
+
+  it('a change carries its rows with an unchecked checkbox and an empty list put back', () => {
+    const withDone = { ...context(false), fieldsByTable: new Map([['tblDEALS01', new Map([['fldNAME', { name: 'Name', type: 'singleLineText' }], ['fldDONE', { name: 'Done', type: 'checkbox' }], ['fldTAGS', { name: 'Tags', type: 'multipleSelects' }]])]]) };
+    const arrivals = arrivalsFromPayload(
+      {
+        baseTransactionNumber: 8,
+        changedTablesById: {
+          tblDEALS01: {
+            createdRecordsById: { recNEW01: { cellValuesByFieldId: { fldNAME: 'Acme' } } },
+            changedRecordsById: { recOLD01: { current: { cellValuesByFieldId: {} }, previous: { cellValuesByFieldId: { fldDONE: true } }, unchanged: { cellValuesByFieldId: { fldNAME: 'Beta' } } } },
+          },
+        },
+      },
+      withDone,
+    );
+    expect(arrivals.map((a) => [a.landing.fields.Current, a.landing.fields.Previous])).toEqual([
+      [{ Name: 'Acme', Done: false, Tags: [] }, undefined],
+      [{ Name: 'Beta', Done: false, Tags: [] }, { Name: 'Beta', Done: true, Tags: [] }],
+    ]);
   });
 
   it('a row created, one updated in two fields and one deleted are three changes, one per row, each with the row before and after', () => {
@@ -1250,8 +1308,10 @@ movement m(x: <air-[:\`Record Change\`]->>) {
     });
     const { projection } = await projectUnpositioned(adapter);
     const deals = projection.schema.positions.Deals?.properties;
-    expect(deals?.Stage).toMatchObject({ kind: 'enum', options: ['Open', 'Won'] });
+    // A cell Airtable may leave out reads as absent; a list left out reads
+    // as an empty list.
+    expect(deals?.Stage).toMatchObject({ kind: 'maybeAbsent', of: { kind: 'enum', options: ['Open', 'Won'] } });
     expect(deals?.Tags).toMatchObject({ kind: 'list', of: { kind: 'enum', options: ['Hot', 'Warm'] } });
-    expect(deals?.Region).toBe('text');
+    expect(deals?.Region).toMatchObject({ kind: 'maybeAbsent', of: 'text' });
   });
 });

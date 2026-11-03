@@ -18,7 +18,7 @@ import { z } from 'zod';
 
 import type { Arrival, AwaitLanding } from 'engine-contracts';
 import type { AirtableWebhookPayload } from './api_client';
-import { BASE_META_TYPE, TABLE_META_TYPE } from './types';
+import { BASE_META_TYPE, TABLE_META_TYPE, withEmptyCells } from './types';
 
 /** The Airtable ping POSTed to the callback URL. It carries only ids — the
  *  actual changes are pulled from the webhook's payload feed. */
@@ -226,6 +226,9 @@ export function arrivalsFromPayload(payload: AirtableWebhookPayload, context: Pa
       }
       return data;
     };
+    // A row as a change carries it: every cell left out that has a value
+    // when empty (an unchecked checkbox, an empty list) put back.
+    const row = (cells: Record<string, unknown>): Record<string, unknown> => withEmptyCells(cells, tableFields?.values() ?? []);
     const change = (recordId: string, kind: AirtableChangeKind, rows: { Current?: Record<string, unknown>; Previous?: Record<string, unknown>; changed: string[] }): AirtableArrival => {
       const id = `${transaction}:${recordId}`;
       const { changed, ...held } = rows;
@@ -251,7 +254,7 @@ export function arrivalsFromPayload(payload: AirtableWebhookPayload, context: Pa
     };
     for (const [recordId, created] of Object.entries(changes.createdRecordsById ?? {})) {
       const current = named(created.cellValuesByFieldId);
-      arrivals.push(change(recordId, 'created', { Current: current, changed: Object.keys(current) }));
+      arrivals.push(change(recordId, 'created', { Current: row(current), changed: Object.keys(current) }));
     }
     for (const [recordId, updated] of Object.entries(changes.changedRecordsById ?? {})) {
       // `current` holds the changed cells as the edit left them, `previous`
@@ -264,7 +267,7 @@ export function arrivalsFromPayload(payload: AirtableWebhookPayload, context: Pa
       const previous = named(updated.previous?.cellValuesByFieldId);
       // An emptied cell may be in `previous` alone: it changed too.
       const changed = [...new Set([...Object.keys(current), ...Object.keys(previous)])].filter((name) => !(name in unchanged));
-      arrivals.push(change(recordId, 'updated', { Current: { ...unchanged, ...current }, Previous: { ...unchanged, ...previous }, changed }));
+      arrivals.push(change(recordId, 'updated', { Current: row({ ...unchanged, ...current }), Previous: row({ ...unchanged, ...previous }), changed }));
     }
     for (const recordId of changes.destroyedRecordIds ?? []) {
       arrivals.push(change(recordId, 'deleted', { changed: [] }));

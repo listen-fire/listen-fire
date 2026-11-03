@@ -189,7 +189,9 @@ export async function listCollection(input: {
   ]);
   return rows.map((row) => {
     const data: Record<string, unknown> = {};
-    for (const col of columns) data[col.columnName] = row.values[col.columnIndex] ?? null;
+    // The values API leaves a row's trailing blank cells out and answers an
+    // inner one as "": both are a blank cell, read as absent.
+    for (const col of columns) data[col.columnName] = blankAsAbsent(row.values[col.columnIndex]);
     return {
       position: makeStablePosition({
         adapterType: GOOGLE_SHEETS_ADAPTER_TYPE,
@@ -199,6 +201,10 @@ export async function listCollection(input: {
       }),
     };
   });
+}
+
+function blankAsAbsent(cell: unknown): unknown {
+  return cell === undefined || cell === '' ? null : cell;
 }
 
 // ── Row identity: unique-by resolution over live table rows ─────────────────
@@ -267,7 +273,9 @@ export async function resolveEntity(input: {
     );
     if (!matches) continue;
     const data: Record<string, unknown> = {};
-    for (const col of columns) data[col.columnName] = row.values[col.columnIndex] ?? null;
+    // The values API leaves a row's trailing blank cells out and answers an
+    // inner one as "": both are a blank cell, read as absent.
+    for (const col of columns) data[col.columnName] = blankAsAbsent(row.values[col.columnIndex]);
     candidates.push({
       adapterType: GOOGLE_SHEETS_ADAPTER_TYPE,
       externalId: rowAddress({ spreadsheetId, tableId, rowNumber: row.rowNumber }),

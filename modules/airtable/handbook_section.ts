@@ -39,6 +39,10 @@ It fires when Stage comes to be Interview, by an edit or on a row created at it 
 
 A connection started at its base (\`\`connect \`@lf/airtable\` using … { base: "Hiring" }\`\`) begins at that base's tables, so its listens start at \`Tables\`.
 
+### empty-cells
+
+Airtable leaves an empty cell out of a row, so a field that can be empty may be absent: text of every kind, a number, a date, a single select, a collaborator, a formula, a rollup. Test it or give it a fallback before you use it (\`coalesce(r.Owner, "Unassigned")\`, \`r.Amount != null && r.Amount > 0\`). An unchecked checkbox reads \`false\`, a list field with nothing in it (a multiple select, attachments, linked rows) reads \`[]\`, and an autonumber, a count and the created time are always there.
+
 ### a-renamed-table
 
 The bases and tables a listen names are looked up again whenever Airtable reports that a base's tables changed: a table renamed to "Expenses" is heard from that moment, and the one renamed away from it no longer is. Changes a table had before it matched are never replayed. \`listen-fire listens\` shows which tables a listen hears now and when they were last looked up.

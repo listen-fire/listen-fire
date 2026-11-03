@@ -7,14 +7,16 @@
 
 import type { GoogleSheetsApiClient } from '../api_client';
 
+import { positionData } from 'movement-engine/public/catalog';
 import {
+  listCollection,
   resolveEntity,
   updateRecord,
   readRecord,
   parseRowAddress,
   rowAddress,
 } from '../row';
-import { loadTableCatalog, tableTypeNamesOf, resolveTable } from '../schema_catalog';
+import { loadTableCatalog, tableTypeNamesOf, resolveTable, tableDescriptorFromColumns } from '../schema_catalog';
 import { parseA1Cell } from '../cells';
 
 const COLUMNS = [
@@ -178,5 +180,25 @@ describe('parseA1Cell', () => {
     expect(parseA1Cell('Dashboard!')).toBeNull();
     expect(parseA1Cell('2B')).toBeNull();
     expect(parseA1Cell('B0')).toBeNull();
+  });
+});
+
+// A blank cell is absent on a read, whether the values API left it out (a
+// trailing one) or answered it as "" (an inner one); every column says so.
+describe('blank cells', () => {
+  it('a row read lists a blank cell as absent', async () => {
+    const rows = jest.fn(async () => [{ rowNumber: 2, values: ['Acme Corp', ''] }]);
+    const blanks = { getTableColumns, getTableRows: rows } as unknown as GoogleSheetsApiClient;
+    const [row] = await listCollection({ client: blanks, ids, tableName: 'Deals (table)' });
+    expect(positionData(row.position)).toEqual({ Name: 'Acme Corp', Stage: null, Domain: null });
+  });
+
+  it('every column of a table may be absent on a read', async () => {
+    const descriptor = tableDescriptorFromColumns({ displayName: 'Deals (table)', columns: COLUMNS });
+    expect(descriptor.fields.filter((f) => COLUMNS.some((c) => c.columnName === f.fieldId)).map((f) => [f.fieldId, f.mayBeAbsent])).toEqual([
+      ['Name', true],
+      ['Stage', true],
+      ['Domain', true],
+    ]);
   });
 });

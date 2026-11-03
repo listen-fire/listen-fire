@@ -637,7 +637,9 @@ export function instanceSchemaFromDescriptors(input: {
         if (field.changedIn !== undefined) changedFields[fieldName] = field.changedIn;
       }
       if (field.writable) {
-        writableFields[fieldName] = type;
+        // `mayBeAbsent` is a read's promise (a record may not hold the
+        // field); a write gives the field a value.
+        writableFields[fieldName] = type !== undefined && typeof type === 'object' && type.kind === 'maybeAbsent' ? type.of : type;
         writeFieldNameById.set(field.fieldId, fieldName);
         if (field.required === true) requiredFields.push(fieldName);
         // Authoring guidance rides along — value conventions and live

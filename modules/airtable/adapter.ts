@@ -48,6 +48,7 @@ import { stubTargetOf } from 'movement-engine/public/adapter';
 import { memoizedResolver, naturalName, type ScopedResolver } from 'module-kit/adapter/name_resolution';
 import {
   AIRTABLE_ADAPTER_TYPE,
+  withEmptyCells,
   type AirtableTableId,
 } from './types';
 import {
@@ -521,7 +522,8 @@ export class AirtableAdapter extends BaseAdapter {
           throw err;
         });
         if (row === null) return [];
-        return [{ position: makeStablePosition({ adapterType: this.adapterType, recordType: change.row.table, recordId: row.id, data: row.fields ?? {} }) }];
+        const fields = (await cachedTables({ client, teamId: this.teamId, baseId: change.row.baseId })).find((t) => t.id === change.row.tableId)?.fields ?? [];
+        return [{ position: makeStablePosition({ adapterType: this.adapterType, recordType: change.row.table, recordId: row.id, data: withEmptyCells(row.fields ?? {}, fields) }) }];
       }
     }
 
@@ -586,8 +588,7 @@ export class AirtableAdapter extends BaseAdapter {
         client,
         adapterType: this.adapterType,
         baseId: containerBaseId,
-        tableId: table.id,
-        tableName: table.name,
+        table,
       });
     }
 
@@ -699,7 +700,8 @@ export class AirtableAdapter extends BaseAdapter {
     const ids = await this.structuredIdFor(input.recordType);
     if (!ids) return null;
     const client = await this.getApiClient();
-    return recordReadRecord({ client, ids, read: input });
+    const fields = (await cachedTables({ client, teamId: this.teamId, baseId: ids.baseId })).find((t) => t.id === ids.tableId)?.fields ?? [];
+    return recordReadRecord({ client, ids, fields, read: input });
   }
 
   // ── 7. Arrivals (notify-then-pull) ────────────────────────────────────────

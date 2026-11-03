@@ -59,6 +59,9 @@ function columnFieldDescriptor(column: {
     displayName: column.columnName,
     kind: tgKindForColumnType(column.columnType),
     cardinality: 'one',
+    // Any cell of a row may be blank, whatever the column's type: a read of
+    // it is absent (a sheet has no required column).
+    mayBeAbsent: true,
     writable: true,
     required: false,
   };
@@ -394,8 +397,8 @@ export function describeNamedCellMeta(): SchemaTypeDescriptor {
       {
         // The current value of the named cell — read-only here (set a value by
         // writing to the cell, not by naming it).
-        fieldId: 'Value', displayName: 'Value', kind: 'string', writable: false, required: false,
-        description: 'The cell\'s current value.',
+        fieldId: 'Value', displayName: 'Value', kind: 'string', writable: false, required: false, mayBeAbsent: true,
+        description: 'The cell\'s current value, absent when the cell is blank.',
       },
       {
         // Write-only create input: WHICH cell to name. Not a read-back fact
@@ -430,7 +433,8 @@ export function describeCellMeta(): SchemaTypeDescriptor {
         // `values.get`. Anything else has no address to fetch.
         capability: { filterOperators: ['eq'] },
       },
-      { fieldId: 'Value', displayName: 'Value', kind: 'string', writable: true, required: true },
+      // Absent on a read of a blank cell; a write gives it a value.
+      { fieldId: 'Value', displayName: 'Value', kind: 'string', writable: true, required: true, mayBeAbsent: true },
     ],
     references: [],
     uniquenessAuthorable: false,

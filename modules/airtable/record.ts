@@ -42,6 +42,7 @@ import {
   NUMERIC_FIELD_TYPES,
   READ_ONLY_FIELD_TYPES,
   RECORD_ID_FIELD,
+  withEmptyCells,
   type AirtableTableId,
   type AirtableFieldMeta,
   type AirtableTableMeta,
@@ -533,20 +534,20 @@ export async function listCollection(input: {
   client: AirtableAPIClient;
   adapterType: string;
   baseId: string;
-  tableId: string;
-  /** The table's own name — what the emitted positions are typed by. */
-  tableName: string;
+  /** The table: its name types the emitted positions, and its fields say
+   *  what a cell Airtable left out holds. */
+  table: AirtableTableMeta;
 }): Promise<RelatedResult[]> {
   const records = await input.client.listRecords({
     baseId: input.baseId,
-    tableId: input.tableId,
+    tableId: input.table.id,
   });
   return records.map((record) => ({
     position: makeStablePosition({
       adapterType: input.adapterType,
-      recordType: input.tableName,
+      recordType: input.table.name,
       recordId: record.id,
-      data: record.fields ?? {},
+      data: withEmptyCells(record.fields ?? {}, input.table.fields),
     }),
   }));
 }
@@ -654,6 +655,7 @@ export async function getRelated(input: {
     }
   }
 
+  const linkedFields = (await cachedTables({ client: input.client, teamId: input.teamId, baseId: ids.baseId })).find((t) => t.id === linkedTableId)?.fields ?? [];
   // Emit in the link field's own order; drop any id the batch didn't return
   // (deleted/inaccessible record).
   const results: RelatedResult[] = [];
@@ -665,7 +667,7 @@ export async function getRelated(input: {
         adapterType: input.adapterType,
         recordType: linkedTypeName,
         recordId: record.id,
-        data: record.fields ?? {},
+        data: withEmptyCells(record.fields ?? {}, linkedFields),
       }),
     });
   }
@@ -677,6 +679,8 @@ export async function getRelated(input: {
 export async function readRecord(input: {
   client: AirtableAPIClient;
   ids: AirtableTableId;
+  /** The table's fields: what a cell Airtable left out holds. */
+  fields: AirtableFieldMeta[];
   read: ReadInput;
 }): Promise<Record<string, unknown> | null> {
   try {
@@ -685,7 +689,7 @@ export async function readRecord(input: {
       tableId: input.ids.tableId,
       recordId: input.read.externalId,
     });
-    return record.fields ?? {};
+    return withEmptyCells(record.fields ?? {}, input.fields);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     if (message.includes('404')) return null;

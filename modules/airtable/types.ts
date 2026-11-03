@@ -54,6 +54,53 @@ export const READ_ONLY_FIELD_TYPES = new Set<string>([
   'aiText',
 ]);
 
+// ── Empty cells ─────────────────────────────────────────────────────────────
+// Airtable leaves an empty cell out of a row: "Returned records do not include
+// any fields with "empty" values, e.g. "", [], or false" (the list-records
+// reference, read 2026-11-03). So what a row omits depends on its field's type.
+
+/** Field types whose cell holds a list: left out when it holds none. */
+export const LIST_FIELD_TYPES = new Set<string>([
+  'multipleSelects',
+  'multipleCollaborators',
+  'multipleAttachments',
+  'multipleLookupValues',
+  'lookup',
+  LINK_FIELD_TYPE,
+]);
+
+/** Field types Airtable fills in on every row, so never left out: a number
+ *  it counts (`count` answers 0, which is no "empty" value), a number or a
+ *  stamp it sets when the row is made, and a button. */
+export const ALWAYS_PRESENT_FIELD_TYPES = new Set<string>(['autoNumber', 'count', 'createdTime', 'createdBy', 'button']);
+
+/** What a cell of `type` left out of a row holds: an unchecked checkbox's
+ *  `false`, a list type's `[]`, or nothing (`undefined`) where a left-out
+ *  cell is a field with no value. */
+export function emptyCell(type: string | undefined): false | [] | undefined {
+  if (type === 'checkbox') return false;
+  if (type !== undefined && LIST_FIELD_TYPES.has(type)) return [];
+  return undefined;
+}
+
+/** A field of `type` may have no value on a row: Airtable leaves it out, and
+ *  nothing stands in for it. */
+export function mayBeEmpty(type: string | undefined): boolean {
+  return emptyCell(type) === undefined && !(type !== undefined && ALWAYS_PRESENT_FIELD_TYPES.has(type));
+}
+
+/** A row's cells, keyed by field name, with each cell Airtable left out that
+ *  has a value when empty (`false`, `[]`) put back, so a reader sees the type
+ *  the catalog gives the field. */
+export function withEmptyCells(cells: Record<string, unknown>, fields: Iterable<{ name: string; type?: string }>): Record<string, unknown> {
+  const filled = { ...cells };
+  for (const field of fields) {
+    const empty = emptyCell(field.type);
+    if (empty !== undefined && filled[field.name] === undefined) filled[field.name] = Array.isArray(empty) ? [] : empty;
+  }
+  return filled;
+}
+
 /** The Airtable API's structured routing identifier for a table — the value
  *  the name → structured-identifier cache yields for a table's displayName.
  *  This is the adapter's PRIVATE currency; it never appears on a position. */
