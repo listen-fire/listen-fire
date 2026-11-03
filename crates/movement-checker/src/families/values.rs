@@ -1118,9 +1118,16 @@ pub fn collection_ordering(typing: &Typing, expr: &Expression, position: Option<
         Expression::List { .. } => (CollectionOrder::Ordered, None),
         Expression::Aggregate { fn_: AggregationFunction::Sort, .. } => (CollectionOrder::Ordered, None),
         Expression::Aggregate { fn_: AggregationFunction::Collect, expression, .. } => collection_ordering(typing, expression, position),
+        // A dict holds its keys as a set; a list's repeats removed keep its order.
+        Expression::Function { fn_, .. } if fn_.starts_with("dict.") => (CollectionOrder::Unordered, None),
+        Expression::Function { fn_, args } if fn_ == "list.distinct" => match args.first() {
+            Some(list) => collection_ordering(typing, list, position),
+            None => (CollectionOrder::Unknown, None),
+        },
         Expression::Property { property_type_id: name, .. } | Expression::EdgeProperty { property_type_id: name, .. } | Expression::AliasRef { name } => {
             let ty = position.and_then(|p| lookup_property_type(Some(p), name)).or_else(|| typing.scalar_type(name));
-            (collection_order_of(ty.as_ref()), Some(name.clone()))
+            // A call written in place is read through a name nobody wrote.
+            (collection_order_of(ty.as_ref()), Some(name.clone()).filter(|n| !crate::families::calls::is_nested_call_name(n)))
         }
         _ => (CollectionOrder::Unknown, None),
     }

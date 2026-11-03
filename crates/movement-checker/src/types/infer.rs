@@ -1471,6 +1471,8 @@ impl<'a> Typing<'a> {
             "chunks" => return Some(crate::families::extraction::type_chunks_call(self, args)),
             "coalesce" => return coalesce_type_with(args, |kinds, old| self.joined_records(kinds, old)),
             "multi" => return multi_type(args),
+            "dict.keys" | "dict.values" | "dict.entries" => return dict_view_type(function, args.first().and_then(Option::as_ref)),
+            "list.distinct" => return distinct_type(args.first().and_then(Option::as_ref)),
             _ => {}
         }
         if let Some(coerced) = bare_coercer_returns(function) {

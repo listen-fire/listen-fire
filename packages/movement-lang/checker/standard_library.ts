@@ -20,6 +20,7 @@ export const BUILTIN_PARAM_TYPES = [
   'list',
   'any',
   'record',
+  'dict',
   'options',
   'function',
   'type',

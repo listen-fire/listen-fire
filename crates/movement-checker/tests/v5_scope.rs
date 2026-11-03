@@ -104,7 +104,7 @@ fn an_unbound_old_name_is_still_refused_under_5() {
 }
 
 /// Every word a binding cannot take, as both refusals list it.
-const WORDS: &str = "Words that can't be names: ai, all, await, callback, coalesce, count, Currency, Date, DateTime, delete, edge, else, exists, export, extract, extractOne, fail, File, filter, first, function, if, import, Json, link, List, listen, map, members, movement, Number, only, race, reduce, refresh, return, run, shape, sleep, sort, Text, unlink, until, Url, write";
+const WORDS: &str = "Words that can't be names: ai, all, await, callback, coalesce, count, Currency, Date, DateTime, delete, Dict, edge, else, exists, export, extract, extractOne, fail, File, filter, first, function, if, import, Json, link, List, listen, map, members, movement, Number, only, race, reduce, refresh, return, run, shape, sleep, sort, Text, unlink, until, Url, write";
 
 #[test]
 fn a_name_that_hides_a_core_word_or_a_namespace_is_refused_under_5_for_now() {

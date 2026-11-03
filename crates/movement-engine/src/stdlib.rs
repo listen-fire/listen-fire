@@ -11,6 +11,7 @@ use crate::eval::EvalError;
 use crate::js::{self, Js, JsObject};
 use crate::js_date;
 use crate::js_regex::{Regex, RegexError};
+use movement_parser::lowering::expression::FilterOperator;
 
 /// The 17 flat built-ins `applyMovementFunction` runs (`coalesce` is the
 /// evaluator's, being branch selection), and the namespaced members.
@@ -36,7 +37,7 @@ pub fn is_flat_builtin(name: &str) -> bool {
     FLAT.contains(&folded.as_str()) || FORMS.contains(&folded.as_str())
 }
 
-pub const NAMESPACED: [&str; 15] = [
+pub const NAMESPACED: [&str; 19] = [
     "currency.get_number_from_figure",
     "currency.get_code_from_figure",
     "currency.format_figure",
@@ -52,6 +53,10 @@ pub const NAMESPACED: [&str; 15] = [
     "text.serialise",
     "url.host",
     "number.format",
+    "list.distinct",
+    "dict.keys",
+    "dict.values",
+    "dict.entries",
 ];
 
 /// Which argument a member reads specially: `TEXT.PAIRS`'s record, and
@@ -157,8 +162,67 @@ pub fn apply_namespaced(id: &str, args: &[Js], around: Surroundings<'_>) -> Resu
         "text.serialise" => text_serialise(&a, &b),
         "url.host" => url_host(&a, around.services),
         "number.format" => Ok(number_format(&a, &b)),
+        "list.distinct" => list_distinct(&a),
+        "dict.keys" | "dict.values" | "dict.entries" => dict_view(id, &a),
         other => Err(EvalError::engine("MOVENG_RUNTIME", format!("unknown built-in function: {other}"))),
     }
+}
+
+// ── LIST, DICT ───────────────────────────────────────────────────────────────
+
+/// `List.distinct`: each member once, where it first appears, two members
+/// the same when `==` says so (the checker hands it plain values; a record
+/// would compare by its identity, as `==` compares one). Nothing is no members.
+fn list_distinct(list: &Js) -> Result<Js, EvalError> {
+    let members = match list {
+        Js::Undefined | Js::Null => return Ok(Js::array(vec![])),
+        Js::Array(members) => members.items().clone(),
+        other => return Err(EvalError::engine("MOVENG_RUNTIME", format!("List.distinct takes a list, and this is {} — the checker should have caught this", other.type_of()))),
+    };
+    let mut kept: Vec<Js> = Vec::new();
+    for member in members {
+        let mut seen = false;
+        for earlier in &kept {
+            let same = match crate::record::compare_records(earlier, FilterOperator::Eq, &member)? {
+                Some(same) => same,
+                None => crate::filter::compare_values(earlier, FilterOperator::Eq, &member)?,
+            };
+            if same {
+                seen = true;
+                break;
+            }
+        }
+        if !seen {
+            kept.push(member);
+        }
+    }
+    Ok(Js::array(kept))
+}
+
+/// `Dict.keys`, `Dict.values`, `Dict.entries` (each `{ key, value }`). The
+/// checker types the list as one in no order; it comes back in the order the
+/// dict was filled, which no program may rely on. Nothing is no entries.
+fn dict_view(id: &str, dict: &Js) -> Result<Js, EvalError> {
+    let entries = match dict {
+        Js::Undefined | Js::Null => return Ok(Js::array(vec![])),
+        Js::Object(dict) => dict.entries().to_vec(),
+        other => return Err(EvalError::engine("MOVENG_RUNTIME", format!("{id} takes a dict, and this is {} — the checker should have caught this", other.type_of()))),
+    };
+    Ok(Js::array(
+        entries
+            .into_iter()
+            .map(|(key, value)| match id {
+                "dict.keys" => Js::str(key),
+                "dict.values" => value,
+                _ => {
+                    let mut entry = JsObject::new();
+                    entry.set("key".to_string(), Js::str(key));
+                    entry.set("value".to_string(), value);
+                    Js::object(entry)
+                }
+            })
+            .collect(),
+    ))
 }
 
 // ── CURRENCY ─────────────────────────────────────────────────────────────────
@@ -861,6 +925,36 @@ mod tests {
     fn call(id: &str, args: Vec<Js>) -> Js {
         let result = if FLAT.contains(&id) { apply_flat(id, &args) } else { apply_namespaced(id, &args, around()) };
         result.unwrap_or_else(|e| panic!("{id}: {e:?}"))
+    }
+
+    #[test]
+    fn list_distinct_keeps_each_value_once_where_it_first_appears() {
+        let list = |items: Vec<Js>| Js::array(items);
+        let texts = |js: Js| match js {
+            Js::Array(items) => items.items().iter().map(|v| v.to_js_string()).collect::<Vec<_>>(),
+            other => panic!("not a list: {other:?}"),
+        };
+        assert_eq!(texts(call("list.distinct", vec![list(vec![s("b"), s("a"), s("b"), s("c"), s("a")])])), ["b", "a", "c"]);
+        assert_eq!(texts(call("list.distinct", vec![list(vec![Js::Number(1.0), Js::Number(1.0), s("1")])])), ["1", "1"]);
+        assert_eq!(texts(call("list.distinct", vec![Js::Null])), Vec::<String>::new());
+    }
+
+    #[test]
+    fn a_dict_lists_its_keys_values_and_entries() {
+        let mut dict = JsObject::new();
+        dict.set("Tom".into(), Js::array(vec![s("a"), s("c")]));
+        dict.set("Ann".into(), Js::array(vec![s("b")]));
+        let dict = Js::object(dict);
+        let keys = call("dict.keys", vec![dict.clone()]);
+        assert_eq!(keys.to_js_string(), "Tom,Ann");
+        assert_eq!(call("dict.values", vec![dict.clone()]).to_js_string(), "a,c,b");
+        let Js::Array(entries) = call("dict.entries", vec![dict]) else { panic!("entries is a list") };
+        let entries = entries.items();
+        let Js::Object(first) = &entries[0] else { panic!("an entry is a dict") };
+        assert_eq!(first.get("key").map(Js::to_js_string).as_deref(), Some("Tom"));
+        assert_eq!(first.get("value").map(Js::to_js_string).as_deref(), Some("a,c"));
+        assert_eq!(call("dict.keys", vec![Js::Null]).to_js_string(), "");
+        assert!(apply_namespaced("dict.keys", &[s("x")], around()).is_err());
     }
 
     /// TEXT.PAIRS skips a member that is any object, as the TypeScript's

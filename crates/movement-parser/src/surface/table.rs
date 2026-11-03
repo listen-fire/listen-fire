@@ -143,6 +143,11 @@ pub const SPELLINGS: &[Spelling] = &[
     row("GROUPBY", "List.groupBy", Same),
     row("KEYBY", "List.keyBy", Same),
     new("IN", "List.includes", ListIncludes),
+    row("LIST.DISTINCT", "List.distinct", Same),
+    // Dict
+    row("DICT.KEYS", "Dict.keys", Same),
+    row("DICT.VALUES", "Dict.values", Same),
+    row("DICT.ENTRIES", "Dict.entries", Same),
     // File
     row("FILE", "File.from", Same),
     row("READ", "File.read", Same),
@@ -174,7 +179,7 @@ pub fn hidden_by(name: &str) -> Option<String> {
 }
 
 /// The standard namespaces (§2.2): values that hold functions.
-pub const NAMESPACES: &[&str] = &["Text", "Number", "Date", "DateTime", "Currency", "Url", "Json", "List", "File"];
+pub const NAMESPACES: &[&str] = &["Text", "Number", "Date", "DateTime", "Currency", "Url", "Json", "List", "Dict", "File"];
 
 /// The closed CAPS set read inside walk brackets (§4.1): each the member name
 /// of one everyday function, upper-cased, namespace dropped. Any letter case.

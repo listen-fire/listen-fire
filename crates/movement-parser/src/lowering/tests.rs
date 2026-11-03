@@ -433,7 +433,7 @@ fn a_namespace_member_call_is_its_stdlib_function() {
 
 #[test]
 fn an_unknown_all_caps_namespace_in_call_position_is_refused() {
-    let message = "Unknown function namespace 'NOPE' — the namespaced families are: CURRENCY, DATE, DATETIME, TEXT, URL, NUMBER";
+    let message = "Unknown function namespace 'NOPE' — the namespaced families are: CURRENCY, DATE, DATETIME, TEXT, URL, NUMBER, LIST, DICT";
     assert_eq!(refused("NOPE.F(x)"), message);
     assert_eq!(value("Nope.F(x)")["aliasRoot"], "Nope");
     assert_eq!(value("N.F(x)")["aliasRoot"], "N");
