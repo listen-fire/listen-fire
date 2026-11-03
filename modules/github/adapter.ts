@@ -210,7 +210,10 @@ export class GithubAdapter extends BaseAdapter implements Adapter {
     switch (input.fieldId) {
       case GITHUB_REPOSITORIES_COLLECTION: {
         const pinned = pinnedRepository(input.where);
-        if (pinned !== undefined) return [repositoryPosition(normalizeRepository(await client.getRepository(pinned)))];
+        if (pinned !== undefined) {
+          const repo = await client.findRepository(pinned);
+          return repo === undefined ? [] : [repositoryPosition(normalizeRepository(repo))];
+        }
         const repos = await client.listRepositories(limitOf(input, input.where === undefined, 'Full Name', 'asc').limit);
         return repos.map((repo) => repositoryPosition(normalizeRepository(repo)));
       }

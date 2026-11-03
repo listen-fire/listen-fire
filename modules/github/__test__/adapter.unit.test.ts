@@ -176,6 +176,11 @@ describe('GithubAdapter walks', () => {
     expect(fake.requests.at(-1)?.path).toBe('/repos/acme/api');
   });
 
+  it('answers nothing for a `Full Name` GitHub does not know, as a filter that matches nothing does', async () => {
+    expect(await walk(meta(), 'Repositories', { where: eq('Full Name', 'acme/gone') })).toEqual([]);
+    expect(fake.requests.at(-1)?.path).toBe('/repos/acme/gone');
+  });
+
   it('walks a repository’s pull requests open AND closed when the WHERE names no state', async () => {
     const repo = await repoApi();
     const all = await walk(repo, 'Pull Requests');

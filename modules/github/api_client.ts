@@ -326,6 +326,18 @@ export class GithubClient {
     return this.json<GithubRepository>(repoPath(ref));
   }
 
+  /** The repository a WHERE pins, or none: a filter that matches nothing is an
+   *  empty set, and GitHub's 404 cannot tell a missing repository from one the
+   *  token cannot see. */
+  async findRepository(ref: GithubRepoRef): Promise<GithubRepository | undefined> {
+    try {
+      return await this.getRepository(ref);
+    } catch (error) {
+      if (error instanceof GithubApiError && error.status === 404) return undefined;
+      throw error;
+    }
+  }
+
   /** `GET /repos/{owner}/{repo}/pulls`, newest first. */
   listPullRequests(ref: GithubRepoRef, input: { state: 'open' | 'closed' | 'all'; limit?: number }): Promise<GithubPullRequest[]> {
     return this.pages<GithubPullRequest>(`${repoPath(ref)}/pulls`, new URLSearchParams({ state: input.state }), input.limit);
