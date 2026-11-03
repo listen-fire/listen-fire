@@ -12,12 +12,13 @@ One idea runs through the release: **a type says what the run will meet.** A nam
 - [4. Airtable and Google Sheets cells that can be empty](#4-airtable-and-google-sheets-cells-that-can-be-empty)
 - [5. A `List.groupBy` or `List.keyBy` key that may be absent](#5-a-listgroupby-or-listkeyby-key-that-may-be-absent)
 - [6. The records a block answers come in the walk's order](#6-the-records-a-block-answers-come-in-the-walks-order)
-- [7. A whole program](#7-a-whole-program)
-- [8. Diagnostic code index](#8-diagnostic-code-index)
+- [7. Inside walk brackets a built-in is spelled as outside them](#7-inside-walk-brackets-a-built-in-is-spelled-as-outside-them)
+- [8. A whole program](#8-a-whole-program)
+- [9. Diagnostic code index](#9-diagnostic-code-index)
 
 ## 1. How the pin moves
 
-- `listen-fire upgrade` checks every movement file as a move up from its pin. 0.15 adds no rewrite: each change below is a refusal the author fixes by hand, because each fix chooses a value (a name, a fallback, an order).
+- `listen-fire upgrade` checks every movement file as a move up from its pin. It rewrites one change unasked, a walk word to its everyday spelling (section 7). Each other change is a refusal the author fixes by hand, because each fix chooses a value (a name, a fallback, an order).
 - The pin (`engine:` in `lf.yaml`) moves to `0.15.0` only when every file then checks clean. Otherwise it stays, and the command lists what is left.
 - 0.15 changes what a run reads in one place: an Airtable checkbox left empty is `false` and an empty list field is `[]`, where 0.14 read both as absent (section 4).
 
@@ -68,7 +69,16 @@ A block over a walk with no `ORDER BY` answers in no order. `first`, `[0]`, `Tex
 |---|---|
 | `ps = c-[p:People]-> { return p }` then `first(ps)` | order the walk (`c-[p:People ORDER BY p.Name]->`), or `only(…)` where exactly one is meant |
 
-## 7. A whole program
+## 7. Inside walk brackets a built-in is spelled as outside them
+
+A built-in has one spelling: `Text.lower(c.Name)`, `Text.trim(…)`, `Number.round(…)`, `coalesce(…)`, `exists(…)`, inside a walk's `WHERE` and `ORDER BY` as in a function body. The walk words 0.14 read there are refused (`MOV_V5_SPELLING`), and `listen-fire upgrade` rewrites them: the predicate a run evaluates, and a host receives, is the same. The logic words stay: `AND`, `OR`, `NOT`, `CONTAINS`, `IN` inside the brackets.
+
+| 0.14 | 0.15 |
+|---|---|
+| `ch-[m:Messages WHERE LOWER(m.Text) CONTAINS "urgent"]->` | `ch-[m:Messages WHERE Text.lower(m.Text) CONTAINS "urgent"]->` |
+| `crm-[c:Companies WHERE EXISTS(c-[:Team]->)]->` | `crm-[c:Companies WHERE exists(c-[:Team]->)]->` |
+
+## 8. A whole program
 
 A grouping key with a fallback, keys sorted before they are joined, and a record tested before it is read:
 
@@ -86,7 +96,7 @@ function `Open Issues`(go: <manual-[:Invocation]->>) {
 }
 ```
 
-## 8. Diagnostic code index
+## 9. Diagnostic code index
 
 | code | what 0.15 refuses |
 |---|---|
@@ -95,3 +105,4 @@ function `Open Issues`(go: <manual-[:Invocation]->>) {
 | `MOV_ABSENT_REQUIRED` | an Airtable or Google Sheets field that may be empty, read where a value is needed |
 | `MOV_DICT_KEY_MAY_BE_ABSENT` | a grouping key that may be absent (now an error) |
 | `MOV_FOLD_NEEDS_ORDER` | `first`, `[0]`, `Text.join` or `reduce` over the records an unordered walk's block answers |
+| `MOV_V5_SPELLING` | a CAPS walk word (`LOWER`, `EXISTS`, …) inside walk brackets; rewritten by `listen-fire upgrade` |
