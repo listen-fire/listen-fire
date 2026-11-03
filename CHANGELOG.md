@@ -32,6 +32,7 @@ named in [`RELEASING.md`](RELEASING.md).
 - **`@lf/stripe` says its amounts' units where a reader looks.** A customer's, an invoice's and a charge's description now says in its first sentence that their amounts are in major units of their `Currency`. That sentence is what the catalog text, `runs show` and `modules show` print for a record type. The amounts are unchanged.
 - **`listen-fire runs show <run-id>` prints text; `--json` prints the document.** The text says the run's status and error, the event once (each record that arrived, with the fields its record type declares), one line per write and per trace entry, what the run is parked on, and its attempts when there were several. A script that read the indented JSON passes `--json`.
 - **`listen-fire modules show` marks the edges a listen starts on** (`(listenable)`, `(listen only)`), shows the edges only listened to (Stripe's `Changes`), and names the fields a read must pin (an MCP tool's arguments).
+- **A `List.groupBy` or `List.keyBy` key that may answer nothing is warned of where it is written** (`MOV_DICT_KEY_MAY_BE_ABSENT`, a warning): `(t) => t.Done ? null : t.Owner` fails the run on the first member whose key is absent. Give it a fallback, `coalesce(…, "none")`. It is a warning, so every program this release accepted it still accepts. The run's refusal of a key that answered nothing no longer says the checker should have caught it: a field the record leaves empty answers nothing, and no check sees that. It says to give the key a fallback.
 
 ## [0.14.2] - 2026-11-02
 

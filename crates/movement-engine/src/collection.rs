@@ -750,11 +750,15 @@ impl Run<'_> {
                 for (member, answer) in members.iter().zip(answers) {
                     let Some(key) = answer else { continue };
                     let Js::String(key) = key else {
-                        let what = if key.is_nullish() { "nothing".to_string() } else { key.type_of().to_string() };
-                        return Err(Stop::Thrown(Failure::engine(
-                            "MOVENG_RUNTIME",
-                            format!("'{spelling}' files each member under a text key, and this one answered {what} — the checker should have caught this"),
-                        )));
+                        // Nothing is what a read answers where the host holds no
+                        // value (a field the record leaves empty), which no save
+                        // check sees; a value of another type is one the check let through.
+                        let message = if key.is_nullish() {
+                            format!("'{spelling}' files each member under a text key, and this one answered nothing (a field the record leaves empty answers nothing). Give the key a fallback: `coalesce(r.Field, \"none\")`")
+                        } else {
+                            format!("'{spelling}' files each member under a text key, and this one answered {} — the checker should have caught this", key.type_of())
+                        };
+                        return Err(Stop::Thrown(Failure::engine("MOVENG_RUNTIME", message)));
                     };
                     if op == CollectionOp::Keyby {
                         if filed.get(key.as_str()).is_some() {
