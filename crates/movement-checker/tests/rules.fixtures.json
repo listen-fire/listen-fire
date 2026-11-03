@@ -1452,11 +1452,11 @@
    "snapshot": "maybe",
    "source": "import { attio } from adapters\nimport { crm_cred } from credentials\nimport { score } from plugins\ncrm = connect attio using crm_cred\nfunction f(n: <number>) {\n  return n\n}\nfunction all3(ns: <number[]>) {\n  return 1\n}\nfunction m() {\n  co = write crm-[:companies]-> { name: \"a\" }\n  x1 = f(coalesce(co, 1))\n  c = true\n  x2 = f(c ? co : 1)\n  v = coalesce(co, 1)\n  x3 = f(v)\n  f(coalesce(co, 1))\n  x4 = all3([coalesce(co, 1)])\n}\n",
    "expected": [
-    "MOV_CALL_ARG_MAYBE_RECORD 13:10-13:25 'f' expects number for 'n' (argument 1), but 'coalesce(co, 1)' may be a crm.company handle — a record, not a value, and such a union is no number, as in TypeScript. Narrow it to the record with 'is' and pass a field off it ('r.`Name`'), or fill every arm with a value",
+    "MOV_CALL_ARG_TYPE 13:10-13:25 'f' expects number for 'n' (argument 1), but this argument is a crm.company handle",
     "MOV_CALL_ARG_MAYBE_RECORD 15:10-15:20 'f' expects number for 'n' (argument 1), but 'c ? co : 1' may be a crm.company handle — a record, not a value, and such a union is no number, as in TypeScript. Narrow it to the record with 'is' and pass a field off it ('r.`Name`'), or fill every arm with a value",
-    "MOV_CALL_ARG_MAYBE_RECORD 17:10-17:11 'f' expects number for 'n' (argument 1), but 'v' may be a crm.company handle — a record, not a value, and such a union is no number, as in TypeScript. Narrow it to the record with 'is' and pass a field off it ('r.`Name`'), or fill every arm with a value",
-    "MOV_CALL_ARG_MAYBE_RECORD 18:5-18:20 'f' expects number for 'n' (argument 1), but 'coalesce(co, 1)' may be a crm.company handle — a record, not a value, and such a union is no number, as in TypeScript. Narrow it to the record with 'is' and pass a field off it ('r.`Name`'), or fill every arm with a value",
-    "MOV_CALL_ARG_MAYBE_RECORD 19:13-19:30 'all3' expects list of number for 'ns' (argument 1), but '[coalesce(co, 1)]' may hold a crm.company handle at '[0]' — a record, not a value, and such a union is no list of number, as in TypeScript. Narrow it to the record with 'is' and pass a field off it ('r.`Name`'), or fill every arm with a value"
+    "MOV_CALL_ARG_TYPE 17:10-17:11 'f' expects number for 'n' (argument 1), but this argument is a crm.company handle",
+    "MOV_CALL_ARG_TYPE 18:5-18:20 'f' expects number for 'n' (argument 1), but this argument is a crm.company handle",
+    "MOV_CALL_ARG_TYPE 19:13-19:30 'all3' expects list of number for 'ns' (argument 1), but this argument is list of a crm.company handle"
    ]
   },
   {
@@ -1629,7 +1629,7 @@
    "snapshot": "cands",
    "source": "import { attio } from adapters\nimport { crm_cred } from credentials\ncrm = connect attio using crm_cred\nfunction inc(n: <number>) {\n  return n + 1\n}\nfunction m() {\n  co = write crm-[:companies]-> { name: \"a\" }\n  x = map([coalesce(co, 1)], (n: <number>) => n)\n}",
    "expected": [
-    "MOV_CALL_ARG_MAYBE_RECORD 9:11-9:28 the function for 'map' expects number for 'n' (argument 1), but each member 'map' hands it may be a crm.company handle — a record, not a value, and such a union is no number, as in TypeScript. Narrow it to the record with 'is' and pass a field off it ('r.`Name`'), or fill every arm with a value"
+    "MOV_CALL_ARG_TYPE 9:11-9:28 the function for 'map' expects number for 'n' (argument 1), but each member 'map' hands it is a crm.company handle"
    ]
   },
   {
@@ -1760,7 +1760,7 @@
    "snapshot": "plug",
    "source": "import { attio } from adapters\nimport { crm_cred } from credentials\nimport { summarise, relay, tag, ocr, score } from plugins\n\ncrm = connect attio using crm_cred\nfunction m() {\n  org = write crm-[:companies]-> { name: \"Acme Inc.\" }\n  f = File.from(\"contents\", \"text\")\n  s = score(coalesce(org, 1))\n}",
    "expected": [
-    "MOV_CALL_ARG_TYPE 9:13-9:29 'score' takes number for 'n', and this may be a crm.company handle — a record, not a value. Pass one of its fields ('n: r.`Name`')."
+    "MOV_CALL_ARG_TYPE 9:13-9:29 'score' takes number for 'n', and this is a record — pass one of its fields ('n: r.website')"
    ]
   },
   {

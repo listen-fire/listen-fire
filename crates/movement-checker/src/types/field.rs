@@ -613,6 +613,15 @@ fn member_absorbs(wide: &Ty, narrow: &Ty) -> bool {
     match wide {
         Ty::Json => is_data_shaped(narrow),
         Ty::Text => is_enum(Some(narrow)) || matches!(narrow, Ty::Owned(_)),
+        // `string[] | []` is `string[]` in TypeScript: a tuple each of whose
+        // members the list holds is one of the list's values.
+        Ty::List { of, .. } => match narrow {
+            Ty::Tuple { of: members, rest } => {
+                let held = |m: Option<&Ty>| m.is_some_and(|m| member_absorbs(of, m));
+                members.iter().all(|m| held(m.as_ref())) && rest.as_ref().is_none_or(|r| held(r.of.as_deref()))
+            }
+            _ => false,
+        },
         _ => false,
     }
 }
@@ -783,22 +792,22 @@ pub fn coalesce_type_with(args: &[Option<Ty>], join: impl Fn(&[Ty], Option<Ty>) 
     }
 }
 
-/// `coalesce_type_with` over the arguments a run reaches.
+/// `coalesce_type_with` over the arguments a run reaches, as TypeScript
+/// types `a ?? b ?? c`: each argument that may be absent hands on to the
+/// next, so the answer is the union of what each reached argument holds,
+/// absent only where the last one reached may be. The first argument that is
+/// always there is the last one reached.
 fn coalesce_reached(args: &[Option<Ty>], join: impl Fn(&[Ty], Option<Ty>) -> Option<Ty>) -> Option<Ty> {
-    let typed: Vec<&Ty> = args.iter().map(Option::as_ref).collect::<Option<_>>()?;
+    let present = |t: &Option<Ty>| t.as_ref().is_some_and(|t| !matches!(t, Ty::Absent) && !is_maybe_absent(Some(t)));
+    let reached = args.iter().position(present).map_or(args, |last| &args[..=last]);
+    let typed: Vec<&Ty> = reached.iter().map(Option::as_ref).collect::<Option<_>>()?;
     let valued: Vec<&Ty> = typed.into_iter().filter(|t| !matches!(t, Ty::Absent)).collect();
     if valued.is_empty() {
         return Some(Ty::Absent);
     }
     let kinds: Vec<Ty> = valued.iter().map(|t| strip_absent(t).clone()).collect();
-    let shared = join(&kinds, kinds.iter().all(|k| field_type_equals(k, &kinds[0])).then(|| kinds[0].clone()));
-    if valued.iter().any(|t| !is_maybe_absent(Some(t))) {
-        return shared;
-    }
-    match shared {
-        Some(shared) => Some(maybe_absent(shared)),
-        None => valued.iter().find(|t| is_maybe_absent(Some(t))).map(|t| (*t).clone()),
-    }
+    let shared = join(&kinds, kinds.iter().all(|k| field_type_equals(k, &kinds[0])).then(|| kinds[0].clone())).or_else(|| value_union(&kinds))?;
+    Some(if valued.iter().all(|t| is_maybe_absent(Some(t))) { maybe_absent(shared) } else { shared })
 }
 
 /// `multiType`: `MULTI(a, b, …)` — a list where the members share a record or a file.

@@ -22,7 +22,7 @@ fn a_chain_of_closures_returning_the_last_twice_checks_in_linear_time() {
     )
     .unwrap();
     let links = 60;
-    let mut source = String::from("import { attio } from adapters\nimport { crm_cred } from credentials\ncrm = connect attio using crm_cred\nfunction m() {\n  org = write crm-[:companies]-> { name: \"Acme\" }\n  f0 = () => coalesce(org, \"x\")\n");
+    let mut source = String::from("import { attio } from adapters\nimport { crm_cred } from credentials\ncrm = connect attio using crm_cred\nfunction m() {\n  org = only(crm-[:companies]->)\n  f0 = () => coalesce(org, \"x\")\n");
     for i in 1..=links {
         source += &format!("  f{i} = () => {{\n    if (1 > 0) {{\n      return f{p}()\n    }}\n    return f{p}()\n  }}\n", p = i - 1);
     }

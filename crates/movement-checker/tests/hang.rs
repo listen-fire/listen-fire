@@ -32,13 +32,13 @@ fn codes(found: &[Diagnostic]) -> Vec<&str> {
     found.iter().map(|d| d.code.as_str()).collect()
 }
 
-/// `org` or a text.
+/// `org`, a company that may be missing, or a text.
 const ORG_OR_TEXT: &str = "coalesce(org, \"x\")";
 
 /// A chain of closures, each returning `returned` (over `a`, the last one's
 /// value) on two branches.
 fn chain_of(returned: &str, start: &str) -> Vec<String> {
-    let mut lines = vec!["  org = write crm-[:companies]-> { name: \"Acme\" }".to_string(), format!("  f0 = () => {start}")];
+    let mut lines = vec!["  org = only(crm-[:companies]->)".to_string(), format!("  f0 = () => {start}")];
     for i in 1..=LINKS {
         lines.extend([
             format!("  f{i} = () => {{"),
@@ -95,7 +95,7 @@ fn a_chain_of_closures_returning_a_list_of_the_last_value_twice_checks_in_linear
 /// The parity corpus's `h12` (record 8575), thirty links deep.
 #[test]
 fn a_fan_of_closures_each_a_list_of_three_calls_of_the_last_checks_in_linear_time() {
-    let mut fan = vec!["  org = write crm-[:companies]-> { name: \"Acme\" }".to_string(), format!("  h0 = () => {}", ORG_OR_TEXT)];
+    let mut fan = vec!["  org = only(crm-[:companies]->)".to_string(), format!("  h0 = () => {}", ORG_OR_TEXT)];
     for i in 1..=LINKS {
         fan.push(format!("  h{i} = () => [h{0}(), h{0}(), h{0}()]", i - 1));
     }

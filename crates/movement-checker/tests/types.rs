@@ -72,15 +72,33 @@ fn a_mixed_tuple_is_named() {
     assert!(message.starts_with("a list holds one kind of thing, and this one holds both: a record is a record, and another member is text."));
 }
 
-/// Pins coalesceType as read from typing.ts.
+/// Pins coalesceType as read from typing.ts, and from 0.15 as TypeScript
+/// types `a ?? b`: the union of what each argument it reaches holds.
 #[test]
 fn coalesce_discharges_absence_by_its_present_argument() {
     let maybe_text = maybe_absent(Ty::Text);
     assert_eq!(describe_field_type(&coalesce_type(&[Some(maybe_text.clone()), Some(Ty::Text)]).unwrap()), "text");
     assert_eq!(describe_field_type(&coalesce_type(&[Some(maybe_text.clone()), Some(Ty::Absent)]).unwrap()), "text (or absent)");
-    assert!(coalesce_type(&[Some(maybe_text), None]).is_none(), "an untyped argument leaves the result unknown");
-    assert!(coalesce_type(&[Some(Ty::Text), Some(Ty::Number)]).is_none(), "no shared kind");
+    assert!(coalesce_type(&[Some(maybe_text.clone()), None]).is_none(), "an untyped argument leaves the result unknown");
     assert!(matches!(coalesce_type(&[Some(Ty::Absent)]), Some(Ty::Absent)));
+}
+
+#[test]
+fn coalesce_is_the_union_of_the_arguments_it_reaches() {
+    let maybe = |t: Ty| Some(maybe_absent(t));
+    let spelled = |args: &[Option<Ty>]| coalesce_type(args).map(|t| describe_field_type(&t));
+    assert_eq!(spelled(&[maybe(Ty::Number), Some(Ty::Text)]).as_deref(), Some("number | text"));
+    assert_eq!(spelled(&[maybe(Ty::Text), maybe(Ty::Number)]).as_deref(), Some("(number | text) (or absent)"));
+    assert_eq!(spelled(&[maybe(Ty::Text), maybe(Ty::Number), Some(Ty::Number)]).as_deref(), Some("number | text"));
+    // An argument that is always there is the last one reached: TypeScript
+    // types `a ?? b` as `a` where `a` is never null.
+    assert_eq!(spelled(&[Some(Ty::Text), Some(Ty::Number)]).as_deref(), Some("text"));
+    assert_eq!(spelled(&[Some(Ty::Text), None]).as_deref(), Some("text"));
+    // `[]` is one of a list's values (`string[] | []` is `string[]`), and
+    // beside anything else a member of its own.
+    let empty = Ty::Tuple { of: Rc::new(Vec::new()), rest: None };
+    assert_eq!(spelled(&[maybe(Ty::list(Ty::Text)), Some(empty.clone())]).as_deref(), Some("list of text"));
+    assert_eq!(spelled(&[maybe(Ty::Text), Some(empty)]).as_deref(), Some("[] | text"));
 }
 
 fn crm() -> InstanceRef {
@@ -245,7 +263,7 @@ fn a_choice_may_hold_a_record() {
     let crm = crm();
     let mut env = Env::default();
     env.roots.insert("co".to_string(), position_ref_in(&crm, "Company").unwrap());
-    let (ty, typing, expr) = infer("COALESCE(co, \"none\")", &env);
+    let (ty, typing, expr) = infer("IF co.Size != NULL THEN co ELSE \"none\" END", &env);
     assert!(ty.is_none(), "a record and a value share no kind");
     let held = typing.may_hold_type(&expr).unwrap();
     assert!(mixes_record_with_value(Some(&held)));

@@ -1317,7 +1317,17 @@ impl<'a> Typing<'a> {
                 if crate::families::calls::check_call_operands(self, expr, fn_, args, &types) {
                     return (None, types);
                 }
-                let ty = self.function_type(fn_, &types);
+                let ty = if fn_ == "coalesce" {
+                    // `[]` widens to nothing (no member says what its list
+                    // holds), so it joins `coalesce` as written: `coalesce(t,
+                    // [])` is text or an empty list, as TypeScript types `t
+                    // ?? []`, and `coalesce(tags, [])` a list of text.
+                    let joined: Vec<Option<Ty>> =
+                        types.iter().zip(args).map(|(ty, a)| ty.clone().or_else(|| self.exact_types.get(&key(a)).cloned().flatten())).collect();
+                    self.function_type(fn_, &joined)
+                } else {
+                    self.function_type(fn_, &types)
+                };
                 crate::families::calls::check_stdlib_args(self, fn_, args, &types);
                 (ty, types)
             }
