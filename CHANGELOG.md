@@ -24,6 +24,8 @@ named in [`RELEASING.md`](RELEASING.md).
 
 A new compatibility key: 0.15.0 reads `0.15.x` pins only, and refuses a project or automation pinned to `0.14.x` by name ("validate it under 0.15.0 and upgrade it"). Each change below is refused or diagnosed under the new key; `listen-fire upgrade` moves the pin once the program checks clean.
 
+Guide: [`docs/language/migrating-to-0.15.md`](docs/language/migrating-to-0.15.md), with each change before and after.
+
 - **A name is never a word an expression reads as itself: `true`, `false`, `null`, `and`, `or`, `not`, `in`, `contains`, `exists`, `if`, `then`, `else` and `end`, in any letter case.** `true = 5` is refused (`MOV_V5_HIDES_BUILTIN`, as a core word is), and so is a parameter, an alias or a function so named. Introduced by 0.15.0, a new compatibility key, since 0.14 accepts them.
   - Why: the expression grammar reads each of these words as itself, so a value bound to one is never read back. 0.14 checked `true = 5` clean, and every later `true` was the literal; `in = 1` bound a name no expression could read. TypeScript refuses `true` as a name for the same reason.
   - `exists`, `if` and `else` were refused already as spelled in lower case; any other case (`If = 1`) now is too.
