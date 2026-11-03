@@ -187,11 +187,19 @@ function installDirOf(version: string): string {
 /** The catalog as the older checker could have been given it: no member the
  *  release did not define. */
 function catalogFor(version: Triple, catalog: CatalogSnapshot): CatalogSnapshot {
-  // `AdapterSpec.package` and a plugin's came with 0.13.1; a reader built before it refuses a snapshot carrying it.
+  // `AdapterSpec.package` and a plugin's, and a changed field's `unchangedValues`, came with 0.13.1; a reader built
+  // before it refuses a snapshot carrying them.
   if (compareVersions(version, [0, 13, 1]) >= 0) return catalog;
-  const stripped = JSON.parse(JSON.stringify(catalog)) as { adapters?: Record<string, Record<string, unknown>>; plugins?: Record<string, Record<string, unknown>> };
-  for (const adapter of Object.values(stripped.adapters ?? {})) delete adapter.package;
-  return stripped as unknown as CatalogSnapshot;
+  const stripped: CatalogSnapshot = structuredClone(catalog);
+  for (const adapter of Object.values(stripped.adapters)) {
+    delete adapter.package;
+    for (const schema of Object.values(adapter.schemas)) {
+      for (const position of Object.values(schema.positions)) {
+        for (const changed of Object.values(position.changedFields ?? {})) delete changed.unchangedValues;
+      }
+    }
+  }
+  return stripped;
 }
 
 /** The checker of release `version`: the workspace's own when the floor is the
