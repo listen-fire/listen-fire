@@ -10,7 +10,10 @@ import {
   CORE_CHAPTERS,
   frontSection,
   readChapter,
+  renderExampleIndex,
+  renderExampleLookup,
   renderFrontPage,
+  searchExamples,
   searchLanguage,
   UNIT_CHAPTERS,
   type Chapter,
@@ -95,4 +98,11 @@ export function readHandbook(
 /** searchLanguage over the language's chapters and the host's. */
 export function searchHandbook(input: { query: string; kind?: LanguageSearchKind }, hostChapters: HostChapters = {}): LanguageSearchResult {
   return searchLanguage(input, bookOf(hostChapters));
+}
+
+/** showExample: a few checked lines doing what the words ask; with none, every example's intent. */
+export function showExample(input: { query?: string }): string {
+  const query = input.query?.trim() ?? '';
+  if (query === '') return `Every example; ask for one in your own words:\n${renderExampleIndex()}`;
+  return renderExampleLookup(query, searchExamples(query));
 }

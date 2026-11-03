@@ -34,6 +34,7 @@ import { builtins } from './chapters/builtins';
 export * from './types';
 export * from './front_page';
 export * from './language_search';
+export * from './micro_examples';
 export * from './prose_rules';
 export * from './units';
 

@@ -165,6 +165,8 @@ describe('the authoring tools over MCP', () => {
     const client = await connect('globex-key');
     expect((await call(client, 'readHandbook', { chapter: 'front#maybe-absent' })).value).toMatchObject({ chapter: 'front', section: 'maybe-absent' });
     expect((await call(client, 'searchLanguage', { query: 'join text' })).value.results.length).toBeGreaterThan(0);
+    expect((await call(client, 'showExample', { query: 'if then else expression' })).value).toMatch(/^# A value chosen by a condition\n.* \? .* : /);
+    expect((await call(client, 'showExample', {})).value).toMatch(/Run on a schedule/);
     expect((await call(client, 'listConnections')).value).toMatchObject({
       connections: [{ name: 'workspace', system: 'crm' }],
       systems: expect.arrayContaining([expect.objectContaining({ system: 'mail', connected: false })]),

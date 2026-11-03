@@ -36,8 +36,15 @@ const PACKAGES = [
   { dir: 'packages/module-runtime' },
   { dir: 'packages/movement-engine' },
   // The builtins chapter reads the language's reference where the repo keeps
-  // it, and a build from beside its own output (chapters/builtins.ts).
-  { dir: 'packages/handbook', copies: [{ from: 'crates/movement-language/src/builtins.md', to: 'builtins.md' }] },
+  // it, and a build from beside its own output (chapters/builtins.ts); the
+  // micro examples likewise travel with the listen-fire command (micro_examples.ts).
+  {
+    dir: 'packages/handbook',
+    copies: [
+      { from: 'crates/movement-language/src/builtins.md', to: 'builtins.md' },
+      { from: 'crates/lf/data/examples.md', to: 'examples.md' },
+    ],
+  },
   { dir: 'packages/file-text' },
   { dir: 'modules/anthropic' },
   { dir: 'packages/model-providers' },

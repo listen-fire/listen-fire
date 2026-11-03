@@ -20,6 +20,10 @@ named in [`RELEASING.md`](RELEASING.md).
 
 <!-- add merged PRs here -->
 
+### Added
+
+- **`listen-fire example <words>`: unsure how to write something? Ask in your own words, get a few lines doing it.** `listen-fire example create or update` answers with the snippet that does it, under a comment saying what it does, and at most one more comment where the code cannot speak; never more than three examples, and one when one clearly answers. With no words it lists what every example does. The 51 examples cover listening, the schedule, writing, walking, absence, grouping, dates, text, extraction and waiting, each with the words authors were seen to ask with ("dict keys entries groupBy", "if then else expression", "connect airtable base"). Every one is checked: by the handbook's tests against its catalog, or, where it names Airtable, by `listen-fire check` against the fake. The authoring tools serve the same lookup as `showExample`, and the handbook's front page points at both.
+
 ### Changed
 
 - **A value that may be absent is reported once, however many fields are read through it.** `MOV_ABSENT_REQUIRED` used to report each read: twelve errors for a program that read seven fields of one invoice in eight places. Reads through one name, in one function, are now one error at the first read. It names each field and line once, and suggests the one test that answers them all, `if (invoice == null) { fail("…") }`. Its fix is every read's `?.`, so `listen-fire upgrade` and an editor's quick fix place them all at once. A value read once, a read inside a walk's `WHERE` and a read through a call's result keep their own message. Nothing the checker accepts or refuses changes.
