@@ -205,7 +205,7 @@ function \`Intake\`(m: <inbox-[:Emails]->>) {
   }
   write company-[:Notes]-> {
     Title:   "Window"
-    Content: "\${coalesce(Date.parse(m.Subject), Date.addDays(today, 7))} / \${Date.format(today, "MMMM D, YYYY")} / \${DateTime.toIso(win)} / \${coalesce(ref, "")} / \${coalesce(Url.host(m.Body), "")} / \${coalesce(Number.format(amount, "compact"), "")} / \${coalesce(Currency.formatFigure(amount, "EUR"), "")}"
+    Content: "\${coalesce(Date.parse(m.Subject), Date.addDays(today, 7))} / \${Date.daysBetween(today, Date.addDays(today, 7))} / \${Date.format(today, "MMMM D, YYYY")} / \${DateTime.toIso(win)} / \${coalesce(ref, "")} / \${coalesce(Url.host(m.Body), "")} / \${coalesce(Number.format(amount, "compact"), "")} / \${coalesce(Currency.formatFigure(amount, "EUR"), "")}"
   }
 }
 `,

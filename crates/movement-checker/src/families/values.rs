@@ -321,6 +321,9 @@ fn arithmetic_hint(op: ArithmeticOp, whole: &Expression, offending: &[BaseKind])
         };
     }
     if offending.contains(&BaseKind::Date) || offending.contains(&BaseKind::Datetime) {
+        if op == ArithmeticOp::Sub {
+            return " Count the days from one date to another with DATE.DAYS_BETWEEN(from, to), or shift a date with DATE.ADD_DAYS(date, days).".to_string();
+        }
         return " Shift a date with DATE.ADD_DAYS(date, days) instead.".to_string();
     }
     String::new()

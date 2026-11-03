@@ -37,12 +37,13 @@ pub fn is_flat_builtin(name: &str) -> bool {
     FLAT.contains(&folded.as_str()) || FORMS.contains(&folded.as_str())
 }
 
-pub const NAMESPACED: [&str; 19] = [
+pub const NAMESPACED: [&str; 20] = [
     "currency.get_number_from_figure",
     "currency.get_code_from_figure",
     "currency.format_figure",
     "date.parse",
     "date.add_days",
+    "date.days_between",
     "date.format",
     "date.format_iso",
     "date.today",
@@ -152,6 +153,7 @@ pub fn apply_namespaced(id: &str, args: &[Js], around: Surroundings<'_>) -> Resu
         "currency.format_figure" => Ok(format_figure(&a, &b)),
         "date.parse" => Ok(read_date_parts(&a).map_or(Js::Null, |p| Js::str(iso_date(p)))),
         "date.add_days" => date_add_days(&a, &b),
+        "date.days_between" => Ok(date_days_between(&a, &b)),
         "date.format" => Ok(date_format(&a, &b)),
         "date.format_iso" => Ok(date_format_iso(&a).map_or(Js::Null, |(iso, _)| Js::str(iso))),
         "date.today" => date_today(&a, around),
@@ -579,6 +581,19 @@ fn date_add_days(date: &Js, days: &Js) -> Result<Js, EvalError> {
     match js_date::time_clip(epoch) {
         Some(ms) => Ok(Js::String(js_date::to_iso_string(ms).chars().take(10).collect())),
         None => Err(EvalError::Thrown { class: crate::eval::ErrorClass::RangeError, message: "Invalid time value".into() }),
+    }
+}
+
+/// `DATE.DAYS_BETWEEN(from, to)`: whole calendar days, `to` less `from`.
+/// Each counts as the day it falls on in UTC, so a datetime's time of day is
+/// dropped and a date is itself. Nothing in either, or text that reads as no
+/// date, is nothing out, as `DATE.ADD_DAYS` answers; the checker types the
+/// count as maybe absent whenever that can happen.
+fn date_days_between(from: &Js, to: &Js) -> Js {
+    let day = |value: &Js| coerce_to_datetime(value).map(|(_, ms)| (ms / js_date::MS_PER_DAY).floor());
+    match (day(from), day(to)) {
+        (Some(from), Some(to)) => Js::Number(to - from),
+        _ => Js::Null,
     }
 }
 
@@ -1047,6 +1062,31 @@ mod tests {
             apply_namespaced("date.add_days", &[s("2026-03-12"), Js::Number(1e9)], around()),
             Err(EvalError::Thrown { message, .. }) if message == "Invalid time value"
         ));
+        let between = |a: Js, b: Js| call("date.days_between", vec![a, b]);
+        let days = |a: &str, b: &str| match between(s(a), s(b)) {
+            Js::Number(n) => n,
+            other => panic!("{a} → {b}: {other:?}"),
+        };
+        assert_eq!(days("2026-03-12", "2026-03-26"), 14.0);
+        assert_eq!(days("2026-03-26", "2026-03-12"), -14.0);
+        assert_eq!(days("2026-03-12", "2026-03-12"), 0.0);
+        assert!(days("2026-03-12", "2026-03-12").is_sign_positive());
+        assert_eq!(days("2026-02-28", "2026-03-01"), 1.0);
+        assert_eq!(days("2028-02-28", "2028-03-01"), 2.0);
+        assert_eq!(days("2026-12-31", "2027-01-01"), 1.0);
+        assert_eq!(days("1969-12-31", "1970-01-02"), 2.0);
+        // A datetime is the day it falls on in UTC; the time of day is dropped.
+        assert_eq!(days("2026-03-12", "2026-03-13T23:59:00Z"), 1.0);
+        assert_eq!(days("2026-03-12T23:59:00Z", "2026-03-13T00:01:00Z"), 1.0);
+        assert_eq!(days("2026-03-12T00:30:00+01:00", "2026-03-12"), 1.0);
+        assert_eq!(days("12 March 2026", "2026-03-19"), 7.0);
+        for d in [-400.0, -1.0, 0.0, 1.0, 14.0, 1000.0] {
+            let later = text(call("date.add_days", vec![s("2026-03-12"), Js::Number(d)]));
+            assert_eq!(days("2026-03-12", &later), d, "addDays {d}");
+        }
+        assert!(matches!(between(Js::Null, s("2026-03-12")), Js::Null));
+        assert!(matches!(between(s("2026-03-12"), Js::Undefined), Js::Null));
+        assert!(matches!(between(s("someday"), s("2026-03-12")), Js::Null));
         let fmt = |v: Js, p: &str| text(call("date.format", vec![v, s(p)]));
         assert_eq!(fmt(s("2026-08-31"), "MMMM D, YYYY"), "August 31, 2026");
         assert_eq!(fmt(s("2026-08-31T07:05:09Z"), "ddd DD/MM/YY HH:mm:ss H m s"), "Mon 31/08/26 07:05:09 7 5 9");

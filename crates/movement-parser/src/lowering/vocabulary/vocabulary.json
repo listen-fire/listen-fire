@@ -38,6 +38,7 @@
       "functions": [
         { "name": "PARSE", "params": ["text"] },
         { "name": "ADD_DAYS", "params": ["date", "days"] },
+        { "name": "DAYS_BETWEEN", "params": ["from", "to"] },
         { "name": "FORMAT", "params": ["value", "pattern"] },
         { "name": "FORMAT_ISO", "params": ["value"] },
         { "name": "TODAY", "params": ["zone"] }

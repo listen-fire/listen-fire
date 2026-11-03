@@ -344,6 +344,15 @@ d = Date.parse("12 March 2026")   # "2026-03-12"
 deadline = Date.addDays(@current_date, 14)
 ```
 
+### Date.daysBetween
+
+`Date.daysBetween(from, to)` → `number` when both arguments are dates or datetimes that are there, `number | absent` when either may be absent or is text (text that reads as no date answers absent: `Date.parse` it first and test it) — the whole calendar days from `from` to `to`, negative when `to` is the earlier. Each argument counts as the calendar day it falls on in UTC: a date is itself, and a datetime loses its time of day, so `Date.daysBetween(d, Date.addDays(d, n))` is `n`. Dates can't be subtracted with `-`; this is the difference.
+
+```
+days   = Date.daysBetween(Date.today("Europe/London"), event)   # 14 when event is two weeks away
+urgent = days < 14
+```
+
 ### Date.format
 
 `Date.format(value, pattern)` → `text`, always present — a date written out for a person to read, from the tokens `YYYY YY MMMM MMM MM M DD D dddd ddd HH H mm m ss s`; anything that is not a letter prints as written. The pattern is a literal, checked when you save.

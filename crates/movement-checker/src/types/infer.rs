@@ -1483,6 +1483,21 @@ impl<'a> Typing<'a> {
             "multi" => return multi_type(args),
             "dict.keys" | "dict.values" | "dict.entries" => return dict_view_type(function, args.first().and_then(Option::as_ref)),
             "list.distinct" => return distinct_type(args.first().and_then(Option::as_ref)),
+            // A day count is there only when both its days are: a date that
+            // may be missing, or text that may read as no date, gives one that
+            // may be missing too, and whoever reads it is told so.
+            "date.days_between" => {
+                // An argument of a kind no day is was refused already.
+                fn may_miss(ty: &Ty) -> bool {
+                    match ty {
+                        Ty::MaybeAbsent(_) | Ty::Absent | Ty::Text | Ty::Owned(_) | Ty::Enum { .. } => true,
+                        Ty::Union(members) => members.iter().any(may_miss),
+                        _ => false,
+                    }
+                }
+                let missing = args.iter().flatten().any(may_miss);
+                return Some(if missing { maybe_absent(Ty::Number) } else { Ty::Number });
+            }
             _ => {}
         }
         if let Some(coerced) = bare_coercer_returns(function) {

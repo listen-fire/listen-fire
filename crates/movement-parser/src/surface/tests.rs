@@ -153,6 +153,7 @@ fn namespaces() {
         ("Date.from(v)", "DATE(v)"),
         ("Date.parse(t)", "DATE.PARSE(t)"),
         ("Date.addDays(d, 3)", "DATE.ADD_DAYS(d, 3)"),
+        ("Date.daysBetween(a, b)", "DATE.DAYS_BETWEEN(a, b)"),
         ("Date.format(v, \"yyyy\")", "DATE.FORMAT(v, \"yyyy\")"),
         ("Date.today(zone)", "DATE.TODAY(zone)"),
         ("DateTime.from(v)", "DATETIME(v)"),

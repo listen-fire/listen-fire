@@ -292,6 +292,8 @@ win_start    = DateTime.at(Date.addDays(berlin_today, -1), "07:00", "Europe/Berl
 
 **Arithmetic happens in calendar space; anchoring happens last.** \`Date.addDays\` moves a day on the calendar, and \`DateTime.at(date, time, zone)\` turns a day plus a wall-clock time into the one instant it names there. Anchor each end separately and the window between yesterday 07:00 and today 07:00 comes out 23 or 25 hours long on the two days a year the clocks move, without you writing anything down. Anchor one end and subtract 24 hours instead, and those two days silently run from 06:00 or 08:00.
 
+Count the other way with \`Date.daysBetween(from, to)\`: the whole calendar days between two days, negative when \`to\` is the earlier, so \`Date.daysBetween(Date.today("Europe/Berlin"), event) < 14\` is "less than two weeks away". Dates can't be subtracted with \`-\`; a datetime counts as the day it falls on in UTC, its time of day dropped.
+
 \`Date.today(zone)\` reads the moment the run fired, in that zone — a run firing at 00:30 in Berlin is on the Berlin date, not yesterday's UTC one. Every reading of the clock in one run gives the same answer, including after the run waits for a person, so a window computed at the start and one computed at the end agree.
 
 Both the zone (\`"Europe/Berlin"\`, \`"America/New_York"\`, \`"UTC"\`) and the time (\`"07:00"\`, 24-hour \`HH:mm\`) are written down and checked when you save. \`DateTime.at\` always names an instant: on the spring-forward morning a time the clock skips resolves forward to the moment the clock resumed, and on the fall-back morning a time that happens twice takes the first of the two.
@@ -524,7 +526,7 @@ function \`Intake\`(m: <inbox-[:Emails]->>) {
   company = write crm-[:Companies]-> { Name: m.Subject }
   write company-[:Notes]-> {
     Title:   "Window"
-    Content: "\${win_start} → \${win_end} (\${berlin_today})"
+    Content: "\${win_start} → \${win_end} (\${berlin_today}, \${Date.daysBetween(berlin_today, Date.addDays(berlin_today, 14))} days)"
   }
 }
 `,

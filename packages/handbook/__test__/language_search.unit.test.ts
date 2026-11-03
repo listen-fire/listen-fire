@@ -98,6 +98,12 @@ describe('ranking', () => {
     for (const query of ['distinct', 'distinct unique']) answers(query, 'List.distinct');
   });
 
+  it('answers the days between two dates with Date.daysBetween', () => {
+    for (const query of ['days between two dates', 'date difference in days', 'days until']) {
+      expect([query, top(query).slice(0, 3)]).toEqual([query, expect.arrayContaining(['Date.daysBetween'])]);
+    }
+  });
+
   it('filters by kind, caps the results, and is deterministic', () => {
     const results = searchLanguage({ query: 'text', kind: 'function' }, CORE_CHAPTERS).results;
     expect(results.length).toBeLessThanOrEqual(MAX_RESULTS);

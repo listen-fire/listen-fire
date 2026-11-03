@@ -34,6 +34,9 @@
     { "query": "create row only if none exists with same name (dedupe), date within next days", "top": "create-only-if-missing" },
     { "query": "create row only if none exists matching, with date comparison", "top": "create-only-if-missing" },
     { "query": "skip if a matching record already exists before write", "top": "create-only-if-missing" },
+    { "query": "days between two dates / parse date text", "top": "days-between-dates" },
+    { "query": "date difference in days, parse date from text", "top": "days-between-dates" },
+    { "query": "days between two dates; parse date from text", "top": "days-between-dates" },
 
     { "query": "for each issue in a repository", "top": "act-per-record" },
     { "query": "loop over records", "top": "act-per-record" },
@@ -55,6 +58,8 @@
     { "query": "extract fields from an email", "top": "extract-fields" },
     { "query": "classify with ai", "top": "ai-value" },
     { "query": "add days to a date", "top": "date-arithmetic" },
+    { "query": "days until an event", "top": "days-between-dates" },
+    { "query": "how many days away is the event", "top": "days-between-dates" },
     { "query": "format a date", "top": "todays-date" },
     { "query": "format currency", "top": "format-money" },
     { "query": "sum a list of numbers", "top": "list-maths" },

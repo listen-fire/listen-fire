@@ -29,7 +29,7 @@ const CHECKED_AGAINST_A_FAKE = ['connect-with-a-setting', 'create-or-update', 's
 describe('the corpus', () => {
   it('is a few dozen examples, each with a distinct id', () => {
     expect(examples.length).toBeGreaterThanOrEqual(30);
-    expect(examples.length).toBeLessThanOrEqual(55);
+    expect(examples.length).toBeLessThanOrEqual(56);
     expect(new Set(examples.map((e) => e.id)).size).toBe(examples.length);
     for (const e of examples) expect(e.id).toMatch(/^[a-z]+(-[a-z]+)*$/);
   });

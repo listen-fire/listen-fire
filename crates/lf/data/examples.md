@@ -586,6 +586,20 @@ due  = Date.addDays(Date.today("Europe/London"), 14)
 late = m.Date < Date.addDays(Date.today("Europe/London"), -7)
 ```
 
+### days-between-dates
+
+The number of days between two dates
+search: days between two dates difference in days until away since apart how many count subtract parse date from text urgent soon
+
+```body
+event = Date.parse(m.Subject)
+if (event == null) { fail("no date in the subject") }
+days   = Date.daysBetween(Date.today("Europe/London"), event)
+urgent = days < 14
+```
+
+Whole calendar days, negative when the second date is the earlier; a datetime counts as its day in UTC.
+
 ### format-money
 
 Write an amount of money or a large number

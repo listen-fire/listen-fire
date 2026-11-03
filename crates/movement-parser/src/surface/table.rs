@@ -122,6 +122,7 @@ pub const SPELLINGS: &[Spelling] = &[
     row("DATE", "Date.from", Same),
     row("DATE.PARSE", "Date.parse", Same),
     row("DATE.ADD_DAYS", "Date.addDays", Same),
+    row("DATE.DAYS_BETWEEN", "Date.daysBetween", Same),
     row("DATE.FORMAT", "Date.format", Same),
     row("DATE.TODAY", "Date.today", Same),
     row("DATETIME", "DateTime.from", Same),

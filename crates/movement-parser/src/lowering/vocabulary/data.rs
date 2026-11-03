@@ -67,6 +67,7 @@ pub static VOCABULARY: Vocabulary = Vocabulary {
             functions: &[
                 FamilyFunction { name: "PARSE", id: "date.parse", signature: "DATE.PARSE(text)", arity: Arity { min: 1, max: 1 } },
                 FamilyFunction { name: "ADD_DAYS", id: "date.add_days", signature: "DATE.ADD_DAYS(date, days)", arity: Arity { min: 2, max: 2 } },
+                FamilyFunction { name: "DAYS_BETWEEN", id: "date.days_between", signature: "DATE.DAYS_BETWEEN(from, to)", arity: Arity { min: 2, max: 2 } },
                 FamilyFunction { name: "FORMAT", id: "date.format", signature: "DATE.FORMAT(value, pattern)", arity: Arity { min: 2, max: 2 } },
                 FamilyFunction { name: "FORMAT_ISO", id: "date.format_iso", signature: "DATE.FORMAT_ISO(value)", arity: Arity { min: 1, max: 1 } },
                 FamilyFunction { name: "TODAY", id: "date.today", signature: "DATE.TODAY(zone)", arity: Arity { min: 1, max: 1 } },
