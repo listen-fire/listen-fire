@@ -18,7 +18,7 @@ One idea runs through the release: **a type says what the run will meet.** A nam
 
 ## 1. How the pin moves
 
-- `listen-fire upgrade` checks every movement file as a move up from its pin. It rewrites one change unasked, a walk word to its everyday spelling (section 7). Each other change is a refusal the author fixes by hand, because each fix chooses a value (a name, a fallback, an order).
+- `listen-fire upgrade` checks every movement file as a move up from its pin. It rewrites one change unasked, a walk word to its everyday spelling (section 7), except `LENGTH` of a list. Each other change is a refusal the author fixes by hand, because each fix chooses a value (a name, a fallback, an order).
 - The pin (`engine:` in `lf.yaml`) moves to `0.15.0` only when every file then checks clean. Otherwise it stays, and the command lists what is left.
 - 0.15 changes what a run reads in one place: an Airtable checkbox left empty is `false` and an empty list field is `[]`, where 0.14 read both as absent (section 4).
 
@@ -63,11 +63,12 @@ The run fails at the first member whose key answers nothing, so such a key is no
 
 ## 6. The records a block answers come in the walk's order
 
-A block over a walk with no `ORDER BY` answers in no order. `first`, `[0]`, `Text.join` and `reduce` over the records it answers are refused (`MOV_FOLD_NEEDS_ORDER`), as they were over the values it answers.
+A block over a walk with no `ORDER BY` answers in no order. `first`, `[0]`, `Text.join` and `reduce` over the records it answers are refused (`MOV_FOLD_NEEDS_ORDER`), as they were over the values it answers. A list literal that spreads a collection in no order is in no order too: a spread keeps the order of what it splices in.
 
 | 0.14, checked clean | 0.15 |
 |---|---|
 | `ps = c-[p:People]-> { return p }` then `first(ps)` | order the walk (`c-[p:People ORDER BY p.Name]->`), or `only(…)` where exactly one is meant |
+| `Text.join([...names], ", ")`, `names` from a walk with no `ORDER BY` | `Text.join(sort(names), ", ")` |
 
 ## 7. Inside walk brackets a built-in is spelled as outside them
 
@@ -77,6 +78,7 @@ A built-in has one spelling: `Text.lower(c.Name)`, `Text.trim(…)`, `Number.rou
 |---|---|
 | `ch-[m:Messages WHERE LOWER(m.Text) CONTAINS "urgent"]->` | `ch-[m:Messages WHERE Text.lower(m.Text) CONTAINS "urgent"]->` |
 | `crm-[c:Companies WHERE EXISTS(c-[:Team]->)]->` | `crm-[c:Companies WHERE exists(c-[:Team]->)]->` |
+| `ch-[m:Messages WHERE LENGTH(m.Tags) > 0]->`, `Tags` a list | `ch-[m:Messages WHERE count(m.Tags) > 0]->`, by hand: `count` reads into a different predicate, so `upgrade` leaves it |
 
 ## 8. A whole program
 
@@ -104,5 +106,5 @@ function `Open Issues`(go: <manual-[:Invocation]->>) {
 | `MOV_COLLECTION_OP_NOT_A_COLLECTION`, `MOV_ARITH_NON_NUMERIC`, `MOV_BUILTIN_ARG_TYPE` | a `coalesce` whose union is not what the read needs |
 | `MOV_ABSENT_REQUIRED` | an Airtable or Google Sheets field that may be empty, read where a value is needed |
 | `MOV_DICT_KEY_MAY_BE_ABSENT` | a grouping key that may be absent (now an error) |
-| `MOV_FOLD_NEEDS_ORDER` | `first`, `[0]`, `Text.join` or `reduce` over the records an unordered walk's block answers |
-| `MOV_V5_SPELLING` | a CAPS walk word (`LOWER`, `EXISTS`, …) inside walk brackets; rewritten by `listen-fire upgrade` |
+| `MOV_FOLD_NEEDS_ORDER` | `first`, `[0]`, `Text.join` or `reduce` over the records an unordered walk's block answers, or over a list that spreads them |
+| `MOV_V5_SPELLING` | a CAPS walk word (`LOWER`, `EXISTS`, …) inside walk brackets; rewritten by `listen-fire upgrade`, except `LENGTH` of a list, which is `count(xs)` by hand |
