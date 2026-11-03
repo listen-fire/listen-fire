@@ -19,6 +19,7 @@ use std::collections::HashSet;
 
 use crate::ast::*;
 use crate::lexer::{KEYWORDS, MAX_DEPTH, TOO_DEEP};
+use crate::surface::table::{CORE_WORDS, NAMESPACES};
 use crate::scan::{
     Opaque, OpaqueKind, TooDeep, call_style_if_message, ident_end, is_closer, is_opener, opens_hop, scan_backtick_name,
     scan_ident, scan_member_path, scan_name, skip_opaque, skip_string,
@@ -42,24 +43,44 @@ const NODE_ENTRY_EFFECTS: [&str; 10] =
     ["write", "match", "link", "unlink", "delete", "extract", "await", "race", "parallel", "callback"];
 
 /// The words that always begin their own statement, so none of them can be a
-/// name a statement binds. (`match`, `node`, `type`, `race`, `all` and `fail`
-/// begin one only when what follows fits, so `match = …` still binds.)
+/// name a statement binds. (`match`, `node` and `type` begin one only when
+/// what follows fits, so `match = …` still binds; `race`, `all` and `fail`
+/// bind here too, and the checker refuses them as core words.)
 const STATEMENT_KEYWORDS: [&str; 20] = [
     "import", "export", "shape", "movement", "function", "listen", "run", "write", "link", "edge", "unlink", "delete", "refresh", "await",
     "if", "ERROR", "extract", "callback", "else", "return",
 ];
 
-/// Why `word = …` is refused, and what to write instead: a name that says
-/// what it holds, and every word a binding cannot take.
-fn reserved_as_name(word: &str) -> String {
-    let mut words = STATEMENT_KEYWORDS.to_vec();
+/// Every word a binding cannot take, in one list: the words that start a
+/// statement (refused here), and the core words and namespaces (refused by
+/// the checker, `MOV_V5_HIDES_BUILTIN`). Both refusals end with it, so a
+/// reader told one word learns them all.
+pub fn words_no_name_takes() -> String {
+    // A statement word the language now spells otherwise (`ERROR`, now
+    // `fail`) is listed by its current spelling, as every message names it.
+    let current = |w: &&&str| crate::surface::table::by_canonical(w).is_none_or(|s| s.current == **w);
+    let mut words: Vec<&str> = STATEMENT_KEYWORDS.iter().filter(current).chain(CORE_WORDS).chain(NAMESPACES).copied().collect();
     words.sort_by_key(|w| w.to_lowercase());
+    words.dedup();
+    format!("Words that can't be names: {}", words.join(", "))
+}
+
+/// Why a binding of `word` (`what` it is: `starts a statement`, `is the core
+/// word \`all\``) is refused, and what to write instead: a name that says
+/// what it holds, and every word a binding cannot take.
+pub fn not_a_name(word: &str, what: &str) -> String {
     let mut letters = word.chars();
-    let suggested = letters.next().map(|c| format!("the{}{}", c.to_uppercase(), letters.as_str().to_lowercase())).unwrap_or_default();
-    format!(
-        "'{word}' starts a statement, so it can't be a name: call the value something else, such as `{suggested}`, here and where it is read. Words that start a statement: {}",
-        words.join(", ")
-    )
+    let first = letters.next().map(|c| c.to_uppercase().to_string()).unwrap_or_default();
+    let rest = letters.as_str();
+    // `ERROR` is `theError`; `extractOne` keeps its own capitals.
+    let rest = if rest.chars().any(char::is_lowercase) { rest.to_string() } else { rest.to_lowercase() };
+    let suggested = format!("the{first}{rest}");
+    format!("'{word}' {what}, so it can't be a name: call the value something else, such as `{suggested}`, here and where it is read. {}", words_no_name_takes())
+}
+
+/// Why `word = …` is refused: it starts a statement.
+fn reserved_as_name(word: &str) -> String {
+    not_a_name(word, "starts a statement")
 }
 
 const LAZY_AWAIT: &str = "'lazy await' can't be both: 'await' waits for the edge to resolve and continues the run there, 'lazy' waits to look until something reads. Pick the one you meant";
@@ -5196,11 +5217,12 @@ mod tests {
 
     #[test]
     fn a_statement_keyword_bound_as_a_name_is_reserved() {
-        let words = "await, callback, delete, edge, else, ERROR, export, extract, function, if, import, link, listen, movement, refresh, return, run, shape, unlink, write";
+        let words = "ai, all, await, callback, coalesce, count, Currency, Date, DateTime, delete, edge, else, exists, export, extract, extractOne, fail, File, filter, first, function, if, import, Json, link, List, listen, map, members, movement, Number, only, race, reduce, refresh, return, run, shape, sleep, sort, Text, unlink, until, Url, write";
         assert_eq!(
             error("function m() {\n  link = 1\n}\n"),
-            json!({ "message": format!("'link' starts a statement, so it can't be a name: call the value something else, such as `theLink`, here and where it is read. Words that start a statement: {words}"), "loc": { "line": 2, "col": 3 } })
+            json!({ "message": format!("'link' starts a statement, so it can't be a name: call the value something else, such as `theLink`, here and where it is read. Words that can't be names: {words}"), "loc": { "line": 2, "col": 3 } })
         );
+        assert!(error("ERROR = 1\n")["message"].as_str().is_some_and(|m| m.contains("`theError`")));
         assert_eq!(error("write\t= 1\n").pointer("/loc"), Some(&json!({ "line": 1, "col": 1 })));
         assert!(error("write\t= 1\n")["message"].as_str().is_some_and(|m| m.starts_with("'write' starts a statement") && m.contains("`theWrite`")));
         assert!(error("function m() {\n  return = 1\n}\n")["message"].as_str().is_some_and(|m| m.starts_with("'return' starts a statement")));

@@ -3,8 +3,11 @@
 // (engine_claims.unit.test.ts takes `frontPageClaims()` alongside them); the
 // anchors diagnostics name are held by pointers.unit.test.ts.
 
+import { LANGUAGE_VERSION, checkSourceInRust } from 'movement-lang';
+import { reference as referenceChapter } from '../chapters/reference';
 import { CONCEPTS, TS_EXCEPT, exampleProgram, frontPageClaims, frontSection, renderFrontPage } from '../front_page';
 import { proseViolations } from '../prose_rules';
+import { HANDBOOK_CATALOG } from '../testing';
 
 /** The page is read on every build; past this it stops being a front page. */
 const WORD_CEILING = 800;
@@ -34,6 +37,32 @@ describe('the front page', () => {
       if ('file' in entry.example) expect(page).toContain(probe.trimEnd());
       else expect(page).not.toContain(probe);
     }
+  });
+
+  // The words the handbook says are never names are the ones the parser and
+  // checker refuse as names, and each refusal lists the same words.
+  it('lists as never names the words a binding is refused, `all` among them', () => {
+    const listed = (text: string) => [...text.matchAll(/`([A-Za-z]+)`/g)].map((m) => m[1]);
+    const reference = /A name you coin is never a word of the language.*They are (.*)\.\n/.exec(referenceChapter.content)?.[1];
+    expect(reference).toBeDefined();
+    const words = listed(reference ?? '');
+    expect(words).toContain('all');
+    const refusal = (word: string) => {
+      const source = `function f(t: <text>) {\n  ${word} = 1\n}\n`;
+      try {
+        return checkSourceInRust(source, HANDBOOK_CATALOG, { languageVersion: LANGUAGE_VERSION }).map((d) => d.message).find((m) => m.includes("can't be a name"));
+      } catch (error) {
+        return error instanceof Error ? error.message : String(error);
+      }
+    };
+    for (const word of words) {
+      const said = refusal(word) ?? `'${word}' was bound`;
+      expect(said).toContain(`'${word}' `);
+      expect(said).toContain(`Words that can't be names: ${words.join(', ')}`);
+    }
+    const front = frontSection('statements');
+    expect(front.ok).toBe(true);
+    if (front.ok) for (const word of listed(/Never names: (.*)\./.exec(front.content)?.[1] ?? '')) expect(words).toContain(word);
   });
 
   it('carries every concept with no TypeScript analogue', () => {

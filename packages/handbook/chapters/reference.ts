@@ -59,6 +59,7 @@ Types **always** wear angle brackets; positions, scalar values, and handles **ne
 - **Backticks** wrap any name with spaces, *anywhere it appears*: a field (\`msg.\`Sender Name\`\`), a write target's edge (\`write crm-[:\`Sales Pipeline\`]->\`), a declared node (\`node \`Deal Intake\` { … }\`, \`rec is <\`Deal Intake\`>\`), a credential or automation name, and a field read through an alias inside \`WHERE\` / \`ORDER BY\` (\`c.\`Created At\`\`).
 - **Double quotes are always a literal string.** \`Name: "Subject"\` writes the word "Subject"; a field read needs a position — \`Name: msg.Subject\`.
 - Keep the names you coin bare (binding names, import aliases) — backticks work there too, but bare reads best. Alias an awkward credential name to a bare one on import.
+- **A name you coin is never a word of the language**: the words that start a statement, the core words and the namespaces. Binding one is refused, with a name to use instead (\`all = …\`: call it \`theAll\`). They are \`ai\`, \`all\`, \`await\`, \`callback\`, \`coalesce\`, \`count\`, \`Currency\`, \`Date\`, \`DateTime\`, \`delete\`, \`edge\`, \`else\`, \`exists\`, \`export\`, \`extract\`, \`extractOne\`, \`fail\`, \`File\`, \`filter\`, \`first\`, \`function\`, \`if\`, \`import\`, \`Json\`, \`link\`, \`List\`, \`listen\`, \`map\`, \`members\`, \`movement\`, \`Number\`, \`only\`, \`race\`, \`reduce\`, \`refresh\`, \`return\`, \`run\`, \`shape\`, \`sleep\`, \`sort\`, \`Text\`, \`unlink\`, \`until\`, \`Url\`, \`write\`.
 
 ### operators-and-functions
 

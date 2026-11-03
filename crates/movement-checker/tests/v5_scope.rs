@@ -103,16 +103,22 @@ fn an_unbound_old_name_is_still_refused_under_5() {
     assert_eq!(of_code(&check_with(inner, NONE), "MOV_V5_SPELLING").len(), 1);
 }
 
+/// Every word a binding cannot take, as both refusals list it.
+const WORDS: &str = "Words that can't be names: ai, all, await, callback, coalesce, count, Currency, Date, DateTime, delete, edge, else, exists, export, extract, extractOne, fail, File, filter, first, function, if, import, Json, link, List, listen, map, members, movement, Number, only, race, reduce, refresh, return, run, shape, sleep, sort, Text, unlink, until, Url, write";
+
 #[test]
 fn a_name_that_hides_a_core_word_or_a_namespace_is_refused_under_5_for_now() {
     let found = check_with("function go(count: <number>) {\n  Text = 3\n  Map = 3\n  upper = 3\n}", NONE);
     assert_eq!(
         of_code(&found, "MOV_V5_HIDES_BUILTIN"),
         vec![
-            "'count' would hide the core word `count` — not yet allowed: inside an expression a call written with 'count' is read as the core word `count` before any name is bound, so it would not reach this binding. Name it something else",
-            "'Text' would hide the namespace `Text` — not yet allowed: inside an expression a call written with 'Text' is read as the namespace `Text` before any name is bound, so it would not reach this binding. Name it something else",
+            format!("'count' is the core word `count`, so it can't be a name: call the value something else, such as `theCount`, here and where it is read. {WORDS}"),
+            format!("'Text' is the namespace `Text`, so it can't be a name: call the value something else, such as `theText`, here and where it is read. {WORDS}"),
         ]
     );
+    // `all` (the join) is one of them, and the list a reader is given says so.
+    let found = check_with("function go(t: <text>) {\n  all = [t]\n}", NONE);
+    assert_eq!(of_code(&found, "MOV_V5_HIDES_BUILTIN"), vec![format!("'all' is the core word `all`, so it can't be a name: call the value something else, such as `theAll`, here and where it is read. {WORDS}")]);
     // A function by a core word's name: reported once, as hiding it.
     let found = check_with("function first(s: <text>) {\n  return 1\n}", NONE);
     assert_eq!(codes_of(&found).iter().filter(|c| c.starts_with("MOV_V5_HIDES") || c.starts_with("MOV_FUNCTION_NAME")).count(), 1, "{found:#?}");

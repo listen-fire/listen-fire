@@ -61,11 +61,11 @@ fn insert_line_at_top(line: &str) -> serde_json::Value {
 /// The design allows it with a warning, a call going to the name; refused for
 /// now, because the spelling rewrite reads a core word's or a namespace's call
 /// before any name is bound (movement_parser::surface::canonical), so a call
-/// written with the name would still run the built-in.
+/// written with the name would still run the built-in. Said as the parser
+/// says a word that starts a statement, with the one list of words no name
+/// takes.
 fn hides_builtin_message(name: &str, hidden: &str) -> String {
-    format!(
-        "'{name}' would hide {hidden} — not yet allowed: inside an expression a call written with '{name}' is read as {hidden} before any name is bound, so it would not reach this binding. Name it something else"
-    )
+    movement_parser::stmt::not_a_name(name, &format!("is {hidden}"))
 }
 
 impl Checker<'_> {
