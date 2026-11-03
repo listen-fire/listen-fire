@@ -12,6 +12,7 @@ import {
   readChapter,
   renderFrontPage,
   searchLanguage,
+  UNIT_CHAPTERS,
   type Chapter,
   type LanguageSearchKind,
   type LanguageSearchResult,
@@ -28,10 +29,11 @@ const CHAPTER_POINTER =
 
 export type HostChapters = NonNullable<AuthoringHost['chapters']>;
 
-/** The book: the language's chapters and the host's. */
+/** The book: the language's chapters, its units' (`system:cron`, `system:manual`)
+ *  and the host's; a host's chapter of a unit's id takes its place. */
 function bookOf(hostChapters: HostChapters): Readonly<Record<string, Chapter>> {
   const host = Object.values(hostChapters).filter((chapter): chapter is Chapter => chapter !== undefined);
-  return { ...CORE_CHAPTERS, ...Object.fromEntries(host.map((chapter) => [chapter.id, chapter])) };
+  return { ...CORE_CHAPTERS, ...UNIT_CHAPTERS, ...Object.fromEntries(host.map((chapter) => [chapter.id, chapter])) };
 }
 
 interface ChapterRead {

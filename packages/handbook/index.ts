@@ -35,6 +35,7 @@ export * from './types';
 export * from './front_page';
 export * from './language_search';
 export * from './prose_rules';
+export * from './units';
 
 /**
  * `foundations#conventions` is a route the index serves and a section every

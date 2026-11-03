@@ -147,4 +147,12 @@ describe('the handbook as the tools serve it', () => {
     expect(readHandbook({ chapter: 'system:crm' }, chapters)).toMatchObject({ content: expect.stringContaining('Companies') });
     expect(searchHandbook({ query: 'COALESCE' }).results.length).toBeGreaterThan(0);
   });
+
+  // The catalog text and the index both send a schedule's author to system:cron.
+  it("reads the units' chapters with no host, and a host's chapter of the same id in their place", () => {
+    expect(readHandbook({ chapter: 'system:cron' })).toMatchObject({ content: expect.stringContaining('`Fired at`') });
+    expect(readHandbook({ chapter: 'system:manual' })).toMatchObject({ content: expect.stringContaining('`Invocations`') });
+    const host = { 'system:cron': { id: 'system:cron' as const, title: 'Schedules', content: '## Schedules\n\nThe host says.' } };
+    expect(readHandbook({ chapter: 'system:cron' }, host)).toMatchObject({ content: expect.stringContaining('The host says.') });
+  });
 });
