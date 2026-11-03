@@ -62,6 +62,24 @@ test('a lapsed webhook is not counted against the cap', async () => {
   }
 });
 
+test('a row written by field id or by name is read back by name, as Airtable answers it', async () => {
+  const { baseUrl, close } = await bootApp((store) => {
+    store.create('airtable', 'base', { id: 'appC', name: 'Community' }, 'appC');
+    store.create('airtable', 'table:appC', { id: 'tblM', name: 'Members', primaryFieldId: 'fldId', fields: [{ id: 'fldId', name: 'Telegram Id' }, { id: 'fldLast', name: 'Last Message' }] }, 'tblM');
+  });
+  try {
+    const ada = (await (await post(`${baseUrl}/v0/appC/tblM`, { fields: { fldId: '1001', fldLast: 'hello' } })).json()) as { id: string };
+    const read = async () => ((await (await fetch(`${baseUrl}/v0/appC/tblM/${ada.id}`)).json()) as { fields: Record<string, unknown> }).fields;
+    assert.deepEqual(await read(), { 'Telegram Id': '1001', 'Last Message': 'hello' });
+    await fetch(`${baseUrl}/v0/appC/tblM/${ada.id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ fields: { fldLast: '/stop' } }) });
+    assert.deepEqual(await read(), { 'Telegram Id': '1001', 'Last Message': '/stop' });
+    await fetch(`${baseUrl}/v0/appC/tblM/${ada.id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ fields: { 'Last Message': 'back' } }) });
+    assert.deepEqual(await read(), { 'Telegram Id': '1001', 'Last Message': 'back' });
+  } finally {
+    await close();
+  }
+});
+
 test('a record search by formula answers the records it holds for: fields by name or by id, AND and OR of equalities, quotes escaped', async () => {
   const { baseUrl, close } = await bootApp((store) => {
     store.create('airtable', 'base', { id: 'appO', name: 'Office' }, 'appO');

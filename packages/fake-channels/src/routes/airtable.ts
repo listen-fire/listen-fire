@@ -448,6 +448,16 @@ export function airtableRoutes(store: EntityStore): Router {
     res.json({ now: new Date(now()).toISOString() });
   });
 
+  // Airtable holds a cell by its field and answers it by the field's name,
+  // whichever of the two a write named it by. A row kept under the name a
+  // write happened to use read back as absent under the other: a `?:` on a
+  // row the module had written by id saw an empty field and overwrote it.
+  const byFieldName = (baseId: string, tableId: string, cells: Record<string, unknown>) => {
+    const table = store.get(SVC, `table:${baseId}`, tableId)?.data as { fields?: { id: string; name: string }[] } | undefined;
+    const nameById = new Map((table?.fields ?? []).map((f) => [f.id, f.name]));
+    return Object.fromEntries(Object.entries(cells).map(([key, value]) => [nameById.get(key) ?? key, value]));
+  };
+
   // Create record
   r.post('/v0/:baseId/:tableId', (req, res) => {
     const id = `rec${store.nextId(SVC, `record:${req.params.baseId}:${req.params.tableId}`)}`;
@@ -456,7 +466,7 @@ export function airtableRoutes(store: EntityStore): Router {
       `record:${req.params.baseId}:${req.params.tableId}`,
       {
         id,
-        fields: req.body.fields || {},
+        fields: byFieldName(req.params.baseId, req.params.tableId, req.body.fields || {}),
         createdTime: new Date().toISOString(),
       },
       id,
@@ -469,7 +479,8 @@ export function airtableRoutes(store: EntityStore): Router {
     const key = `record:${req.params.baseId}:${req.params.tableId}`;
     const record = store.get(SVC, key, req.params.recordId);
     if (!record) return res.status(404).json({ error: 'Not found' });
-    const fields = { ...(record.data.fields as Record<string, unknown>), ...req.body.fields };
+    const { baseId, tableId } = req.params;
+    const fields = { ...byFieldName(baseId, tableId, record.data.fields as Record<string, unknown>), ...byFieldName(baseId, tableId, req.body.fields || {}) };
     store.update(SVC, key, req.params.recordId, { ...record.data, fields });
     res.json({ id: req.params.recordId, fields });
   });
