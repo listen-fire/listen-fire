@@ -109,6 +109,38 @@ test('a Base narrowed by name is typed by its own tables, and the write reaches 
   }
 });
 
+// Before any program connects at a base, the catalog holds none of a base's
+// tables: the text says how to connect at one (from the module's declared
+// `base` setting and the bases the connection lists), that each table is then
+// an edge off the connection, and that the catalog lists them after.
+test('the catalog text, before a program connects at a base, says how to and what the tables then are', async () => {
+  const fake = await fakeChannels();
+  try {
+    const dir = await connected(fake.url);
+    const before = lfSync(dir, 'catalog');
+    assert.equal(before.code, 0, before.out);
+    const lines = before.out.split('\n');
+    const use = lines.indexOf('use: c = connect `@lf/airtable` using my_airtable');
+    assert.ok(use > 0, before.out);
+    assert.deepEqual(lines.slice(use + 1, use + 4), [
+      'or at one Base: c = connect `@lf/airtable` using my_airtable { base: "Pipeline Tracker" } (base: "Pipeline Tracker" or "Ops")',
+      '  connected at a Base, the connection is that Base: each thing the Base holds by name is an edge off the connection, c-[:<its name>]->, its records read, written and listened to along that edge',
+      '  those edges, with their fields, are listed here once a program in the project connects at a Base (run listen-fire catalog again then)',
+    ]);
+    assert.match(before.out, /^ {2}Base: One of this workspace's bases, whose tables are each an edge named after the table, which you read and write rows along: off a connection made at the base/m);
+    assert.doesNotMatch(before.out, /^ {2}Companies/m, 'no table is described before a program connects at its base');
+
+    // Connected so, the tables are listed, each an edge off the connection.
+    writeFileSync(join(dir, 'movements/pipeline.mvt'), program({ base: 'Pipeline Tracker', table: 'Companies', field: 'Name' }).replace('pipeline = connect airtable using my_airtable', 'pipeline = connect airtable using my_airtable { base: "Pipeline Tracker" }'));
+    const after = lfSync(dir, 'catalog');
+    assert.equal(after.code, 0, after.out);
+    assert.match(after.out, /^ {2}Companies -> Companies$/m);
+    assert.match(after.out, /^ {2}a Companies along the connection's Companies: Name, Stage, Tags, Notes$/m);
+  } finally {
+    await fake.stop();
+  }
+});
+
 // A row is in its base by being in one of the base's tables: an update found
 // by `unique by` along a base's table edge is attached to that base already.
 test('a `unique by` write along a narrowed base\'s table edge creates the row, then updates it in place', async () => {

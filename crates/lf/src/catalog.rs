@@ -296,17 +296,21 @@ pub fn catalog_text(catalog: &Js) -> String {
         };
         for (key, schema) in &schemas {
             out.push(String::new());
-            let (header, using) = match key.as_str() {
-                "" => (format!("connection {name} (no credential): {spelled}"), String::new()),
-                credential if credentials.contains_key(credential) => (format!("connection {credential}: {spelled}"), format!(" using {credential}")),
+            let (header, using, positioned) = match key.as_str() {
+                "" => (format!("connection {name} (no credential): {spelled}"), String::new(), false),
+                credential if credentials.contains_key(credential) => (format!("connection {credential}: {spelled}"), format!(" using {credential}"), false),
                 // A connection in a position (an Airtable base) is the program's own construction.
-                positioned => (format!("connection {positioned}: {spelled}, in the position its program's connect names"), " using <credential> as the program's connect says".to_string()),
+                positioned => (format!("connection {positioned}: {spelled}, in the position its program's connect names"), " using <credential> as the program's connect says".to_string(), true),
             };
             out.push(header);
             if let Some(description) = adapter.get("description").and_then(Js::as_str) {
                 out.push(description.to_string());
             }
-            out.push(format!("use: c = connect {spelled}{using}"));
+            let connect = format!("c = connect {spelled}{using}");
+            out.push(format!("use: {connect}"));
+            if !positioned {
+                out.extend(position_lines(adapter, key, &connect));
+            }
             crate::modules::SchemaView::of(schema).lines(&mut out);
         }
     }
@@ -355,6 +359,33 @@ pub fn catalog_text(catalog: &Js) -> String {
         out.push(format!("credentials no installed module describes (its module is not installed here, or does not declare that credential): {}", unconnected.join(", ")));
     }
     out.join("\n")
+}
+
+/// How a connection with no position is connected in one (its module's
+/// `positionArgs`: an Airtable base): the connect with its settings, the
+/// values each may take as the connection's own describe listed them, and
+/// what the connection is then. A program that never connects in a position
+/// shows none of the record types the position holds, so the text says
+/// where they come from rather than leave a reader to look for them under
+/// the records it does show.
+fn position_lines(adapter: &Js, key: &str, connect: &str) -> Vec<String> {
+    let args: Vec<&Js> = adapter.get("constructionArgs").and_then(Js::as_array).unwrap_or_default().iter().filter(|arg| arg.get("kind").and_then(Js::as_str) == Some("position")).collect();
+    let Some(first) = args.first() else { return Vec::new() };
+    let text = |arg: &Js, k: &str| arg.get(k).and_then(Js::as_str).unwrap_or_default().to_string();
+    let label = |arg: &Js| arg.get("label").and_then(Js::as_str).map(str::to_string).unwrap_or_else(|| text(arg, "optionsFromType"));
+    let options = |arg: &Js| -> Vec<String> {
+        let listed = adapter.get("constructionArgOptions").and_then(|o| o.get(key)).and_then(|o| o.get(&text(arg, "name"))).and_then(Js::as_array).unwrap_or_default();
+        listed.iter().filter_map(Js::as_str).map(|o| Js::str(o).to_json()).collect()
+    };
+    let settings: Vec<String> = args.iter().map(|arg| format!("{}: {}", text(arg, "name"), options(arg).first().cloned().unwrap_or_else(|| "\"…\"".into()))).collect();
+    let choices: Vec<String> = args.iter().filter(|arg| !options(arg).is_empty()).map(|arg| format!("{}: {}", text(arg, "name"), options(arg).join(" or "))).collect();
+    let choices = if choices.is_empty() { String::new() } else { format!(" ({})", choices.join("; ")) };
+    let at = label(first);
+    vec![
+        format!("or at one {at}: {connect} {{ {} }}{choices}", settings.join(", ")),
+        format!("  connected at a {at}, the connection is that {at}: each thing the {at} holds by name is an edge off the connection, c-[:<its name>]->, its records read, written and listened to along that edge"),
+        format!("  those edges, with their fields, are listed here once a program in the project connects at a {at} (run listen-fire catalog again then)"),
+    ]
 }
 
 /// `pluginsOf`: each plugin external's package, keyed by module and name, each
@@ -493,5 +524,32 @@ mod text_tests {
         ];
         assert_eq!(text, expected.join("\n"));
         assert!(!text.contains("listenSettingsBecome") && !text.contains("Bases"), "no retired 0.12 mapping in the text");
+    }
+
+    /// A second shape beside Airtable's: the setting's name, its label and
+    /// the values the connection listed are the module's, never spelled here.
+    #[test]
+    fn a_connection_with_no_position_says_how_its_program_connects_in_one_and_what_it_then_is() {
+        let catalog = Js::parse(
+            br#"{"adapters":{"sheets":{"package":"@lf/sheets","schemaShape":"introspected",
+              "constructionArgs":[{"name":"credentials","kind":"credential","required":true},{"name":"spreadsheet","kind":"position","required":false,"optionsFromType":"Spreadsheet","label":"Spreadsheet"}],
+              "constructionArgOptions":{"team":{"spreadsheet":["Q3 \"plan\"","Hiring"]}},
+              "schemas":{"team":{"positions":{"Spreadsheet":{"properties":{"Title":"text"},"edges":{}}},"collections":{"Spreadsheet":{"target":"Spreadsheet"}},"writableRoots":{}},
+                "team::[[\"spreadsheet\",\"Hiring\"]]":{"positions":{"Candidates":{"properties":{"Name":"text"},"edges":{}}},"collections":{"Candidates":{"target":"Candidates"}},"writableRoots":{}}}}},
+            "credentials":{"team":{"adapters":["sheets"],"credential":"google"}},"plugins":{},"files":{}}"#,
+        )
+        .unwrap();
+        let text = catalog_text(&catalog);
+        let lines: Vec<&str> = text.lines().collect();
+        let use_ = lines.iter().position(|l| *l == "use: c = connect `@lf/sheets` using team").expect(&text);
+        assert_eq!(
+            lines[use_ + 1..use_ + 4],
+            [
+                r#"or at one Spreadsheet: c = connect `@lf/sheets` using team { spreadsheet: "Q3 \"plan\"" } (spreadsheet: "Q3 \"plan\"" or "Hiring")"#,
+                "  connected at a Spreadsheet, the connection is that Spreadsheet: each thing the Spreadsheet holds by name is an edge off the connection, c-[:<its name>]->, its records read, written and listened to along that edge",
+                "  those edges, with their fields, are listed here once a program in the project connects at a Spreadsheet (run listen-fire catalog again then)",
+            ]
+        );
+        assert_eq!(text.matches("or at one Spreadsheet").count(), 1, "a connection already in a position says nothing of one: {text}");
     }
 }

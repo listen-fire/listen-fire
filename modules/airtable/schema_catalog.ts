@@ -502,8 +502,9 @@ export function describeBaseMeta(): SchemaTypeDescriptor {
     typeId: BASE_META_TYPE,
     displayName: BASE_META_TYPE,
     description:
-      "One of this workspace's bases. Narrow to one (`-[b:Bases WHERE b.Name == \"CRM\"]->`, " +
-      'or the `base:` construction arg) and its tables become the edges you write rows along.',
+      "One of this workspace's bases, whose tables are each an edge named after the table, which you read and write rows along: " +
+      'off a connection made at the base (`connect … { base: "CRM" }`, then `c-[:Companies]->`), ' +
+      'or off the base narrowed by name (`-[b:Bases WHERE b.Name == "CRM"]->`, then `b-[:Companies]->`).',
     fields: [
       // The labels a narrowing predicate reads — published on every member
       // the root hop mints.

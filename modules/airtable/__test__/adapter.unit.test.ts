@@ -746,7 +746,8 @@ describe('AirtableAdapter entry-position (base) scoping', () => {
     const base = await adapter.describe('Base');
     expect(base?.references.map((r) => r.name)).toEqual(['Tables']);
     expect(base?.fields.map((f) => f.fieldId)).toEqual(['Name', 'Id']);
-    expect(base?.description).toContain('Narrow');
+    // Its first sentence, all the catalog text shows, says where a base's tables are.
+    expect(base?.description?.split('. ')[0]).toMatch(/tables are each an edge named after the table.*connection made at the base.*base narrowed by name/);
   });
 
   it('a base is still describable BY NAME — the node narrowing lands on', async () => {
