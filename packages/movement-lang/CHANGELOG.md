@@ -1,5 +1,11 @@
 # @listen-fire/movement-lang
 
+## 0.15.1
+
+### Patch Changes
+
+- b2a12ef: `listen-fire example` answers two more things: listening for a Stripe failed payment and reading its invoice, and calling an MCP tool and reading its answer.
+
 ## 0.15.0
 
 ### Minor Changes

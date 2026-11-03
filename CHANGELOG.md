@@ -20,6 +20,10 @@ named in [`RELEASING.md`](RELEASING.md).
 
 <!-- add merged PRs here -->
 
+## [0.15.1] - 2026-11-03
+
+A patch of 0.15; it reads the same pins (`0.15.x`). `listen-fire example` answers two more things: listening for a Stripe failed payment and reading its invoice, and calling an MCP tool and reading its answer. The handbook's index lists each system chapter's sections, so a section can be read on its own. The repository's example projects and the deploy image's default project are upgraded to the 0.15 pin; 0.15.0 refused them.
+
 ## [0.15.0] - 2026-11-03
 
 A new compatibility key. A value that may be empty says so: Airtable and Google Sheets fields that can be blank, `coalesce`, and every built-in that can answer nothing are typed with `| absent`, and a read that needs a value is refused until it is tested or given a fallback. Words an expression reads as itself (`true`, `null`, `in`, …) are never names. Inside a walk's brackets a built-in is spelled as it is outside them (`Text.lower`, not `LOWER`). Order-dependent operations need an order wherever a collection comes from a walk. New: `Dict.keys`, `Dict.values`, `Dict.entries`, `List.distinct`, `Date.daysBetween`, and `listen-fire example`. **Which pins it reads:** `0.15.x` only; a project or automation pinned to `0.14.x` is refused by name ("validate it under 0.15.0 and upgrade it"). **To upgrade:** run `listen-fire upgrade`; it rewrites the walk spellings and lists each refusal it leaves for you, with its fix. See `docs/language/migrating-to-0.15.md`.
