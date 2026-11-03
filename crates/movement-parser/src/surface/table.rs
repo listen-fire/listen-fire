@@ -165,17 +165,37 @@ pub const CORE_WORDS: &[&str] = &[
     "extract", "extractOne", "members", "fail",
 ];
 
-/// What a name a program binds hides (§4.2), exactly as
-/// written: a core word or a standard namespace. Letter case counts:
-/// `upper` hides nothing (`Text.upper` is the function), nor does `Map`.
+/// What a name a program binds hides (§4.2): a core word or a standard
+/// namespace, exactly as written, or a word of the expression grammar, in any
+/// letter case. Letter case counts for the first two: `upper` hides nothing
+/// (`Text.upper` is the function), nor does `Map`.
 pub fn hidden_by(name: &str) -> Option<String> {
     if CORE_WORDS.contains(&name) {
         Some(format!("the core word `{name}`"))
     } else if NAMESPACES.contains(&name) {
         Some(format!("the namespace `{name}`"))
     } else {
-        None
+        expression_word(name)
     }
+}
+
+/// A word the expression grammar reads as itself in any letter case
+/// (`crate::lexer::KEYWORDS`), so a name spelled so is never read back: `true
+/// = 5` would leave every later `true` the literal. TypeScript refuses `true`
+/// as an identifier for the same reason.
+fn expression_word(name: &str) -> Option<String> {
+    let upper = name.to_ascii_uppercase();
+    let keyword = crate::lexer::KEYWORDS.iter().find(|k| **k == upper)?;
+    let word = keyword.to_lowercase();
+    Some(match *keyword {
+        "TRUE" | "FALSE" | "NULL" => format!("the literal `{word}`"),
+        _ => format!("the expression word `{word}`"),
+    })
+}
+
+/// The words of the expression grammar, as a name would spell them.
+pub fn expression_words() -> impl Iterator<Item = String> {
+    crate::lexer::KEYWORDS.iter().map(|k| k.to_lowercase())
 }
 
 /// The standard namespaces (§2.2): values that hold functions.

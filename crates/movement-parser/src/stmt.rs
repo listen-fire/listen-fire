@@ -52,14 +52,22 @@ const STATEMENT_KEYWORDS: [&str; 20] = [
 ];
 
 /// Every word a binding cannot take, in one list: the words that start a
-/// statement (refused here), and the core words and namespaces (refused by
-/// the checker, `MOV_V5_HIDES_BUILTIN`). Both refusals end with it, so a
+/// statement (refused here), and the core words, the namespaces and the
+/// expression grammar's words (refused by the checker, `MOV_V5_HIDES_BUILTIN`). Both refusals end with it, so a
 /// reader told one word learns them all.
 pub fn words_no_name_takes() -> String {
     // A statement word the language now spells otherwise (`ERROR`, now
     // `fail`) is listed by its current spelling, as every message names it.
     let current = |w: &&&str| crate::surface::table::by_canonical(w).is_none_or(|s| s.current == **w);
-    let mut words: Vec<&str> = STATEMENT_KEYWORDS.iter().filter(current).chain(CORE_WORDS).chain(NAMESPACES).copied().collect();
+    let expression_words: Vec<String> = crate::surface::table::expression_words().collect();
+    let mut words: Vec<&str> = STATEMENT_KEYWORDS
+        .iter()
+        .filter(current)
+        .chain(CORE_WORDS)
+        .chain(NAMESPACES)
+        .copied()
+        .chain(expression_words.iter().map(String::as_str))
+        .collect();
     words.sort_by_key(|w| w.to_lowercase());
     words.dedup();
     format!("Words that can't be names: {}", words.join(", "))
@@ -5217,7 +5225,7 @@ mod tests {
 
     #[test]
     fn a_statement_keyword_bound_as_a_name_is_reserved() {
-        let words = "ai, all, await, callback, coalesce, count, Currency, Date, DateTime, delete, Dict, edge, else, exists, export, extract, extractOne, fail, File, filter, first, function, if, import, Json, link, List, listen, map, members, movement, Number, only, race, reduce, refresh, return, run, shape, sleep, sort, Text, unlink, until, Url, write";
+        let words = "ai, all, and, await, callback, coalesce, contains, count, Currency, Date, DateTime, delete, Dict, edge, else, end, exists, export, extract, extractOne, fail, false, File, filter, first, function, if, import, in, Json, link, List, listen, map, members, movement, not, null, Number, only, or, race, reduce, refresh, return, run, shape, sleep, sort, Text, then, true, unlink, until, Url, write";
         assert_eq!(
             error("function m() {\n  link = 1\n}\n"),
             json!({ "message": format!("'link' starts a statement, so it can't be a name: call the value something else, such as `theLink`, here and where it is read. Words that can't be names: {words}"), "loc": { "line": 2, "col": 3 } })

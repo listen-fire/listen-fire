@@ -20,6 +20,16 @@ named in [`RELEASING.md`](RELEASING.md).
 
 <!-- add merged PRs here -->
 
+### Breaking (0.15.0)
+
+A new compatibility key: 0.15.0 reads `0.15.x` pins only, and refuses a project or automation pinned to `0.14.x` by name ("validate it under 0.15.0 and upgrade it"). Each change below is refused or diagnosed under the new key; `listen-fire upgrade` moves the pin once the program checks clean.
+
+- **A name is never a word an expression reads as itself: `true`, `false`, `null`, `and`, `or`, `not`, `in`, `contains`, `exists`, `if`, `then`, `else` and `end`, in any letter case.** `true = 5` is refused (`MOV_V5_HIDES_BUILTIN`, as a core word is), and so is a parameter, an alias or a function so named. Introduced by 0.15.0, a new compatibility key, since 0.14 accepts them.
+  - Why: the expression grammar reads each of these words as itself, so a value bound to one is never read back. 0.14 checked `true = 5` clean, and every later `true` was the literal; `in = 1` bound a name no expression could read. TypeScript refuses `true` as a name for the same reason.
+  - `exists`, `if` and `else` were refused already as spelled in lower case; any other case (`If = 1`) now is too.
+  - The refusal suggests a name (`theTrue`) and lists every word that can't be a name, these among them. The handbook's reference lists them too.
+  - The fix, by hand: rename the value where it is bound and where it is read.
+
 ### Added
 
 - **`listen-fire example <words>`: unsure how to write something? Ask in your own words, get a few lines doing it.** `listen-fire example create or update` answers with the snippet that does it, under a comment saying what it does, and at most one more comment where the code cannot speak; never more than three examples, and one when one clearly answers. With no words it lists what every example does. The 51 examples cover listening, the schedule, writing, walking, absence, grouping, dates, text, extraction and waiting, each with the words authors were seen to ask with ("dict keys entries groupBy", "if then else expression", "connect airtable base"). Every one is checked: by the handbook's tests against its catalog, or, where it names Airtable, by `listen-fire check` against the fake. The authoring tools serve the same lookup as `showExample`, and the handbook's front page points at both.

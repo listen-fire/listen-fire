@@ -104,7 +104,7 @@ fn an_unbound_old_name_is_still_refused_under_5() {
 }
 
 /// Every word a binding cannot take, as both refusals list it.
-const WORDS: &str = "Words that can't be names: ai, all, await, callback, coalesce, count, Currency, Date, DateTime, delete, Dict, edge, else, exists, export, extract, extractOne, fail, File, filter, first, function, if, import, Json, link, List, listen, map, members, movement, Number, only, race, reduce, refresh, return, run, shape, sleep, sort, Text, unlink, until, Url, write";
+const WORDS: &str = "Words that can't be names: ai, all, and, await, callback, coalesce, contains, count, Currency, Date, DateTime, delete, Dict, edge, else, end, exists, export, extract, extractOne, fail, false, File, filter, first, function, if, import, in, Json, link, List, listen, map, members, movement, not, null, Number, only, or, race, reduce, refresh, return, run, shape, sleep, sort, Text, then, true, unlink, until, Url, write";
 
 #[test]
 fn a_name_that_hides_a_core_word_or_a_namespace_is_refused_under_5_for_now() {
@@ -119,6 +119,23 @@ fn a_name_that_hides_a_core_word_or_a_namespace_is_refused_under_5_for_now() {
     // `all` (the join) is one of them, and the list a reader is given says so.
     let found = check_with("function go(t: <text>) {\n  all = [t]\n}", NONE);
     assert_eq!(of_code(&found, "MOV_V5_HIDES_BUILTIN"), vec![format!("'all' is the core word `all`, so it can't be a name: call the value something else, such as `theAll`, here and where it is read. {WORDS}")]);
+    // A word the expression grammar reads as itself, in any letter case, is
+    // never read back as the name: `true = 5` left every later `true` the
+    // literal, and `in = 5` a name no expression could read.
+    let found = check_with("function go(t: <text>) {\n  true = 5\n  in = 1\n}", NONE);
+    assert_eq!(
+        of_code(&found, "MOV_V5_HIDES_BUILTIN"),
+        vec![
+            format!("'true' is the literal `true`, so it can't be a name: call the value something else, such as `theTrue`, here and where it is read. {WORDS}"),
+            format!("'in' is the expression word `in`, so it can't be a name: call the value something else, such as `theIn`, here and where it is read. {WORDS}"),
+        ]
+    );
+    for word in ["false", "null", "Null", "end", "not", "then", "and", "or", "contains", "AND", "Then"] {
+        let found = check_with(&format!("function go(t: <text>) {{\n  {word} = 5\n}}"), NONE);
+        assert_eq!(of_code(&found, "MOV_V5_HIDES_BUILTIN").len(), 1, "{word}: {found:#?}");
+        let found = check_with(&format!("function go({word}: <text>) {{\n  return 1\n}}"), NONE);
+        assert_eq!(of_code(&found, "MOV_V5_HIDES_BUILTIN").len(), 1, "a parameter {word}: {found:#?}");
+    }
     // A function by a core word's name: reported once, as hiding it.
     let found = check_with("function first(s: <text>) {\n  return 1\n}", NONE);
     assert_eq!(codes_of(&found).iter().filter(|c| c.starts_with("MOV_V5_HIDES") || c.starts_with("MOV_FUNCTION_NAME")).count(), 1, "{found:#?}");
