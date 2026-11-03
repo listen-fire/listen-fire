@@ -36,7 +36,10 @@ test('listen-fire catalog: each connection as text, in the notation of modules s
   assert.match(run.stdout, /^connection acme: #acme_crm$/m);
   assert.match(run.stdout, /^use: c = connect #acme_crm using acme$/m);
   assert.match(run.stdout, /^ {2}Company\b.*\n {4}fields: .*\bName text\b/m);
-  assert.match(run.stdout, /^always connected \(a program names each with no connect; see handbook: system:cron, system:manual\):\n {2}cron: Ticks -> Tick \(listen only\)\n {2}manual: Invocations -> Invocation \(listen only\)$/m);
+  assert.match(run.stdout, /^always connected \(a program names each with no connect; a name with a space is written in backticks; see handbook: system:cron, system:manual\):$/m);
+  // A listen on a schedule reads its tick, so the tick's fields are here.
+  assert.match(run.stdout, /^ {2}cron: Ticks -> Tick \(listen only\)\n {4}Tick: Fired at date, Schedule cron, Zone timeZone$/m);
+  assert.match(run.stdout, /^ {2}manual: Invocations -> Invocation \(listen only\)\n {4}Invocation: Fired at date, .*\bText text\b.*, Files -> File\n {4}File: Name text\b/m);
   assert.doesNotMatch(run.stdout, /listenSettingsBecome|"adapters"/, 'no JSON, and no retired 0.12 mapping');
 });
 

@@ -324,16 +324,18 @@ pub fn catalog_text(catalog: &Js) -> String {
         }
     }
 
-    // Every program has them, and the handbook's chapter on each has its
-    // record types with the listens written out, so here each is where it starts.
-    let units: Vec<(&String, Vec<String>)> =
-        adapters.iter().filter(|(name, _)| is_unit(name)).filter_map(|(name, adapter)| Some((name, crate::modules::SchemaView::of(adapter.get("schemas")?.get("")?).starts()))).collect();
+    // Every program has them, and the handbook's chapter on each has the
+    // listens written out, so here each is where it starts and what lands:
+    // a listen on a schedule reads its tick's fields.
+    let units: Vec<(&String, crate::modules::SchemaView)> =
+        adapters.iter().filter(|(name, _)| is_unit(name)).filter_map(|(name, adapter)| Some((name, crate::modules::SchemaView::of(adapter.get("schemas")?.get("")?)))).collect();
     if !units.is_empty() {
         let chapters: Vec<String> = units.iter().map(|(name, _)| format!("system:{name}")).collect();
         out.push(String::new());
-        out.push(format!("always connected (a program names each with no connect; see handbook: {}):", chapters.join(", ")));
-        for (name, starts) in &units {
-            out.push(format!("  {name}: {}", starts.join(", ")));
+        out.push(format!("always connected (a program names each with no connect; a name with a space is written in backticks; see handbook: {}):", chapters.join(", ")));
+        for (name, view) in &units {
+            out.push(format!("  {name}: {}", view.starts().join(", ")));
+            out.extend(view.record_summaries().into_iter().map(|record| format!("    {record}")));
         }
     }
 
@@ -483,8 +485,9 @@ mod text_tests {
             "plugins (use: import { <name> } from plugins, then call it by position, settings last):",
             "  render(text, pageSize?): A PDF of the text.",
             "",
-            "always connected (a program names each with no connect; see handbook: system:manual):",
+            "always connected (a program names each with no connect; a name with a space is written in backticks; see handbook: system:manual):",
             "  manual: Invocations -> Invocation (listen only)",
+            "    Invocation: Text text",
             "",
             "credentials no installed module describes (its module is not installed here, or does not declare that credential): crm_two (mcp)",
         ];

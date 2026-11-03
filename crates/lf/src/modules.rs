@@ -415,6 +415,18 @@ impl SchemaView {
         self.collections.iter().map(|edge| format!("{} -> {}{}", edge.name, edge.target, edge.access.mark())).collect()
     }
 
+    /// Each record type in one line, its fields then its edges:
+    /// `Tick: Fired at date, Schedule cron, Zone zone`.
+    pub(crate) fn record_summaries(&self) -> Vec<String> {
+        self.records
+            .iter()
+            .map(|record| {
+                let parts: Vec<String> = record.fields.iter().map(|(n, t)| format!("{n} {t}")).chain(record.edges.iter().map(|e| format!("{} -> {}{}", e.name, e.target, e.access.mark()))).collect();
+                format!("{}: {}", record.name, if parts.is_empty() { "(no fields)".into() } else { parts.join(", ") })
+            })
+            .collect()
+    }
+
     /// Where a walk or a listen starts, the record types and the writes, a blank line before each.
     pub(crate) fn lines(&self, out: &mut Vec<String>) {
         if !self.collections.is_empty() {
@@ -512,6 +524,9 @@ fn type_text(type_: &Js) -> String {
                 format!("enum({})", options.join("|"))
             }
             Some("list") => format!("list<{}>", type_.get("of").map_or_else(|| "?".to_string(), |of| type_text(of))),
+            // A scalar its adapter parses, said by the text it is written as
+            // (`Schedule cron`, `Zone timeZone`), else by its name.
+            Some("owned") => type_.get("format").or_else(|| type_.get("name")).and_then(Js::as_str).unwrap_or("owned").to_string(),
             Some(other) => other.to_string(),
             None => "?".to_string(),
         },
