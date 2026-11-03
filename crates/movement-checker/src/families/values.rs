@@ -1125,7 +1125,9 @@ pub fn collection_ordering(typing: &Typing, expr: &Expression, position: Option<
             None => (CollectionOrder::Unknown, None),
         },
         Expression::Property { property_type_id: name, .. } | Expression::EdgeProperty { property_type_id: name, .. } | Expression::AliasRef { name } => {
-            let ty = position.and_then(|p| lookup_property_type(Some(p), name)).or_else(|| typing.scalar_type(name));
+            // A block that answers records holds them on the name, with the
+            // order of the walk it ran over (`ns = c-[p:People]-> { return p }`).
+            let ty = position.and_then(|p| lookup_property_type(Some(p), name)).or_else(|| typing.bare_name_type(name));
             // A call written in place is read through a name nobody wrote.
             (collection_order_of(ty.as_ref()), Some(name.clone()).filter(|n| !crate::families::calls::is_nested_call_name(n)))
         }

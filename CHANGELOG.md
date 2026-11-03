@@ -39,6 +39,10 @@ A new compatibility key: 0.15.0 reads `0.15.x` pins only, and refuses a project 
   - Why: the warning was added within 0.14 because an error would have refused programs 0.14 accepted. With the Airtable fields that may be empty now typed so (below), grouping rows by such a field is the common case, and it fails the run.
   - The fix, by hand: give the key a fallback, `(t) => coalesce(t.Assignee, "unassigned")`. `listen-fire upgrade` does not add one: the fallback names a group, which is the author's to choose.
 
+- **`first`, `[0]`, `Text.join` and `reduce` over the records a block answers from a walk with no `ORDER BY` are refused** (`MOV_FOLD_NEEDS_ORDER`), as they are over the walk itself. `ns = c-[p:People]-> { return p }` then `first(ns)` takes an arbitrary person. Introduced by 0.15.0, a new compatibility key, since 0.14 accepts these programs.
+  - Why: 0.14 refused them over a block that answered values (`{ return p.Name }`) but not over one that answered the records themselves, which the checker holds on the name rather than as a list.
+  - The fix, by hand: order the walk (`c-[p:People ORDER BY p.Name]->`), `sort` the answers, or write `only(…)` where exactly one is meant.
+
 ### Added
 
 - **`listen-fire example <words>`: unsure how to write something? Ask in your own words, get a few lines doing it.** `listen-fire example create or update` answers with the snippet that does it, under a comment saying what it does, and at most one more comment where the code cannot speak; never more than three examples, and one when one clearly answers. With no words it lists what every example does. The 51 examples cover listening, the schedule, writing, walking, absence, grouping, dates, text, extraction and waiting, each with the words authors were seen to ask with ("dict keys entries groupBy", "if then else expression", "connect airtable base"). Every one is checked: by the handbook's tests against its catalog, or, where it names Airtable, by `listen-fire check` against the fake. The authoring tools serve the same lookup as `showExample`, and the handbook's front page points at both.
