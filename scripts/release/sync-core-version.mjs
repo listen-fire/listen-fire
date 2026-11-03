@@ -7,6 +7,7 @@
 //   crates/*/Cargo.toml              the `version = "…"` of each core path dependency
 //   packages/movement-lang/language_version_value.ts
 //   README.md                        the `cargo install listen-fire --version` line
+//   docs/contracts/README.md         the language row's compatibility key
 // `--check` writes nothing and exits 1 on any drift (CI's gate).
 // Run from the repository root: node scripts/release/sync-core-version.mjs [--check]
 import { readFileSync, readdirSync, writeFileSync } from 'node:fs';
@@ -17,12 +18,16 @@ const version = JSON.parse(readFileSync('packages/movement-lang/package.json', '
 if (!/^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/.test(version)) throw new Error(`movement-lang's version is not semver: ${version}`);
 
 const CORE_CRATES = ['listen-fire-parser', 'listen-fire-checker', 'listen-fire-language', 'listen-fire-engine'];
+// The rule of docs/contracts/language-versions.md: the minor under 0.x, the major from 1.0.
+const [major, minor] = version.split('.');
+const key = major === '0' ? `0.${minor}` : major;
 
-// [file, pattern with one capture group around the version, how many matches it must have]
+// [file, pattern with capture groups around the value, how many matches it must have, the value (default: the version)]
 const edits = [
   ['Cargo.toml', /(\[workspace\.package\]\nversion = ")[^"]+(")/, 1],
   ['packages/movement-lang/language_version_value.ts', /(export const PACKAGE_VERSION = ')[^']+(')/, 1],
   ['README.md', /(cargo install listen-fire --version )\d[^\s`;,)]*()/, 1],
+  ['docs/contracts/README.md', /(\| language-versions \|.*\| the release's compatibility key \()[^)]+(\))/, 1, key],
 ];
 for (const dir of readdirSync('crates')) {
   const file = join('crates', dir, 'Cargo.toml');
@@ -37,11 +42,11 @@ for (const dir of readdirSync('crates')) {
 }
 
 const drift = [];
-for (const [file, pattern, expected] of edits) {
+for (const [file, pattern, expected, value = version] of edits) {
   const before = readFileSync(file, 'utf8');
   const matches = [...before.matchAll(new RegExp(pattern.source, pattern.flags.includes('g') ? pattern.flags : `${pattern.flags}g`))];
   if (matches.length !== expected) throw new Error(`${file}: expected ${expected} place(s) for ${pattern}, found ${matches.length}`);
-  const after = before.replace(pattern, (_all, head, tail = '') => `${head}${version}${tail}`);
+  const after = before.replace(pattern, (_all, head, tail = '') => `${head}${value}${tail}`);
   if (after === before) continue;
   drift.push(file);
   if (!check) writeFileSync(file, after);
