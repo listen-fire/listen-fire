@@ -368,10 +368,25 @@ export function searchTokens(text: string): string[] {
     .map(stem);
 }
 
+/** One part of a searched entry: its words, and what each shared word is worth. */
+export interface ScoredField {
+  tokens: ReadonlySet<string>;
+  weight: number;
+}
+
+/** The ranking rule every search here shares: each distinct query word adds
+ *  the weight of every field it appears in. */
+export function scoreFields(query: string, fields: readonly ScoredField[]): number {
+  let score = 0;
+  for (const word of new Set(searchTokens(query))) {
+    for (const field of fields) if (field.tokens.has(word)) score += field.weight;
+  }
+  return score;
+}
+
 /** How well `entry` answers `query`: name words count most, then purpose, then body. */
 export function scoreEntry(entry: LanguageEntry, query: string, aliases = registryAliases()): number {
-  const wanted = [...new Set(searchTokens(query))];
-  if (wanted.length === 0) return 0;
+  if (searchTokens(query).length === 0) return 0;
   // A family's namespace (`TEXT.`, `DATE.`) is where a function lives, not
   // what it does, so it counts as body: "join text" means JOIN, not every
   // TEXT.* member.
@@ -382,12 +397,11 @@ export function scoreEntry(entry: LanguageEntry, query: string, aliases = regist
   const body = new Set(
     searchTokens(`${entry.name.slice(0, Math.max(dot, 0))} ${alias ?? ''} ${entry.detail} ${entry.example ?? ''}`),
   );
-  let score = 0;
-  for (const word of wanted) {
-    if (name.has(word)) score += 5;
-    if (purpose.has(word)) score += 3;
-    if (body.has(word)) score += 1;
-  }
+  let score = scoreFields(query, [
+    { tokens: name, weight: 5 },
+    { tokens: purpose, weight: 3 },
+    { tokens: body, weight: 1 },
+  ]);
   const folded = query.trim().toLowerCase();
   if (folded === entry.name.toLowerCase() || folded === entry.name.toLowerCase().split('.').pop()) score += 20;
   return score;

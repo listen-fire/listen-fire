@@ -25,6 +25,7 @@ const AUTHORING_TOOL_NAMES = [
   'listReviews',
   'submitReview',
   'searchLanguage',
+  'showExample',
 ];
 
 /** Retired constructs from earlier syntax rounds — none may be taught. */

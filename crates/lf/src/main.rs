@@ -3,6 +3,7 @@
 //!
 //!   listen-fire init [dir]                       scaffold a starter project
 //!   listen-fire check [--dir <project>]          every diagnostic the project's files have
+//!   listen-fire example [<words>…]                a few checked lines doing what the words ask (src/examples.rs)
 //!   listen-fire run <movement> [--text <text>] [--dry-run]  run a movement a `listen to manual` fires, its Invocation's Text given
 //!   listen-fire run --event <file>   judge the file's arrivals against the listens on their edges and run each
 //!   listen-fire run --poll <movement>            poll now the polled sources of the listens that fire it
@@ -81,6 +82,7 @@ mod doors;
 mod documents;
 mod drain;
 mod edge_polls;
+mod examples;
 mod externals;
 mod file_ref;
 mod http;
@@ -172,7 +174,8 @@ use std::io::Write;
 pub(crate) use module_wire::{json, obj};
 use std::path::PathBuf;
 
-const USAGE: &str = "usage: listen-fire <init|check|catalog|lsp|run|resume|runs|deliveries|drain|serve|cancel|upgrade|modules|connect|credential|completion> [--dir <project folder>] [--ephemeral] [--store <state.db|postgres://…>] [--team <uuid>]
+const USAGE: &str = "usage: listen-fire <init|check|example|catalog|lsp|run|resume|runs|deliveries|drain|serve|cancel|upgrade|modules|connect|credential|completion> [--dir <project folder>] [--ephemeral] [--store <state.db|postgres://…>] [--team <uuid>]
+       listen-fire example [<words>…]
        listen-fire run <movement> [--text <text>] [--dry-run]
        listen-fire run --event <file.json>
        listen-fire run --poll <movement>
@@ -200,6 +203,7 @@ const USAGE: &str = "usage: listen-fire <init|check|catalog|lsp|run|resume|runs|
        listen-fire --version
   init      scaffold a starter project in the folder (default: the current one): lf.yaml, a movement, .gitignore
   check     every diagnostic the project's movement files have (as `listen-fire check`)
+  example   unsure how to write something? ask in your own words (`listen-fire example create or update`): a few checked lines of listen-fire doing it; with no words, every example's intent
   catalog   each connection the project holds, as a program reads, writes and listens to it: its record types with their fields, edges and writes, in the notation of `modules show`, its live types included (--json: the catalog snapshot the files are checked against)
   lsp       the language server (LSP over stdin/stdout): diagnostics, completion, hover, definitions and fixes for the movement files
   run       run <movement>: one manual invocation, to the `listen to manual-[:Invocations]-> fire <movement>` listens (--text: the Invocation's Text); --event: judge the event file's arrivals against the listens on their edges and run each; --poll <movement>: poll now, once, each polled edge a listen that fires it is on, once for every listen sharing the poll
@@ -449,6 +453,7 @@ async fn run(argv: Vec<String>) -> Result<i32, String> {
     match command.as_str() {
         "init" => init::run(&args.rest.first().map(PathBuf::from).unwrap_or_else(|| args.dir.clone()), &mut out),
         "check" => check::run(&load()?, args.json, &mut out).await,
+        "example" => examples::run(&args.rest, &mut out),
         "catalog" => match check::open_checking_in(&load()?, check::Scope::Held).await? {
             check::Opened::Ready(checking) => {
                 // A connection that cannot be described hides no other: the

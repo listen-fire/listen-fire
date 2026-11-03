@@ -153,7 +153,7 @@ export const CONCEPTS: readonly FrontEntry[] = [
 /** Agent-facing, so it names the tools: the `listen-fire` commands first, then the platform's spelling of each. */
 export const BUILD_LOOP = `### build-loop
 
-\`listen-fire check\`, \`listen-fire run\`, \`listen-fire runs show\`; on the platform: getStarted, saveAutomation (checks first; saves nothing with errors), runAutomation, checkRun. No chapters: searchLanguage answers lookups, describeConnection details one system. Batch calls.`;
+\`listen-fire check\`, \`listen-fire run\`, \`listen-fire runs show\`; on the platform: getStarted, saveAutomation (checks first; saves nothing with errors), runAutomation, checkRun. Unsure how to write something? \`listen-fire example <words>\` (showExample). No chapters: searchLanguage answers lookups, describeConnection details one system. Batch calls.`;
 
 function renderExample(example: FrontExample): string {
   return `\n\`\`\`\n${exampleText(example)}\n\`\`\``;
