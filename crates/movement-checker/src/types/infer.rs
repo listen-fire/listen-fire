@@ -29,7 +29,7 @@ use super::unions::{join_field_types, join_positions, joined_under, one_record_o
 use super::pinned_member::pinned_member;
 use super::union_walk::{MemberOnly, Subject, member_only};
 use super::position::{EdgeLanding, Position, describe_position, edge_landing, position_ref_in, refine_selected, unselected_members, instance_of_ref, lookup_property_type, narrow_present, narrow_present_node};
-use super::stdlib::{bare_coercer_returns, movement_meta_key_type, stdlib_function_by_id};
+use super::stdlib::{answer_may_be_absent, bare_coercer_returns, movement_meta_key_type, stdlib_function_by_id};
 
 /// What the typing asks of the scope it types in (the TypeScript's
 /// `ExpressionTyping` options).
@@ -1483,34 +1483,15 @@ impl<'a> Typing<'a> {
             "multi" => return multi_type(args),
             "dict.keys" | "dict.values" | "dict.entries" => return dict_view_type(function, args.first().and_then(Option::as_ref)),
             "list.distinct" => return distinct_type(args.first().and_then(Option::as_ref)),
-            // A day count is there only when both its days are: a date that
-            // may be missing, or text that may read as no date, gives one that
-            // may be missing too, and whoever reads it is told so.
-            "date.days_between" => {
-                // An argument of a kind no day is was refused already.
-                fn may_miss(ty: &Ty) -> bool {
-                    match ty {
-                        Ty::MaybeAbsent(_) | Ty::Absent | Ty::Text | Ty::Owned(_) | Ty::Enum { .. } => true,
-                        Ty::Union(members) => members.iter().any(may_miss),
-                        _ => false,
-                    }
-                }
-                let missing = args.iter().flatten().any(may_miss);
-                return Some(if missing { maybe_absent(Ty::Number) } else { Ty::Number });
-            }
             _ => {}
         }
-        if let Some(coerced) = bare_coercer_returns(function) {
-            // `Number.parse` answers nothing for text that is no number.
-            if function == "number" {
-                return Some(maybe_absent(coerced));
-            }
-            return Some(coerced);
+        // `Number.parse` answers nothing for text that is no number.
+        if function == "number" {
+            return bare_coercer_returns(function).map(maybe_absent);
         }
-        if let Some(spec) = stdlib_function_by_id(function) {
-            return spec.returns.ty();
-        }
-        super::stdlib::builtin_under(&function.to_ascii_uppercase()).and_then(|builtin| builtin.returns.ty())
+        let builtin = stdlib_function_by_id(function).or_else(|| super::stdlib::builtin_under(&function.to_ascii_uppercase()))?;
+        let declared = bare_coercer_returns(function).or_else(|| builtin.returns.ty())?;
+        Some(if answer_may_be_absent(builtin, args) { maybe_absent(declared) } else { declared })
     }
 
     fn list_literal_type(&mut self, elements: &[ListElement], position: Option<&Position>) -> Ty {

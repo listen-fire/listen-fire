@@ -146,7 +146,7 @@ bucket = copy.intro
 
 ### Text.trim
 
-`Text.trim(text)` → the text with leading and trailing whitespace removed. Null in, null out.
+`Text.trim(text)` → `text`, and `text | absent` when `text` may be absent (null in, null out) — the text with leading and trailing whitespace removed.
 
 ```
 name = Text.trim(msg.Subject)
@@ -154,7 +154,7 @@ name = Text.trim(msg.Subject)
 
 ### Text.lower
 
-`Text.lower(text)` → the text, lowercased. Null in, null out.
+`Text.lower(text)` → `text`, and `text | absent` when `text` may be absent (null in, null out) — the text, lowercased.
 
 ```
 key = Text.lower(msg.From)
@@ -162,7 +162,7 @@ key = Text.lower(msg.From)
 
 ### Text.upper
 
-`Text.upper(text)` → the text, uppercased. Null in, null out.
+`Text.upper(text)` → `text`, and `text | absent` when `text` may be absent (null in, null out) — the text, uppercased.
 
 ```
 code = Text.upper(Text.trim(msg.Subject))
@@ -186,7 +186,7 @@ big = Text.length(msg.Body) > 500
 
 ### Text.from
 
-`Text.from(value)` → the value's text form. Null in, null out — a number, date, or boolean prints as its usual text; a record or list is refused (write a field off it instead).
+`Text.from(value)` → `text`, and `text | absent` when `value` may be absent (null in, null out) — the value's text form: a number, date, or boolean prints as its usual text; a record or list is refused (write a field off it instead).
 
 ```
 label = Text.from(amount)
@@ -226,7 +226,7 @@ pieces = Text.chunks(text, { size: 40000, overlap: 2000 })
 
 ### Text.regexExtract
 
-`Text.regexExtract(text, pattern, group?)` → `text`, empty when nothing matches — the first regex match, or the first capture group when the pattern has one. The pattern reads whole characters (`.` matches an emoji) and is absent when malformed: escape only punctuation (`\\.`, `\\-`) or a known escape (`\\d`, `\\s`, `\\x41`, `\\u{1F600}`); an octal escape or an unknown letter escape is malformed.
+`Text.regexExtract(text, pattern, group?)` → `text | absent`, absent when nothing matches — the first regex match, or the first capture group when the pattern has one. The pattern reads whole characters (`.` matches an emoji) and is absent when malformed: escape only punctuation (`\\.`, `\\-`) or a known escape (`\\d`, `\\s`, `\\x41`, `\\u{1F600}`); an octal escape or an unknown letter escape is malformed.
 
 ```
 ref = Text.regexExtract(m.Subject, "(DEAL-\\d+)")
@@ -234,7 +234,7 @@ ref = Text.regexExtract(m.Subject, "(DEAL-\\d+)")
 
 ### Text.slug
 
-`Text.slug(text)` → `text`, always present — a lowercase-hyphen slug.
+`Text.slug(text)` → `text`, and `text | absent` when `text` may be absent — a lowercase-hyphen slug.
 
 ```
 slug = Text.slug("Acme Corp Ltd.")   # "acme-corp-ltd"
@@ -242,7 +242,7 @@ slug = Text.slug("Acme Corp Ltd.")   # "acme-corp-ltd"
 
 ### Text.pairs
 
-`Text.pairs(record, separator?)` → `text`, always present — a record or a dict rendered as `key=value` pairs, keys in the order they were written (a dict literal's own order; a declared or extracted record's field order), joined by `separator` (default `" | "`). It takes a record from a walk or a name — `Text.pairs(e)` inside `deduped-[e:entries]-> { … }`, an extracted node, a `first(…)` answer — as well as a literal. Each value renders exactly as `${…}` interpolation would: absent is empty, a boolean is `true`/`false`, a number is `Text.from`'s form. A nested node or edge field is SKIPPED, not stringified — only scalar fields make it into the line. Refused on `<json>`: it looks keyed but the checker cannot see its keys, so name the fields into a dict first.
+`Text.pairs(record, separator?)` → `text`, and `text | absent` when `record` may be absent — a record or a dict rendered as `key=value` pairs, keys in the order they were written (a dict literal's own order; a declared or extracted record's field order), joined by `separator` (default `" | "`). It takes a record from a walk or a name — `Text.pairs(e)` inside `deduped-[e:entries]-> { … }`, an extracted node, a `first(…)` answer — as well as a literal. Each value renders exactly as `${…}` interpolation would: absent is empty, a boolean is `true`/`false`, a number is `Text.from`'s form. A nested node or edge field is SKIPPED, not stringified — only scalar fields make it into the line. Refused on `<json>`: it looks keyed but the checker cannot see its keys, so name the fields into a dict first.
 
 Project A's composer posts one Slack line per candidate row:
 
@@ -322,10 +322,12 @@ long  = Number.format(1200000, "grouped")   # "1,200,000"
 
 ### Date.from
 
-`Date.from(value)` → `date` — coerces any readable date or timestamp to a calendar day (midnight UTC). Reach for it when a comparison spans two kinds of value.
+`Date.from(value)` → `date` when `value` is a date or datetime that is there, and `date | absent` when it may be absent or is anything else (text may read as no date) — coerces any readable date or timestamp to a calendar day (midnight UTC). Reach for it when a comparison spans two kinds of value.
 
 ```
-crm-[s:Tasks WHERE s.`Snoozed Until` <= Date.from(m.Body)]->
+due = Date.from(m.Body)
+if (due == null) { fail("no date in the body") }
+crm-[s:Tasks WHERE s.`Snoozed Until` <= due]->
 ```
 
 ### Date.parse
@@ -338,7 +340,7 @@ d = Date.parse("12 March 2026")   # "2026-03-12"
 
 ### Date.addDays
 
-`Date.addDays(date, days)` → `date`, always present — a date shifted by whole days.
+`Date.addDays(date, days)` → `date` when `date` is a date or datetime that is there, and `date | absent` when it may be absent or is text (text that reads as no date answers absent) — a date shifted by whole days. It reads the calendar date written at the start of its argument, any time of day and offset dropped (`"2026-03-12T00:30+01:00"` is the 12th), exactly as `Date.daysBetween` does.
 
 ```
 deadline = Date.addDays(@current_date, 14)
@@ -346,7 +348,7 @@ deadline = Date.addDays(@current_date, 14)
 
 ### Date.daysBetween
 
-`Date.daysBetween(from, to)` → `number` when both arguments are dates or datetimes that are there, `number | absent` when either may be absent or is text (text that reads as no date answers absent: `Date.parse` it first and test it) — the whole calendar days from `from` to `to`, negative when `to` is the earlier. Each argument counts as the calendar day it falls on in UTC: a date is itself, and a datetime loses its time of day, so `Date.daysBetween(d, Date.addDays(d, n))` is `n`. Dates can't be subtracted with `-`; this is the difference.
+`Date.daysBetween(from, to)` → `number` when both arguments are dates or datetimes that are there, `number | absent` when either may be absent or is text (text that reads as no date answers absent: `Date.parse` it first and test it) — the whole calendar days from `from` to `to`, negative when `to` is the earlier. Each argument counts as the calendar date written at its start, any time of day and offset dropped (`"2026-03-12T00:30+01:00"` is the 12th), exactly as `Date.addDays` reads its date, so `Date.daysBetween(d, Date.addDays(d, n))` is `n`. Dates can't be subtracted with `-`; this is the difference.
 
 ```
 days   = Date.daysBetween(Date.today("Europe/London"), event)   # 14 when event is two weeks away
@@ -355,7 +357,7 @@ urgent = days < 14
 
 ### Date.format
 
-`Date.format(value, pattern)` → `text`, always present — a date written out for a person to read, from the tokens `YYYY YY MMMM MMM MM M DD D dddd ddd HH H mm m ss s`; anything that is not a letter prints as written. The pattern is a literal, checked when you save.
+`Date.format(value, pattern)` → `text` when `value` is a date or datetime that is there, and `text | absent` when it may be absent or is text — a date written out for a person to read, from the tokens `YYYY YY MMMM MMM MM M DD D dddd ddd HH H mm m ss s`; anything that is not a letter prints as written. The pattern is a literal, checked when you save.
 
 ```
 line = Date.format(@current_date, "MMMM D, YYYY")   # "August 31, 2026"
@@ -373,7 +375,7 @@ today = Date.today("Europe/Berlin")
 
 ### DateTime.from
 
-`DateTime.from(value)` → `datetime` — coerces to a full UTC instant.
+`DateTime.from(value)` → `datetime` when `value` is a date or datetime that is there, and `datetime | absent` when it may be absent or is anything else — coerces to a full UTC instant.
 
 ```
 sent = DateTime.from(m.Date)
@@ -381,7 +383,7 @@ sent = DateTime.from(m.Date)
 
 ### DateTime.at
 
-`DateTime.at(date, time, zone)` → `datetime`, always present — the instant a wall-clock time on a date names in a place. `time` and `zone` are literals, checked when you save. Move days with `Date.addDays` and anchor each end of a window separately — a daylight-saving change then takes care of itself.
+`DateTime.at(date, time, zone)` → `datetime`, and `datetime | absent` when `date` may be absent (text that reads as no date fails the run) — the instant a wall-clock time on a date names in a place. `time` and `zone` are literals, checked when you save. Move days with `Date.addDays` and anchor each end of a window separately — a daylight-saving change then takes care of itself.
 
 ```
 win_end = DateTime.at(today, "07:00", "Europe/Berlin")
@@ -389,7 +391,7 @@ win_end = DateTime.at(today, "07:00", "Europe/Berlin")
 
 ### DateTime.toIso
 
-`DateTime.toIso(value)` → any readable date or timestamp normalised to a full ISO 8601 UTC timestamp. A text with a time of day is read as ISO 8601 / RFC 3339 only (`2026-03-05T10:00`, `2026-03-05 10:00:30+01:00`); with no offset it is UTC.
+`DateTime.toIso(value)` → absent when `value` may be absent or is text that reads as no date, otherwise any readable date or timestamp normalised to a full ISO 8601 UTC timestamp. A text with a time of day is read as ISO 8601 / RFC 3339 only (`2026-03-05T10:00`, `2026-03-05 10:00:30+01:00`); with no offset it is UTC.
 
 ```
 iso = DateTime.toIso(m.Date)
@@ -399,7 +401,7 @@ iso = DateTime.toIso(m.Date)
 
 ### Currency.numberFromFigure
 
-`Currency.numberFromFigure(figure)` → `number`, always present (empty when unreadable) — the numeric amount in a money figure.
+`Currency.numberFromFigure(figure)` → `number | absent`, absent when the text holds no figure — the numeric amount in a money figure.
 
 ```
 amount = Currency.numberFromFigure("£1.2m")   # 1200000
@@ -407,7 +409,7 @@ amount = Currency.numberFromFigure("£1.2m")   # 1200000
 
 ### Currency.codeFromFigure
 
-`Currency.codeFromFigure(figure)` → `text` — the ISO currency code in a money figure.
+`Currency.codeFromFigure(figure)` → `text | absent`, absent when the text names no currency — the ISO currency code in a money figure.
 
 ```
 code = Currency.codeFromFigure("£1.2m")   # "GBP"

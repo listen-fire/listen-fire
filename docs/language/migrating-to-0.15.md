@@ -2,7 +2,7 @@
 
 0.15.0 opens a new compatibility key: it reads pins of `0.15.x` only. A project pinned to `0.14.x` is refused by name until it is upgraded, and `listen-fire upgrade` moves its pin once every file checks clean.
 
-One idea runs through the release: **a type says what the run will meet.** A name is never a word the language reads as itself; `coalesce` answers the kinds its arguments hold; a key or a field that may be empty says so; and a collection in no order is never read as if it had one. 0.14 let each of these check clean, and the run failed or answered something arbitrary.
+One idea runs through the release: **a type says what the run will meet.** A name is never a word the language reads as itself; `coalesce` answers the kinds its arguments hold; a key, a field or a built-in's answer that may be empty says so; and a collection in no order is never read as if it had one. 0.14 let each of these check clean, and the run failed or answered something arbitrary.
 
 ## Contents
 
@@ -13,8 +13,9 @@ One idea runs through the release: **a type says what the run will meet.** A nam
 - [5. A `List.groupBy` or `List.keyBy` key that may be absent](#5-a-listgroupby-or-listkeyby-key-that-may-be-absent)
 - [6. The records a block answers come in the walk's order](#6-the-records-a-block-answers-come-in-the-walks-order)
 - [7. Inside walk brackets a built-in is spelled as outside them](#7-inside-walk-brackets-a-built-in-is-spelled-as-outside-them)
-- [8. A whole program](#8-a-whole-program)
-- [9. Diagnostic code index](#9-diagnostic-code-index)
+- [8. A built-in that can answer nothing says so](#8-a-built-in-that-can-answer-nothing-says-so)
+- [9. A whole program](#9-a-whole-program)
+- [10. Diagnostic code index](#10-diagnostic-code-index)
 
 ## 1. How the pin moves
 
@@ -80,7 +81,23 @@ A built-in has one spelling: `Text.lower(c.Name)`, `Text.trim(…)`, `Number.rou
 | `crm-[c:Companies WHERE EXISTS(c-[:Team]->)]->` | `crm-[c:Companies WHERE exists(c-[:Team]->)]->` |
 | `ch-[m:Messages WHERE LENGTH(m.Tags) > 0]->`, `Tags` a list | `ch-[m:Messages WHERE count(m.Tags) > 0]->`, by hand: `count` reads into a different predicate, so `upgrade` leaves it |
 
-## 8. A whole program
+## 8. A built-in that can answer nothing says so
+
+A built-in's answer is `T | absent` exactly when its run can answer nothing, as TypeScript types a function that can return `undefined`, and `T` otherwise. 0.14 typed these answers as always there while the run answered null, so a comparison or a write read the null without a word.
+
+- Given a value that may be absent: `Text.trim`, `Text.lower`, `Text.upper`, `Text.from`, `Text.slug`, `Text.pairs`, `DateTime.at`.
+- Given a value that may be absent, or text, which may read as no date: `Date.from`, `DateTime.from`, `DateTime.toIso`, `Date.addDays`, `Date.format`, `Date.daysBetween`.
+- Whatever it is given: `Text.regexExtract` (nothing matched), `Currency.numberFromFigure` and `Currency.codeFromFigure` (no figure, no currency).
+
+| 0.14, checked clean | 0.15 |
+|---|---|
+| `due = Date.addDays(Date.parse(m.Subject), 7)` then `due < today` | refused (`MOV_ABSENT_REQUIRED`): test the parsed date first, `if (d == null) { fail("…") }` |
+| `Description: Currency.codeFromFigure(m.Body)` in a write | refused: `Description ?: Currency.codeFromFigure(m.Body)`, or `coalesce(…, "unknown")` |
+| `Number.format(Currency.numberFromFigure(m.Body), "compact")` | refused: `coalesce(Currency.numberFromFigure(m.Body), 0)`, or test it first |
+
+A date or datetime that is there still gives an answer that is there: `Date.addDays(Date.today("UTC"), 7)` and `Date.format(m.Date, "D MMMM")` are unchanged. `listen-fire upgrade` adds no fallback, since the fallback is the author's to choose.
+
+## 9. A whole program
 
 A grouping key with a fallback, keys sorted before they are joined, and a record tested before it is read:
 
@@ -98,13 +115,13 @@ function `Open Issues`(go: <manual-[:Invocation]->>) {
 }
 ```
 
-## 9. Diagnostic code index
+## 10. Diagnostic code index
 
 | code | what 0.15 refuses |
 |---|---|
 | `MOV_V5_HIDES_BUILTIN` | a name that is a word an expression reads as itself |
 | `MOV_COLLECTION_OP_NOT_A_COLLECTION`, `MOV_ARITH_NON_NUMERIC`, `MOV_BUILTIN_ARG_TYPE` | a `coalesce` whose union is not what the read needs |
-| `MOV_ABSENT_REQUIRED` | an Airtable or Google Sheets field that may be empty, read where a value is needed |
+| `MOV_ABSENT_REQUIRED` | an Airtable or Google Sheets field that may be empty, or a built-in's answer that may be absent (section 8), read where a value is needed |
 | `MOV_DICT_KEY_MAY_BE_ABSENT` | a grouping key that may be absent (now an error) |
 | `MOV_FOLD_NEEDS_ORDER` | `first`, `[0]`, `Text.join` or `reduce` over the records an unordered walk's block answers, or over a list that spreads them |
 | `MOV_V5_SPELLING` | a CAPS walk word (`LOWER`, `EXISTS`, …) inside walk brackets; rewritten by `listen-fire upgrade`, except `LENGTH` of a list, which is `count(xs)` by hand |

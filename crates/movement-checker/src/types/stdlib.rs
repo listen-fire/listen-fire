@@ -76,6 +76,7 @@ pub enum Returns {
     File,
     ListOfText,
     MaybeAbsentText,
+    MaybeAbsentNumber,
     MaybeAbsentDate,
     /// Never returns: the run fails there (`fail("…")`).
     Never,
@@ -94,6 +95,7 @@ impl Returns {
             Returns::File => "file",
             Returns::ListOfText => "list of text",
             Returns::MaybeAbsentText => "text (or absent)",
+            Returns::MaybeAbsentNumber => "number (or absent)",
             Returns::MaybeAbsentDate => "date (or absent)",
             Returns::Never => "never",
             Returns::Derived => "derived",
@@ -110,6 +112,7 @@ impl Returns {
             Returns::File => Ty::File,
             Returns::ListOfText => Ty::list(Ty::Text),
             Returns::MaybeAbsentText => maybe_absent(Ty::Text),
+            Returns::MaybeAbsentNumber => maybe_absent(Ty::Number),
             Returns::MaybeAbsentDate => maybe_absent(Ty::Date),
             Returns::Never => Ty::Never,
             Returns::Derived => return None,
@@ -246,17 +249,17 @@ pub static STANDARD_LIBRARY: &[Builtin] = &[
     b!("MEMBERS", [p("type", T::Type)], R::Derived, "a closed type's values, in declaration order"),
     b!("EXTRACT", [p("content", T::Any), p("shape", T::Shape), opt("settings", T::Options)], R::Derived, "the records a model finds in content, of a declared shape", effects: AI_ROW),
     b!("EXTRACTONE", [p("content", T::Any), p("shape", T::Shape), opt("settings", T::Options)], R::Derived, "the single record content describes, of a declared shape, or absent", effects: AI_ROW),
-    b!("CURRENCY.GET_NUMBER_FROM_FIGURE", [p("figure", T::Text)], R::Number, "the numeric amount in a money figure — CURRENCY.GET_NUMBER_FROM_FIGURE(\"£1.2m\") is 1200000", family),
-    b!("CURRENCY.GET_CODE_FROM_FIGURE", [p("figure", T::Text)], R::Text, "the ISO currency code in a money figure — CURRENCY.GET_CODE_FROM_FIGURE(\"£1.2m\") is \"GBP\"", family),
+    b!("CURRENCY.GET_NUMBER_FROM_FIGURE", [p("figure", T::Text)], R::MaybeAbsentNumber, "the numeric amount in a money figure — CURRENCY.GET_NUMBER_FROM_FIGURE(\"£1.2m\") is 1200000; text with no figure is absent", family),
+    b!("CURRENCY.GET_CODE_FROM_FIGURE", [p("figure", T::Text)], R::MaybeAbsentText, "the ISO currency code in a money figure — CURRENCY.GET_CODE_FROM_FIGURE(\"£1.2m\") is \"GBP\"; text naming no currency is absent", family),
     b!("CURRENCY.FORMAT_FIGURE", [p("number", T::Number), p("code", T::Text)], R::MaybeAbsentText, "a number as a money figure — the inverse of GET_NUMBER_FROM_FIGURE — CURRENCY.FORMAT_FIGURE(1200000, \"EUR\") is \"€1.2M\"; a code with no symbol prints after the amount (\"1.2M CHF\"); an empty or unknown code prints the bare number", family),
     b!("DATE.PARSE", [p("text", T::Text)], R::MaybeAbsentDate, "a written date as an ISO date — DATE.PARSE(\"12 March 2026\") is \"2026-03-12\"; unreadable text is absent", family),
     b!("DATE.ADD_DAYS", [p("date", T::Temporal), p("days", T::Number)], R::Date, "a date shifted by whole days — DATE.ADD_DAYS(\"2026-03-12\", 7) is \"2026-03-19\"", family),
-    b!("DATE.DAYS_BETWEEN", [p("from", T::Temporal), p("to", T::Temporal)], R::Number, "the whole calendar days from one date to another — DATE.DAYS_BETWEEN(\"2026-03-12\", \"2026-03-26\") is 14, and negative when `to` is the earlier; a datetime counts as its calendar day in UTC, its time of day dropped; absent when either is absent or is text that reads as no date", family),
+    b!("DATE.DAYS_BETWEEN", [p("from", T::Temporal), p("to", T::Temporal)], R::Number, "the whole calendar days from one date to another — DATE.DAYS_BETWEEN(\"2026-03-12\", \"2026-03-26\") is 14, and negative when `to` is the earlier; each counts as the calendar date written at its start, any time of day and offset dropped, as DATE.ADD_DAYS reads it; absent when either is absent or is text that reads as no date", family),
     b!("DATE.FORMAT", [p("value", T::Temporal), p("pattern", T::Text)], R::Text, "a date written out — DATE.FORMAT(\"2026-08-31\", \"MMMM D, YYYY\") is \"August 31, 2026\". Tokens: YYYY YY MMMM MMM MM M DD D dddd ddd HH H mm m ss s; anything else is printed as written", family),
     b!("DATE.FORMAT_ISO", [p("value", T::Temporal)], R::Date, "any readable date or timestamp normalised to a full ISO 8601 UTC timestamp", family),
     b!("DATE.TODAY", [p("zone", T::Text)], R::Date, "the calendar date it is right now in a place — DATE.TODAY(\"Europe/Berlin\") is \"2026-03-12\" from 00:00 to 23:59 there. The zone is written down (an IANA name like \"Europe/Berlin\", \"America/New_York\", \"UTC\")", family, effects: CLOCK),
     b!("DATETIME.AT", [p("date", T::Temporal), p("time", T::Text), p("zone", T::Text)], R::Datetime, "the instant a wall-clock time on a date names in a place — DATETIME.AT(\"2026-06-15\", \"07:00\", \"Europe/Berlin\") is 05:00 UTC. Move days with DATE.ADD_DAYS on the date and anchor each end separately, and a daylight-saving change takes care of itself", family),
-    b!("TEXT.REGEX_EXTRACT", [p("text", T::Text), p("pattern", T::Text), opt("group", T::Number)], R::Text, "the first regex match (the first capture group when the pattern has one) — null when nothing matches", family),
+    b!("TEXT.REGEX_EXTRACT", [p("text", T::Text), p("pattern", T::Text), opt("group", T::Number)], R::MaybeAbsentText, "the first regex match (the first capture group when the pattern has one) — absent when nothing matches", family),
     b!("TEXT.SLUG", [p("text", T::Text)], R::Text, "a lowercase-hyphen slug — TEXT.SLUG(\"Acme Corp Ltd.\") is \"acme-corp-ltd\"", family),
     b!("TEXT.PAIRS", [p("record", T::Record), opt("separator", T::Text)], R::Text, "a record or dict rendered as key=value pairs, keys in written order, joined by `separator` (default \" | \") — TEXT.PAIRS({ name: \"Acme\", url: \"acme.com\" }) is \"name=Acme | url=acme.com\"; a nested node/edge field is skipped, not stringified", family),
     b!("TEXT.SERIALISE", [p("value", T::Any), p("format", T::Text)], R::Text, "any value written out as text for a prompt, the same bytes every time it is the same value — TEXT.SERIALISE(deal, \"JSON\") is the record's fields as indented JSON with keys sorted, its nested nodes under their edge names as lists; an absent value is null, a file is its name/type/size and never its contents. The format is written down; \"JSON\" is the only one so far", family),
@@ -363,6 +366,50 @@ pub fn describe_param_type(param: ParamType) -> &'static str {
         T::Type => "a type",
         T::Shape => "a node declaration",
     }
+}
+
+/// Where a built-in answers nothing at run time though its declared type is
+/// a value: the arguments whose absence it passes on, and the arguments it
+/// reads a day out of, which answer nothing when they read as no date.
+struct Absence {
+    absent_in: &'static [usize],
+    read_as_day: &'static [usize],
+}
+
+fn absence_of(name: &str) -> Option<Absence> {
+    let (absent_in, read_as_day): (&'static [usize], &'static [usize]) = match name {
+        "TRIM" | "LOWER" | "UPPER" | "TOSTRING" | "TEXT.SLUG" | "TEXT.PAIRS" => (&[0], &[]),
+        "DATE" | "DATETIME" | "DATE.FORMAT_ISO" | "DATE.ADD_DAYS" | "DATE.FORMAT" => (&[0], &[0]),
+        "DATE.DAYS_BETWEEN" => (&[0, 1], &[0, 1]),
+        // An unreadable day fails the run here rather than answering nothing.
+        "DATETIME.AT" => (&[0, 1, 2], &[]),
+        _ => return None,
+    };
+    Some(Absence { absent_in, read_as_day })
+}
+
+/// Whether a call of `builtin` on arguments of these types may answer
+/// nothing where its declared type is a value: `T | absent` exactly when
+/// the run can answer null, as TypeScript types a function that can return
+/// `undefined`. An argument of a kind the parameter refuses was reported
+/// already, and adds nothing here.
+pub fn answer_may_be_absent(builtin: &Builtin, args: &[Option<Ty>]) -> bool {
+    fn absent(ty: &Ty) -> bool {
+        matches!(ty, Ty::MaybeAbsent(_) | Ty::Absent)
+    }
+    fn always_a_day(ty: &Ty) -> bool {
+        match ty {
+            Ty::Date | Ty::Datetime | Ty::Never => true,
+            Ty::Union(members) => members.iter().all(always_a_day),
+            _ => false,
+        }
+    }
+    let Some(rule) = absence_of(builtin.name) else { return false };
+    let at = |index: usize| args.get(index).and_then(Option::as_ref);
+    rule.absent_in.iter().filter_map(|&i| at(i)).any(absent)
+        || rule.read_as_day.iter().any(|&i| {
+            at(i).is_some_and(|ty| !always_a_day(ty) && builtin.param_at(i).is_some_and(|param| param_accepts(param.ty, ty)))
+        })
 }
 
 /// `BARE_COERCER_RETURNS`: the bare coercers and the type they retype to.

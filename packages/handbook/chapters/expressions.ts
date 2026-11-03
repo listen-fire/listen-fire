@@ -292,7 +292,7 @@ win_start    = DateTime.at(Date.addDays(berlin_today, -1), "07:00", "Europe/Berl
 
 **Arithmetic happens in calendar space; anchoring happens last.** \`Date.addDays\` moves a day on the calendar, and \`DateTime.at(date, time, zone)\` turns a day plus a wall-clock time into the one instant it names there. Anchor each end separately and the window between yesterday 07:00 and today 07:00 comes out 23 or 25 hours long on the two days a year the clocks move, without you writing anything down. Anchor one end and subtract 24 hours instead, and those two days silently run from 06:00 or 08:00.
 
-Count the other way with \`Date.daysBetween(from, to)\`: the whole calendar days between two days, negative when \`to\` is the earlier, so \`Date.daysBetween(Date.today("Europe/Berlin"), event) < 14\` is "less than two weeks away". Dates can't be subtracted with \`-\`; a datetime counts as the day it falls on in UTC, its time of day dropped.
+Count the other way with \`Date.daysBetween(from, to)\`: the whole calendar days between two days, negative when \`to\` is the earlier, so \`Date.daysBetween(Date.today("Europe/Berlin"), event) < 14\` is "less than two weeks away". Dates can't be subtracted with \`-\`; a datetime counts as the calendar date written at its start, its time of day and offset dropped, exactly as \`Date.addDays\` reads it.
 
 \`Date.today(zone)\` reads the moment the run fired, in that zone — a run firing at 00:30 in Berlin is on the Berlin date, not yesterday's UTC one. Every reading of the clock in one run gives the same answer, including after the run waits for a person, so a window computed at the start and one computed at the end agree.
 
@@ -300,7 +300,7 @@ Both the zone (\`"Europe/Berlin"\`, \`"America/New_York"\`, \`"UTC"\`) and the t
 
 ### coercers
 
-\`Date.from(value)\`, \`DateTime.from(value)\` and \`Number.parse(value)\` are **coercers** — they say "treat this as a calendar day / an instant / a number". Reach for a coercer when a comparison spans two kinds of value: a comparison only makes sense within one kind, so \`\`Snoozed Until\` <= 5\` is refused when you save and \`\`Snoozed Until\` <= Date.from(…)\` is the repair. (Dates and timestamps compare freely — a date is midnight. When a value's type isn't known, the comparison is left alone; only a definite clash is flagged.)
+\`Date.from(value)\`, \`DateTime.from(value)\` and \`Number.parse(value)\` are **coercers** — they say "treat this as a calendar day / an instant / a number". Reach for a coercer when a comparison spans two kinds of value: a comparison only makes sense within one kind, so \`\`Snoozed Until\` <= 5\` is refused when you save and \`\`Snoozed Until\` <= Date.from(…)\` is the repair (from text, the coerced value may be absent: test it before ordering on it). (Dates and timestamps compare freely — a date is midnight. When a value's type isn't known, the comparison is left alone; only a definite clash is flagged.)
 
 Prefer a helper over \`ai()\` whenever one fits: it is instant, free, and gives the same answer every run.
 
@@ -497,7 +497,7 @@ function \`Intake\`(m: <inbox-[:Emails]->>) {
   if (Text.regexExtract(m.Subject, "(DEAL-\\\\d+)") != null) {
     company = write crm-[:Companies]-> {
       Name:        Text.slug(m.Subject)
-      Description: Currency.codeFromFigure(m.Body)
+      Description ?: Currency.codeFromFigure(m.Body)
       \`Team Size\` ?: Number.parse(m.Body)
     }
     write company-[:Tasks]-> {

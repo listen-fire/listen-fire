@@ -598,7 +598,7 @@ days   = Date.daysBetween(Date.today("Europe/London"), event)
 urgent = days < 14
 ```
 
-Whole calendar days, negative when the second date is the earlier; a datetime counts as its day in UTC.
+Whole calendar days, negative when the second date is the earlier; a datetime counts as the date written at its start.
 
 ### format-money
 

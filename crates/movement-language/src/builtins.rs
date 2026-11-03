@@ -86,6 +86,7 @@ impl CurrentBuiltin {
             Returns::File => "Returns a file.",
             Returns::ListOfText => "Returns a list of text.",
             Returns::MaybeAbsentText => "Returns text, or null.",
+            Returns::MaybeAbsentNumber => "Returns a number, or null.",
             Returns::MaybeAbsentDate => "Returns a date, or null.",
             Returns::Never => "Fails the run here.",
             Returns::Derived => return None,

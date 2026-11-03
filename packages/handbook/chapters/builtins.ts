@@ -196,11 +196,11 @@ function \`Intake\`(m: <inbox-[:Emails]->>) {
   today  = Date.today("Europe/Berlin")
   win    = DateTime.at(today, "07:00", "Europe/Berlin")
   ref    = Text.regexExtract(m.Subject, "(DEAL-\\\\d+)")
-  amount = Currency.numberFromFigure(m.Body)
+  amount = coalesce(Currency.numberFromFigure(m.Body), 0)
   company = write crm-[:Companies]-> {
     unique by (\`Name\`)
     Name:        Text.slug(m.Subject)
-    Description: Currency.codeFromFigure(m.Body)
+    Description ?: Currency.codeFromFigure(m.Body)
     \`Team Size\` ?: amount
   }
   write company-[:Notes]-> {

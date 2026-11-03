@@ -585,12 +585,13 @@ fn date_add_days(date: &Js, days: &Js) -> Result<Js, EvalError> {
 }
 
 /// `DATE.DAYS_BETWEEN(from, to)`: whole calendar days, `to` less `from`.
-/// Each counts as the day it falls on in UTC, so a datetime's time of day is
-/// dropped and a date is itself. Nothing in either, or text that reads as no
-/// date, is nothing out, as `DATE.ADD_DAYS` answers; the checker types the
-/// count as maybe absent whenever that can happen.
+/// Each is read as `DATE.ADD_DAYS` reads its date: the calendar date written
+/// at its start, any time of day and offset after it dropped, so the two
+/// always agree. Nothing in either, or text that reads as no date, is
+/// nothing out; the checker types the count as maybe absent whenever that
+/// can happen.
 fn date_days_between(from: &Js, to: &Js) -> Js {
-    let day = |value: &Js| coerce_to_datetime(value).map(|(_, ms)| (ms / js_date::MS_PER_DAY).floor());
+    let day = |value: &Js| read_date_parts(value).map(|p| js_date::utc_midnight(p.y, p.m, p.d) / js_date::MS_PER_DAY);
     match (day(from), day(to)) {
         (Some(from), Some(to)) => Js::Number(to - from),
         _ => Js::Null,
@@ -1075,14 +1076,19 @@ mod tests {
         assert_eq!(days("2028-02-28", "2028-03-01"), 2.0);
         assert_eq!(days("2026-12-31", "2027-01-01"), 1.0);
         assert_eq!(days("1969-12-31", "1970-01-02"), 2.0);
-        // A datetime is the day it falls on in UTC; the time of day is dropped.
+        // A datetime is the date written at its start; time and offset are dropped.
         assert_eq!(days("2026-03-12", "2026-03-13T23:59:00Z"), 1.0);
         assert_eq!(days("2026-03-12T23:59:00Z", "2026-03-13T00:01:00Z"), 1.0);
-        assert_eq!(days("2026-03-12T00:30:00+01:00", "2026-03-12"), 1.0);
+        assert_eq!(days("2026-03-12T00:30+01:00", "2026-03-12"), 0.0);
+        assert_eq!(days("2026-03-12 10:00", "2026-03-13"), 1.0);
         assert_eq!(days("12 March 2026", "2026-03-19"), 7.0);
-        for d in [-400.0, -1.0, 0.0, 1.0, 14.0, 1000.0] {
-            let later = text(call("date.add_days", vec![s("2026-03-12"), Js::Number(d)]));
-            assert_eq!(days("2026-03-12", &later), d, "addDays {d}");
+        // `addDays` reads the same day out of the same text, so the two invert.
+        assert_eq!(add("2026-03-12T00:30+01:00", 0.0), "2026-03-12");
+        for start in ["2026-03-12", "2026-03-12T00:30+01:00", "2026-03-12T23:30:00-05:00", "12 March 2026"] {
+            for d in [-400.0, -1.0, 0.0, 1.0, 14.0, 1000.0] {
+                let later = text(call("date.add_days", vec![s(start), Js::Number(d)]));
+                assert_eq!(days(start, &later), d, "{start} addDays {d}");
+            }
         }
         assert!(matches!(between(Js::Null, s("2026-03-12")), Js::Null));
         assert!(matches!(between(s("2026-03-12"), Js::Undefined), Js::Null));
