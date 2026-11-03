@@ -35,6 +35,7 @@ The core is at the new version; the plain tags move npm `latest`, make the GitHu
    cargo update -w
    corepack pnpm install
    ```
+   On a new compatibility key (a new minor under 0.x), also upgrade the repository's own projects with the new binary: `listen-fire upgrade --dir <folder>` for each committed `lf.yaml` (the examples and `deploy/lf/project`). The sync script's `--check` fails while any still pins an older key.
 4. Update `CHANGELOG.md` (the language's): move Unreleased under the new version's heading with its date, and say which pins the release no longer reads. Commit steps 2 to 4 as `release: <version>`.
 5. Rebuild the committed wasm artifacts and commit them: the crate versions change the build's metadata, so `packages/movement-lang/wasm/*.wasm` no longer reproduce until rebuilt, and CI's byte check (`movement-wasm.yml`) would fail.
    ```sh

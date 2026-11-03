@@ -8,8 +8,11 @@
 //   packages/movement-lang/language_version_value.ts
 //   README.md                        the `cargo install listen-fire --version` line
 //   docs/contracts/README.md         the language row's compatibility key
-// `--check` writes nothing and exits 1 on any drift (CI's gate).
+// `--check` writes nothing and exits 1 on any drift (CI's gate). It also exits 1 when a
+// committed lf.yaml pins a version this release does not read: a pin moves only by
+// `listen-fire upgrade`, so the script never writes one, and a run without --check only says so.
 // Run from the repository root: node scripts/release/sync-core-version.mjs [--check]
+import { execFileSync } from 'node:child_process';
 import { readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -41,6 +44,20 @@ for (const dir of readdirSync('crates')) {
   if (lines > 0) edits.push([file, new RegExp(`(package = "(?:${CORE_CRATES.join('|')})", version = ")[^"]+(")`, 'g'), lines]);
 }
 
+// The repository's own projects (examples, the deploy image's default) are saved movements too:
+// at a new compatibility key they refuse to run until `listen-fire upgrade` moves their pins.
+const keyOf = (pin) => {
+  const [pinMajor, pinMinor] = pin.split('.');
+  return pinMajor === '0' ? `0.${pinMinor}` : pinMajor;
+};
+const stalePins = execFileSync('git', ['ls-files', '--', 'lf.yaml', '**/lf.yaml'], { encoding: 'utf8' })
+  .split('\n')
+  .filter(Boolean)
+  .flatMap((file) => {
+    const pin = readFileSync(file, 'utf8').match(/^engine:\s*['"]?(\d+\.\d+\.\d+[^\s'"#]*)/m)?.[1];
+    return pin !== undefined && keyOf(pin) !== key ? [`${file} pins engine ${pin}`] : [];
+  });
+
 const drift = [];
 for (const [file, pattern, expected, value = version] of edits) {
   const before = readFileSync(file, 'utf8');
@@ -52,7 +69,13 @@ for (const [file, pattern, expected, value = version] of edits) {
   if (!check) writeFileSync(file, after);
 }
 
+const staleMessage = `this release (${version}) does not read these pins; run \`listen-fire upgrade --dir <project folder>\` on each:\n  ${stalePins.join('\n  ')}`;
+
 if (check) {
+  if (stalePins.length > 0) {
+    console.error(staleMessage);
+    process.exit(1);
+  }
   if (drift.length > 0) {
     console.error(`core version ${version} (packages/movement-lang/package.json) is not in: ${drift.join(', ')}\nrun: node scripts/release/sync-core-version.mjs`);
     process.exit(1);
@@ -60,4 +83,5 @@ if (check) {
   console.log(`core version ${version}: in sync`);
 } else {
   console.log(drift.length === 0 ? `core version ${version}: already in sync` : `core version ${version}: wrote ${drift.join(', ')}`);
+  if (stalePins.length > 0) console.warn(staleMessage);
 }
