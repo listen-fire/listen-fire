@@ -436,6 +436,11 @@
   },
   {
     "chapter": "patterns",
+    "construct": "group-and-count (records filed under one record per key in the run's own graph by unique by, the keys walked in order and each counted)",
+    "source": "\ngh   = connect `@lf/github` using my_github\nchat = connect `@lf/slack` using team_workspace\n\nnode Board {\n  node people {\n    name: <text>\n    node issues {\n      title: <text>\n    }\n  }\n}\n\nfunction `Open Issues By Author`(t: <cron-[:Ticks]->>) {\n  board = graph<Board> {}\n  gh-[r:Repositories WHERE r.Name == \"api\"]->-[i:Issues WHERE i.State == \"open\"]-> {\n    p = write board-[:people]-> { unique by (name), name: i.Author }\n    write p-[:issues]-> { title: i.Title }\n  }\n  lines = board-[p:people ORDER BY p.name]-> { return \"${p.name}: ${count(p-[:issues]->)}\" }\n\n  ops = only(chat-[ch:Channels WHERE ch.Name == \"ops\"]->)\n  if (ops == null) { fail(\"no #ops channel\") }\n  write ops-[:Messages]-> {\n    Message: \"${count(board-[:people]->-[:issues]->)} open:\\n${Text.join(lines, \"\\n\")}\"\n  }\n}\n\nlisten as \"Open issues by author\" to cron-[k:Ticks WHERE k.Schedule == \"0 9 * * 1\"]-> fire `Open Issues By Author`\n"
+  },
+  {
+    "chapter": "patterns",
     "construct": "the compose-a-report shape (returned block lines → Text.join → pdf.render artifact)",
     "source": "\nimport { `@lf/pdf` as pdf } from plugins\ninbox = connect `@lf/email`\ncrm   = connect `@lf/attio` using acme\n\nfunction `Attachment Report`(m: <inbox-[:Emails]->>) {\n  lines = m-[f:Attachments]-> {\n    return \"- ${f.Name}\"\n  }\n  digest = \"Attachments on ${m.Subject}: ${Text.join(lines, \", \")}\"\n\n  record = write crm-[:Companies]-> {\n    unique by (FUZZY Name)\n    Name: m.Subject\n  }\n  write record-[:Files]-> {\n    File: pdf.render(digest)\n  }\n}\n"
   },

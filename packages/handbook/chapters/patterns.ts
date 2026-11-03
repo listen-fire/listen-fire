@@ -110,6 +110,35 @@ function \`Thesis Recap\`(go: <manual-[:Invocation]->>) {
 - Adding a thesis is one edit — the declaration — and the report grows a section on its own, in the place the declaration puts it. A thesis nothing matched is an ordinary missing lookup, so it still gets its line.
 - A thesis the model could not settle on is defaulted on the way into the row. The headline needs no default — a text field it did not find is \`""\`.
 
+### group-and-count
+
+A line per distinct value with its count (group by a key, count per group, the keys a dict can't list): file each record under one record per key in the run's own graph, then walk the keys.
+
+\`\`\`
+node Board {
+  node people {
+    name: <text>
+    node issues {
+      title: <text>
+    }
+  }
+}
+
+board = graph<Board> {}
+gh-[r:Repositories WHERE r.Name == "api"]->-[i:Issues WHERE i.State == "open"]-> {
+  p = write board-[:people]-> { unique by (name), name: i.Author }
+  write p-[:issues]-> { title: i.Title }
+}
+lines = board-[p:people ORDER BY p.name]-> { return "\${p.name}: \${count(p-[:issues]->)}" }
+\`\`\`
+
+- \`unique by (name)\` makes one \`people\` record per name. A second issue by the same author lands on the record the first one made, and is filed under it.
+- The keys are records, so they are walked, ordered and counted like any others: \`count(p-[:issues]->)\` is one person's issues, \`count(board-[:people]->)\` the distinct names, \`count(board-[:people]->-[:issues]->)\` every issue.
+- A key that may be missing takes a fallback before it is filed: \`name: coalesce(t.Assignee, "Unassigned")\`.
+- A walk answers a set, in no order. The \`ORDER BY\` on the people is what puts the lines in order for \`Text.join\`.
+- A \`List.groupBy\` dict is looked up by a key you already hold, and never lists its keys. When the keys are a type's values, *sections-from-a-type* walks them instead.
+- The graph is the run's own: nothing reaches a system, and \`listen-fire run\` lists each filing as a write into the run's own graph.
+
 ### extract-and-connect
 
 Records pulled out of a message and written **with their relationships intact**: the people are declared inside the company, so each one lands attached to the right one.
@@ -249,6 +278,40 @@ function \`Thesis Recap\`(go: <manual-[:Invocation]->>) {
 }
 
 listen to manual-[:Invocations]-> fire \`Thesis Recap\`
+`,
+    },
+    {
+      construct: 'group-and-count (records filed under one record per key in the run\'s own graph by unique by, the keys walked in order and each counted)',
+      status: 'runs',
+      probe: `
+gh   = connect \`@lf/github\` using my_github
+chat = connect \`@lf/slack\` using team_workspace
+
+node Board {
+  node people {
+    name: <text>
+    node issues {
+      title: <text>
+    }
+  }
+}
+
+function \`Open Issues By Author\`(t: <cron-[:Ticks]->>) {
+  board = graph<Board> {}
+  gh-[r:Repositories WHERE r.Name == "api"]->-[i:Issues WHERE i.State == "open"]-> {
+    p = write board-[:people]-> { unique by (name), name: i.Author }
+    write p-[:issues]-> { title: i.Title }
+  }
+  lines = board-[p:people ORDER BY p.name]-> { return "\${p.name}: \${count(p-[:issues]->)}" }
+
+  ops = only(chat-[ch:Channels WHERE ch.Name == "ops"]->)
+  if (ops == null) { fail("no #ops channel") }
+  write ops-[:Messages]-> {
+    Message: "\${count(board-[:people]->-[:issues]->)} open:\\n\${Text.join(lines, "\\n")}"
+  }
+}
+
+listen as "Open issues by author" to cron-[k:Ticks WHERE k.Schedule == "0 9 * * 1"]-> fire \`Open Issues By Author\`
 `,
     },
     {

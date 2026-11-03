@@ -48,7 +48,7 @@ channel = only(chat-[ch:Channels WHERE ch.Name == "ops"]->)
 
 ### first
 
-`first(list)` → `T | absent` — needs an ordered sequence, refused otherwise (the message points at `only` when the source is really a single-match lookup).
+`first(list)` → `T | absent` — needs an ordered sequence: a walk answers a set, in no order, so put an `ORDER BY` on the hop or `sort` it. Refused otherwise (the message points at `only` when the source is really a single-match lookup).
 
 ```
 newest = first(crm-[c:Companies ORDER BY c.`Created At` DESC]->.Name)
@@ -84,7 +84,7 @@ kept = filter(lines, (t) => { return Text.length(t) > 0 })
 
 ### reduce
 
-`reduce(list, f, start)` → whatever `f` last returned, always present when `start` is. Needs an ordered list — `f` is `(carried, member) => { … }` and must `return` the next carried value.
+`reduce(list, f, start)` → whatever `f` last returned, always present when `start` is. Needs an ordered list: a walk answers a set, in no order, so `sort` it or put an `ORDER BY` on the hop. `f` is `(carried, member) => { … }` and must `return` the next carried value.
 
 ```
 total = reduce(lines, (carried, t) => { return carried + Text.length(t) }, 0)
@@ -210,7 +210,7 @@ line = Text.concat(msg.From, " — ", msg.Subject)
 
 ### Text.join
 
-`Text.join(list, separator)` → `text`, always present — the separator is text written in place (`", "`), never a name or a template. Needs an ordered sequence (an `ORDER BY` on the hop, a relationship the source keeps in order, or a `sort`), refused otherwise naming the fix. Over a bound block it joins what the iterations returned.
+`Text.join(list, separator)` → `text`, always present — the separator is text written in place (`", "`), never a name or a template. Needs an ordered sequence: a walk answers a set, in no order, so put an `ORDER BY` on the hop or `sort` it (a relationship the source keeps in order needs neither); refused otherwise naming the fix. Over a bound block it joins what the iterations returned.
 
 ```
 roster = Text.join(sort(co-[t:Team]->.Name), ", ")
@@ -492,7 +492,7 @@ Tags: List.compact("inbound", region, [`Sub Tag`])
 
 ### List.groupBy
 
-`List.groupBy(list, key)` → a dict of lists, always present — files each member under the key its function answers. The values carry the members' own shape (a dict literal's fields read straight off a group); the keys are data, so a lookup with `by[key]` is always `T | absent` even against a literal string.
+`List.groupBy(list, key)` → a dict of lists, always present — files each member under the key its function answers. The values carry the members' own shape (a dict literal's fields read straight off a group); the keys are data, so a lookup with `by[key]` is always `T | absent` even against a literal string. A dict never lists its keys: for a line per key, file the members under one record per key in the run's own graph and walk those (patterns#group-and-count).
 
 ```
 by = List.groupBy(rows, (r) => { return r.thesis })
