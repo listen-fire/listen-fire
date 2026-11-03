@@ -3,7 +3,8 @@
 // ports its ranking, and this holds the two to one answer), and the examples
 // that name a system the handbook's catalog does not carry are checked here,
 // by `listen-fire check` against that module's fake (fake-channels' Airtable:
-// bases "Pipeline Tracker" and "Ops").
+// bases "Pipeline Tracker" and "Ops"), fake Stripe and a fake MCP server
+// (kind `billing`).
 
 import assert from 'node:assert/strict';
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
@@ -18,6 +19,8 @@ import { microExamples, renderExampleIndex, renderExampleLookup, searchExamples 
 import { lf as lfSync } from './example';
 import { freePort, lf, ok } from './interactive';
 import { lfBinary } from './lf_bin';
+import { startFakeMcpServer } from '../../../../modules/mcp/__test__/fake_server';
+import { startFakeStripe } from '../../../../modules/stripe/__test__/fake_stripe';
 
 function example(...words: string[]): { code: number; out: string } {
   const ran = spawnSync(lfBinary(), ['example', ...words], { encoding: 'utf8' });
@@ -66,8 +69,9 @@ async function fakeChannels(): Promise<{ url: string; stop(): Promise<void> }> {
   return { url, stop: async () => (child.kill('SIGTERM'), exited) };
 }
 
-/** A project with `@lf/airtable` installed against the fake and a credential `my_airtable`, as the examples name it. */
-async function airtableProject(url: string): Promise<string> {
+/** A project with `@lf/airtable` installed against the fake and a credential `my_airtable`, as the examples name it;
+ *  and Stripe (`stripe_account`) and an MCP server (`crm`) against their fakes, likewise. */
+async function exampleProject(url: string, others: { stripe: string; crm: string }): Promise<string> {
   const dir = join(mkdtempSync(join(tmpdir(), 'lf-micro-')), 'micro');
   assert.equal(lfSync(join(dir, '..'), 'init', 'micro').code, 0);
   await ok(
@@ -80,6 +84,10 @@ async function airtableProject(url: string): Promise<string> {
   await adding.line(/paste the URL your browser was sent back to/);
   adding.answer(location);
   await ok(adding);
+  await ok(lf(dir, ['connect', '@lf/stripe', '--yes', '--base-url', others.stripe], { answers: [] }));
+  await ok(lf(dir, ['credential', 'add', '--module', 'stripe', 'stripe_account'], { answers: ['rk_test_micro', 'whsec_micro'] }));
+  await ok(lf(dir, ['connect', '@lf/mcp', '--yes'], { answers: [] }));
+  await ok(lf(dir, ['credential', 'add', '--module', '@lf/mcp', 'crm', '--credential', 'mcp_token'], { answers: [others.crm, 'crm-key', ''] }));
   // The starter movement is not an example's; each example is the project's only file.
   rmSync(join(dir, 'movements'), { recursive: true, force: true });
   mkdirSync(join(dir, 'movements'));
@@ -90,16 +98,21 @@ test('an example naming a system the handbook does not carry is checked against 
   const faked = microExamples().filter((e) => e.fake);
   assert.ok(faked.length > 0);
   const fake = await fakeChannels();
+  const stripe = await startFakeStripe({ apiKey: 'rk_test_micro' });
+  const crm = await startFakeMcpServer({ kind: 'billing', token: 'crm-key' });
   try {
-    const dir = await airtableProject(fake.url);
+    const dir = await exampleProject(fake.url, { stripe: stripe.url, crm: crm.url });
     for (const e of faked) {
       assert.equal(e.kind, 'file', `${e.id} is a whole file`);
       writeFileSync(join(dir, 'movements/example.mvt'), `${e.code}\n`);
-      const checked = lfSync(dir, 'check');
+      // Asynchronously: the fake MCP server answers from this process.
+      const checked = await lf(dir, ['check']).done;
       assert.equal(checked.code, 0, `${e.id}:\n${checked.out}`);
       assert.doesNotMatch(checked.out, / error /, e.id);
     }
   } finally {
     await fake.stop();
+    await stripe.close();
+    await crm.close();
   }
 });

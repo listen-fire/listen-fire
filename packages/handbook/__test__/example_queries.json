@@ -86,6 +86,14 @@
     { "query": "pick one of several matching records", "top": "pick-one-of-several" },
     { "query": "is the value in a list read from another table", "top": "in-values-read-elsewhere" },
     { "query": "value is one of the names from another system", "top": "in-values-read-elsewhere" },
-    { "query": "create only if it does not exist", "top": "create-only-if-missing" }
+    { "query": "create only if it does not exist", "top": "create-only-if-missing" },
+    { "query": "stripe payment failed", "top": "listen-for-a-failed-payment" },
+    { "query": "listen for a failed payment", "top": "listen-for-a-failed-payment" },
+    { "query": "listen to a stripe invoice payment_failed and read the invoice", "top": "listen-for-a-failed-payment" },
+    { "query": "failed payment customer email amount due", "top": "listen-for-a-failed-payment" },
+    { "query": "call an mcp tool", "top": "call-an-mcp-tool" },
+    { "query": "mcp tool result", "top": "call-an-mcp-tool" },
+    { "query": "read the answer of an MCP server tool", "top": "call-an-mcp-tool" },
+    { "query": "look up a customer through an mcp tool by email", "top": "call-an-mcp-tool" }
   ]
 }

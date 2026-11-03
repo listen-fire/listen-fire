@@ -24,12 +24,24 @@ const examples = microExamples();
 /** The examples checked against a module's fake by `listen-fire check`
  *  (apps/cli/src/__test__/micro_examples.test.ts), not by the catalog here.
  *  Pinned, so a new one cannot slip past both checks. */
-const CHECKED_AGAINST_A_FAKE = ['connect-with-a-setting', 'create-or-update', 'set-only-when-empty', 'create-only-if-missing', 'read-a-table'];
+const CHECKED_AGAINST_A_FAKE = [
+  'connect-with-a-setting',
+  'create-or-update',
+  'set-only-when-empty',
+  'create-only-if-missing',
+  'read-a-table',
+  'listen-for-a-failed-payment',
+  'call-an-mcp-tool',
+];
+
+/** The examples that name one vendor's system, because the form being asked for
+ *  is that system's (a Stripe failure's invoice, an MCP tool's answer). */
+const NAMES_A_VENDOR = ['listen-for-a-failed-payment', 'call-an-mcp-tool'];
 
 describe('the corpus', () => {
   it('is a few dozen examples, each with a distinct id', () => {
     expect(examples.length).toBeGreaterThanOrEqual(30);
-    expect(examples.length).toBeLessThanOrEqual(56);
+    expect(examples.length).toBeLessThanOrEqual(60);
     expect(new Set(examples.map((e) => e.id)).size).toBe(examples.length);
     for (const e of examples) expect(e.id).toMatch(/^[a-z]+(-[a-z]+)*$/);
   });
@@ -59,8 +71,8 @@ describe('the corpus', () => {
     expect(proseViolations({ id: 'reference', title: 'Micro examples', content })).toEqual([]);
   });
 
-  it('stays generic: no payments, no CRM, no one vendor of them', () => {
-    const shown = examples.map((e) => `${e.intent} ${e.search} ${e.code} ${e.note ?? ''}`).join('\n');
+  it('stays generic: no payments, no CRM, no one vendor of them, except the examples that ask for one', () => {
+    const shown = examples.filter((e) => !NAMES_A_VENDOR.includes(e.id)).map((e) => `${e.intent} ${e.search} ${e.code} ${e.note ?? ''}`).join('\n');
     expect(shown).not.toMatch(/\b(stripe|attio|mcp|payments?|crm|invoices?|deals?)\b/i);
   });
 

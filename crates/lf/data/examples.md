@@ -735,3 +735,38 @@ r = all(
   () => { return count(m-[:Attachments]->) },
 )
 ```
+
+### listen-for-a-failed-payment
+
+Listen for a Stripe payment that failed, and read its invoice
+search: stripe payment failed failure invoice listen decline card billing customer email amount hosted invoice url change kind
+
+```file fake
+pay = connect `@lf/stripe` using stripe_account
+
+function `Payment Failed`(c: <pay-[:InvoiceChange]->>) {
+  invoice = only(c-[:Invoice]->)
+  if (invoice == null) { fail("a payment failure with no invoice") }
+  return invoice.`Customer Email`
+}
+listen to pay-[:Invoices]->-[c:Changes WHERE c.Kind == "payment_failed"]-> fire `Payment Failed`
+```
+
+The invoice is one hop along the change's `Invoice` edge; read its `Amount Due`, `Currency` and `Hosted Invoice URL` the same way.
+
+### call-an-mcp-tool
+
+Call an MCP server's tool and read its answer
+search: mcp tool call server answer result read lookup find customer by email crm argument
+
+```file fake
+crm = connect `@lf/mcp` using crm
+
+function `Plan Of`(i: <manual-[:Invocations]->>) {
+  found = crm-[r:find_customer_by_email WHERE r.email == i.Text]->
+  if (found.found != true) { fail("no customer for ${i.Text}") }
+  return found.plan
+}
+```
+
+A tool that only reads is an edge off the connection, its arguments the `WHERE` equalities and its answer the record the walk lands on; a tool that changes something is written to.
