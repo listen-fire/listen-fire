@@ -1115,7 +1115,15 @@ pub fn collection_ordering(typing: &Typing, expr: &Expression, position: Option<
             Some((order, edge)) => (*order, edge.clone()),
             None => (CollectionOrder::Unknown, None),
         },
-        Expression::List { .. } => (CollectionOrder::Ordered, None),
+        // Written members keep their order; a spread keeps the one it splices in.
+        Expression::List { elements } => elements
+            .iter()
+            .filter_map(|e| match e {
+                ListElement::Spread(s) => Some(collection_ordering(typing, &s.expression, position)),
+                ListElement::Expression(_) => None,
+            })
+            .find(|(order, _)| *order == CollectionOrder::Unordered)
+            .unwrap_or((CollectionOrder::Ordered, None)),
         Expression::Aggregate { fn_: AggregationFunction::Sort, .. } => (CollectionOrder::Ordered, None),
         Expression::Aggregate { fn_: AggregationFunction::Collect, expression, .. } => collection_ordering(typing, expression, position),
         // A dict holds its keys as a set; a list's repeats removed keep its order.

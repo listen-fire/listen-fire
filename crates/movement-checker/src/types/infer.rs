@@ -1504,6 +1504,7 @@ impl<'a> Typing<'a> {
             Run(Option<Ty>),
         }
         let mut parts: Vec<Part> = Vec::new();
+        let mut unordered = false;
         for element in elements {
             match element {
                 ListElement::Expression(e) => {
@@ -1513,6 +1514,7 @@ impl<'a> Typing<'a> {
                 }
                 ListElement::Spread(spread) => {
                     let spread_parts = self.spread_parts(&spread.expression, position);
+                    unordered |= self.spread_ordering(&spread.expression, position) == CollectionOrder::Unordered;
                     let held: Vec<Ty> = spread_parts.iter().filter_map(|(_, ty)| ty.clone()).collect();
                     self.refuse_closure_as_data(&spread.expression, value_union(&held).as_ref(), "a spread into a list holds");
                     parts.extend(spread_parts.into_iter().map(|(run, ty)| if run { Part::Run(ty) } else { Part::Slot(ty) }));
@@ -1526,6 +1528,11 @@ impl<'a> Typing<'a> {
                 })
                 .collect()
         };
+        // A spread keeps the order of what it splices in: members in no order
+        // leave no position meaning anything, so the list is one in no order.
+        if unordered && let Some(Ty::List { of, .. }) = tuple_as_list(&slots_of(&parts), None) {
+            return Ty::List { of, unordered: true };
+        }
         let Some(first_run) = parts.iter().position(|p| matches!(p, Part::Run(_))) else {
             return Ty::Tuple { of: Rc::new(slots_of(&parts)), rest: None };
         };
@@ -1571,6 +1578,20 @@ impl<'a> Typing<'a> {
             present @ Ty::Union(_) => vec![(true, collection_element_of(present))],
             _ => vec![(true, None)],
         }
+    }
+
+    /// The order a spread's members come in, once the spread is typed: a walk's
+    /// own, a block's answers held on a name, or the order its type carries.
+    fn spread_ordering(&self, expr: &Expression, position: Option<&Position>) -> CollectionOrder {
+        if let Some((order, _)) = self.walk_ordering_of(expr) {
+            return *order;
+        }
+        if position.is_none()
+            && let Some(order) = super::narrowing::bare_name(expr).and_then(|n| self.env.plural_order_of(n))
+        {
+            return order;
+        }
+        collection_order_of(self.exact_type_of(expr).and_then(Option::as_ref))
     }
 
     /// `None` where a spread could not be typed: the TypeScript types more of
