@@ -245,7 +245,7 @@ merged = { ...c, ...details }
 Name: coalesce(msg-[:Sender]->.Name, msg-[:Sender]->.Email)
 \`\`\`
 
-A traversal that yields nothing makes the value empty rather than failing, and \`coalesce\` takes the first non-empty of its arguments. To test rather than fall back: \`exists(msg-[:Sender]->)\` tells whether a relationship has any records, and \`x != null\` or \`x == null\` tells whether a binding or a field read off one has a value — \`\`Suggested Action\` != null\`, \`channel.Topic == null\`.
+A traversal that yields nothing makes the value empty rather than failing, and \`coalesce\` takes the first of its arguments that has a value (an empty text is one). To test rather than fall back: \`exists(msg-[:Sender]->)\` tells whether a relationship has any records, and \`x != null\` or \`x == null\` tells whether a binding or a field read off one has a value — \`\`Suggested Action\` != null\`, \`channel.Topic == null\`.
 
 A separate and stronger thing is a value typed as *possibly not there at all* — \`T | absent\`. That is a real part of the type, not a caution. These produce one:
 
