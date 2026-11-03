@@ -5,6 +5,7 @@
 // not failures. The retired-spelling diagnostic is a hard failure.
 
 import { LANGUAGE_VERSION, checkSourceInRust } from 'movement-lang';
+import { CORE_CHAPTERS, INTENT_INDEX, readChapter, renderIndex } from '../index';
 import { proseViolations } from '../prose_rules';
 import { HANDBOOK_CATALOG, admitProbe, checkExemption } from '../testing';
 import { FENCE, MODULES } from './module_manifests';
@@ -62,5 +63,32 @@ describe('the probes in every module handbook section', () => {
 
   it.each(probes.filter(([, claim]) => claim.status === 'runs' && checkExemption(claim) === undefined))('%s is admitted', (_name, claim) => {
     expect(() => admitProbe(claim)).not.toThrow();
+  });
+});
+
+describe('the index over a host that adds system chapters', () => {
+  const chapters = {
+    ...CORE_CHAPTERS,
+    ...Object.fromEntries(
+      Object.entries(MODULES).flatMap(([name, manifest]) =>
+        manifest.handbookSection ? [[`system:${name}`, { id: `system:${name}`, title: manifest.handbookSection.title, content: manifest.handbookSection.content }] as const] : [],
+      ),
+    ),
+  };
+  const index = renderIndex({ intentIndex: INTENT_INDEX, chapters });
+
+  it('names every section of a system chapter, and each one reads', () => {
+    const systemChapters = Object.values(chapters).filter((c) => c.id.startsWith('system:'));
+    expect(systemChapters.length).toBeGreaterThan(0);
+    for (const c of systemChapters) {
+      const line = index.split('\n').find((l) => l.startsWith(`- ${c.id} — `)) ?? '';
+      const named = /\(sections: (.*)\)$/.exec(line)?.[1]?.split(', ') ?? [];
+      for (const section of named) expect(readChapter(chapters, c.id, section).ok).toBe(true);
+      expect(named.length > 0).toBe(c.content.includes('\n### '));
+    }
+  });
+
+  it('leaves the hand-written chapters to the intents', () => {
+    expect(index).toMatch(/^- anatomy — [^(]*$/m);
   });
 });

@@ -15,7 +15,7 @@
 
 import type { Chapter, ChapterId, Handbook, IntentEntry } from './types';
 
-import { chapterRoute, sliceChapterSection } from 'engine-contracts/handbook_section';
+import { chapterRoute, listChapterSections, sliceChapterSection } from 'engine-contracts/handbook_section';
 import { foundations } from './chapters/foundations';
 import { anatomy } from './chapters/anatomy';
 import { expressions } from './chapters/expressions';
@@ -137,12 +137,22 @@ export const CORE_CHAPTERS: Readonly<Record<ChapterId, Chapter>> = {
   builtins,
 };
 
+/** A system's chapter is mostly about one thing an author came for among many
+ *  (Slack's is buttons, blocks and waiting; posting is a paragraph), and the
+ *  intent index cannot route into sections it has no entry for, so the index
+ *  names them: a reader fetches one section rather than the whole chapter. */
+function systemSections(chapter: Chapter): string {
+  if (!chapter.id.startsWith('system:')) return '';
+  const sections = listChapterSections(chapter.content);
+  return sections.length === 0 ? '' : ` (sections: ${sections.join(', ')})`;
+}
+
 /** The routes, then the chapters, of `handbook` — what a reader who does not
  *  yet know where to look is handed. */
 export function renderIndex(handbook: Handbook): string {
   const intents = handbook.intentIndex.map((e) => `- ${e.intent} → ${chapterRoute(e)}`).join('\n');
   const chapters = Object.values(handbook.chapters)
-    .map((c) => `- ${c.id} — ${c.title}`)
+    .map((c) => `- ${c.id} — ${c.title}${systemSections(c)}`)
     .join('\n');
   return `## Automation authoring handbook — index\n\nA route is a chapter, or \`chapter#section\` — one section of it, which is what to read when you need one rule.\n\nWhen you need to:\n${intents}\n\nChapters (read the relevant one before authoring):\n${chapters}`;
 }
