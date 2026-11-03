@@ -1,5 +1,5 @@
 {
-  "about": "Realistic lookups and the example each must answer first. The first block is what agents searched in the held-out sessions (plans/post-0.13-2026-11-02/WHY-report.md); the rest are the phrasings an author new to the language reaches for. The handbook's tests and the listen-fire command's both hold the ranking to it.",
+  "about": "Realistic lookups and the example each must answer first. The first block is what agents searched in the held-out sessions (plans/post-0.13-2026-11-02/WHY-report.md and HELDOUT2-report.md); the rest are the phrasings an author new to the language reaches for. The handbook's tests and the listen-fire command's both hold the ranking to it.",
   "queries": [
     { "query": "Dict entries keys values", "top": "dict-keys" },
     { "query": "dict keys entries groupBy", "top": "dict-keys" },
@@ -30,6 +30,10 @@
     { "query": "cron Tick fields Fired at Schedule", "top": "run-on-a-schedule" },
     { "query": "if then else expression", "top": "value-by-condition" },
     { "query": "today's date format Date.now", "top": "todays-date" },
+    { "query": "look up a record by email, case-insensitive, may be absent", "top": "match-ignoring-case" },
+    { "query": "create row only if none exists with same name (dedupe), date within next days", "top": "create-only-if-missing" },
+    { "query": "create row only if none exists matching, with date comparison", "top": "create-only-if-missing" },
+    { "query": "skip if a matching record already exists before write", "top": "create-only-if-missing" },
 
     { "query": "for each issue in a repository", "top": "act-per-record" },
     { "query": "loop over records", "top": "act-per-record" },
@@ -68,6 +72,15 @@
     { "query": "set a field only if empty", "top": "set-only-when-empty" },
     { "query": "get the issue a notification is about", "top": "read-what-an-arrival-is-about" },
     { "query": "parse a number from text", "top": "parse-a-number" },
-    { "query": "temporary records in memory", "top": "keep-records-for-this-run" }
+    { "query": "temporary records in memory", "top": "keep-records-for-this-run" },
+    { "query": "IF THEN ELSE expression as a value", "top": "value-by-condition" },
+    { "query": "conditional expression ?:", "top": "value-by-condition" },
+    { "query": "compare text ignoring case in a where", "top": "match-ignoring-case" },
+    { "query": "trim and lower inside a walk filter", "top": "match-ignoring-case" },
+    { "query": "first of an unordered walk", "top": "pick-one-of-several" },
+    { "query": "pick one of several matching records", "top": "pick-one-of-several" },
+    { "query": "is the value in a list read from another table", "top": "in-values-read-elsewhere" },
+    { "query": "value is one of the names from another system", "top": "in-values-read-elsewhere" },
+    { "query": "create only if it does not exist", "top": "create-only-if-missing" }
   ]
 }

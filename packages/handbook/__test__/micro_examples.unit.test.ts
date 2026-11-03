@@ -24,7 +24,7 @@ const examples = microExamples();
 /** The examples checked against a module's fake by `listen-fire check`
  *  (apps/cli/src/__test__/micro_examples.test.ts), not by the catalog here.
  *  Pinned, so a new one cannot slip past both checks. */
-const CHECKED_AGAINST_A_FAKE = ['connect-with-a-setting', 'create-or-update', 'set-only-when-empty', 'read-a-table'];
+const CHECKED_AGAINST_A_FAKE = ['connect-with-a-setting', 'create-or-update', 'set-only-when-empty', 'create-only-if-missing', 'read-a-table'];
 
 describe('the corpus', () => {
   it('is a few dozen examples, each with a distinct id', () => {

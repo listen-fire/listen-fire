@@ -153,6 +153,23 @@ function `Track Vendor`(i: <manual-[:Invocations]->>) {
 
 `?:` is about the record's field, not the value: a value that may be missing needs `coalesce` first.
 
+### create-only-if-missing
+
+Create a record only if no matching one exists, and skip it when one does
+search: create only if missing absent not exists skip when already exists dedupe duplicate check before write insert new row none matching no existing
+
+```file fake
+ops = connect `@lf/airtable` using my_airtable { base: "Ops" }
+
+function `Add Vendor`(i: <manual-[:Invocations]->>) {
+  if (!exists(ops-[v:Vendors WHERE v.Vendor == i.Text]->)) {
+    write ops-[:Vendors]-> { Vendor: i.Text, Spend: 0 }
+  }
+}
+```
+
+`unique by` would update the row that is there; this leaves it as it is.
+
 ### write-off-a-connection
 
 Write a new record straight off a connection, such as an email to send
@@ -239,6 +256,18 @@ pdfs = m-[a:Attachments WHERE a.`Content Type` == "application/pdf" AND a.Size <
 
 Inside the brackets a test reads like SQL: `AND`, `OR`, `NOT`, `CONTAINS`, `IN`.
 
+### match-ignoring-case
+
+Compare text ignoring case or spaces, inside a walk
+search: case insensitive ignore case lower upper trim spaces whitespace compare match equal email lookup where text lower trim
+
+```body
+from = Text.lower(Text.trim(m.From))
+who  = only(chat-[u:Users WHERE Text.lower(u.Email) == from]->)
+```
+
+Inside the brackets a built-in is written as it is outside them.
+
 ### find-one-record
 
 Find the one record that matches, and test it is there
@@ -251,6 +280,18 @@ write ops-[:Messages]-> { Message: m.Subject }
 ```
 
 After the test, `ops` is present for the rest of the block.
+
+### pick-one-of-several
+
+Take one record when several may match
+search: one of several pick choose any single first match unordered set no order which arbitrary only first needs order newest oldest
+
+```body
+newest = first(gh-[r:Repositories WHERE r.Name == "api"]->-[i:Issues ORDER BY i.`Created At` DESC]->)
+api    = only(gh-[r:Repositories WHERE r.Name == "api"]->)
+```
+
+A walk comes back in no order, so `first` needs `ORDER BY`; `only` fails the run if more than one matches.
 
 ### read-a-table
 
@@ -277,6 +318,20 @@ if (List.includes(m.Labels, "IMPORTANT")) {
   write m-[:Replies]-> { Body: "Seen." }
 }
 ```
+
+### in-values-read-elsewhere
+
+Test whether a value is among the values read from another system or table
+search: in list read from another table system lookup membership allowed known values includes is one of any of contains walk answers
+
+```body
+staff = chat-[u:Users]-> { return u.Email }
+if (List.includes(staff, m.From)) {
+  write m-[:Replies]-> { Body: "Thanks." }
+}
+```
+
+A block over a walk answers a list of what each record returned.
 
 ### order-and-limit
 
