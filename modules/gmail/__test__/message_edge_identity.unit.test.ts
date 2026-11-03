@@ -94,7 +94,7 @@ function Triage(m: <mail-[:Message]->>) {
   x = m.\`Subject\`
 }
 function lister(go: <mail-[:Message]->>) {
-  found = mail-[m:Messages]-> { return m }
+  found = mail-[m:Messages ORDER BY m.Date]-> { return m }
   Triage(found[0])
 }
 `;
