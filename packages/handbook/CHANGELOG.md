@@ -1,5 +1,26 @@
 # @listen-fire/handbook
 
+## 0.15.0
+
+### Minor Changes
+
+- a354fd1: The handbook carries the chapters on the always-connected `cron` and `manual` (`system:cron`, `system:manual`, exported as `UNIT_CHAPTERS`). Its index and `listen-fire catalog` route a schedule's or a hand-started run's author to them, and only the platform had them: elsewhere the route answered "No chapter". `system:cron` shows a schedule listen in a zone and says what a tick carries (`Fired at`, `Schedule`, `Zone`); `system:manual`, a start reading its `Text`, and a backfill. Each example checks clean. The authoring tools read them with no host; a host's own chapter of the same id takes their place.
+
+### Patch Changes
+
+- 9e0ee87: The reference and the expressions chapter say what `coalesce` answers as it runs: the first argument that has a value, as TypeScript's `??`. An empty text is a value, so `coalesce(pr.Body, pr.Title)` answers an empty body. The reference said "first non-empty".
+- fa0d26d: `Dict.keys(d)`, `Dict.values(d)` and `Dict.entries(d)` list a dict (a `List.groupBy` or `List.keyBy` answer, or a `{ … }` literal), in no order, and `List.distinct(list)` answers each plain value once, in the order they first appear. The wasm carries them, and the standard library table names the new `dict` parameter type. The handbook's `patterns#group-and-count` groups one level with `List.groupBy` and `sort(Dict.keys(by))`, and keeps the run's own graph for grouping deeper than one level; the expressions chapter and the reference name the four functions, and the reference lists `Dict` among the words that can't be names.
+  
+  `Date.daysBetween(from, to)` answers the whole calendar days from one date to another, negative when `to` is the earlier; a datetime counts as the calendar date written at its start, read exactly as `Date.addDays` reads it. It is `number | absent` when either argument may be absent or is text. The wasm carries it; the builtins, expressions and reference chapters name it, and the micro examples answer "days between two dates" with it.
+- 56ba35d: A recipe, `patterns#group-and-count`: a line per distinct value with its count, made by filing each record under one record per key in the run's own graph (`unique by`) and walking the keys in order, each counted. The language search answers "group", "distinct", "count per", "keys" and "dict keys" with it.
+- c8e1bfe: The micro examples: a few checked lines of listen-fire doing one thing each, found by asking in your own words. The handbook exports them (`microExamples`, `searchExamples`, `renderExampleLookup`, `renderExampleIndex`); they are read from the `listen-fire` command's own copy, `crates/lf/data/examples.md`, which a build of the package carries as `examples.md`. The authoring tools serve the lookup as `showExample`, and the front page's build loop points at it. The language search's ranking rule is now one function, `scoreFields`, which both lookups share.
+- c57e47c: The handbook lists every word a name can't be, `all` among them. The front page's statements entry names the words that start a statement with `all`, and says core words and namespaces are never names either; the reference lists them all (the words that start a statement, the core words and the namespaces), as the refusal of a binding does. The expressions chapter said a name matching a core word hides it with a warning; the binding is refused.
+- 01bfdd4: The core peer floor is now `>=0.15.0`. The handbook's `patterns#group-and-count` recipe and its built-ins reference use `Dict.keys` and `List.distinct`, which a 0.14 core does not read, so a 0.14 host would install it cleanly and then fail on those examples.
+- 05d2f0c: The reference says `coalesce` is typed as TypeScript's `a ?? b`: `coalesce(n, "n/a")` is a number or a text, and is no number (the 0.15 checker's typing).
+- b1e401b: The group-and-count recipe says a `List.groupBy` key that may be missing is refused without a fallback, as the 0.15 checker does.
+- 0dcc4ec: The reference lists the words an expression reads as themselves (`true`, `false`, `null`, `in`, `and`, `end`, …) among the words that can't be names, as the 0.15 checker refuses them.
+- 3c4dbee: The reference, the writes chapter and the foundations chapter spell a built-in inside walk brackets as outside them (`exists(c-[:Team]->)`, `Text.lower(c.Name)`), as the 0.15 checker requires, and the prose rules refuse a CAPS walk word (`LOWER(x)`) in any chapter.
+
 ## 0.14.2
 
 ### Patch Changes

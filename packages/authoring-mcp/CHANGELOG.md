@@ -1,5 +1,24 @@
 # @listen-fire/authoring-mcp
 
+## 0.13.3
+
+### Patch Changes
+
+- c8e1bfe: The micro examples: a few checked lines of listen-fire doing one thing each, found by asking in your own words. The handbook exports them (`microExamples`, `searchExamples`, `renderExampleLookup`, `renderExampleIndex`); they are read from the `listen-fire` command's own copy, `crates/lf/data/examples.md`, which a build of the package carries as `examples.md`. The authoring tools serve the lookup as `showExample`, and the front page's build loop points at it. The language search's ranking rule is now one function, `scoreFields`, which both lookups share.
+- a354fd1: The handbook carries the chapters on the always-connected `cron` and `manual` (`system:cron`, `system:manual`, exported as `UNIT_CHAPTERS`). Its index and `listen-fire catalog` route a schedule's or a hand-started run's author to them, and only the platform had them: elsewhere the route answered "No chapter". `system:cron` shows a schedule listen in a zone and says what a tick carries (`Fired at`, `Schedule`, `Zone`); `system:manual`, a start reading its `Text`, and a backfill. Each example checks clean. The authoring tools read them with no host; a host's own chapter of the same id takes their place.
+- Updated dependencies [9e0ee87]
+- Updated dependencies [fa0d26d]
+- Updated dependencies [56ba35d]
+- Updated dependencies [c8e1bfe]
+- Updated dependencies [c57e47c]
+- Updated dependencies [01bfdd4]
+- Updated dependencies [a354fd1]
+- Updated dependencies [05d2f0c]
+- Updated dependencies [b1e401b]
+- Updated dependencies [0dcc4ec]
+- Updated dependencies [3c4dbee]
+  - @listen-fire/handbook@0.15.0
+
 ## 0.13.2
 
 ### Patch Changes

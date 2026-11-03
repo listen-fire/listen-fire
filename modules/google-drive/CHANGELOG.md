@@ -1,5 +1,12 @@
 # @listen-fire/google-drive
 
+## 0.12.10
+
+### Patch Changes
+
+- Updated dependencies [5bc85fb]
+  - @listen-fire/google-sheets@0.13.0
+
 ## 0.12.9
 
 ### Patch Changes

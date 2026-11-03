@@ -72,7 +72,7 @@ Install the `listen-fire` command (macOS or Linux; it verifies the download and 
 curl -fsSL https://raw.githubusercontent.com/listen-fire/listen-fire/main/scripts/install.sh | sh
 ```
 
-The archives it installs are on the [releases page](https://github.com/listen-fire/listen-fire/releases) if you would rather unpack one yourself; `cargo install listen-fire --version 0.14.2` and, from a clone, `cargo build --release -p listen-fire` work too.
+The archives it installs are on the [releases page](https://github.com/listen-fire/listen-fire/releases) if you would rather unpack one yourself; `cargo install listen-fire --version 0.15.0` and, from a clone, `cargo build --release -p listen-fire` work too.
 
 Then:
 

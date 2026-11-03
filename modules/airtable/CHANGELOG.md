@@ -1,5 +1,15 @@
 # @listen-fire/airtable
 
+## 0.14.0
+
+### Minor Changes
+
+- 5bc85fb: Needs the listen-fire 0.15 engine: release this only with listen-fire 0.15.0. A field Airtable can leave empty is typed as maybe absent (`mayBeAbsent` on its descriptor): text of every kind, a number, a date, a single select, a collaborator, a barcode, a formula, a rollup, AI text, the last-modified time and author. A checkbox Airtable leaves out of a row is read as `false`, and a list field (multiple selects, collaborators, attachments, lookups, linked rows) as `[]`, wherever a row is read: a table's rows, linked rows, a change's `Record`, `Current` and `Previous`. An autonumber, a count, the created time and the creator stay always present. The handbook section says so. Under a 0.14 engine this would refuse programs that checked before, which is why it ships with the 0.15 compatibility key.
+
+### Patch Changes
+
+- aa776ae: A base's description says in its first sentence that each of its tables is an edge named after the table, which rows are read and written along: off a connection made at the base (`connect … { base: "CRM" }`, then `c-[:Companies]->`) or off the base narrowed by name (`b-[:Companies]->`). The first sentence is what `listen-fire catalog` prints for a record type; the description used to say this in its second sentence, with the retired `base:` construction spelling.
+
 ## 0.13.3
 
 ### Patch Changes

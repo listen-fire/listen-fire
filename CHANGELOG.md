@@ -20,6 +20,10 @@ named in [`RELEASING.md`](RELEASING.md).
 
 <!-- add merged PRs here -->
 
+## [0.15.0] - 2026-11-03
+
+A new compatibility key. A value that may be empty says so: Airtable and Google Sheets fields that can be blank, `coalesce`, and every built-in that can answer nothing are typed with `| absent`, and a read that needs a value is refused until it is tested or given a fallback. Words an expression reads as itself (`true`, `null`, `in`, …) are never names. Inside a walk's brackets a built-in is spelled as it is outside them (`Text.lower`, not `LOWER`). Order-dependent operations need an order wherever a collection comes from a walk. New: `Dict.keys`, `Dict.values`, `Dict.entries`, `List.distinct`, `Date.daysBetween`, and `listen-fire example`. **Which pins it reads:** `0.15.x` only; a project or automation pinned to `0.14.x` is refused by name ("validate it under 0.15.0 and upgrade it"). **To upgrade:** run `listen-fire upgrade`; it rewrites the walk spellings and lists each refusal it leaves for you, with its fix. See `docs/language/migrating-to-0.15.md`.
+
 ### Breaking (0.15.0)
 
 A new compatibility key: 0.15.0 reads `0.15.x` pins only, and refuses a project or automation pinned to `0.14.x` by name ("validate it under 0.15.0 and upgrade it"). Each change below is refused or diagnosed under the new key; `listen-fire upgrade` moves the pin once the program checks clean.
