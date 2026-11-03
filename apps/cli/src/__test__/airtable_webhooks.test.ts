@@ -606,10 +606,10 @@ test('Stage coming to be Interview fires once per edit, on an update or a row cr
         previous: { Name: 'Ada Lovelace', Email: 'ada@example.com', Stage: 'Applied' },
       });
       await until(() => interviews() === 1, server.lines);
-      // The fake keeps a written row's cells by field id.
-      assert.match(await written(), /"fldICand":"Ada King"/, 'it read the row as it is now off the change\'s Record');
-      assert.match(await written(), /"fldIFrom":"Applied"/, 'it read the Stage the row had before the edit');
-      assert.match(await written(), /"fldIChanged":"Ada"/, 'it read the Name the edit left');
+      // The fake keeps a written row's cells by field name, as Airtable answers them.
+      assert.match(await written(), /"Candidate":"Ada King"/, 'it read the row as it is now off the change\'s Record');
+      assert.match(await written(), /"From":"Applied"/, 'it read the Stage the row had before the edit');
+      assert.match(await written(), /"Changed":"Ada"/, 'it read the Name the edit left');
 
       // Interview to Interview, and Applied to Rejected: the webhook is pinged, and nothing runs.
       const stayed = await deliver(fake, { changeType: 'update', tableId: 'tblCAND01', recordId: 'recADA', fields: { Email: 'ada@x.example' }, previous: { Email: 'ada@new.example' } });
@@ -619,8 +619,8 @@ test('Stage coming to be Interview fires once per edit, on an update or a row cr
       // A row created at Interview came to be at it: no row before.
       await deliver(fake, { changeType: 'add', tableId: 'tblCAND01', recordId: 'recCY', fields: { Name: 'Cy', Stage: 'Interview' } });
       await until(() => interviews() === 2, server.lines);
-      assert.match(await written(), /"fldIFrom":"nothing"/, 'a created row has no row before');
-      assert.match(await written(), /"fldICand":"gone"/, 'a row the fake does not hold reads as none');
+      assert.match(await written(), /"From":"nothing"/, 'a created row has no row before');
+      assert.match(await written(), /"Candidate":"gone"/, 'a row the fake does not hold reads as none');
       assert.equal(interviews(), 2, 'staying at Interview and becoming Rejected ran nothing');
     } finally {
       await server.stop();
@@ -676,13 +676,13 @@ test('a row a change holds spreads into a map, read by the field names, whether 
       const runId = /^run (\S+) hiring:schedule_interview completed$/.exec(server.lines.find((l) => /^run \S+ hiring:schedule_interview completed$/.test(l)) ?? '')?.[1];
       assert.ok(runId !== undefined);
       assert.match(lfSync(dir, 'runs', 'show', runId, '--json').out, /"writes":1/);
-      assert.match(await written(), /"fldIFrom":"Applied"/, 'it read Stage off the map spread from the row before');
-      assert.match(await written(), /"fldIChanged":"Ada"/, 'it read Name off the map spread from the row the edit left');
+      assert.match(await written(), /"From":"Applied"/, 'it read Stage off the map spread from the row before');
+      assert.match(await written(), /"Changed":"Ada"/, 'it read Name off the map spread from the row the edit left');
 
       await deliver(fake, { changeType: 'add', tableId: 'tblCAND01', recordId: 'recCY', fields: { Name: 'Cy', Stage: 'Interview' } });
       await until(() => interviews() === 2, server.lines);
-      assert.match(await written(), /"fldIFrom":"nothing"/, 'no row before spreads to a map with no Stage');
-      assert.match(await written(), /"fldIChanged":"Cy"/);
+      assert.match(await written(), /"From":"nothing"/, 'no row before spreads to a map with no Stage');
+      assert.match(await written(), /"Changed":"Cy"/);
     } finally {
       await server.stop();
     }
@@ -1008,7 +1008,7 @@ test("a function over any change or the Candidates table's takes both, and a lis
       await until(() => server.lines.filter((l) => /registered webhook ach\d+/.test(l)).length >= 1, server.lines);
       await deliver(fake, { changeType: 'add', tableId: 'tblCAND01', recordId: 'recADA', fields: { Name: 'Ada', Stage: 'Applied' } });
       await until(() => server.lines.some((l) => /^run \S+ hiring:audit completed$/.test(l)), server.lines);
-      assert.match(JSON.stringify(await fake.json('/airtable/v0/appHIRE01/tblINTV01')), /"fldICand":"created"/);
+      assert.match(JSON.stringify(await fake.json('/airtable/v0/appHIRE01/tblINTV01')), /"Candidate":"created"/);
     } finally {
       await server.stop();
     }
