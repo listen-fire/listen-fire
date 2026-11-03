@@ -661,7 +661,7 @@ impl Fired {
         if self.outcomes.is_empty() && !self.redelivered.is_empty() {
             return Ok(0);
         }
-        report(&self.outcomes, Returned::Shown, out)
+        report(&self.outcomes, Results::Shown, out)
     }
 }
 
@@ -674,7 +674,9 @@ pub struct RunOutcome {
     pub entry: &'static str,
     /// `completed`, `parked`, `failed` or `leaseLost`.
     pub status: String,
-    pub writes: usize,
+    /// Each write this entry made, as the run's history lists it
+    /// (crate::segment's `write_summary`).
+    pub writes: Vec<Js>,
     pub captured: Option<Vec<Js>>,
     pub trace_entries: i64,
     pub error: Option<String>,
@@ -683,11 +685,11 @@ pub struct RunOutcome {
     pub returned: Option<Js>,
 }
 
-/// Whether a report shows what each completed run returned: yes to a person
-/// who started or drove the run; no in a worker's log of the runs events
-/// started, where it only sits in the run's history.
+/// Whether a report shows what each run wrote and, once completed,
+/// returned: yes to a person who started or drove the run; no in a worker's
+/// log of the runs events started, where they only sit in the run's history.
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub enum Returned {
+pub enum Results {
     Shown,
     Withheld,
 }
@@ -734,10 +736,11 @@ fn failed_outcome(before: Option<&str>, committed: &[Js], message: &str) -> Js {
     Js::Obj(outcome)
 }
 
-/// What a run entry has done so far: its writes, and how many segments ran.
-#[derive(Default, Clone, Copy)]
+/// What a run entry has done so far: its writes, as the run's history
+/// lists them, and how many segments ran.
+#[derive(Default)]
 struct Tally {
-    writes: usize,
+    writes: Vec<Js>,
     stepped: usize,
 }
 
@@ -1549,7 +1552,7 @@ impl Session {
         .await?;
         // A fresh run's row is new: nobody else can hold its lease.
         let Some(lease_lost) = held else { return Err(run_busy(run_id)) };
-        let mut outcome = self.settled_outcome(run_id, "fired", *tally.borrow(), lease_lost?)?;
+        let mut outcome = self.settled_outcome(run_id, "fired", tally.into_inner(), lease_lost?)?;
         if dry_run {
             outcome.captured = Some(captured.into_inner());
         }
@@ -1577,14 +1580,14 @@ impl Session {
             Ok(ran) => ran,
             Err(Ended::LeaseLost) => return Ok(StepOutcome::LeaseLost),
             Err(Ended::Failed(message)) => {
-                tally.borrow_mut().writes += committed.len();
+                tally.borrow_mut().writes.extend(committed);
                 return Ok(StepOutcome::Failed(message));
             }
         };
         if let Some(captured) = captured {
             captured.borrow_mut().extend(ran.captured.iter().cloned());
         }
-        tally.borrow_mut().writes += ran.writes;
+        tally.borrow_mut().writes.extend(ran.write_records);
         if ran.cancelled {
             let reason = self.store.cancel_request(run_id).map_err(|e| e.to_string())?.flatten();
             return Ok(StepOutcome::Cancelled(reason));
@@ -1839,7 +1842,7 @@ impl Session {
                 Drain::Awaits(addresses) => drain_run(&*self.store, run_id, addresses, None, lease, &stepper).await?,
                 Drain::OwedRaces => drain_run(&*self.store, run_id, &[], None, lease, &stepper).await?,
             };
-            Ok(Some((*stepper.tally.borrow(), lease_lost, stepper.rehearsed())))
+            Ok(Some((stepper.tally.take(), lease_lost, stepper.rehearsed())))
         })
         .await?;
         let Some(held) = held else { return Ok(Parked::Busy) };
@@ -1920,7 +1923,7 @@ impl Session {
             Ok(ran) => ran,
             Err(refused) => return Ok(Rerun::Refused(refused)),
         };
-        let mut outcome = self.settled_outcome(run_id, "rerun", *tally.borrow(), lease_lost)?;
+        let mut outcome = self.settled_outcome(run_id, "rerun", tally.into_inner(), lease_lost)?;
         if dry_run {
             outcome.captured = Some(captured.into_inner());
         }
@@ -2643,23 +2646,33 @@ pub async fn cancel_run(store: &dyn RunHostStore, run_id: &str, reason: Option<&
     }
 }
 
-/// `report`: each outcome's line, its error and a dry run's writes; the exit
-/// code 1 when any failed.
-pub fn report(outcomes: &[RunOutcome], returned: Returned, out: &mut impl Write) -> Result<i32, String> {
+/// `report`: each outcome's line, its error, what it returned, and a line
+/// per write as `runs show` lists it (a dry run's marked not committed);
+/// the exit code 1 when any failed.
+pub fn report(outcomes: &[RunOutcome], results: Results, out: &mut impl Write) -> Result<i32, String> {
     let io = |e: std::io::Error| e.to_string();
     if outcomes.is_empty() {
         writeln!(out, "no listen matched").map_err(io)?;
     }
+    let mut cut = false;
     for o in outcomes {
         let entries = if o.trace_entries == 1 { "entry" } else { "entries" };
         let error = o.error.as_ref().map(|e| format!("\n  {e}")).unwrap_or_default();
-        writeln!(out, "run {} {}:{} {} — {} write(s), {} trace {entries}{error}", o.run_id, o.file, o.movement, o.status, o.writes, o.trace_entries).map_err(io)?;
-        if let (Returned::Shown, Some(value)) = (returned, &o.returned) {
-            writeln!(out, "  {}", crate::returned::shown(value)).map_err(io)?;
+        writeln!(out, "run {} {}:{} {} — {} write(s), {} trace {entries}{error}", o.run_id, o.file, o.movement, o.status, o.writes.len(), o.trace_entries).map_err(io)?;
+        if results == Results::Shown {
+            if let Some(value) = &o.returned {
+                writeln!(out, "  {}", crate::returned::shown(value)).map_err(io)?;
+            }
+            for write in o.writes.iter().take(LISTED_WRITES) {
+                writeln!(out, "  {}", crate::run_show::write_line(write, &mut cut)).map_err(io)?;
+            }
+            if o.writes.len() > LISTED_WRITES {
+                writeln!(out, "  … and {} more write(s), which the run's history counts but does not list", o.writes.len() - LISTED_WRITES).map_err(io)?;
+            }
         }
-        for w in o.captured.iter().flatten() {
-            writeln!(out, "  dry run, not written: {}", w.to_json()).map_err(io)?;
-        }
+    }
+    if cut {
+        writeln!(out, "{}", crate::run_show::cut_note()).map_err(io)?;
     }
     Ok(if outcomes.iter().any(|o| o.status == "failed") { 1 } else { 0 })
 }

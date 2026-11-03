@@ -161,10 +161,7 @@ fn text(run: &Js, typing: &Typing) -> String {
         Some(writes) if !writes.is_empty() => {
             out.push(format!("writes ({}):", word("writes")));
             for write in writes {
-                let get = |k: &str| write.get(k).map(plain).unwrap_or_default();
-                let rehearsed = if Js::is_false(write.get("committed")) { " (not committed)" } else { "" };
-                let values = write.get("values").map(|v| format!(": {}", value(v, &mut cut))).unwrap_or_default();
-                out.push(format!("  {} {} {} {}{rehearsed}{values}", get("action"), get("adapter"), get("recordType"), get("recordId")));
+                out.push(format!("  {}", write_line(write, &mut cut)));
             }
         }
         _ => out.push(format!("writes: {}", field("writes").map(plain).unwrap_or_else(|| "0".into()))),
@@ -199,7 +196,7 @@ fn text(run: &Js, typing: &Typing) -> String {
         }
     }
     if cut {
-        out.push(format!("(a value over {VALUE_CHARS} characters is cut; --json shows it whole)"));
+        out.push(cut_note());
     }
     out.join("\n")
 }
@@ -244,6 +241,29 @@ fn event_lines(event: &Js, arrival: &Js, typing: &Typing, out: &mut Vec<String>,
             out.push(format!("    unknown (its module could not read them): {}", unknown.iter().map(plain).collect::<Vec<_>>().join(", ")));
         }
     }
+}
+
+/// One write as `runs show` and `run` list it (`writeRecords`): what was
+/// done, to which module's record type and record, and the values it set.
+/// `cut` is set when a value was cut (`cut_note` says so once).
+pub fn write_line(write: &Js, cut: &mut bool) -> String {
+    let get = |k: &str| write.get(k).filter(|v| !matches!(v, Js::Null)).map(plain);
+    let action = get("action").unwrap_or_default();
+    let record_type = get("recordType").unwrap_or_default();
+    let values = write.get("values").map(|v| format!(": {}", value(v, cut))).unwrap_or_default();
+    // A write into the run's own graph (`graph<…> {}`) reaches no system,
+    // so it is never committed, and says where it went instead.
+    if get("adapter").as_deref() == Some(movement_engine::local::LOCAL_ADAPTER_TYPE) {
+        return format!("{action} {record_type} in the run's own graph{values}");
+    }
+    let rehearsed = if Js::is_false(write.get("committed")) { " (not committed)" } else { "" };
+    let record_id = get("recordId").map(|id| format!(" {id}")).unwrap_or_default();
+    format!("{action} {} {record_type}{record_id}{rehearsed}{values}", get("adapter").unwrap_or_default())
+}
+
+/// What a text says, once, after a value `write_line` or `value` cut.
+pub fn cut_note() -> String {
+    format!("(a value over {VALUE_CHARS} characters is cut; --json shows it whole)")
 }
 
 /// One trace entry: its kind, then what it says.
@@ -367,6 +387,14 @@ mod tests {
         let shown = text(&run(), &Err("the server is down".into()));
         assert!(shown.contains("(every field shown, raw and typed: the module could not say which its record types declare: the server is down)"), "{shown}");
         assert!(shown.contains("    object: {\"id\":\"in_1\",\"amount_due\":49000}\n"), "{shown}");
+    }
+
+    #[test]
+    fn a_write_into_the_runs_own_graph_says_so_and_a_rehearsed_one_is_marked() {
+        let line = |json: &str| write_line(&Js::parse(json.as_bytes()).unwrap(), &mut false);
+        assert_eq!(line(r#"{"adapter":"local","recordType":"people","recordId":null,"action":"create","committed":false,"values":{"name":"Priya"}}"#), r#"create people in the run's own graph: {"name":"Priya"}"#);
+        assert_eq!(line(r#"{"adapter":"airtable","recordType":"Digests","recordId":"rec1","action":"create","committed":false,"values":{"Date":"d"}}"#), r#"create airtable Digests rec1 (not committed): {"Date":"d"}"#);
+        assert_eq!(line(r#"{"adapter":"slack","recordType":"Message","recordId":null,"action":"create","committed":true,"values":{}}"#), "create slack Message: {}");
     }
 
     #[test]

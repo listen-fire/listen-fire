@@ -102,6 +102,7 @@ test('a Base narrowed by name is typed by its own tables, and the write reaches 
     assert.equal(check(dir, { base: 'Pipeline Tracker', table: 'Companies', field: 'Name' }).code, 0);
     const ran = lfSync(dir, 'run', 'track');
     assert.equal(ran.code, 0, ran.out);
+    assert.match(ran.out, /^ {2}create airtable Companies rec\S+: \{"Name":"Acme Narrowed"\}$/m, 'the run says what it wrote, and where');
     assert.match(JSON.stringify(await fetch(`${fake.url}/airtable/v0/appTEST001/tblCOMPANIES`).then((r) => r.json())), /Acme Narrowed/);
   } finally {
     await fake.stop();

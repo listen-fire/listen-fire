@@ -649,7 +649,7 @@ async fn run(argv: Vec<String>) -> Result<i32, String> {
 }
 
 fn report_runs(outcomes: &[runs::RunOutcome], json: bool, out: &mut impl Write) -> Result<i32, String> {
-    if json { lfjson::emit(out, &lfjson::runs_doc(outcomes, &[]), lfjson::exit_of(outcomes)) } else { runs::report(outcomes, runs::Returned::Shown, out) }
+    if json { lfjson::emit(out, &lfjson::runs_doc(outcomes, &[]), lfjson::exit_of(outcomes)) } else { runs::report(outcomes, runs::Results::Shown, out) }
 }
 
 fn report_rerun(run_id: &str, rerun: runs::Rerun, json: bool, out: &mut impl Write) -> Result<i32, String> {
@@ -660,7 +660,7 @@ fn report_rerun(run_id: &str, rerun: runs::Rerun, json: bool, out: &mut impl Wri
                 return lfjson::emit(out, &lfjson::rerun_doc(attempt, &outcomes[0]), lfjson::exit_of(&outcomes));
             }
             writeln!(out, "run {run_id}: attempt {attempt}, on its own event and the movement as the project holds it now").map_err(|e| e.to_string())?;
-            runs::report(&outcomes, runs::Returned::Shown, out)
+            runs::report(&outcomes, runs::Results::Shown, out)
         }
         runs::Rerun::Refused(refused) => {
             if json {

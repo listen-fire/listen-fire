@@ -32,12 +32,13 @@ When a connection cannot be described (its server is down, its credential refuse
 ```json
 { "ok": true, "redelivered": ["…"],
   "runs": [{ "runId": "…", "file": "hello", "movement": "hello", "entry": "fired",
-    "status": "completed", "writes": 0, "dryRunWrites": null, "traceEntries": 0, "error": null,
+    "status": "completed", "writes": 0, "writeRecords": [], "dryRunWrites": null, "traceEntries": 0, "error": null,
     "returned": { "value": "Hello, Ada!" } }] }
 ```
 
 - `entry`: `fired`, `resumed` or `rerun`. `status`: `completed`, `parked`, `failed` or `leaseLost`.
 - `ok` is false when any run failed. `dryRunWrites` is an array only under `--dry-run`.
+- `writeRecords`: each write this entry into the run made, in order, as `runs show` lists them (below), a dry run's with `committed` false. Without `--json`, a line per write follows the run's line.
 - `redelivered`: lines for listens that had already seen the event's idempotency key.
 - `returned`: what the movement returned, once the run has completed (`null` before then, or when it returned nothing). It is `{ "value" }`; `{ "truncated": true, "bytes", "preview" }` when its JSON is over 64 KiB (`preview` is the start of that JSON); or `{ "unwritable": "<why>" }` for a value with no plain form, such as a function. A file in the value is its reference (`__brand`, `name`, `contentType`, `size`, `source`: its owner and handle), never its bytes.
 - `resume` with nothing parked, or nothing due in what is parked: `runs` is empty.

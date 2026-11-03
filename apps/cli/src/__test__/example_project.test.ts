@@ -108,8 +108,8 @@ listen to crm-[:Company]-> fire onboard
   writeFileSync(join(dir, 'events/company_landed.json'), JSON.stringify(event));
   const run = lf(dir, 'run', '--event', 'events/company_landed.json');
   assert.equal(run.code, 0, run.out);
-  // The human line stays a count.
-  assert.match(run.out, /companies:onboard completed — 2 write\(s\)/);
+  // The run's line stays a count; a line per write follows it, as `runs show` lists them.
+  assert.match(run.out, /companies:onboard completed — 2 write\(s\), 0 trace entries\n {2}create acme_crm Company company-2: \{"Name":"Welcome Vireo Robotics"\}\n {2}update acme_crm Company c-1: \{"Name":"Onboarded Vireo Robotics"\}\n/);
   const runId = /^run (\S+) /m.exec(run.out)?.[1] ?? '';
   const shown = JSON.parse(lf(dir, 'runs', 'show', runId, '--json').out) as { run: Record<string, unknown> };
   const { startedAt, finishedAt, writes, writeRecords } = shown.run;
@@ -134,6 +134,49 @@ listen to crm-[:Company]-> fire onboard
   assert.match(text.out, /^ {2}landed Company c-1: A company\n {4}id: "c-1"\n {4}Name: "Vireo Robotics"$/m);
   assert.doesNotMatch(text.out, /hook_source/);
   assert.match(text.out, /^writes \(2\):\n {2}create acme_crm Company company-2: \{"Name":"Welcome Vireo Robotics"\}\n {2}update acme_crm Company c-1: \{"Name":"Onboarded Vireo Robotics"\}$/m);
+});
+
+// A test run keeps nothing to show afterwards under --ephemeral, so the run's
+// own lines say what it wrote, as `runs show` lists each write, and what it
+// returned.
+test('listen-fire run --ephemeral lists each write, its target and values, and what the run returned', () => {
+  const dir = project();
+  writeFileSync(
+    join(dir, 'movements/companies.mvt'),
+    `import { acme_crm } from adapters
+import { acme } from credentials
+
+crm = connect acme_crm using acme
+
+node Seen {
+  node names {
+    name: <text>
+  }
+}
+
+function welcome_by_hand(go: <manual-[:Invocations]->>) {
+  seen = graph<Seen> {}
+  write seen-[:names]-> { name: go.Text }
+  write crm-[:Company]-> { Name: "Welcome \${go.Text}" }
+  return "welcomed \${go.Text}"
+}
+
+listen to manual-[:Invocations]-> fire welcome_by_hand
+`,
+  );
+  const run = lf(dir, 'run', '--ephemeral', 'welcome_by_hand', '--text', 'Vireo Robotics');
+  assert.equal(run.code, 0, run.out);
+  assert.match(
+    run.out,
+    /companies:welcome_by_hand completed — 2 write\(s\), 0 trace entries\n {2}returned "welcomed Vireo Robotics"\n {2}create names in the run's own graph: \{"name":"Vireo Robotics"\}\n {2}create acme_crm Company company-1: \{"Name":"Welcome Vireo Robotics"\}\n/,
+  );
+
+  // A dry run's write is listed once, marked as never reaching the system.
+  const dry = lf(dir, 'run', '--ephemeral', 'welcome_by_hand', '--text', 'Kestrel Labs', '--dry-run');
+  assert.equal(dry.code, 0, dry.out);
+  assert.match(dry.out, /^ {2}create acme_crm Company \S+ \(not committed\): \{"Name":"Welcome Kestrel Labs"\}$/m);
+  assert.equal(dry.out.match(/Welcome Kestrel Labs/g)?.length, 1, dry.out);
+  assert.deepEqual(companies(dir), ['Welcome Vireo Robotics']);
 });
 
 test('listen-fire run --webhook refuses a delivery whose signature does not verify', () => {

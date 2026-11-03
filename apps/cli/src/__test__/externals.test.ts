@@ -67,7 +67,7 @@ listen to manual-[:Invocations]-> fire welcome_by_hand
   );
   const run = lf(dir, 'run', 'welcome_by_hand', '--text', 'Vireo Robotics', '--dry-run');
   assert.equal(run.code, 0, run.out);
-  assert.match(run.out, /dry run, not written: .*"kind":"create".*Welcome Vireo Robotics/);
+  assert.match(run.out, /^ {2}create acme_crm Company \S+ \(not committed\): \{"Name":"Welcome Vireo Robotics"\}$/m);
   assert.ok(!existsSync(join(dir, STATE)) || companies(dir).length === 0, 'nothing reached the external');
 });
 

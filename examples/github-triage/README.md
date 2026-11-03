@@ -83,6 +83,8 @@ $ listen-fire check
 1 file(s), 0 error(s)
 $ listen-fire run --event events/tick.json
 run 9381b04e-42db-4ab8-893d-83c11cfe3e81 triage:triage completed — 1 write(s), 3 trace entries
+  create slack Message C001:1793687064.657031: {"Message":"GitHub needs you:\n• acme/api: Retry webhook deliveries with backoff (review_requested) https://github.com/acme/api/pull/42\n• acme/api: Webhook retries double-charge on timeout (mention) https://github.com/acme/api/issues/57\n• acme/web: Move settings to the new layout (review_requested…
+(a value over 300 characters is cut; --json shows it whole)
 ```
 
 What it posted to Slack:

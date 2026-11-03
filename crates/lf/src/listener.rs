@@ -336,7 +336,7 @@ fn outcome_js(o: &RunOutcome) -> Js {
         "movement" => Js::str(&o.movement),
         "entry" => Js::str(o.entry),
         "status" => Js::str(&o.status),
-        "writes" => Js::Num((o.writes as u64).into()),
+        "writes" => Js::Num((o.writes.len() as u64).into()),
     };
     if let Some(captured) = &o.captured {
         out.insert("captured".into(), Js::Arr(captured.clone()));
@@ -678,7 +678,7 @@ mod tests {
             movement: "note".into(),
             entry: "fired",
             status: "completed".into(),
-            writes: 0,
+            writes: Vec::new(),
             captured: None,
             trace_entries: 0,
             error: None,
