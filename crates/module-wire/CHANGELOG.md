@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- `PROTOCOL_MINOR` is 8: adapter protocol 2.8, every slot request a runner sends carries `hostRelease`, its release. 2.8 is a host behaviour and names no method, so `PROTOCOL_MINORS` gains no row.
+- `PROTOCOL_MINOR` is 8: adapter protocol 2.8, every request a runner sends to the slots it fills carries `hostRelease`, its release. 2.8 is a host behaviour and names no method, so `PROTOCOL_MINORS` gains no row.
 
 ## 0.12.9 - 2026-11-02
 

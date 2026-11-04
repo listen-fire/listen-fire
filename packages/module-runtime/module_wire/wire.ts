@@ -71,15 +71,18 @@ export function postTo(address: SlotAddress, body: string): Promise<{ status: nu
 }
 
 /** A client of one module: `call(method, params)` answers its result, or
- *  throws `SlotRefused` with the module's code. */
+ *  throws `SlotRefused` with the module's code. A host states its own release
+ *  as `hostRelease` (adapter protocol 2.8), sent on every request; without it
+ *  the request does not say. */
 export class SlotClient {
   constructor(
     readonly address: SlotAddress,
     readonly settings: Record<string, string> = {},
+    readonly hostRelease?: string,
   ) {}
 
   async call(method: string, params: object = {}): Promise<unknown> {
-    const body = JSON.stringify({ protocolVersion: PROTOCOL_VERSION, method, cacheScopeId: '<slot>', params, settings: this.settings });
+    const body = JSON.stringify({ protocolVersion: PROTOCOL_VERSION, method, cacheScopeId: '<slot>', params, settings: this.settings, ...(this.hostRelease === undefined ? {} : { hostRelease: this.hostRelease }) });
     const answer = await postTo(this.address, body);
     if (answer.status < 200 || answer.status >= 300) throw new SlotTransportError(`${method}: HTTP ${answer.status}`);
     let json: unknown;

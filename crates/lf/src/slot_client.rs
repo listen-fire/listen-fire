@@ -304,7 +304,8 @@ impl Drop for SlotClient {
 /// Every slot request: the envelope, the install's settings, and this
 /// listen-fire's release (`hostRelease`, adapter protocol 2.8), so a module
 /// serving runners of several releases (a platform's store) answers each by
-/// its line. A request without it comes from a runner before 2.8.
+/// its line. A request without it did not state its sender's release: a runner
+/// before 0.15.2, or a host or module that does not set it.
 fn request_body(method: &str, params: Obj, settings: &Obj) -> String {
     Js::from(obj! {
         "protocolVersion" => Js::str(PROTOCOL_VERSION),
@@ -341,5 +342,17 @@ async fn post(label: &str, base_url: &str, bearer: Option<&str>, auth: Option<&O
             })
         }
         _ => Err(SlotError::transport(format!("{label} answered {}, not the protocol's envelope", envelope.to_json()))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_slot_request_carries_the_release_that_sent_it() {
+        let body = Js::parse(request_body("list", Obj::new(), &Obj::new()).as_bytes()).unwrap();
+        assert_eq!(body.get("hostRelease").and_then(Js::as_str), Some(env!("CARGO_PKG_VERSION")));
+        assert_eq!(body.get("method").and_then(Js::as_str), Some("list"));
     }
 }

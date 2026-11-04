@@ -24,7 +24,8 @@ export const SlotRequestEnvelope = z.object({
   settings: z.record(z.string(), z.unknown()).optional(),
   /** Adapter protocol 2.8: the release of the runner that sent the request
    *  (`"0.15.2"`), so a module serving runners of several releases answers
-   *  each by its line. A request without it comes from a runner before 2.8. */
+   *  each by its line. A request without it did not state its sender's
+   *  release: a runner before 0.15.2, or a host or module that does not set it. */
   hostRelease: z.string().optional(),
 });
 

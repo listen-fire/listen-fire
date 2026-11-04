@@ -134,5 +134,5 @@ await contractCase.run({
 
 ## Changes
 
-- **Unreleased** (listen-fire 0.15.2; adapter protocol 2.8; a module may take it): every request carries `hostRelease`, the release of the runner that sent it; one without it comes from a runner before 0.15.2 ([the store slot's envelope](store-slot.md#the-envelope)).
+- **Unreleased** (listen-fire 0.15.2; adapter protocol 2.8; a module may take it): a runner's requests carry `hostRelease`, the release of the runner that sent it; one without it did not state its sender's release (a runner before 0.15.2, or a host that does not set it) ([the store slot's envelope](store-slot.md#the-envelope)).
 - **2026-10-22** (within adapter protocol 2): the secrets slot, its methods, and its conformance cases.
