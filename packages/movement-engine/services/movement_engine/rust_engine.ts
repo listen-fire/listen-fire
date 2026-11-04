@@ -14,7 +14,7 @@
 // program in the repository to that (rust_reachability.unit.test.ts). Each
 // segment is logged once (`noteEngine`) and counted (`rustRunStats`).
 
-import { openEngineSegment } from 'movement-lang';
+import { EngineStackRanOut, openEngineSegment } from 'movement-lang';
 
 import { RunCostCapExceeded } from '../../lib/run_cost';
 import { extractionTierAssignments, runChatModels } from './ai_tiers';
@@ -656,10 +656,21 @@ function failureOf(value: unknown, hostErrors: unknown[]): unknown {
 export function openWasmEngine(): EngineProtocol {
   const segment = openEngineSegment();
   return {
-    start: (input) => readStep(segment.start(JSON.stringify(input)), 'start'),
-    answer: (id, answer) => readStep(segment.answer(id, JSON.stringify(answer)), `answer ${id}`),
+    start: (input) => endingInItsCodedError(() => readStep(segment.start(JSON.stringify(input)), 'start')),
+    answer: (id, answer) => endingInItsCodedError(() => readStep(segment.answer(id, JSON.stringify(answer)), `answer ${id}`)),
     finish: () => segment.finish(),
   };
+}
+
+/** V8's stack can run out before the engine's own check sees its own run low:
+ *  the same end, with no chain to name, since the instance went with it. */
+function endingInItsCodedError<T>(step: () => T): T {
+  try {
+    return step();
+  } catch (error) {
+    if (error instanceof EngineStackRanOut) throw new CallDepthExceeded(maxCallDepth(), [], true);
+    throw error;
+  }
 }
 
 function readStep(reply: { ok: boolean; json: unknown }, call: string): EngineStep {
@@ -701,11 +712,11 @@ function thrownBy(error: Record<string, unknown>): Error {
   // A call past the depth limit: rebuilt from its limit and chain, message
   // and all, as call_depth.ts builds it.
   if (error.class === 'CallDepthExceeded') {
-    const { limit, chain } = error;
+    const { limit, chain, stackRanOut } = error;
     if (typeof limit !== 'number' || !Array.isArray(chain) || !chain.every((name): name is string => typeof name === 'string')) {
       throw new RustShimError('a CallDepthExceeded carries its limit and its chain of names');
     }
-    return new CallDepthExceeded(limit, chain);
+    return new CallDepthExceeded(limit, chain, stackRanOut === true);
   }
   const message = string(error.message, 'the Rust evaluator error message');
   switch (error.class) {

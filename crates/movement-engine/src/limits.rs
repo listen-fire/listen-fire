@@ -39,11 +39,29 @@ impl Default for Limits {
 pub struct LimitExceeded {
     pub code: &'static str,
     pub message: String,
+    /// Set when the stack is what ran out. Boxed, as this is carried in every
+    /// call's future, and those are what the stack is spent on.
+    stack_ran_out: Option<Box<StackRanOut>>,
+}
+
+/// A WASM engine's stack, spent short of the call depth limit: the limit, and
+/// the calls the run was inside.
+#[derive(Debug, Clone, PartialEq)]
+struct StackRanOut {
+    limit: usize,
+    chain: Vec<String>,
 }
 
 impl LimitExceeded {
     fn new(code: &'static str, message: String) -> LimitExceeded {
-        LimitExceeded { code, message: format!("{message}. The segment was stopped so one movement cannot exhaust its host; the host sets this limit.") }
+        LimitExceeded { code, message: format!("{message}. The segment was stopped so one movement cannot exhaust its host; the host sets this limit."), stack_ran_out: None }
+    }
+
+    /// The call depth limit's error, the host writing its message as it does
+    /// for the limit itself. It travels as a limit met because that is what it
+    /// is to the run: nothing forgives it, and any evaluation can meet it.
+    pub fn stack_ran_out(limit: usize, chain: Vec<String>) -> LimitExceeded {
+        LimitExceeded { code: "MOVENG_CALL_DEPTH", message: String::new(), stack_ran_out: Some(Box::new(StackRanOut { limit, chain })) }
     }
 
     pub fn steps(limit: u64) -> LimitExceeded {
@@ -55,6 +73,9 @@ impl LimitExceeded {
     }
 
     pub fn to_json(&self) -> serde_json::Value {
+        if let Some(ran_out) = &self.stack_ran_out {
+            return serde_json::json!({ "class": "CallDepthExceeded", "limit": ran_out.limit, "chain": ran_out.chain, "stackRanOut": true });
+        }
         serde_json::json!({ "class": "MovementEngineError", "code": self.code, "message": self.message })
     }
 }

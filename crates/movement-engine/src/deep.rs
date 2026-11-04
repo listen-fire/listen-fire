@@ -9,13 +9,39 @@
 //! the limit alone decides how deep a run goes (the limit bounds the memory:
 //! docs/contracts/run-limits.md).
 //!
-//! WASM has no stack to switch to, and each of these is what it wraps.
+//! WASM has no stack to switch to, and each of these is what it wraps, adding
+//! no frame of its own: a value walked there is held to V8's stack as well as
+//! its own. Running low on the stack it has ends the run instead (`stack_is_low`).
 
 use std::future::Future;
 use std::pin::Pin;
 
 /// A future the program's calls or its text decide how deeply it nests.
 pub(crate) type Deep<'s, T> = Pin<Box<dyn Future<Output = T> + 's>>;
+
+/// What a statement may count on being left of the shadow stack, whatever the
+/// program: until the next statement or call asks again it runs at most one
+/// statement's own expressions, which the parser bounds, the parser itself at
+/// its depth limit among them (`scripts/build-movement-wasm.sh`, which adds this
+/// to the stack so a run that fitted before still does).
+#[cfg(target_arch = "wasm32")]
+const STACK_MARGIN: usize = 1024 * 1024;
+
+/// Whether what is left of the stack is under the margin. The shadow stack
+/// comes first in linear memory (`--stack-first`) and grows down towards zero,
+/// so a local's address is what is left.
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn stack_is_low() -> bool {
+    let here = 0u8;
+    (std::hint::black_box(&here) as *const u8 as usize) < STACK_MARGIN
+}
+
+/// The native engine runs on more stack instead (`deep`).
+#[cfg(not(target_arch = "wasm32"))]
+#[inline(always)]
+pub(crate) fn stack_is_low() -> bool {
+    false
+}
 
 #[cfg(target_arch = "wasm32")]
 pub(crate) fn deep<'s, T>(future: impl Future<Output = T> + 's) -> Deep<'s, T> {
@@ -24,6 +50,7 @@ pub(crate) fn deep<'s, T>(future: impl Future<Output = T> + 's) -> Deep<'s, T> {
 
 /// One step of a walk down a value, which the program decides the depth of.
 #[cfg(target_arch = "wasm32")]
+#[inline(always)]
 pub(crate) fn walking<R>(step: impl FnOnce() -> R) -> R {
     step()
 }
@@ -31,6 +58,7 @@ pub(crate) fn walking<R>(step: impl FnOnce() -> R) -> R {
 /// `work` with room for what the program's text bounds, and for a value on the
 /// wire at its deepest: what a host does with a segment's step.
 #[cfg(target_arch = "wasm32")]
+#[inline(always)]
 pub fn with_room<R>(work: impl FnOnce() -> R) -> R {
     work()
 }

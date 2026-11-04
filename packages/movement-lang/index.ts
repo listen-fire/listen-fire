@@ -10,6 +10,7 @@ export {
   callLandingMisfits,
   callLandingNode,
   callListenIdentity,
+  EngineStackRanOut,
   initEngine,
   initParser,
   isParserReady,

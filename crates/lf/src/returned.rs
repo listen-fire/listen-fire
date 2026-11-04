@@ -5,10 +5,11 @@
 //! reaches an external system — no door answers with it, so what a run
 //! returns can never be a side door for an effect.
 //!
-//! As recorded: `{value}`; `{truncated: true, bytes, preview}` for a value
-//! whose JSON is over the cap; `{unwritable: why}` for one with no plain
-//! form. A file in the value is kept as a reference to the file (its owner
-//! and handle), never its bytes or a URL to them.
+//! As recorded: `{value}`; `{json}`, its JSON as text, for a value nested past
+//! `HISTORY_NESTING`; `{truncated: true, bytes, preview}` for a value whose
+//! JSON is over the cap; `{unwritable: why}` for one with no plain form. A file
+//! in the value is kept as a reference to the file (its owner and handle),
+//! never its bytes or a URL to them.
 
 use crate::json::{Js, Obj};
 use crate::obj;
@@ -20,20 +21,41 @@ use crate::wire::Hv;
 /// and anything bigger belongs in a file, which is recorded by reference.
 pub const RECORDED_BYTES: usize = 64 * 1024;
 
+/// How deep a value the run's history keeps as itself. Every store and reader
+/// of a run's outcome reads it as JSON, most of them refusing it past 128
+/// levels, and a refused outcome reads as no outcome. A value can nest far
+/// deeper, and its JSON as a text nests not at all. Well under 128, as the
+/// outcome and a rerun's attempts wrap it.
+const HISTORY_NESTING: usize = 64;
+
 /// The value as the run's history keeps it.
 pub fn recorded(value: &Hv) -> Js {
     let plain = plain(value);
     match cut(&plain, RECORDED_BYTES) {
         Some(truncated) => truncated,
+        None if nests_past(&plain, HISTORY_NESTING) => Js::Obj(obj! { "json" => Js::str(&plain.to_json()) }),
         None => Js::Obj(obj! { "value" => plain }),
     }
 }
 
 /// A value a write set, as the run's history lists it: plain, files by
-/// reference, or cut as a returned value is when its JSON is over `cap`.
+/// reference, or cut as a returned value is when its JSON is over `cap`, and
+/// as its JSON when it nests too deep to keep as itself.
 pub fn written(value: &Hv, cap: usize) -> Js {
     let plain = plain(value);
-    cut(&plain, cap).unwrap_or(plain)
+    match cut(&plain, cap) {
+        Some(truncated) => truncated,
+        None if nests_past(&plain, HISTORY_NESTING) => Js::Obj(obj! { "json" => Js::str(&plain.to_json()) }),
+        None => plain,
+    }
+}
+
+fn nests_past(value: &Js, levels: usize) -> bool {
+    match value {
+        Js::Arr(items) => levels == 0 || items.iter().any(|member| nests_past(member, levels - 1)),
+        Js::Obj(members) => levels == 0 || members.values().any(|member| nests_past(member, levels - 1)),
+        _ => false,
+    }
 }
 
 /// `{truncated: true, bytes, preview}` for a value whose JSON is over `cap`.
@@ -98,6 +120,9 @@ pub fn shown(recorded: &Js) -> String {
     if let Some(value) = recorded.get("value") {
         return format!("returned {}", value.to_json());
     }
+    if let Some(json) = recorded.get("json").and_then(Js::as_str) {
+        return format!("returned {json}");
+    }
     if let Some(why) = recorded.get("unwritable").and_then(Js::as_str) {
         return format!("returned a value listen-fire cannot record: {why}");
     }
@@ -116,6 +141,17 @@ mod tests {
         let kept = recorded(&value);
         assert_eq!(kept.to_json(), r#"{"value":{"greeting":"Hello, henry!","n":3}}"#);
         assert_eq!(shown(&kept), r#"returned {"greeting":"Hello, henry!","n":3}"#);
+    }
+
+    #[test]
+    fn a_value_too_deep_to_keep_as_itself_is_kept_as_its_json() {
+        let nested = |levels: usize| (1..levels).fold(Js::Obj(Obj::new()), |inner, _| Js::Obj(obj! { "v" => inner }));
+        assert!(recorded(&Hv::of_js(&nested(HISTORY_NESTING))).get("value").is_some());
+        let deep = nested(HISTORY_NESTING + 1);
+        let kept = recorded(&Hv::of_js(&deep));
+        assert_eq!(kept.get("json").and_then(Js::as_str), Some(deep.to_json().as_str()));
+        assert_eq!(shown(&kept), format!("returned {}", deep.to_json()));
+        assert!(Js::parse(kept.to_json().as_bytes()).is_ok(), "the history's reader reads it");
     }
 
     #[test]

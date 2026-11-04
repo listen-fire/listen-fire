@@ -140,7 +140,8 @@ fn text(run: &Js, typing: &Typing) -> String {
         out.push(format!("error: {}", plain(error)));
     }
     if let Some(returned) = field("returned") {
-        out.push(format!("returned: {}", value(returned.get("value").unwrap_or(returned), &mut cut)));
+        let json = returned.get("json").and_then(Js::as_str).map_or_else(|| returned.get("value").unwrap_or(returned).to_json(), str::to_string);
+        out.push(format!("returned: {}", cut_json(json, &mut cut)));
     }
     if Js::is_true(field("cancelRequested")) {
         out.push(format!("cancel requested{}", field("cancelReason").map(|r| format!(": {}", plain(r))).unwrap_or_default()));
@@ -300,7 +301,10 @@ fn plain(js: &Js) -> String {
 
 /// A value as JSON, cut past VALUE_CHARS characters.
 fn value(js: &Js, cut: &mut bool) -> String {
-    let json = js.to_json();
+    cut_json(js.to_json(), cut)
+}
+
+fn cut_json(json: String, cut: &mut bool) -> String {
     match json.char_indices().nth(VALUE_CHARS) {
         Some((at, _)) => {
             *cut = true;

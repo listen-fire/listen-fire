@@ -696,12 +696,16 @@ fn main() {
     let wants_json = argv.iter().any(|a| a == "--json");
     let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().expect("a tokio runtime");
     // A LocalSet, so a listener's connections run as tasks on this one thread.
-    let code = runtime.block_on(tokio::task::LocalSet::new().run_until(async {
-        let code = run(argv).await;
-        // process::exit runs no destructor: the module processes go now.
-        module_hosts::stop_all();
-        code
-    }));
+    // With room, because a run's values reach this thread as deep as the engine
+    // lets them cross, and what reads, copies and drops them recurses.
+    let code = movement_engine::with_room(|| {
+        runtime.block_on(tokio::task::LocalSet::new().run_until(async {
+            let code = run(argv).await;
+            // process::exit runs no destructor: the module processes go now.
+            module_hosts::stop_all();
+            code
+        }))
+    });
     let code = match code {
         Ok(code) => code,
         Err(message) if wants_json => {

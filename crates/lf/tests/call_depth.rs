@@ -44,6 +44,20 @@ impl Project {
         let said = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
         (out.status.code(), said)
     }
+
+    /// The run kept in the project's history, then that history read back.
+    fn durable_run_then_show(&self) -> (Option<i32>, String) {
+        let mut command = Command::new("/bin/sh");
+        command
+            .arg("-c")
+            .arg(format!("ulimit -s {MAIN_THREAD_STACK_KIB} && \"$0\" run b >/dev/null && \"$0\" runs show \"$(\"$0\" runs | head -1 | cut -d' ' -f1)\""))
+            .arg(binary())
+            .current_dir(&self.0)
+            .env_remove("MOVEMENT_MAX_CALL_DEPTH");
+        let out = command.output().unwrap();
+        let said = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+        (out.status.code(), said)
+    }
 }
 
 impl Drop for Project {
@@ -148,7 +162,29 @@ fn a_deep_value_is_let_go_of_cleanly() {
 
 #[test]
 fn a_value_too_deep_to_write_is_said_to_be_so() {
-    let (code, said) = Project::new(&nested_by_a_loop(5000, "return x")).run(&[]);
-    assert_eq!(code, Some(0), "{said}");
-    assert!(said.contains("nested more than 3000 levels"), "{said}");
+    for levels in [3001, 5000] {
+        let (code, said) = Project::new(&nested_by_a_loop(levels, "return x")).run(&[]);
+        assert_eq!(code, Some(0), "{levels}: {said}");
+        assert!(said.contains("nested more than 3000 levels"), "{levels}: {said}");
+    }
+}
+
+/// `levels` of `{"v":` around the `{}` the loop starts from.
+fn nested_json(levels: usize) -> String {
+    format!("{}{{}}{}", "{\"v\":".repeat(levels), "}".repeat(levels))
+}
+
+/// As deep as a value crosses: the run says what it returned, and its history
+/// reads it back.
+#[test]
+fn a_value_as_deep_as_a_value_crosses_is_returned() {
+    for levels in [41, 200, 2999] {
+        let project = Project::new(&nested_by_a_loop(levels, "return x"));
+        let (code, said) = project.run(&[]);
+        assert_eq!(code, Some(0), "{levels}: {said}");
+        assert!(said.contains(&format!("returned {}", nested_json(levels))), "{levels}: {}", said.chars().take(400).collect::<String>());
+        let (code, said) = project.durable_run_then_show();
+        assert_eq!(code, Some(0), "{levels}: {}", said.chars().take(400).collect::<String>());
+        assert!(said.contains("returned: "), "{levels}: {}", said.chars().take(400).collect::<String>());
+    }
 }

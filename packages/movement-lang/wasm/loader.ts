@@ -389,6 +389,24 @@ interface BufferExports {
   lastPanic(outPtrPtr: number, outLenPtr: number): void;
 }
 
+/** What V8 throws through an instance when its own stack runs out. By its
+ *  message, since the class is another realm's where a test runner's is. */
+function isStackOverflow(error: unknown): boolean {
+  return error instanceof Error && error.name === 'RangeError' && error.message === 'Maximum call stack size exceeded';
+}
+
+/**
+ * An engine segment ended by V8's stack running out under it, which is not the
+ * engine crashing: nothing in it went wrong but how deep the movement went. The
+ * instance goes with it, as with a trap.
+ */
+export class EngineStackRanOut extends Error {
+  constructor(readonly call: string) {
+    super(`the movement engine ran out of stack in ${call}`);
+    this.name = 'EngineStackRanOut';
+  }
+}
+
 /** A call that trapped; `detail` is the trap and the panic message, if any. */
 class WasmTrap extends Error {
   constructor(
@@ -494,6 +512,7 @@ export function openEngineSegment(): EngineSegment {
     } catch (trap) {
       if (!(trap instanceof WasmTrap)) throw trap;
       state = 'trapped';
+      if (isStackOverflow(trap.trapped)) throw new EngineStackRanOut(fn);
       throw new Error(`movement engine crashed in ${fn}: ${trap.detail}`, { cause: trap.trapped });
     }
   };
@@ -502,8 +521,16 @@ export function openEngineSegment(): EngineSegment {
     answer: (id, answerJson) =>
       step('engine_answer', answerJson, (pairs, slots) => exports.answer(id, ...pairs, slots, slots + 4)),
     finish: () => {
-      if (state === 'open') exports.finish();
+      const open = state === 'open';
       state = 'finished';
+      if (!open) return;
+      try {
+        exports.finish();
+      } catch (error) {
+        // Letting go of calls open as deep as the stack held. The instance is
+        // never used again, so what it did not get to goes with its memory.
+        if (!isStackOverflow(error)) throw error;
+      }
     },
   };
 }
@@ -565,6 +592,8 @@ function newInstance(module: WasmModule): Record<string, unknown> {
       const request: unknown = JSON.parse(decoder.decode(memoryBytes(exports).slice(requestPtr, requestPtr + requestLen)));
       reply = answerEnvRequest(request);
     } catch (error) {
+      // Not an answer: the engine is out of stack, wherever it was when it asked.
+      if (isStackOverflow(error)) throw error;
       status = ERROR;
       reply = { error: { message: error instanceof Error ? error.message : String(error) } };
     }

@@ -679,7 +679,12 @@ fn step_json(step: Result<movement_engine::executor::Step, movement_engine::exec
     movement_engine::with_room(|| {
         let bytes = movement_parser::util::form::external_bytes(movement_parser::to_sorted_json(&step));
         drop(step);
-        serde_json::from_slice(&bytes).map_err(|e| Fault(format!("the Rust engine's {call} is not JSON: {e}")))
+        // The engine holds what crosses to MAX_WIRE_NESTING, so what it writes
+        // is bounded; serde_json's own limit of 128 is about a third of that.
+        let mut reader = serde_json::Deserializer::from_slice(&bytes);
+        reader.disable_recursion_limit();
+        let read = serde::Deserialize::deserialize(&mut reader).and_then(|json: Json| reader.end().map(|()| json));
+        read.map_err(|e| Fault(format!("the Rust engine's {call} is not JSON: {e}")))
     })
 }
 

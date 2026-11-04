@@ -1,4 +1,4 @@
-import { assertParserReady, callJson, callLowering, initParser, isParserReady, parserGeneration } from '../loader';
+import { assertParserReady, callJson, callLowering, EngineStackRanOut, initParser, isParserReady, openEngineSegment, parserGeneration } from '../loader';
 
 declare function require(id: string): unknown;
 declare const __dirname: string;
@@ -151,6 +151,22 @@ describe('the parser loader', () => {
       expect(callJson('parse_expression', 'ok', [])).toEqual({ ok: true });
       expect(parserGeneration()).toBe(before + 1);
     });
+
+    it("tells V8's stack running out under an engine segment from the engine crashing", async () => {
+      await initParser(trappingModule());
+      const crashed = openEngineSegment();
+      expect(() => crashed.start('T')).toThrow(/^movement engine crashed in engine_start: RuntimeError: unreachable: panicked at src\/lib\.rs:1:1:\nboom$/);
+      crashed.finish();
+
+      const ranOut = openEngineSegment();
+      expect(() => ranOut.start('S')).toThrow(EngineStackRanOut);
+      expect(() => ranOut.start('ok')).toThrow(/the engine segment is trapped/);
+      ranOut.finish();
+
+      const fine = openEngineSegment();
+      expect(fine.start('ok')).toEqual({ ok: true, json: { ok: true } });
+      fine.finish();
+    });
   });
 });
 
@@ -168,7 +184,8 @@ function committedArtifact(file = 'movement.wasm'): Uint8Array {
 
 // The loader's ABI in miniature: a bump `alloc`, a no-op `dealloc`, one
 // function behind all four parse exports that writes `{"ok":true}` to the
-// out slots and returns status 0 — or hits `unreachable` on a leading "T" —
+// out slots and returns status 0 — or hits `unreachable` on a leading "T", or
+// calls itself until V8's stack runs out on a leading "S" —
 // one behind both lowering exports and the catalog's that always answers
 // `{"ok":true}`, and a
 // `last_panic` that points at a recorded panic message.
@@ -209,6 +226,10 @@ function trappingModule(): Uint8Array {
     [...name('lower_expression'), ...fn(4)],
     [...name('lower_condition'), ...fn(4)],
     [...name('catalog_query'), ...fn(4)],
+    // An engine's, for what a segment does with a trap.
+    [...name('engine_start'), ...fn(2)],
+    [...name('engine_answer'), ...fn(2)],
+    [...name('engine_finish'), ...fn(1)],
   ]);
   const code = vec([
     // ptr = next; next += len
@@ -216,6 +237,8 @@ function trappingModule(): Uint8Array {
     body([]),
     body([
       ...[0x20, 0, 0x2d, 0, 0, 0x41, 0xd4, 0x00, 0x46, 0x04, 0x40, 0x00, 0x0b], // if src[0] == 'T' { unreachable }
+      // if src[0] == 'S' { parse(src, len, out_ptr, out_len); drop }
+      ...[0x20, 0, 0x2d, 0, 0, 0x41, 0xd3, 0x00, 0x46, 0x04, 0x40, 0x20, 0, 0x20, 1, 0x20, 2, 0x20, 3, 0x10, 2, 0x1a, 0x0b],
       ...[0x20, 2, 0x41, JSON_AT, 0x36, 2, 0], // *out_ptr = JSON_AT
       ...[0x20, 3, 0x41, json.length, 0x36, 2, 0], // *out_len = json.length
       ...[0x41, 0], // status 0

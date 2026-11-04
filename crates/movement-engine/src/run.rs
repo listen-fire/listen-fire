@@ -1399,12 +1399,23 @@ impl Run<'_> {
         })
     }
 
+    /// The run ended with its coded error while it still can be, where the
+    /// engine's stack is too low to go on: a WASM engine's cannot grow, so what
+    /// it holds can be short of the call depth limit.
+    pub(crate) fn room_on_the_stack(&self) -> Result<(), Stop> {
+        if !crate::deep::stack_is_low() {
+            return Ok(());
+        }
+        Err(Stop::Thrown(Failure::Limit(crate::limits::LimitExceeded::stack_ran_out(self.input.max_call_depth, self.call_stack.borrow().clone()))))
+    }
+
     /// One statement inside its site: a paused run (its cap met here or
     /// before this segment) stops each flow before it, and so does a
     /// `suspendAt` address; the host refusing a priced call once the run has
     /// spent its cap means this statement was about to spend, so the flow
     /// suspends just before it, its finished calls journalled.
     async fn statement_at(&self, statement: &Statement, scope: &Rc<Scope>, at: &Address, path: &str) -> Result<Flow, Stop> {
+        self.room_on_the_stack()?;
         self.suspend_before(at, scope).await?;
         self.meter.step(&self.input.limits).map_err(|limit| Stop::Thrown(Failure::Limit(limit)))?;
         match self.statement(statement, scope, at, path).await {

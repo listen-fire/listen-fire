@@ -36,12 +36,15 @@ cd "$ROOT_DIR"
 #
 # The shadow stack goes first in linear memory (`--stack-first`, also rustc's
 # default for this target) so an overflow traps instead of silently
-# overwriting static data, and is 2 MiB: at the parser's depth limit
+# overwriting static data, and is 3 MiB: at the parser's depth limit
 # (MAX_DEPTH in crates/movement-parser/src/lexer.rs) the deepest texts need
-# between 512 and 768 KiB of it (measured 2026-10-06), so about a third.
+# between 512 and 768 KiB of it (measured 2026-10-06). The engine ends a run
+# with its coded error when less than 1 MiB is left (crates/movement-engine/src/deep.rs),
+# and that megabyte is on top of the 2 MiB this stack was before, so a run that
+# fitted in those still does.
 SYSROOT="$(rustc --print sysroot)"
 RUSTC_COMMIT="$(rustc -vV | sed -n 's/^commit-hash: //p')"
-RUSTFLAGS="--remap-path-prefix=$ROOT_DIR=/listen-fire --remap-path-prefix=$CARGO_HOME_DIR=/cargo --remap-path-prefix=$SYSROOT/lib/rustlib/src/rust=/rustc/$RUSTC_COMMIT -C link-arg=--stack-first -C link-arg=-zstack-size=2097152"
+RUSTFLAGS="--remap-path-prefix=$ROOT_DIR=/listen-fire --remap-path-prefix=$CARGO_HOME_DIR=/cargo --remap-path-prefix=$SYSROOT/lib/rustlib/src/rust=/rustc/$RUSTC_COMMIT -C link-arg=--stack-first -C link-arg=-zstack-size=3145728"
 export RUSTFLAGS
 # Cargo's per-crate hashes depend on the build machine's target triple; the
 # wrapper replaces them for the wasm crates (see its header). It takes the

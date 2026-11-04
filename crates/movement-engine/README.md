@@ -479,7 +479,8 @@ the callee's scope, and the caller goes on. Its value is what it returned:
 a `return` binds any right-hand side (`return n`, `return node { … }`,
 `return f(x)`), as `declareAssign` does. The call depth is bounded by the
 deployment's `MOVEMENT_MAX_CALL_DEPTH`, which the
-shim reads into the input (`maxCallDepth`), failing as `CallDepthExceeded`.
+shim reads into the input (`maxCallDepth`), failing as `CallDepthExceeded`,
+as it does (with `stackRanOut`) where a WASM engine's stack runs out first.
 
 ### Writes
 

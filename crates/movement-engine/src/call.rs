@@ -302,6 +302,7 @@ impl Run<'_> {
     /// The depth is bounded (`assertCallDepth`: the run's own movement is
     /// not a call).
     fn enter_call(&self, callee: &str) -> Result<(), Stop> {
+        self.room_on_the_stack()?;
         let stack = self.call_stack.borrow();
         let chain = || stack.iter().cloned().chain(std::iter::once(callee.to_string())).collect::<Vec<_>>();
         let limit = self.input.max_call_depth;

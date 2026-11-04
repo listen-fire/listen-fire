@@ -787,6 +787,7 @@ impl Run<'_> {
 
     /// `assertCallDepth` for a function handed to an op by name.
     pub(crate) fn enter_named_call(&self, name: &str) -> Result<(), Stop> {
+        self.room_on_the_stack()?;
         let stack = self.call_stack.borrow();
         let limit = self.input.max_call_depth;
         if stack.len().saturating_sub(1) < limit {

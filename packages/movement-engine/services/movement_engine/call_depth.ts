@@ -64,24 +64,41 @@ function describeChain(chain: readonly string[]): string {
   return [...chain.slice(0, 4), `… ${omitted} more …`, ...chain.slice(-6)].join(' → ');
 }
 
-/** Thrown at the call that would have gone one deeper than the limit. Its
- *  message is the whole failure surface an author sees, so it says the chain,
- *  the limit and the knob. */
+/** Thrown at the call that would have gone one deeper than the limit, or where
+ *  the engine's stack ran out short of it. Its message is the whole failure
+ *  surface an author sees, so it says the chain, the limit and what to do. */
 export class CallDepthExceeded extends MovementEngineError {
   constructor(
     readonly limit: number,
-    /** The run's movement, then each call it is inside, then the refused one. */
+    /** The run's movement, then each call it is inside, then the refused one.
+     *  Where the stack ran out: the calls the run was inside, or empty when the
+     *  engine could not say. */
     readonly chain: readonly string[],
+    /** The WASM engine's stack is fixed, so it can run out short of the limit. */
+    readonly stackRanOut: boolean = false,
   ) {
-    super(
-      'MOVENG_CALL_DEPTH',
-      `call depth limit reached: '${describeChain(chain)}' would nest ${chain.length - 1} calls deep, ` +
-        `and the limit set by ${CALL_DEPTH_ENV_VAR} is ${limit}. The run was stopped in case a recursion never ` +
-        'reaches the case that ends it. If this run legitimately needs to go deeper, raise ' +
-        `${CALL_DEPTH_ENV_VAR} in the server's environment.`,
-    );
+    super('MOVENG_CALL_DEPTH', stackRanOut ? stackRanOutMessage(limit, chain) : limitReachedMessage(limit, chain));
     this.name = 'CallDepthExceeded';
   }
+}
+
+function limitReachedMessage(limit: number, chain: readonly string[]): string {
+  return (
+    `call depth limit reached: '${describeChain(chain)}' would nest ${chain.length - 1} calls deep, ` +
+    `and the limit set by ${CALL_DEPTH_ENV_VAR} is ${limit}. The run was stopped in case a recursion never ` +
+    'reaches the case that ends it. If this run legitimately needs to go deeper, raise ' +
+    `${CALL_DEPTH_ENV_VAR} in the server's environment.`
+  );
+}
+
+function stackRanOutMessage(limit: number, chain: readonly string[]): string {
+  const where = chain.length === 0 ? '' : ` at '${describeChain(chain)}', ${chain.length - 1} calls deep`;
+  return (
+    `the engine's stack ran out${where}, short of the call depth limit of ${limit} set by ${CALL_DEPTH_ENV_VAR}. ` +
+    'How much a call takes depends on what it does, and this engine cannot add to its stack, so raising the limit ' +
+    'will not take this run deeper. The run was stopped in case a recursion never reaches the case that ends it. ' +
+    'If it legitimately goes this deep, make it go less deep: fewer calls, or a list worked through with a loop.'
+  );
 }
 
 export function isCallDepthExceeded(err: unknown): err is CallDepthExceeded {

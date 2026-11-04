@@ -52,7 +52,9 @@ pub struct JsArray {
 }
 
 // A value's members let go of on enough stack: a value can nest as deep as
-// the calls or the loop that built it.
+// the calls or the loop that built it. Natively only: on WASM there is no more
+// stack to ask for, and these would add a frame a level to V8's.
+#[cfg(not(target_arch = "wasm32"))]
 impl Drop for JsArray {
     fn drop(&mut self) {
         let members = self.cells.take();
@@ -60,6 +62,7 @@ impl Drop for JsArray {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Drop for JsObject {
     fn drop(&mut self) {
         let members = std::mem::take(&mut self.entries);
