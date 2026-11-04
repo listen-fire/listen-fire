@@ -56,8 +56,18 @@
 //! listens sharing its key (crate::runs `fire_arrivals`). Every later call
 //! about it (`removeEventSubscription`, `refreshEventSubscription`, the
 //! registration anew once it lapsed) names its edge, filter and scope too.
+//!
+//! Several runners may share one secrets module (`SecretsStore::shared`), and
+//! with it each webhook's id and secret. They then follow the rule of
+//! docs/contracts/adapter-protocol.md, "A webhook several runners share": each
+//! says it holds a webhook in the credential's `webhook_holders` for as long
+//! as a lease, renewed on its tick (`hold`); a webhook goes only once no other
+//! holder's lease is live. What a runner decides about one webhook it decides
+//! under that webhook's own lease in the module, reading the credential as it
+//! stands then (`Held`). A store only one runner sees (the secrets file), a
+//! read-only one and a credential the environment lies over keep no holders.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::connect::spread;
@@ -69,8 +79,9 @@ use crate::check::LOCAL_TENANT;
 use crate::json::{Js, Obj};
 use crate::routing::Scope;
 use crate::runs::{FileSet, Session};
-use crate::secrets_slot::SecretsStore;
+use crate::secrets_slot::{EntryError, SecretsStore};
 use crate::secrets::{Binding, Credential, Credentials, credential_for};
+use crate::secrets_family::{Lease, WEBHOOK_HOLDERS_FIELD};
 use crate::wire::{js_of_json, json_of_js};
 
 /// The source's id for the webhook it registered.
@@ -90,6 +101,16 @@ const WEBHOOK_SUBSCRIPTIONS_FIELD: &str = "webhook_subscriptions";
 /// key (crate::edge_polls::edge_subscription), of each one's `edge`,
 /// `filter`, `scope`, `position`, `id`, `url`, `secret` and `expires`.
 const EDGE_SUBSCRIPTIONS_FIELD: &str = "edge_subscriptions";
+
+/// How long a holder's entry lasts unrenewed, unless `LF_WEBHOOK_LEASE_MS`
+/// says otherwise; a runner renews its own three times in that long, so one
+/// slow pass does not cost it the webhook.
+const DEFAULT_HOLDER_LEASE_MS: i64 = 15 * 60_000;
+const RENEWALS_PER_LEASE: i64 = 3;
+/// How long a webhook's lease lasts when its holder never lets go. Longer
+/// than a module's ordinary answer: a call has no timeout of its own, and one
+/// outliving this can at worst register a second webhook, never lose a holder.
+const WEBHOOK_LEASE_TTL_MS: u64 = 120_000;
 
 /// What one webhook is registered for, as every call about it says.
 #[derive(Debug, Clone, PartialEq)]
@@ -367,7 +388,7 @@ fn edge_webhooks(set: &FileSet, running: &RunningExternal, credentials: &Credent
         .into_iter()
         .map(|((credential, key), (subscribed, needed))| {
             let label = label_of(name, credential.as_deref().filter(|_| several), &subscribed, &key);
-            let webhook = Webhook { external: name.clone(), credential: credential.clone(), key: key.clone(), subscribed, events: Vec::new(), needed, label };
+            let webhook = Webhook { external: name.clone(), credential: credential.clone(), key: key.clone(), subscribed, events: Vec::new(), needed, renewing: false, label };
             ((credential, key), webhook)
         })
         .collect()
@@ -385,6 +406,9 @@ struct Webhook {
     events: Vec<String>,
     /// Whether any listen needs it: one none does is removed.
     needed: bool,
+    /// A renewal (`hold`): its holder's entry is kept alive, and the module
+    /// is asked only about one that is gone or whose holders all lapsed.
+    renewing: bool,
     /// How its lines name it: the external, the credential when the
     /// external's webhooks are kept under more than one, and what it is for.
     label: String,
@@ -398,7 +422,7 @@ fn webhooks_of(external: &str, retired: BTreeMap<Channel, Want>) -> Vec<Webhook>
         .map(|((credential, key), want)| {
             let subscribed = Subscribed::Events(want.scope);
             let label = label_of(external, credential.as_deref().filter(|_| several), &subscribed, &key);
-            Webhook { external: external.to_string(), credential, key, subscribed, needed: false, events: Vec::new(), label }
+            Webhook { external: external.to_string(), credential, key, subscribed, needed: false, renewing: false, events: Vec::new(), label }
         })
         .collect()
 }
@@ -434,9 +458,20 @@ fn registering(set: &FileSet) -> impl Iterator<Item = &RunningExternal> {
 /// tries each again, and so does the server's tick once its backoff passed
 /// (the work queue's: crate::run_host::failed_retry_ms). One is said only
 /// when its message is new.
-#[derive(Default)]
 pub struct Registrations {
     failed: RefCell<BTreeMap<String, Failing>>,
+    /// This process, as a webhook's holders name it: a restart is a new
+    /// holder, and the old one's entry is dropped as it stops, or lapses.
+    instance: String,
+    holder_lease_ms: i64,
+    /// When this runner next renews what it holds; unset until its first tick.
+    next_renewal_ms: Cell<Option<i64>>,
+}
+
+impl Default for Registrations {
+    fn default() -> Registrations {
+        Registrations::with_holder_lease(DEFAULT_HOLDER_LEASE_MS)
+    }
 }
 
 struct Failing {
@@ -445,7 +480,40 @@ struct Failing {
     retry_at_ms: i64,
 }
 
+/// `LF_WEBHOOK_LEASE_MS`: how long a holder's entry lasts unrenewed.
+pub fn holder_lease_of(raw: Option<&str>) -> Result<i64, String> {
+    match raw {
+        None | Some("") => Ok(DEFAULT_HOLDER_LEASE_MS),
+        Some(raw) => raw.trim().parse::<i64>().ok().filter(|ms| *ms > 0).ok_or_else(|| format!("LF_WEBHOOK_LEASE_MS is \"{raw}\": it must be a positive whole number of milliseconds")),
+    }
+}
+
 impl Registrations {
+    pub fn with_holder_lease(holder_lease_ms: i64) -> Registrations {
+        Registrations { failed: RefCell::default(), instance: uuid::Uuid::new_v4().to_string(), holder_lease_ms, next_renewal_ms: Cell::new(None) }
+    }
+
+    /// This runner's entry in a webhook's holders, as of `now_ms`.
+    fn holder_entry(&self, now_ms: i64) -> Js {
+        let no_events: [String; 0] = [];
+        Js::Obj(crate::obj! { "release" => Js::str(env!("CARGO_PKG_VERSION")), "events" => Js::strings(&no_events), "until" => Js::str(&iso_of(now_ms + self.holder_lease_ms)) })
+    }
+
+    /// Whether this runner's renewal is due at `now_ms`; asked once per
+    /// renewal, so passes that overlap do not repeat it.
+    fn renewal_due(&self, now_ms: i64) -> bool {
+        let every = self.holder_lease_ms / RENEWALS_PER_LEASE;
+        let Some(next) = self.next_renewal_ms.get() else {
+            self.next_renewal_ms.set(Some(now_ms + every));
+            return false;
+        };
+        let due = next <= now_ms;
+        if due {
+            self.next_renewal_ms.set(Some(now_ms + every));
+        }
+        due
+    }
+
     /// `line`, unless it is the very failure last said for `name`; tried
     /// again after a backoff that grows with each failure in a row.
     fn failure(&self, name: &str, line: String, now_ms: i64) -> Option<String> {
@@ -478,9 +546,9 @@ impl Registrations {
 /// serve` starting); a line per webhook it touched. One that fails is said
 /// and the rest go on: the doors still answer whatever is registered.
 pub async fn reconcile(session: &Session) -> Vec<String> {
+    let mut lines = read_what_others_wrote(session);
     let secrets = session.secrets();
     let set = session.file_set();
-    let mut lines = Vec::new();
     let mut webhooks = Vec::new();
     for running in registering(&set) {
         webhooks.extend(webhooks_of(&running.external.manifest.name, retired(running, secrets.credentials())));
@@ -488,6 +556,71 @@ pub async fn reconcile(session: &Session) -> Vec<String> {
     }
     lines.extend(register(session, webhooks).await);
     lines.extend(arm_refreshes(session));
+    lines
+}
+
+/// The credentials read again where other runners write them: a webhook
+/// another registered since is seen, and its door answers here. A line when
+/// they could not be, the pass going on with what it read last.
+fn read_what_others_wrote(session: &Session) -> Vec<String> {
+    if !crate::secrets_slot::installed().is_some_and(|store| store.shared()) {
+        return Vec::new();
+    }
+    session.reload_secrets().err().map(|message| format!("the secrets could not be read again: {message}")).into_iter().collect()
+}
+
+/// `listen-fire serve`'s tick, once a third of a holder's lease has passed: a
+/// runner on a shared secrets module says again that it holds each webhook its
+/// listens need, registers one that has gone meanwhile, and removes one no
+/// listen of its own needs whose holders have all lapsed. A webhook for events
+/// (retired at 0.13) waits for `reconcile`, as it always has: a 0.12 runner
+/// beside this one would have it removed again on every tick.
+pub async fn hold(session: &Session) -> Vec<String> {
+    if !crate::secrets_slot::installed().is_some_and(|store| store.shared()) || !session.registrations.renewal_due(session.now_ms()) {
+        return Vec::new();
+    }
+    let mut lines = read_what_others_wrote(session);
+    let secrets = session.secrets();
+    let set = session.file_set();
+    let mut webhooks = Vec::new();
+    for running in registering(&set) {
+        webhooks.extend(edge_webhooks(&set, running, secrets.credentials()).into_values());
+    }
+    for webhook in &mut webhooks {
+        webhook.renewing = true;
+    }
+    lines.extend(register(session, webhooks).await);
+    // On a store runners also share, another's worker may have finished the
+    // row as a webhook its own listens do not need.
+    lines.extend(arm_refreshes(session));
+    lines
+}
+
+/// A runner stopping: it says it holds nothing any more, so another may
+/// remove a webhook once its own last listen goes. Each webhook stays where
+/// it is, as a lone runner's does across a restart. A failure is only said:
+/// the entry lapses on its own.
+pub async fn leave(session: &Session) -> Vec<String> {
+    let mut lines = read_what_others_wrote(session);
+    if !crate::secrets_slot::installed().is_some_and(|store| store.shared()) {
+        return lines;
+    }
+    let (instance, now_ms) = (session.registrations.instance.as_str(), session.now_ms());
+    let secrets = session.secrets();
+    for credential in secrets.credentials() {
+        let holds = records_of(credential_field(credential), WEBHOOK_HOLDERS_FIELD).values().any(|holders| holders.get(instance).is_some());
+        if !holds {
+            continue;
+        }
+        let dropped = |stored| {
+            with_holders(stored, now_ms, &|all| {
+                all.values_mut().for_each(|holders| drop_holder(holders, instance));
+            })
+        };
+        if let Err(message) = replace(credential, &dropped).await {
+            lines.push(format!("credential \"{}\" still says this runner holds its webhooks, until that lapses: {message}", credential.name));
+        }
+    }
     lines
 }
 
@@ -574,8 +707,10 @@ async fn reconcile_one(session: &Session, webhook: &Webhook) -> Result<Option<(S
             Some(named) => format!("no credential \"{named}\" in the secrets to register its webhook under"),
             None => format!("no credential to register its webhook under: listen-fire credential add --module {name} <name>"),
         };
-        return Ok(webhook.needed.then_some((missing, false)));
+        return Ok((webhook.needed && !webhook.renewing).then_some((missing, false)));
     };
+    let held = Held::of(credential, &webhook.key).await?;
+    let credential = held.as_ref().map_or(credential, |held| &held.credential);
     let setup = inbound_of(running).ok_or("it takes no webhooks")?;
     let provider = setup.declaration.provider_key.clone();
     let issued_by_provider = setup.declaration.secret_from_provider;
@@ -592,31 +727,59 @@ async fn reconcile_one(session: &Session, webhook: &Webhook) -> Result<Option<(S
     };
     // What it is for rides every call about it (the platform's `scope`).
     let on = |params: serde_json::Value| webhook.subscribed.on(params);
+    let (instance, now_ms) = (session.registrations.instance.as_str(), session.now_ms());
+    let others_listening = held.as_ref().map_or(0, |_| other_holders(credential, &webhook.key, instance, now_ms));
+    let holds_it = held.is_some() && holder_named(credential, &webhook.key, instance);
 
     if !webhook.needed {
-        let Some(id) = registered.id else { return Ok(None) };
+        if let Some(id) = registered.id.as_deref().filter(|_| others_listening > 0) {
+            if !holds_it {
+                return Ok(None);
+            }
+            kept.let_go(instance, now_ms).await?;
+            return Ok(Some((format!("no listen here needs its webhook any more; webhook {id} stays for the {others_listening} other runner(s) listening"), true)));
+        }
+        let Some(id) = registered.id else {
+            if holds_it {
+                kept.let_go(instance, now_ms).await?;
+            }
+            return Ok(None);
+        };
         let url = registered.url.clone().unwrap_or_default();
         call("removeEventSubscription", on(serde_json::json!({ "callbackUrl": url, "externalId": id }))).await?;
         // Its secret too: nothing is delivered to that door now.
-        kept.forget().await?;
+        kept.forget(now_ms).await?;
         return Ok(Some((format!("no listen needs its webhook any more; removed webhook {id}"), true)));
     }
     let Some(public) = session.project.public_url.as_deref() else {
-        return Ok(Some((format!("set publicUrl in lf.yaml to where {name} reaches listen-fire serve; its webhook is not registered"), false)));
+        return Ok((!webhook.renewing).then(|| (format!("set publicUrl in lf.yaml to where {name} reaches listen-fire serve; its webhook is not registered"), false)));
     };
+    // Said before the module is asked, so that another runner that does not
+    // want it never removes it from under this one's registration.
+    if held.is_some() {
+        kept.hold(session.registrations.holder_entry(now_ms), instance, now_ms).await?;
+    }
     // A scoped webhook's door names its subscription after the credential.
     let mut callback = format!("{}/api/public/webhook-sync/{provider}/{}", public.trim_end_matches('/'), credential.name);
     if !webhook.key.is_empty() {
         callback.push_str(&format!("/{}", webhook.key));
     }
 
-    // Another URL: the webhook there is replaced, not moved.
+    // Another URL: the webhook there is replaced, not moved; unless other
+    // runners listen there, whom replacing it would cut off.
     let mut current = registered.id.clone().map(|id| (id, registered.events.clone()));
     if let (Some((id, _)), Some(url)) = (&current, &registered.url)
         && *url != callback
     {
+        if others_listening > 0 {
+            return Ok((!webhook.renewing).then(|| (format!("webhook {id} stays at {url}, where {others_listening} other runner(s) listen, and does not reach {callback}: runners sharing a webhook share one publicUrl"), true)));
+        }
         call("removeEventSubscription", on(serde_json::json!({ "callbackUrl": url, "externalId": id }))).await?;
         current = None;
+    }
+    // A renewal asks the module nothing about a webhook that is there.
+    if webhook.renewing && current.is_some() {
+        return Ok(None);
     }
     let params = webhook.subscribed.ensure(wanted, &callback, current.as_ref().map(|(id, events)| (id.as_str(), events.as_slice())));
     let had_webhook = current.is_some();
@@ -624,7 +787,7 @@ async fn reconcile_one(session: &Session, webhook: &Webhook) -> Result<Option<(S
     let described = webhook.subscribed.describe(wanted);
     if answer == Js::Null {
         let id = current.map(|(id, _)| id).unwrap_or_default();
-        return Ok(Some((format!("webhook {id} is registered for {described} at {callback}"), false)));
+        return Ok(Some((format!("webhook {id} is registered for {described} at {callback}"), held.is_some())));
     }
     let id = answer.get("externalId").and_then(Js::as_str).map(str::to_string).or(current.map(|(id, _)| id)).unwrap_or_default();
     let issued = answer.get("secret").and_then(Js::as_str).filter(|s| !s.is_empty());
@@ -777,6 +940,14 @@ async fn refresh_one(session: &Session, external: &str, webhook: &Refreshing<'_>
     let label = label_of(external, Some(webhook.credential).filter(|_| several), &subscribed, webhook.key);
     // Its own key in the failures said, apart from its registration's.
     let said_as = format!("{label} refresh");
+    // Another runner may have refreshed it, or registered it anew, by now.
+    let held = match Held::of(credential, webhook.key).await {
+        Ok(held) => held,
+        Err(message) => return (session.registrations.failure(&said_as, format!("{label}: refreshing webhook {id} failed — {message}; trying again in 15 minutes"), now_ms), Some(now_ms + REFRESH_RETRY_MS)),
+    };
+    let credential = held.as_ref().map_or(credential, |held| &held.credential);
+    let registered = Registered::of(credential, webhook.key, &setup.secret_field);
+    let Some(id) = registered.id.clone() else { return (None, None) };
     let call = |method: &'static str, params: serde_json::Value| {
         let params = subscribed.on(params);
         let position = subscribed.position();
@@ -902,12 +1073,129 @@ impl Kept<'_> {
         replace(self.credential, &|stored| with_scoped(stored, field, self.key, Some(record.clone()))).await
     }
 
-    async fn forget(&self) -> Result<(), String> {
+    async fn forget(&self, now_ms: i64) -> Result<(), String> {
+        let no_holders = |stored| {
+            with_holders(stored, now_ms, &|all| {
+                all.shift_remove(self.key);
+            })
+        };
         if self.key.is_empty() {
             let names = [WEBHOOK_ID_FIELD, WEBHOOK_EVENTS_FIELD, WEBHOOK_URL_FIELD, WEBHOOK_EXPIRES_FIELD, self.secret_field];
-            return replace(self.credential, &|stored| stored.into_iter().filter(|(k, _)| !names.contains(&k.as_str())).collect()).await;
+            return replace(self.credential, &|stored| no_holders(stored.into_iter().filter(|(k, _)| !names.contains(&k.as_str())).collect())).await;
         }
-        replace(self.credential, &|stored| KEYED_FIELDS.into_iter().fold(stored, |stored, field| with_scoped(stored, field, self.key, None))).await
+        replace(self.credential, &|stored| no_holders(KEYED_FIELDS.into_iter().fold(stored, |stored, field| with_scoped(stored, field, self.key, None)))).await
+    }
+
+    /// Say `instance` holds this webhook, as `entry` puts it.
+    async fn hold(&self, entry: Js, instance: &str, now_ms: i64) -> Result<(), String> {
+        replace(self.credential, &|stored| {
+            with_holders(stored, now_ms, &|all| {
+                let holders = all.entry(self.key.to_string()).or_insert_with(|| Js::Obj(Obj::new()));
+                if let Js::Obj(holders) = holders {
+                    holders.insert(instance.to_string(), entry.clone());
+                }
+            })
+        })
+        .await
+    }
+
+    /// Say `instance` no longer holds this webhook.
+    async fn let_go(&self, instance: &str, now_ms: i64) -> Result<(), String> {
+        replace(self.credential, &|stored| {
+            with_holders(stored, now_ms, &|all| {
+                if let Some(holders) = all.get_mut(self.key) {
+                    drop_holder(holders, instance);
+                }
+            })
+        })
+        .await
+    }
+}
+
+/// The entry with its holders changed: every lapsed one gone, and the field
+/// itself gone once it names none, so a store nobody holds in stays as it was.
+fn with_holders(stored: Vec<(String, String)>, now_ms: i64, change: &dyn Fn(&mut Obj)) -> Vec<(String, String)> {
+    let mut all = records_of(|name| stored.iter().find(|(k, _)| k == name).map(|(_, v)| v.clone()), WEBHOOK_HOLDERS_FIELD);
+    for holders in all.values_mut() {
+        if let Js::Obj(holders) = holders {
+            holders.retain(|_, holder| until_of(holder).is_some_and(|until| until > now_ms));
+        }
+    }
+    change(&mut all);
+    all.retain(|_, holders| matches!(holders, Js::Obj(holders) if !holders.is_empty()));
+    let others = stored.into_iter().filter(|(k, _)| k != WEBHOOK_HOLDERS_FIELD).collect();
+    if all.is_empty() {
+        return others;
+    }
+    spread(others, vec![(WEBHOOK_HOLDERS_FIELD.to_string(), Js::Obj(all).to_json())])
+}
+
+fn drop_holder(holders: &mut Js, instance: &str) {
+    if let Js::Obj(holders) = holders {
+        holders.shift_remove(instance);
+    }
+}
+
+fn until_of(holder: &Js) -> Option<i64> {
+    holder.get("until").and_then(Js::as_str).and_then(ms_of)
+}
+
+/// Whether the credential's entry says `instance` holds the webhook under `key`.
+fn holder_named(credential: &Credential, key: &str, instance: &str) -> bool {
+    records_of(credential_field(credential), WEBHOOK_HOLDERS_FIELD).get(key).is_some_and(|holders| holders.get(instance).is_some())
+}
+
+/// How many holders other than `instance` the webhook under `key` has whose
+/// lease is live at `now_ms`.
+fn other_holders(credential: &Credential, key: &str, instance: &str, now_ms: i64) -> usize {
+    match records_of(credential_field(credential), WEBHOOK_HOLDERS_FIELD).get(key) {
+        Some(Js::Obj(holders)) => holders.iter().filter(|(name, holder)| name.as_str() != instance && until_of(holder).is_some_and(|until| until > now_ms)).count(),
+        _ => 0,
+    }
+}
+
+/// A webhook under its lease in a secrets module several runners share, and
+/// its credential as stored as that lease was taken. Registering, joining,
+/// leaving and removing one all happen under it, so of two runners deciding
+/// at once the second sees what the first did. It is apart from the
+/// credential's own lease, which a token's refresh takes during the very calls
+/// made under this one; the module grants a lease on any `ref`.
+struct Held {
+    store: std::rc::Rc<dyn SecretsStore>,
+    lease_ref: String,
+    lease: Option<Lease>,
+    credential: Credential,
+}
+
+impl Held {
+    /// None where the webhook is this runner's alone to decide: a store only
+    /// it sees, one it cannot write holders to, a credential the environment
+    /// lies over, or an entry deleted since it was read.
+    async fn of(credential: &Credential, key: &str) -> Result<Option<Held>, String> {
+        let Some(store) = crate::secrets_slot::installed().filter(|store| store.shared()) else { return Ok(None) };
+        if credential.origin.slot_ref.is_none() || !credential.origin.env_fields.is_empty() {
+            return Ok(None);
+        }
+        match store.entries_writable(&credential.name) {
+            Ok(()) => {}
+            Err(EntryError::ReadOnly { .. }) => return Ok(None),
+            Err(EntryError::Failed(message)) => return Err(message),
+        }
+        let lease_ref = format!("{}#webhook:{key}", credential.name);
+        let lease = store.lock(&lease_ref, WEBHOOK_LEASE_TTL_MS).await?;
+        // Taken: unlocked when it is dropped, whatever becomes of the rest.
+        let mut held = Held { store, lease_ref, lease: Some(lease), credential: credential.clone() };
+        let Some(record) = held.store.resolve(&credential.name)? else { return Ok(None) };
+        held.credential.fields = record.fields;
+        Ok(Some(held))
+    }
+}
+
+impl Drop for Held {
+    fn drop(&mut self) {
+        if let Some(lease) = self.lease.take() {
+            self.store.unlock(&self.lease_ref, lease);
+        }
     }
 }
 
@@ -949,6 +1237,56 @@ async fn replace(credential: &Credential, next: &dyn Fn(Vec<(String, String)>) -
 mod tests {
     use super::*;
     use crate::doors::tests::{InboxProject, NOTED, TWO_CONNECTIONS, TWO_CREDENTIALS, in_local};
+
+    #[test]
+    fn a_holders_lease_counts_while_it_is_live_and_lapsed_entries_go_with_the_next_write() {
+        let at = |ms: i64| Js::Obj(crate::obj! { "until" => Js::str(&iso_of(ms)) });
+        let now = 1_800_000_000_000;
+        let stored = vec![("module".to_string(), "inbox".to_string())];
+        let hold = |stored, instance: &'static str, until: i64, key: &'static str| {
+            with_holders(stored, now, &|all| {
+                let holders = all.entry(key.to_string()).or_insert_with(|| Js::Obj(Obj::new()));
+                if let Js::Obj(holders) = holders {
+                    holders.insert(instance.to_string(), at(until));
+                }
+            })
+        };
+        assert_eq!(with_holders(stored.clone(), now, &|_| {}), stored, "nobody holding anything writes nothing");
+
+        let two = hold(hold(stored.clone(), "live", now + 1, "edge-a"), "dead", now + 2, "edge-a");
+        let credential = Credential { name: "c".into(), external: "inbox".into(), binding: Binding::Legacy, fields: two.iter().cloned().collect(), origin: Default::default() };
+        assert_eq!(other_holders(&credential, "edge-a", "me", now), 2);
+        assert_eq!(other_holders(&credential, "edge-a", "live", now), 1, "itself is no other");
+        assert_eq!(other_holders(&credential, "edge-a", "me", now + 1), 1, "a lease at its end is over");
+        assert_eq!(other_holders(&credential, "edge-b", "me", now), 0);
+        assert!(holder_named(&credential, "edge-a", "dead") && !holder_named(&credential, "edge-a", "me"));
+
+        let later = with_holders(two, now + 1, &|_| {});
+        let all = records_of(|name| later.iter().find(|(k, _)| k == name).map(|(_, v)| v.clone()), WEBHOOK_HOLDERS_FIELD);
+        assert!(all["edge-a"].get("live").is_none() && all["edge-a"].get("dead").is_some(), "{all:?}");
+        let gone = with_holders(later, now + 2, &|_| {});
+        assert_eq!(gone, stored, "the field goes once it names none");
+    }
+
+    #[test]
+    fn a_holder_lease_is_a_positive_number_of_milliseconds() {
+        assert_eq!(holder_lease_of(None), Ok(DEFAULT_HOLDER_LEASE_MS));
+        assert_eq!(holder_lease_of(Some("")), Ok(DEFAULT_HOLDER_LEASE_MS));
+        assert_eq!(holder_lease_of(Some("1500")), Ok(1500));
+        for raw in ["0", "-1", "soon"] {
+            assert_eq!(holder_lease_of(Some(raw)), Err(format!("LF_WEBHOOK_LEASE_MS is \"{raw}\": it must be a positive whole number of milliseconds")));
+        }
+    }
+
+    #[test]
+    fn a_renewal_is_due_each_third_of_a_lease_from_the_first_tick_and_only_once() {
+        let registrations = Registrations::with_holder_lease(3_000);
+        assert!(!registrations.renewal_due(0), "the first tick follows the reconcile that just said so");
+        assert!(!registrations.renewal_due(999));
+        assert!(registrations.renewal_due(1_000));
+        assert!(!registrations.renewal_due(1_000), "one pass per renewal");
+        assert!(registrations.renewal_due(2_000));
+    }
 
     /// The webhook each connection's credential holds for the arrivals on
     /// `Notes`: its key, and the token it was registered as.

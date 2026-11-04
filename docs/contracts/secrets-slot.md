@@ -76,6 +76,7 @@ A refresh spends a refresh token that rotates: two listen-fire processes must no
 - **A lease lapses on its own** `ttlMs` after it was granted, so a holder that died frees it. listen-fire asks for 30 s.
 - **`secrets.unlock`** with the lease's token frees it. A token that is not the lease's frees nothing, and answers `null`.
 - **A token is new each time.** A lease granted after an unlock or a lapse has a token of its own.
+- **A `ref` need not name an entry.** listen-fire also leases `<credential>#webhook:<key>` while it decides about one webhook, apart from the credential's own lease ([A webhook several runners share](adapter-protocol.md#a-webhook-several-runners-share)). The conformance cases already lease a ref no entry has.
 - **A module that cannot hold a lease** (a store with a compare-and-swap of its own, that makes a concurrent refresh a conflict anyway) may grant every lock. The cost is a refresh token spent twice, and the second refresh is refused by the provider, so grant honestly where you can.
 
 ### Whole entries
@@ -86,6 +87,7 @@ A refresh spends a refresh token that rotates: two listen-fire processes must no
 - **`replace`** is the whole entry, not a merge: what `fields` does not name is gone. It writes the entry whether or not one existed.
 - **`delete`** refuses (a refusal, any code) when `ref` does not exist.
 - **`binding` and `external` are required.** A request without them is `bad_request`. So is a request without its `ref`, or a lock without its `ttlMs`.
+- **A credential's `webhook_holders` is a field like any other.** listen-fire rewrites it every few minutes while several runners may share the module ([A webhook several runners share](adapter-protocol.md#a-webhook-several-runners-share)), so an entry's `version` moves more often than its token does. The secrets file is one runner's view, and never holds it.
 
 ### Read-only
 
@@ -134,4 +136,5 @@ await contractCase.run({
 
 ## Changes
 
+- **listen-fire 0.15.2** (within adapter protocol 2; nothing for a module to change): a lease on a ref no entry has is relied on, as the conformance cases already required, and a module other than the secrets file may hold a credential's `webhook_holders`.
 - **2026-10-22** (within adapter protocol 2): the secrets slot, its methods, and its conformance cases.

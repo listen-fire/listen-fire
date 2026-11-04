@@ -20,6 +20,10 @@ named in [`RELEASING.md`](RELEASING.md).
 
 <!-- add merged PRs here -->
 
+### Fixed
+
+- **Runners sharing a secrets module now share each webhook.** Two `listen-fire serve` processes on one credential used to remove each other's webhooks, since each removed whatever its own listens did not want, and two starting at once registered two. Each now says it holds a webhook in the credential's `webhook_holders`, under a lease it renews, so a registration never replaces an identical webhook or narrows what is registered, and the last holder to leave removes it. A holder that dies lapses, and a live runner then removes what only it wanted. A lone runner, and any runner on the secrets file, behaves as before. No pin moves. A `listen-fire` from before this patch does not follow the rule: the contract says what a deployer must do ([A webhook several runners share](docs/contracts/adapter-protocol.md#a-webhook-several-runners-share)).
+
 ## [0.15.1] - 2026-11-03
 
 A patch of 0.15; it reads the same pins (`0.15.x`). `listen-fire example` answers two more things: listening for a Stripe failed payment and reading its invoice, and calling an MCP tool and reading its answer. The handbook's index lists each system chapter's sections, so a section can be read on its own. The repository's example projects and the deploy image's default project are upgraded to the 0.15 pin; 0.15.0 refused them.

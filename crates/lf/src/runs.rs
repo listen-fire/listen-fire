@@ -419,7 +419,7 @@ pub async fn open_session(project: Project, opening: &Opening<'_>) -> Result<Ses
         role,
         store,
         secrets: RefCell::new(Rc::new(secrets)),
-        registrations: Default::default(),
+        registrations: crate::subscriptions::Registrations::with_holder_lease(crate::subscriptions::holder_lease_of(std::env::var("LF_WEBHOOK_LEASE_MS").ok().as_deref())?),
         documents,
         file_set,
         due_offset_ms,
@@ -1137,7 +1137,7 @@ impl Session {
             true => crate::subscriptions::reconcile(self).await,
             false => crate::subscriptions::retry_failed(self).await,
         };
-        for line in lines {
+        for line in lines.into_iter().chain(crate::subscriptions::hold(self).await) {
             eprintln!("listen-fire: {line}");
         }
         Ok(())

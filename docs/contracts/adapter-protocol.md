@@ -1117,6 +1117,111 @@ or `scope` is subscribed for with its own shape, once for every listen on it
   any [subscription that expires](#event-subscriptions-that-expire). One that
   lapsed is asked for anew with `edge`, `filter` and `scope` too.
 
+### A webhook several runners share
+
+Several runners, of one release or of several, may share a secrets module and
+so a credential: separate `listen-fire serve` processes, or a platform's own
+subscription sync beside them. A subscription's id and secret live on the
+credential, so they share each subscription too. Every host that registers
+subscriptions on a shared credential follows this rule. It changes nothing a
+module does.
+
+**The rule.**
+
+1. **Registering does not replace.** A host that finds the subscription held
+   asks with `current`. It makes another only when none is held.
+2. **Registering never narrows.** A subscription is the same one for every host
+   that wants it: its door names the connection, edge, filter and scope, so
+   what a host wants that another does not is a subscription of its own, and the
+   subscriptions held are the union of what every live holder wants. A host
+   that registers by events (none does from 0.13) registers the union of its
+   live holders' `events`.
+3. **Removing waits for the last holder.** No host removes a subscription
+   while another's holder entry is live. The last to leave removes it.
+
+**The holders.** A credential's `webhook_holders` field says who holds what. It
+is one more text field of the entry: a JSON object, by subscription key (`""` for
+a subscription kept in the credential's own fields), of holders by instance.
+
+```json
+{ "edge-5f0c…": { "3b1e…": { "release": "0.15.2", "events": [], "until": "2026-11-04T15:00:00Z" } } }
+```
+
+- `instance` is opaque and new for each process.
+- `release` is the host's. `events` is what it wants of a subscription made by
+  events, and empty for an edge's.
+- An entry whose `until` has passed is lapsed: it counts for nothing, and any
+  host's next write of the field drops it. A host keeps its own live: each
+  entry lasts 15 minutes, and a host renews its own every 5
+  (`LF_WEBHOOK_LEASE_MS` sets the lease, and a third of it the renewal). Runners
+  sharing a webhook should keep their clocks within a small part of the lease.
+- The field is gone once it names no one, and a host that writes the entry keeps
+  it, as it keeps any field it does not know.
+
+**A host must:**
+
+- Decide about one subscription under its lease in the secrets module:
+  `secrets.lock` on `<credential>#webhook:<key>`, with
+  [the credential's own lease](secrets-slot.md#the-lease) left free, since a
+  token's refresh takes that during the very calls made under this one. Under
+  it, read the credential again, and only then decide. A lease that lapses
+  under a slow call can at worst make a second subscription; it never loses a
+  holder or removes one in use.
+- Write its entry before it asks the module, so nobody removes what it is
+  registering.
+- Find others' subscriptions by reading the credential again at each pass, not
+  by what it read when it started.
+- Remove a subscription it does not want only when no other entry for it is
+  live, on its own last listen going or on its next renewal after the others
+  lapsed. Otherwise drop its own entry and leave it.
+- Remove the entry with the subscription.
+
+**What each case comes to.**
+
+- **A host stopping in order** drops its own entries and removes nothing, so a
+  restart finds its subscription held. Another host wanting nothing of it may
+  remove it from then on, and the restarted host registers it anew. To avoid
+  that gap, start the new process before stopping the old one.
+- **A host that dies** leaves its entries to lapse. A live host that does not
+  want its subscription removes it at its first renewal after that. One that
+  comes back within the lease finds it held, and its old entry lapses.
+- **A lone host** sees no other entries, so it removes a subscription at once
+  when its last listen goes, as it always has. After a crash its own old entry
+  counts as another's until it lapses, and a listen removed while it was down
+  then goes up to one lease and one renewal late.
+- **A subscription with no entries** (registered before this rule, or by a host
+  that has stopped) is held by nobody known. A host that wants it adopts it,
+  asking with `current`. One that does not removes it on its first pass, as a
+  lone host always has.
+- **A store only one runner sees** (`@lf/file-secrets`), **a read-only module**
+  and **a credential `LF_SECRET__…` lies over** keep no entries. A runner there
+  has only its own view, and behaves as a lone host. A store that is a file may
+  still be read by two processes on one machine: they do not follow this rule.
+
+**What a deployer must do.**
+
+- **Give every runner on a credential one `publicUrl`.** A host at another
+  address does not move a subscription others listen through: it says so, and
+  nothing reaches its own door.
+- **Bring each delivery to every runner holding the subscription.** That address
+  may be a pub/sub topic you run, fanning out to each runner's door at the same
+  path. A runner judges a delivery against its own listens, and one it has no
+  listen for runs nothing.
+- **Serve each listen from one runner**, or give the runners serving it one
+  store: runners with stores of their own each run what they are delivered.
+- **Keep runners before this rule apart.**
+  - A `listen-fire` from 0.13 to 0.15.1 removes every subscription on the
+    credential its own listens do not want, on each pass, whoever holds it.
+  - Every `listen-fire` from 0.13 removes a subscription for events, one a 0.12
+    runner registered, as its listens no longer name events. That runner then
+    registers it again at its next pass, and it is removed again at the next
+    host's.
+  - A 0.12 runner knows only its own subscriptions for events, and removes one
+    when its own last listen on the credential goes. It never touches a
+    subscription for an edge.
+  - So a 0.12 runner beside a later one needs a credential of its own, and a
+    runner before this rule must not share a credential with one that follows it.
+
 ## Modules: credentials, signatures and schedules
 
 An installable module (a built-in integration such as `@lf/attio`, or your
@@ -1938,6 +2043,7 @@ from `apps/cli`.
 
 ## Changes
 
+- **A webhook several runners share** (within version 2; a host behaviour; listen-fire 0.15.2; nothing for a module to do). Runners on one secrets module keep who holds each subscription in the credential's `webhook_holders`; a registration never replaces an identical webhook or narrows it, and the last holder to leave removes it ([A webhook several runners share](#a-webhook-several-runners-share)). A lone runner behaves as before. Why: people may move to `listen-fire serve` as separate processes, perhaps of several versions at once, and each removed what its own listens did not want.
 - **The loop guard slot is removed** (within version 2; listen-fire 0.14.0; breaking for a module that fills it). A core module whose manifest or `lf-external.yaml` names `slot: loopGuard` is refused by name, as is an `lf.yaml` that names `core.loopGuard`: the host's loop breaker replaces it. listen-fire stopped calling the slot's methods before 0.14.0.
 - **Adapter protocol 2.7: a poll may say when to poll again, and who acted rides on the arrival** (within version 2; 2026-11-02; listen-fire 0.13.1; additive). `poll` may answer `pollAgainAt`, an ISO instant: the host polls that edge next at the earlier of it and its interval, never sooner than a second on ([Polled sources](#polled-sources-and-periodic-tasks)). The cron unit answers its next tick. An arrival may carry `actor`, as `extractActor` answers; the run it fires reads `@actor_*` from it and a host resolves `@user_*` from it ([Who acted](#who-acted)). The run's trigger keeps the arrival's `about` and `actor`, and is stamped with its `occurredAt` (when the host took it, for one that names none), so a run's writes say when the change they follow happened. Why: a schedule is cron's polled `Ticks` edge, and a tick seen only on the next poll fired up to an interval (60 seconds) late; and a run is handed the arrival and never the raw event, so whatever a run or a host feature needs travels on the arrival, set at the door. Both are host behaviours, as 2.3 was: an older host ignores `pollAgainAt` and polls on its interval, and drops `actor` and asks `extractActor`, so a module that answers either states no minor for it.
 - **The settings poll and the events subscription leave the protocol** (adapter protocol 2.6, within version 2; 2026-11-01; listen-fire 0.13.0; breaking for a module that still answers them). `poll` is asked only as `{ edge, filter?, scope?, cursor? }` and answers `{ arrivals, cursor? }`; a 0.12 `{ events, checkpoint }` answer is refused, naming `arrivals`. `ensureEventSubscription` is asked only for an edge; `removeEventSubscription` keeps the 0.12 form only to remove a webhook a 0.12 listen registered, and a host removes such a webhook rather than refreshing it. `emit` is refused 410 (`emit_retired`), naming `wake`; it kept events that fired no listen. Why: a 0.13 listen is a traversal, and nothing a settings poll or an events webhook brings can fire one.
