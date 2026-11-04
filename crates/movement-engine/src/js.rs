@@ -51,6 +51,22 @@ pub struct JsArray {
     cells: std::cell::RefCell<Vec<Js>>,
 }
 
+// A value's members let go of on enough stack: a value can nest as deep as
+// the calls or the loop that built it.
+impl Drop for JsArray {
+    fn drop(&mut self) {
+        let members = self.cells.take();
+        crate::deep::walking(|| drop(members));
+    }
+}
+
+impl Drop for JsObject {
+    fn drop(&mut self) {
+        let members = std::mem::take(&mut self.entries);
+        crate::deep::walking(|| drop(members));
+    }
+}
+
 impl JsArray {
     pub fn new(items: Vec<Js>) -> JsArray {
         JsArray { cells: std::cell::RefCell::new(items) }
@@ -352,6 +368,10 @@ pub fn try_json_stringify(value: &Js, indent: usize) -> Result<String, String> {
 }
 
 fn write_json(value: &Js, indent: usize, depth: usize, out: &mut String, held: &mut Option<String>) {
+    crate::deep::walking(|| write_json_step(value, indent, depth, out, held))
+}
+
+fn write_json_step(value: &Js, indent: usize, depth: usize, out: &mut String, held: &mut Option<String>) {
     let newline = |out: &mut String, depth: usize| {
         if indent > 0 {
             out.push('\n');
@@ -448,7 +468,7 @@ pub fn holds_itself(value: &Js) -> bool {
             return true;
         }
         stack.push(address);
-        let found = members.iter().any(|member| walk(member, stack));
+        let found = crate::deep::walking(|| members.iter().any(|member| walk(member, stack)));
         stack.pop();
         found
     }
@@ -469,7 +489,7 @@ pub fn acyclic(value: &Js) -> Js {
             return Js::Null;
         }
         stack.push(address);
-        let out = match value {
+        let out = crate::deep::walking(|| match value {
             Js::Array(list) => Js::array(list.items().iter().map(|item| copy(item, stack)).collect()),
             Js::Object(object) => {
                 let mut out = JsObject::new();
@@ -479,7 +499,7 @@ pub fn acyclic(value: &Js) -> Js {
                 Js::object(out)
             }
             _ => unreachable!("matched above"),
-        };
+        });
         stack.pop();
         out
     }

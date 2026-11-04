@@ -49,7 +49,12 @@ Separate from the bounds above: what keeps a host's calls to modules and models 
   - The TypeScript host: the requests already at the host finish first.
 - **Sizes are checked on every value an expression produces.** A value is checked for its own size, not its members' (each member was checked when it was produced). So a text doubled in a loop fails as soon as it passes the limit.
 - **The result size is checked once, as the segment ends.** It replaces the result with the limit error; the cost lines still go back, because that money is spent.
-- **Call depth was already there.** Only named calls nest; an expression makes no call.
+- **Call depth is the one limit a call has to reach.** Named calls nest, wherever they are written: as a statement, inside an expression, in a condition, through a closure, a `map`, an `all` or a `race`, or in a walk's body.
+  - Stack does not end a run first. The native engine runs on more stack as the calls nest, so `listen-fire` reaches the limit at any setting, on any program, on a release or a debug build.
+  - The WASM engine has a fixed stack, and no way to add to it. A limit it cannot hold ends the run with its host's error for a crashed engine, not `CallDepthExceeded`: at 100 calls it held both programs tried, at 300 neither.
+  - **Setting it costs memory and time, and a host should size it knowing that.** Each open call holds its frames, so the limit bounds that memory: about 90 KiB a call on a release build (920 MiB at a limit of 10,000 on a plain recursion, measured 2026-11-04). Through a `map` or an `all` each flow keeps a copy of the calls above it, so memory grows with the square of the depth (1.2 GiB at 3,000). Nothing else bounds it, so a limit too high for the machine runs it out of memory; the operating system ends the process then, not the engine.
+  - Each host answer polls every open call again, so a run's time grows with the square of its depth: a second to reach 300, three to 1,000, forty to 3,000, twelve minutes to 10,000 (release build, on the machine this was measured on). Far enough up, the wall clock ends the run first, with its own code.
+- **A value crosses to its host only up to 3,000 levels of nesting.** A value handed to a host call deeper than that ends the segment with `MOVENG_RUNTIME`; one returned is recorded as a value it could not write, and the run completes. Written out, a value is a tree of JSON, and what reads and writes one recurses where nothing can ask for more stack. No deeper value crossed before: the WASM engine ran out of stack, and listen-fire's reader refuses JSON nested past 128 (so past about 40 levels on listen-fire). Inside a segment a value can nest as deep as its size limits allow.
 
 ## The cost cap is the same on every host
 
@@ -87,5 +92,5 @@ Measured 2026-10-18 by instrumenting the engine (a counter beside each check, no
 
 ## Not covered
 
-- **Memory as a whole.** The size limits bound each value, not their sum. A movement could still hold many values each under the limits; the step budget bounds how many it can build.
+- **Memory as a whole.** The size limits bound each value, not their sum. A movement could still hold many values each under the limits; the step budget bounds how many it can build. Open calls take memory too; the call depth bounds those.
 - **One step's own work.** A single step can still do work proportional to its input (sorting a list of a million). The collection limit bounds that input.

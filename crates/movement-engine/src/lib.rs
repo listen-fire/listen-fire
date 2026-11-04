@@ -27,6 +27,8 @@ pub mod call;
 mod code;
 pub mod collection;
 mod combinator;
+mod deep;
+pub use deep::with_room;
 pub mod env;
 pub mod env_services;
 // Native only: the WASM artifact is the JSON boundary, and stays as it is.

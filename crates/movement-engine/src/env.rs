@@ -245,6 +245,40 @@ impl Wire {
     }
 }
 
+/// How deep a value may nest to cross to its host. Written out it is a tree of
+/// JSON values (three levels for each of the value's), and what reads, writes
+/// and drops one recurses inside serde_json, where nothing can ask for more
+/// stack. No value this deep crossed before this was checked: the WASM engine
+/// ran out of stack at it (measured 2026-11-04), and listen-fire's reader
+/// refuses JSON nested past 128.
+pub const MAX_WIRE_NESTING: usize = 3000;
+
+/// What `HeldRecord` names when it is a value's depth that kept it from
+/// crossing.
+pub(crate) const TOO_DEEP: &str = "too deep";
+
+/// Whether a value nests past `MAX_WIRE_NESTING`. A value that holds itself is
+/// as deep as it is walked, so this is asked of one with its circles cut. A
+/// record is not walked: it crosses as its tag, or as the event the host sent.
+pub(crate) fn nests_too_deep(value: &Js) -> bool {
+    let mut level = vec![value.clone()];
+    for _ in 0..=MAX_WIRE_NESTING {
+        let mut next = Vec::new();
+        for held in &level {
+            match held {
+                Js::Array(list) => next.extend(list.items().iter().cloned()),
+                Js::Object(object) => next.extend(object.entries().iter().map(|(_, member)| member.clone())),
+                _ => {}
+            }
+        }
+        if next.is_empty() {
+            return false;
+        }
+        level = next;
+    }
+    true
+}
+
 #[derive(Default)]
 struct Encoder<'w> {
     /// A record met while writing, by its kind.
@@ -257,12 +291,26 @@ struct Encoder<'w> {
 impl Encoder<'_> {
     fn value(&mut self, value: &Js) -> Json {
         if crate::js::holds_itself(value) {
-            return self.tree(&crate::js::acyclic(value));
+            return self.within_nesting(&crate::js::acyclic(value));
+        }
+        self.within_nesting(value)
+    }
+
+    /// A value too deep to write crosses as a record does: as no value the
+    /// host could use, its request never made.
+    fn within_nesting(&mut self, value: &Js) -> Json {
+        if nests_too_deep(value) {
+            self.record.get_or_insert(TOO_DEEP.to_string());
+            return json!(["x", TOO_DEEP]);
         }
         self.tree(value)
     }
 
     fn tree(&mut self, value: &Js) -> Json {
+        crate::deep::walking(|| self.tree_step(value))
+    }
+
+    fn tree_step(&mut self, value: &Js) -> Json {
         match value {
             Js::Undefined | Js::Null => Json::Null,
             Js::Bool(b) => json!(b),
@@ -327,7 +375,7 @@ pub fn json_round_trip(value: &Js) -> Js {
     if crate::js::holds_itself(value) {
         return json_round_trip(&crate::js::acyclic(value));
     }
-    match value {
+    crate::deep::walking(|| match value {
         Js::Number(n) if !n.is_finite() => Js::Null,
         Js::Number(n) if *n == 0.0 => Js::Number(0.0),
         Js::Array(list) => Js::array(
@@ -354,7 +402,7 @@ pub fn json_round_trip(value: &Js) -> Js {
             (None, _) => Js::object(JsObject::new()),
         },
         other => other.clone(),
-    }
+    })
 }
 
 /// A value as `JSON.parse(JSON.stringify(value))` hands it back: `undefined`

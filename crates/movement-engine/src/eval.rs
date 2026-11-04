@@ -335,7 +335,7 @@ impl<'a> Evaluator<'a> {
     /// The walk, in the TypeScript's evaluation order: a read the run
     /// answers is awaited where it is made.
     pub fn eval<'s>(&'s self, expr: &'s Expression) -> Evaluating<'s> {
-        Box::pin(async move {
+        crate::deep::deep(async move {
             let Some(reader) = self.reader() else { return self.eval_in_place(expr).await };
             reader.step()?;
             let evaluated = self.eval_in_place(expr).await?;

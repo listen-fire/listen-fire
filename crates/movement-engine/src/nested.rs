@@ -347,7 +347,7 @@ impl Run<'_> {
 
     /// `stageTree`: `tree` with its nested calls run, in order.
     fn stage_tree<'s>(&'s self, tree: &'s MExpr, staging: &'s Staging<'s>) -> Staged<'s> {
-        Box::pin(async move {
+        crate::deep::deep(async move {
             if !holds(tree, &staging.calls) {
                 return Ok(Piece::whole(tree.at()));
             }

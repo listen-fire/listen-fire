@@ -258,10 +258,13 @@ impl Segment {
         let woken = Arc::new(Woken::default());
         let waker = Waker::from(woken.clone());
         let mut cx = Context::from_waker(&waker);
-        let mut polled = task.as_mut().poll(&mut cx);
-        while polled.is_pending() && woken.0.swap(false, std::sync::atomic::Ordering::SeqCst) {
-            polled = task.as_mut().poll(&mut cx);
-        }
+        let polled = crate::deep::with_room(|| {
+            let mut polled = task.as_mut().poll(&mut cx);
+            while polled.is_pending() && woken.0.swap(false, std::sync::atomic::Ordering::SeqCst) {
+                polled = task.as_mut().poll(&mut cx);
+            }
+            polled
+        });
         match polled {
             Poll::Ready(result) => {
                 // The task's futures are gone; answers to anything it left in

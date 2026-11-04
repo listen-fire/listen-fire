@@ -465,6 +465,10 @@ pub fn plain_value_of(value: &Js) -> Result<Js, EvalError> {
 }
 
 fn plain_value(value: &Js, path: &mut Vec<Binding>) -> Result<Js, EvalError> {
+    crate::deep::walking(|| plain_value_step(value, path))
+}
+
+fn plain_value_step(value: &Js, path: &mut Vec<Binding>) -> Result<Js, EvalError> {
     if let Some(record) = binding_of(value) {
         return plain_record(&record, path);
     }

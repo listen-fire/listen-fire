@@ -518,7 +518,7 @@ impl Run<'_> {
     /// each run within its own boundary so a re-park deeper records how to
     /// get back.
     fn complete_spine<'s>(&'s self, spine: &'s [Spine], level: usize, leaf_address: &'s str, leaf: &'s LeafRun) -> Pinned<'s, Completion> {
-        Box::pin(async move {
+        crate::deep::deep(async move {
             let Some(frame) = spine.get(level) else { return self.run_leaf(leaf).await.map(Completion::Done) };
             let inner = self.complete_spine(spine, level + 1, leaf_address, leaf);
             match frame {
@@ -1287,7 +1287,7 @@ impl Run<'_> {
 
     /// `rehydrateValue`: a value with its records rebuilt where they stand.
     fn rehydrate_value<'s>(&'s self, descriptor: &'s Js, park: &'s ParkReader) -> Pinned<'s, Js> {
-        Box::pin(async move {
+        crate::deep::deep(async move {
             Ok(match text(at(descriptor, "kind")) {
                 Some("record") => crate::record::held(self.rehydrate(at(descriptor, "binding").unwrap_or(&Js::Undefined), park).await?),
                 Some("file") => revived_file(at(descriptor, "file"))?,

@@ -680,6 +680,10 @@ fn serialize_captured(run: &Run<'_>, captured: &Rc<Scope>, park: &mut ParkWriter
 /// `serializeValue`: a record as its own descriptor, a file as one (its
 /// descriptor), a list or a map walked, anything else data.
 fn serialize_value(run: &Run<'_>, value: &Js, park: &mut ParkWriter) -> Result<Js, Failure> {
+    crate::deep::walking(|| serialize_value_step(run, value, park))
+}
+
+fn serialize_value_step(run: &Run<'_>, value: &Js, park: &mut ParkWriter) -> Result<Js, Failure> {
     if let Some(record) = crate::record::binding_of(value) {
         return Ok(object_of(vec![("kind", Js::str("record")), ("binding", serialize_binding(run, "", &record, park)?)]));
     }
@@ -945,6 +949,11 @@ impl Run<'_> {
         if self.limit_paused.get() && self.can_suspend() {
             return Err(self.suspend_flow(at, scope).await?);
         }
+        // Nothing to compare, so no text to spell out at every statement: an
+        // address is as long as the calls nested above it.
+        if self.pending_suspensions.borrow().is_empty() {
+            return Ok(());
+        }
         let address = at.encode();
         let pending = {
             let mut pending = self.pending_suspensions.borrow_mut();
@@ -960,6 +969,9 @@ impl Run<'_> {
     /// the flow suspends there, once, its statement's finished calls
     /// journalled.
     pub(crate) async fn suspend_before_call(&self, call_address: &Address, site: &Rc<crate::flow::Site>) -> Result<(), Stop> {
+        if self.pending_suspensions.borrow().is_empty() {
+            return Ok(());
+        }
         let address = call_address.encode();
         let pending = {
             let mut pending = self.pending_suspensions.borrow_mut();

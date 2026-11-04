@@ -44,6 +44,9 @@ default = ["native-env"]
 native-env = ["dep:jiff", "dep:jiff-tzdb", "dep:url", "dep:icu_normalizer"]
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# More stack on demand as a movement's calls nest (src/deep.rs). Natively only:
+# wasm has no stack of its own to switch, and its calls are bounded by its depth.
+stacker = "0.1.25"
 # The zone database bundled rather than read from the system, so every
 # machine answers alike. Held at 0.2.16, the last release that accepts the
 # jiff-tzdb pin below.

@@ -58,7 +58,7 @@ impl Run<'_> {
     /// `executeCall`: the statement's next call opened, then the callee run.
     /// `path` is the call's AST path (its arguments' stamps are under it).
     pub(crate) fn call<'s>(&'s self, call: &'s CallStatement, scope: &'s Rc<Scope>, at: &'s Address, path: &'s str) -> Called<'s> {
-        Box::pin(async move {
+        crate::deep::deep(async move {
             let event = self.begin_call_event().await?;
             if let Some(replayed) = &event.replayed {
                 return Ok(replayed.value.clone());

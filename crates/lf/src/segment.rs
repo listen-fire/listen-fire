@@ -676,8 +676,11 @@ impl<'a> InFlight<'a> {
 /// out of the engine's form.
 fn step_json(step: Result<movement_engine::executor::Step, movement_engine::executor::ProtocolError>, call: &str) -> Result<Json, Fault> {
     let step = step.map_err(|e| Fault(format!("the Rust engine refused {call}: {}", e.0)))?;
-    let bytes = movement_parser::util::form::external_bytes(movement_parser::to_sorted_json(&step));
-    serde_json::from_slice(&bytes).map_err(|e| Fault(format!("the Rust engine's {call} is not JSON: {e}")))
+    movement_engine::with_room(|| {
+        let bytes = movement_parser::util::form::external_bytes(movement_parser::to_sorted_json(&step));
+        drop(step);
+        serde_json::from_slice(&bytes).map_err(|e| Fault(format!("the Rust engine's {call} is not JSON: {e}")))
+    })
 }
 
 fn engine_call<T>(call: &str, body: impl FnOnce() -> T) -> Result<T, Fault> {

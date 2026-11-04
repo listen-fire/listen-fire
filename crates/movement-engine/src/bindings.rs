@@ -400,10 +400,30 @@ pub struct InstanceBinding {
 /// One lexical scope: its own bindings and the scope it sits in. Declaring
 /// into a scope a child already reads is what a body does (a statement
 /// after an `if` arm declares into the scope the arm forked from).
+/// A scope's bindings, let go of on enough stack: a closure holds the scope it
+/// captured, so scopes can chain as deep as the calls that made them.
+#[derive(Debug, Default)]
+struct Bindings(RefCell<Vec<(String, Binding)>>);
+
+impl std::ops::Deref for Bindings {
+    type Target = RefCell<Vec<(String, Binding)>>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl Drop for Bindings {
+    fn drop(&mut self) {
+        let held = self.0.take();
+        crate::deep::walking(|| drop(held));
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct Scope {
     /// In the order declared, as a `Map` keeps them (a park writes them so).
-    bindings: RefCell<Vec<(String, Binding)>>,
+    bindings: Bindings,
     parent: Option<Rc<Scope>>,
     /// A file's own scope (run.ts's `fileTypes` registry keys on it): the
     /// `type`s, shapes and words of the code that runs under it are that
@@ -541,14 +561,14 @@ impl Scope {
     /// closure goes runs over its caller's scope).
     pub fn capture_written_in(self: &Rc<Self>, file: crate::program::DeclaringFile) -> Rc<Scope> {
         let captured = self.capture();
-        Rc::new(Scope { bindings: RefCell::new(captured.own_bindings()), parent: None, file_env: None, written_in: Some(file), expression: false })
+        Rc::new(Scope { bindings: Bindings(RefCell::new(captured.own_bindings())), parent: None, file_env: None, written_in: Some(file), expression: false })
     }
 
     /// A fresh scope holding this one's own bindings (run.ts `closureScope`
     /// of a snapshot): each call of a function that holds a snapshot runs
     /// over a scope of its own, as the TypeScript builds one per call.
     pub fn fresh_copy(&self) -> Rc<Scope> {
-        Rc::new(Scope { bindings: RefCell::new(self.own_bindings()), parent: self.parent.clone(), file_env: None, written_in: self.written_in.clone(), expression: self.expression })
+        Rc::new(Scope { bindings: Bindings(RefCell::new(self.own_bindings())), parent: self.parent.clone(), file_env: None, written_in: self.written_in.clone(), expression: self.expression })
     }
 
     /// The lexical chain, root first, this scope last (`chainFromRoot`).

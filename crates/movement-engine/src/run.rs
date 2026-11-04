@@ -200,6 +200,10 @@ fn default_file_chars() -> f64 {
     50_000.0
 }
 
+fn too_deep_message() -> String {
+    format!("a value nested more than {} levels deep can not be handed to the host", crate::env::MAX_WIRE_NESTING)
+}
+
 /// The segment entry: the run, and its `done`.
 pub async fn segment(host: Host, input: SegmentInput) -> Json {
     let ledger = crate::ledger::Ledger::new(&input.spend);
@@ -885,6 +889,7 @@ impl Run<'_> {
     fn add_returned(&self, result: &mut Json, scope: &Rc<Scope>) {
         let value = scope.resolve_own(RETURN_SLOT).unwrap_or_else(crate::combinator::null_slot);
         match crate::record::plain_value_of(&crate::record::held(value)) {
+            Ok(plain) if crate::env::nests_too_deep(&plain) => result["returnedUnwritable"] = json!(too_deep_message()),
             Ok(plain) => result["returned"] = self.wire.encode_result(&plain),
             Err(EvalError::Thrown { message, .. } | EvalError::Fallback(message)) => result["returnedUnwritable"] = json!(message),
             Err(_) => result["returnedUnwritable"] = json!("it has no plain form"),
@@ -1354,7 +1359,7 @@ impl Run<'_> {
         from: usize,
         replay: Vec<(usize, crate::flow::CallRecord)>,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Flow, Stop>> + 's>> {
-        Box::pin(async move {
+        crate::deep::deep(async move {
             // A node declaration in a body names a shape for the whole body,
             // as the checker hoists it; a resume, which enters past the
             // statements that already ran, finds it again here, or keeps the
@@ -2365,6 +2370,9 @@ impl Run<'_> {
     /// before the request.
     pub(crate) fn encode(&self, value: &Js) -> Result<Json, Failure> {
         self.wire.encode(value).map_err(|crate::env::HeldRecord(kind)| {
+            if kind == crate::env::TOO_DEEP {
+                return Failure::engine("MOVENG_RUNTIME", too_deep_message());
+            }
             Failure::unreproduced(
                 &format!("handing a record held as a value ({}) to the host", crate::record::describe_kind(&kind)),
                 "a record reaches a host call only read down to its fields",
