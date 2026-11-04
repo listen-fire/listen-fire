@@ -48,7 +48,7 @@ One request, one answer.
 | `@listen-fire/document-ai` ([README](../../modules/document-ai/README.md)) | Google Document AI, the platform's own reader: online up to 15 pages and 20 MB, batched through a Cloud Storage bucket past that | per page, `price_per_page` (default $0.0015) |
 | `@listen-fire/models` as `models_ocr` ([README](../../modules/models/README.md#reading-scanned-files-the-ocr-slot)) | Gemini reading the file itself | its tokens, from the shared price table; publishes Gemini's 258 tokens a page at the input price |
 
-The platform keeps its own Document AI reader (`GOOGLE_*` environment) for its own runs; nothing here changes it.
+The platform keeps its own Document AI reader (`GOOGLE_*` environment) for its own runs, under the same rules: an image always goes to it (`packages/file-text`, its `ocrImage` dependency), and a PDF only when it has no usable text layer.
 
 ## Conformance
 

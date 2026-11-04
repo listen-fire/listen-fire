@@ -104,6 +104,107 @@ describe('the resolver', () => {
     );
   });
 
+  describe('an image', () => {
+    const png = Buffer.from('png bytes');
+    const opened = async () => ({ stream: Readable.from([png]), size: png.length });
+
+    it.each([
+      ['image/png', 'x.bin', 'image/png'],
+      ['image/jpeg; charset=binary', 'x', 'image/jpeg'],
+      ['IMAGE/GIF', 'x', 'image/gif'],
+      ['image/tiff', 'x', 'image/tiff'],
+      ['image/bmp', 'x', 'image/bmp'],
+      ['image/webp', 'x', 'image/webp'],
+      [undefined, 'photo.JPG', 'image/jpeg'],
+      [undefined, 'scan.tif', 'image/tiff'],
+      ['application/octet-stream', 'shot.png', 'image/png'],
+    ])('type %s named %s goes to OCR as %s', async (contentType, name, mimeType) => {
+      const ocrImage = jest.fn(async (_stream: Readable, _options: { size: number; mimeType: string }) => 'the words on it');
+      const read = resolver({ openBytes: opened, ocrImage });
+      expect(await read({ file: { name, contentType } })).toEqual({ text: 'the words on it', rawTextId: 'rt-1' });
+      expect(ocrImage).toHaveBeenCalledWith(expect.any(Readable), { size: png.length, mimeType });
+    });
+
+    it('hands OCR the bytes whole', async () => {
+      let seen: Buffer | undefined;
+      const read = resolver({
+        openBytes: opened,
+        ocrImage: async (stream) => {
+          const chunks: Buffer[] = [];
+          for await (const chunk of stream) chunks.push(Buffer.from(chunk));
+          seen = Buffer.concat(chunks);
+          return 'text';
+        },
+      });
+      await read({ file: { contentType: 'image/png' } });
+      expect(seen).toEqual(png);
+    });
+
+    it('never reads an SVG, which is no picture of text', async () => {
+      const ocrImage = jest.fn();
+      const openBytes = jest.fn(opened);
+      expect(await resolver({ openBytes, ocrImage })({ file: { name: 'logo.svg', contentType: 'image/svg+xml' } })).toEqual({
+        unreadable: 'unsupported_type',
+        detail: 'image/svg+xml',
+      });
+      expect(ocrImage).not.toHaveBeenCalled();
+      expect(openBytes).not.toHaveBeenCalled();
+    });
+
+    it('keeps an image unsupported for a shell that names no image reader, and spends nothing opening it', async () => {
+      const openBytes = jest.fn(opened);
+      expect(await resolver({ openBytes })({ file: { name: 'a.png', contentType: 'image/png' } })).toEqual({
+        unreadable: 'unsupported_type',
+        detail: 'image/png',
+      });
+      expect(openBytes).not.toHaveBeenCalled();
+    });
+
+    it.each([[null], [''], ['  \n ']])('with no text on it (%j) is no_text', async (answer) => {
+      const read = resolver({ openBytes: opened, ocrImage: async () => answer });
+      expect(await read({ file: { contentType: 'image/png' } })).toEqual({ unreadable: 'no_text' });
+    });
+
+    it('says it went to OCR when OCR fails', async () => {
+      const read = resolver({
+        openBytes: opened,
+        ocrImage: async () => {
+          throw new Error('OCR is not configured');
+        },
+      });
+      expect(await read({ file: { contentType: 'image/png' } })).toEqual({
+        unreadable: 'extraction_failed',
+        detail: 'an image is read by OCR; OCR is not configured',
+      });
+    });
+
+    it('lets a refusal through, however deep it was raised', async () => {
+      class PastBudget extends Error {}
+      const read = resolver({
+        openBytes: opened,
+        isRefusal: (error) => error instanceof PastBudget,
+        ocrImage: async () => {
+          throw new PastBudget('spent');
+        },
+      });
+      await expect(read({ file: { contentType: 'image/png' } })).rejects.toBeInstanceOf(PastBudget);
+    });
+
+    it('is refused whole past the cap, and costs no OCR', async () => {
+      process.env.MAX_IMAGE_BYTES = '4';
+      const ocrImage = jest.fn();
+      try {
+        expect(await resolver({ openBytes: opened, ocrImage })({ file: { contentType: 'image/png' } })).toEqual({
+          unreadable: 'extraction_failed',
+          detail: 'the image is larger than the 4-byte limit for reading an image',
+        });
+      } finally {
+        delete process.env.MAX_IMAGE_BYTES;
+      }
+      expect(ocrImage).not.toHaveBeenCalled();
+    });
+  });
+
   it('still answers with the text when the raw-text store fails', async () => {
     const rawText = { getOrCreateId: async () => { throw new Error('db down'); } };
     expect(await resolver({ rawText })({ file: { name: 'v.ogg' } })).toEqual({ text: 'spoken words' });

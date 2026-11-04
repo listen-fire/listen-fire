@@ -2,7 +2,7 @@
 // its bytes, extract text, and (optionally) store the text for provenance.
 //
 // Everything that is a provider or a product is injected: the bytes
-// (`openBytes`), OCR for scanned PDFs, speech-to-text for audio, the model call
+// (`openBytes`), OCR for scanned PDFs and images, speech-to-text for audio, the model call
 // that reads a spreadsheet's layout, the raw-text store, and the logger.
 // The package itself carries only the format readers (PDF text layer, PPTX,
 // XLSX/CSV) and the rules around them (size caps, NUL scrubbing, the
@@ -14,6 +14,7 @@
 import { Readable } from 'node:stream';
 
 import { getXlsxContent, type SheetAnalyzer } from './excel';
+import { extractImageText, imageType, type ImageType, type OcrImage } from './image';
 import { extractPdfText, type OcrPdf } from './pdf';
 import { getPptxText } from './powerpoint';
 import {
@@ -23,8 +24,8 @@ import {
   type FileUnreadable,
 } from './shared';
 
-export { extractPdfText, getPptxText, getXlsxContent };
-export type { FileTextLogger, FileUnreadable, OcrPdf, SheetAnalyzer };
+export { extractImageText, extractPdfText, getPptxText, getXlsxContent, imageType };
+export type { FileTextLogger, FileUnreadable, ImageType, OcrImage, OcrPdf, SheetAnalyzer };
 export type { FileUnreadableReason } from './shared';
 
 /** What classification reads of a file descriptor. */
@@ -57,17 +58,19 @@ export interface RawTextSink {
 export interface FileTextDeps<Ref extends FileDescriptor> {
   /** The file's bytes. Throw to say they are unavailable. */
   openBytes(ref: Ref): Promise<OpenedBytes>;
-  /** Errors from `openBytes` that must propagate (a file that is not the
-   *  caller's own), instead of reading as "bytes unavailable". */
+  /** Errors that must propagate (a file that is not the caller's own, a run
+   *  past its budget), instead of reading as an unreadable file. */
   isRefusal?(error: unknown): boolean;
   ocrPdf: OcrPdf;
+  /** Absent, images are `unsupported_type`, so a shell asks for them. */
+  ocrImage?: OcrImage;
   transcribe: TranscribeAudio;
   analyzeSheet: SheetAnalyzer;
   rawText: RawTextSink;
   logger: FileTextLogger;
 }
 
-type FileKind = 'pdf' | 'pptx' | 'xlsx' | 'audio';
+type FileKind = 'pdf' | 'pptx' | 'xlsx' | 'audio' | 'image';
 
 const AUDIO_EXTENSIONS = ['.ogg', '.oga', '.opus', '.mp3', '.m4a', '.aac', '.wav', '.webm', '.flac'];
 
@@ -104,6 +107,7 @@ function fileKind(ref: FileDescriptor): FileKind | undefined {
   if (type.startsWith('audio/') || AUDIO_EXTENSIONS.some((ext) => name.endsWith(ext))) {
     return 'audio';
   }
+  if (imageType(ref) !== undefined) return 'image';
   return undefined;
 }
 
@@ -141,6 +145,22 @@ async function transcribeAudio<Ref extends FileDescriptor>(
   return text.trim().length === 0 ? null : text;
 }
 
+async function readImage<Ref extends FileDescriptor>(
+  resolved: OpenedBytes,
+  ref: Ref,
+  deps: FileTextDeps<Ref>,
+): Promise<string | FileUnreadable | null> {
+  const mimeType = imageType(ref);
+  const { ocrImage } = deps;
+  // The resolver checked both before it opened the bytes.
+  if (mimeType === undefined || ocrImage === undefined) return { unreadable: 'unsupported_type' };
+  return extractImageText(
+    resolved.stream,
+    { name: ref.name, mimeType },
+    { ocrImage, isRefusal: deps.isRefusal, logger: deps.logger },
+  );
+}
+
 async function extractTextFromStream<Ref extends FileDescriptor>(
   kind: FileKind,
   resolved: OpenedBytes,
@@ -160,6 +180,8 @@ async function extractTextFromStream<Ref extends FileDescriptor>(
       return getXlsxContent(resolved.stream, ref.name, deps.analyzeSheet);
     case 'audio':
       return transcribeAudio(resolved, ref, deps);
+    case 'image':
+      return readImage(resolved, ref, deps);
   }
 }
 
@@ -173,7 +195,7 @@ export function makeFileTextResolver<Ref extends FileDescriptor>(
   const { logger } = deps;
   return async ({ file: ref }) => {
     const kind = fileKind(ref);
-    if (!kind) {
+    if (!kind || (kind === 'image' && !deps.ocrImage)) {
       logger.debug('[movement:file-text] unsupported file type — skipping', {
         name: ref.name,
         contentType: ref.contentType,
@@ -201,6 +223,7 @@ export function makeFileTextResolver<Ref extends FileDescriptor>(
     try {
       text = await extractTextFromStream(kind, resolved, ref, deps);
     } catch (error) {
+      if (deps.isRefusal?.(error)) throw error;
       const message = error instanceof Error ? error.message : String(error);
       logger.warn('[movement:file-text] text extraction failed', {
         name: ref.name,
