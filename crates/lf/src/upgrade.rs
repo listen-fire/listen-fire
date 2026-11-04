@@ -5,7 +5,10 @@
 //! fixes marked safe are applied unless `--all`; the rest are listed with their
 //! rewrite. Only the rewritten spans change, so comments and layout survive.
 //! The pin moves only when nothing is left to fix and no warning says the
-//! rewrite may have changed what the program does, unless `--all`.
+//! rewrite may have changed what the program does, unless `--all`. The loop
+//! runs over the whole project, not file by file: an importer is checked
+//! through the library it imports, so a library's rewrite changes what its
+//! importers report, and one call settles them all.
 
 use std::io::Write;
 use std::path::Path;
@@ -304,28 +307,56 @@ pub async fn run(project: &Project, options: UpgradeOptions, out: &mut impl Writ
     let mut held = checking.catalog.to_json();
     let mut catalog = load(&checking.catalog)?;
     let store = movements_slot::of_project(project, &std::env::vars().collect::<Vec<_>>())?;
-    let (mut changed, mut left, mut warned) = (0usize, 0usize, 0usize);
-    for file in &checking.files.clone() {
-        let mut result = upgrade_source(&file.source, &catalog, options.all, &project.engine);
-        // A rewrite walks hops the files did not (a listen's table, narrowed by
-        // its WHERE): the catalog is narrowed by them too, and the file upgraded
-        // again against it, until the narrowing settles.
-        for _ in 0..MAX_PASSES {
-            // A rewrite the catalog was not narrowed for is withheld, and says
-            // the traversal it would walk: the catalog is narrowed by it too.
-            let unchecked: String = result.remaining.iter().filter_map(|d| d.walks.as_deref()).map(|path| format!("\nlisten to {path} fire __upgrade_probe__\n")).collect();
-            if result.source == file.source && unchecked.is_empty() {
-                break;
+    let originals = checking.files.clone();
+    // The catalog carries every file's text, and an importer is checked
+    // through the library it imports: a library's rewrite can clear (or
+    // raise) what its importers report. So the whole project is upgraded
+    // again, against the catalog holding each file's rewritten text, until
+    // a round rewrites nothing; only then is anything written.
+    let mut seen: Vec<Vec<String>> = vec![texts_of(&checking.files)];
+    let results = loop {
+        let mut results = Vec::with_capacity(checking.files.len());
+        for file in &checking.files.clone() {
+            let mut result = upgrade_source(&file.source, &catalog, options.all, &project.engine);
+            // A rewrite walks hops the files did not (a listen's table, narrowed by
+            // its WHERE): the catalog is narrowed by them too, and the file upgraded
+            // again against it, until the narrowing settles.
+            for _ in 0..MAX_PASSES {
+                // A rewrite the catalog was not narrowed for is withheld, and says
+                // the traversal it would walk: the catalog is narrowed by it too.
+                let unchecked: String = result.remaining.iter().filter_map(|d| d.walks.as_deref()).map(|path| format!("\nlisten to {path} fire __upgrade_probe__\n")).collect();
+                if result.source == file.source && unchecked.is_empty() {
+                    break;
+                }
+                let rewritten = MovementFile { source: format!("{}{unchecked}", result.source), version: None, ..file.clone() };
+                let narrowed = crate::check::catalog_with(&mut checking, &[rewritten]).await?;
+                if narrowed.to_json() == held {
+                    break;
+                }
+                held = narrowed.to_json();
+                catalog = load(&narrowed)?;
+                result = upgrade_source(&file.source, &catalog, options.all, &project.engine);
             }
-            let rewritten = MovementFile { source: format!("{}{unchecked}", result.source), version: None, ..file.clone() };
-            let narrowed = crate::check::catalog_with(&mut checking, &[rewritten]).await?;
-            if narrowed.to_json() == held {
-                break;
-            }
-            held = narrowed.to_json();
-            catalog = load(&narrowed)?;
-            result = upgrade_source(&file.source, &catalog, options.all, &project.engine);
+            results.push(result);
         }
+        let round: Vec<String> = results.iter().map(|r| r.source.clone()).collect();
+        let moving = || checking.files.iter().zip(&round).filter(|(file, text)| file.source != **text).map(|(file, _)| relative(&project.root, &file.path)).collect::<Vec<_>>().join(", ");
+        match after_round(&seen, &round) {
+            Round::Settled => break results,
+            Round::Again => {}
+            Round::Cycle => return Err(format!("the upgrade did not settle: its rewrites of {} come back to a text they already had (a bug; please report it); nothing written", moving())),
+            Round::Unbounded => return Err(format!("the upgrade did not settle: {} still changed after {MAX_PASSES} rounds over the project (a bug; please report it); nothing written", moving())),
+        }
+        for (file, text) in checking.files.iter_mut().zip(round.iter()) {
+            file.source.clone_from(text);
+        }
+        seen.push(round);
+        let refreshed = crate::check::catalog_with(&mut checking, &[]).await?;
+        held = refreshed.to_json();
+        catalog = load(&refreshed)?;
+    };
+    let (mut changed, mut left, mut warned) = (0usize, 0usize, 0usize);
+    for (file, result) in originals.iter().zip(results) {
         let shown = relative(&project.root, &file.path);
         if result.source != file.source {
             if options.check_only {
@@ -399,6 +430,37 @@ pub async fn run(project: &Project, options: UpgradeOptions, out: &mut impl Writ
 pub struct UpgradeOptions {
     pub check_only: bool,
     pub all: bool,
+}
+
+/// What a round over the whole project says, given the project's texts
+/// before each round so far (`seen`, the last the texts it started from) and
+/// the texts it produced.
+#[derive(Debug, PartialEq)]
+enum Round {
+    /// Nothing changed: the fixed point.
+    Settled,
+    /// Something changed: another round, against the catalog holding it.
+    Again,
+    /// The texts are ones an earlier round started from: rounds would cycle.
+    Cycle,
+    /// Still changing after `MAX_PASSES` rounds.
+    Unbounded,
+}
+
+fn after_round(seen: &[Vec<String>], round: &[String]) -> Round {
+    if seen.last().is_some_and(|last| last == round) {
+        Round::Settled
+    } else if seen.iter().any(|earlier| earlier == round) {
+        Round::Cycle
+    } else if seen.len() > MAX_PASSES {
+        Round::Unbounded
+    } else {
+        Round::Again
+    }
+}
+
+fn texts_of(files: &[MovementFile]) -> Vec<String> {
+    files.iter().map(|f| f.source.clone()).collect()
 }
 
 fn relative(root: &Path, path: &Path) -> String {
@@ -538,6 +600,18 @@ mod tests {
         let fixable = Diagnostic { fix: Some(serde_json::json!({ "edits": [] })), ..note.clone() };
         assert!(stands(&fixable) && !is_note(&fixable));
         assert!(stands(&Diagnostic::error("MOV_X", "x", span)));
+    }
+
+    #[test]
+    fn rounds_over_the_project_stop_at_a_fixed_point_and_refuse_a_cycle_or_no_end() {
+        let texts = |t: &[&str]| t.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let start = texts(&["lib v1", "caller"]);
+        let next = texts(&["lib v2", "caller"]);
+        assert_eq!(after_round(&[start.clone()], &next), Round::Again);
+        assert_eq!(after_round(&[start.clone(), next.clone()], &next), Round::Settled);
+        assert_eq!(after_round(&[start.clone(), next.clone()], &start), Round::Cycle);
+        let many: Vec<Vec<String>> = (0..=MAX_PASSES).map(|n| texts(&[&format!("lib v{n}")])).collect();
+        assert_eq!(after_round(&many, &texts(&["lib, once more"])), Round::Unbounded);
     }
 
     #[test]

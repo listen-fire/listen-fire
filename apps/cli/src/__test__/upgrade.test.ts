@@ -323,6 +323,47 @@ test('listen-fire upgrade holds the pin on a settings listen it cannot rewrite, 
   assert.match(out, /engine: left at 0\.12\.13 until the 1 remaining diagnostic\(s\) are fixed/);
 });
 
+// A library whose own rewrite clears an error its importer reports: the
+// importer is checked against the library as rewritten, so one call settles
+// both and moves the pin.
+const LIBRARY = `export function \`Find Company\`(name: <text>) {
+  was = first([{ Name: name }])
+  return coalesce(was.Name, "none")
+}
+`;
+
+const IMPORTER = `import { \`Find Company\` } from "Lookup"
+
+function go(name: <text>) {
+  return \`Find Company\`(name)
+}
+`;
+
+test('listen-fire upgrade settles a library and its importer in one call', () => {
+  const dir = project();
+  rmSync(join(dir, 'movements', 'companies.mvt'));
+  const library = join(dir, 'movements', 'Lookup.mvt');
+  const importer = join(dir, 'movements', 'Caller.mvt');
+  writeFileSync(library, LIBRARY);
+  writeFileSync(importer, IMPORTER);
+  pinned(dir, '0.12.13');
+
+  const checked = lf(dir, 'upgrade', '--check');
+  assert.doesNotMatch(checked.out, /MOV_ABSENT_REQUIRED/);
+  assert.match(checked.out, /^\+  return coalesce\(was\?\.Name, "none"\)$/m);
+  assert.match(checked.out, new RegExp(String.raw`lf\.yaml: would set engine: ${RELEASE_RE} \(the pin is 0\.12\.13\)`));
+  assert.match(checked.out, /2 file\(s\), 1 would be rewritten, 0 left to change by hand/);
+  assert.equal(readFileSync(library, 'utf8'), LIBRARY);
+
+  const upgraded = lf(dir, 'upgrade');
+  assert.equal(upgraded.code, 0, upgraded.out);
+  assert.equal(readFileSync(library, 'utf8'), LIBRARY.replace('was.Name', 'was?.Name'));
+  assert.equal(readFileSync(importer, 'utf8'), IMPORTER);
+  assert.match(upgraded.out, new RegExp(String.raw`lf\.yaml: engine: ${RELEASE_RE} \(was 0\.12\.13\)`));
+  assert.match(upgraded.out, /2 file\(s\), 1 rewritten, 0 left to change by hand/);
+  assert.equal(lf(dir, 'check').code, 0);
+});
+
 /** The example project with `name.mvt` its only movement; `upgradesTo`
  *  pins it 0.12.13 first. */
 function only012(name: string, source: string): { dir: string; file: string } {

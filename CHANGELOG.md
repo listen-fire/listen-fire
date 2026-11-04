@@ -20,6 +20,8 @@ named in [`RELEASING.md`](RELEASING.md).
 
 <!-- add merged PRs here -->
 
+- `listen-fire upgrade` settles a project in one call. An importer is checked through the library it imports, and it was checked against the library as it was before its rewrite, so a fix inside a library cleared its importers' errors only on a second call. Each round now checks every file against the others as rewritten, until a round rewrites nothing; a round that keeps rewriting is refused, naming the files, and nothing is written.
+
 ## [0.15.1] - 2026-11-03
 
 A patch of 0.15; it reads the same pins (`0.15.x`). `listen-fire example` answers two more things: listening for a Stripe failed payment and reading its invoice, and calling an MCP tool and reading its answer. The handbook's index lists each system chapter's sections, so a section can be read on its own. The repository's example projects and the deploy image's default project are upgraded to the 0.15 pin; 0.15.0 refused them.
