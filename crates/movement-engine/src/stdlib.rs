@@ -758,7 +758,7 @@ fn to_stable_json(value: &Js) -> Js {
         Js::Record(_) => Js::object(JsObject::new()),
         Js::Bool(_) | Js::String(_) => value.clone(),
         Js::Number(n) => if n.is_finite() { Js::Number(*n + 0.0) } else { Js::Null },
-        Js::Array(list) => Js::array(list.items().iter().map(to_stable_json).collect()),
+        Js::Array(list) => crate::deep::walking(|| Js::array(list.items().iter().map(to_stable_json).collect())),
         Js::File(file) => {
             let mut out = JsObject::new();
             for key in ["contentType", "kind", "name", "size"] {
@@ -767,7 +767,7 @@ fn to_stable_json(value: &Js) -> Js {
             }
             Js::object(out)
         }
-        Js::Object(object) => {
+        Js::Object(object) => crate::deep::walking(|| {
             let mut out = JsObject::new();
             let mut entries: Vec<&(String, Js)> = object.entries().iter().collect();
             entries.sort_by(|(a, _), (b, _)| a.cmp(b));
@@ -775,7 +775,7 @@ fn to_stable_json(value: &Js) -> Js {
                 out.set(key.clone(), to_stable_json(item));
             }
             Js::object(out)
-        }
+        }),
     }
 }
 
@@ -941,6 +941,37 @@ mod tests {
     fn call(id: &str, args: Vec<Js>) -> Js {
         let result = if FLAT.contains(&id) { apply_flat(id, &args) } else { apply_namespaced(id, &args, around()) };
         result.unwrap_or_else(|e| panic!("{id}: {e:?}"))
+    }
+
+    /// `Text.serialise` of a value as deep as a loop makes one writes text
+    /// quadratic in the depth, so the stable form it writes from is what is
+    /// asked for here.
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn a_deep_value_has_a_stable_form_without_ending_the_process() {
+        use crate::deep::testing::{nested_lists, nested_maps, on_a_small_stack, LEVELS};
+        let (lists, maps) = on_a_small_stack(|| {
+            let depth = |mut value: Js| {
+                let mut levels = 0;
+                loop {
+                    let next = match &value {
+                        Js::Array(list) => list.items().first().cloned(),
+                        Js::Object(object) => object.get("v").cloned(),
+                        _ => None,
+                    };
+                    match next {
+                        Some(inside) => {
+                            value = inside;
+                            levels += 1;
+                        }
+                        None => return (levels, value.to_js_string()),
+                    }
+                }
+            };
+            (depth(to_stable_json(&nested_lists(s("leaf")))), depth(to_stable_json(&nested_maps(s("leaf")))))
+        });
+        assert_eq!(lists, (LEVELS, "leaf".to_string()));
+        assert_eq!(maps, (LEVELS, "leaf".to_string()));
     }
 
     #[test]

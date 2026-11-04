@@ -1989,31 +1989,33 @@ fn deep_equal_within(a: &Js, b: &Js, pairs: &mut Vec<(*const (), *const ())>) ->
         return Err(Failure::Engine { class: crate::eval::ErrorClass::RangeError, message: thrown.message });
     }
     pairs.push(pair);
-    let equal = match (a, b) {
-        (Js::Array(x), Js::Array(y)) => {
-            let (x, y) = (x.items().clone(), y.items().clone());
-            let mut equal = x.len() == y.len();
-            for (p, q) in x.iter().zip(y.iter()) {
-                if !equal {
-                    break;
+    let equal = crate::deep::walking(|| -> Result<bool, Failure> {
+        Ok(match (a, b) {
+            (Js::Array(x), Js::Array(y)) => {
+                let (x, y) = (x.items().clone(), y.items().clone());
+                let mut equal = x.len() == y.len();
+                for (p, q) in x.iter().zip(y.iter()) {
+                    if !equal {
+                        break;
+                    }
+                    equal = deep_equal_within(p, q, pairs)?;
                 }
-                equal = deep_equal_within(p, q, pairs)?;
+                equal
             }
-            equal
-        }
-        (Js::Object(x), Js::Object(y)) => {
-            // `b[k]`, read up its prototype chain.
-            let mut equal = x.entries().len() == y.entries().len();
-            for (k, v) in x.entries() {
-                if !equal {
-                    break;
+            (Js::Object(x), Js::Object(y)) => {
+                // `b[k]`, read up its prototype chain.
+                let mut equal = x.entries().len() == y.entries().len();
+                for (k, v) in x.entries() {
+                    if !equal {
+                        break;
+                    }
+                    equal = deep_equal_within(v, &js::object_property(y, k), pairs)?;
                 }
-                equal = deep_equal_within(v, &js::object_property(y, k), pairs)?;
+                equal
             }
-            equal
-        }
-        _ => false,
-    };
+            _ => false,
+        })
+    })?;
     pairs.pop();
     Ok(equal)
 }
@@ -2330,6 +2332,18 @@ mod tests {
         for none in [json!({ "index": -1 }), json!({ "index": 0.5 }), json!({ "index": null }), json!({}), json!({ "index": "1" })] {
             assert_eq!(judged_index(&none), None, "{none}");
         }
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn two_deep_values_are_compared_without_ending_the_process() {
+        use crate::deep::testing::{nested_lists, on_a_small_stack};
+        let (same, different) = on_a_small_stack(|| {
+            let leaf = |n: f64| nested_lists(Js::Number(n));
+            (deep_equal(&leaf(1.0), &leaf(1.0)).unwrap(), deep_equal(&leaf(1.0), &leaf(2.0)).unwrap())
+        });
+        assert!(same);
+        assert!(!different);
     }
 
     #[test]

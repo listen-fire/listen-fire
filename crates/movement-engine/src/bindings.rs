@@ -397,9 +397,6 @@ pub struct InstanceBinding {
     pub schema: Option<InstanceSchema>,
 }
 
-/// One lexical scope: its own bindings and the scope it sits in. Declaring
-/// into a scope a child already reads is what a body does (a statement
-/// after an `if` arm declares into the scope the arm forked from).
 /// A scope's bindings, let go of on enough stack: a closure holds the scope it
 /// captured, so scopes can chain as deep as the calls that made them.
 #[derive(Debug, Default)]
@@ -420,6 +417,9 @@ impl Drop for Bindings {
     }
 }
 
+/// One lexical scope: its own bindings and the scope it sits in. Declaring
+/// into a scope a child already reads is what a body does (a statement
+/// after an `if` arm declares into the scope the arm forked from).
 #[derive(Debug, Default)]
 pub struct Scope {
     /// In the order declared, as a `Map` keeps them (a park writes them so).

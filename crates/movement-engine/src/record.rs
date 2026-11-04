@@ -125,12 +125,18 @@ pub fn bind_value(value: Js, trail: Option<crate::env::Trail>, many: bool) -> Bi
 /// recursive `recordValue` descriptor, and everything else as data.
 pub fn holds_records(value: &Js) -> bool {
     if js::holds_itself(value) {
-        return holds_records(&js::acyclic(value));
+        return records_within(&js::acyclic(value));
     }
+    records_within(value)
+}
+
+/// The walk, which asks about a circle once at the top: a value that holds no
+/// circle holds none below it either.
+fn records_within(value: &Js) -> bool {
     binding_of(value).is_some()
         || match value {
-            Js::Array(list) => list.items().iter().any(holds_records),
-            Js::Object(dict) if js::is_dict(value) => dict.entries().iter().any(|(_, item)| holds_records(item)),
+            Js::Array(list) => crate::deep::walking(|| list.items().iter().any(records_within)),
+            Js::Object(dict) if js::is_dict(value) => crate::deep::walking(|| dict.entries().iter().any(|(_, item)| records_within(item))),
             _ => false,
         }
 }
@@ -540,6 +546,19 @@ fn plain_record_within(binding: &Binding, path: &mut Vec<Binding>) -> Result<Js,
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn a_deep_value_is_searched_for_records_without_ending_the_process() {
+        use crate::deep::testing::{nested_lists, nested_maps, on_a_small_stack};
+        let (without, with_in_lists, with_in_maps) = on_a_small_stack(|| {
+            let record = held(Binding::Event);
+            (holds_records(&nested_lists(Js::Number(1.0))), holds_records(&nested_lists(record.clone())), holds_records(&nested_maps(record)))
+        });
+        assert!(!without);
+        assert!(with_in_lists);
+        assert!(with_in_maps);
+    }
 
     /// An instance held as a value hands out its name and its adapter, never
     /// the name of the credential it was set up with.

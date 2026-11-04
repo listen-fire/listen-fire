@@ -257,26 +257,46 @@ pub const MAX_WIRE_NESTING: usize = 3000;
 /// crossing.
 pub(crate) const TOO_DEEP: &str = "too deep";
 
-/// Whether a value nests past `MAX_WIRE_NESTING`. A value that holds itself is
-/// as deep as it is walked, so this is asked of one with its circles cut. A
-/// record is not walked: it crosses as its tag, or as the event the host sent.
+/// Whether a value nests past `MAX_WIRE_NESTING`: whether anything sits more
+/// than that many levels under it. A value that holds itself is as deep as it
+/// is walked, so this is asked of one with its circles cut. A record is not
+/// walked: it crosses as its tag, or as the event the host sent.
+///
+/// It walks with a stack of the containers it is inside, which is no longer
+/// than the limit, and copies nothing: it is asked of every value that crosses,
+/// and what it costs should follow the value's depth, not its size.
 pub(crate) fn nests_too_deep(value: &Js) -> bool {
-    let mut level = vec![value.clone()];
-    for _ in 0..=MAX_WIRE_NESTING {
-        let mut next = Vec::new();
-        for held in &level {
-            match held {
-                Js::Array(list) => next.extend(list.items().iter().cloned()),
-                Js::Object(object) => next.extend(object.entries().iter().map(|(_, member)| member.clone())),
-                _ => {}
-            }
-        }
-        if next.is_empty() {
-            return false;
-        }
-        level = next;
+    /// A container, and how many of its members have been looked at.
+    struct Open {
+        container: Js,
+        seen: usize,
     }
-    true
+    let held = |member: &Js| matches!(member, Js::Array(_) | Js::Object(_)).then(|| member.clone());
+    if held(value).is_none() {
+        return false;
+    }
+    let mut open = vec![Open { container: value.clone(), seen: 0 }];
+    // The container on top is `open.len() - 1` deep, so its members are
+    // `open.len()` deep.
+    while let Some(Open { container, seen }) = open.last_mut() {
+        let next = match container {
+            Js::Array(list) => list.items().get(*seen).map(held),
+            Js::Object(object) => object.entries().get(*seen).map(|(_, member)| held(member)),
+            _ => None,
+        };
+        let Some(member) = next else {
+            open.pop();
+            continue;
+        };
+        *seen += 1;
+        if open.len() > MAX_WIRE_NESTING {
+            return true;
+        }
+        if let Some(container) = member {
+            open.push(Open { container, seen: 0 });
+        }
+    }
+    false
 }
 
 #[derive(Default)]
@@ -373,19 +393,25 @@ pub fn object_of(entries: Vec<(&str, Js)>) -> Js {
 /// `-0` 0. `undefined` itself stays `undefined`.
 pub fn json_round_trip(value: &Js) -> Js {
     if crate::js::holds_itself(value) {
-        return json_round_trip(&crate::js::acyclic(value));
+        return round_trip_within(&crate::js::acyclic(value));
     }
+    round_trip_within(value)
+}
+
+/// The walk, which asks about a circle once at the top: a value that holds no
+/// circle holds none below it either.
+fn round_trip_within(value: &Js) -> Js {
     crate::deep::walking(|| match value {
         Js::Number(n) if !n.is_finite() => Js::Null,
         Js::Number(n) if *n == 0.0 => Js::Number(0.0),
         Js::Array(list) => Js::array(
-            list.items().iter().map(|item| if matches!(item, Js::Undefined) { Js::Null } else { json_round_trip(item) }).collect(),
+            list.items().iter().map(|item| if matches!(item, Js::Undefined) { Js::Null } else { round_trip_within(item) }).collect(),
         ),
         Js::Object(object) => {
             let mut copy = JsObject::new();
             for (k, v) in object.entries() {
                 if !matches!(v, Js::Undefined) {
-                    copy.set(k.clone(), json_round_trip(v));
+                    copy.set(k.clone(), round_trip_within(v));
                 }
             }
             Js::object(copy)
@@ -431,8 +457,8 @@ fn json_of_tree(value: &Js) -> Json {
         Js::Number(n) if n.fract() == 0.0 && n.abs() < 9.007_199_254_740_992e15 => json!(*n as i64),
         Js::Number(n) => json!(n),
         Js::String(s) => json!(s),
-        Js::Array(list) => Json::Array(list.items().iter().map(json_of_tree).collect()),
-        Js::Object(object) => {
+        Js::Array(list) => crate::deep::walking(|| Json::Array(list.items().iter().map(json_of_tree).collect())),
+        Js::Object(object) => crate::deep::walking(|| {
             let mut map = Map::new();
             for (k, v) in object.entries() {
                 if !matches!(v, Js::Undefined) {
@@ -440,7 +466,7 @@ fn json_of_tree(value: &Js) -> Json {
                 }
             }
             Json::Object(map)
-        }
+        }),
     }
 }
 
@@ -524,6 +550,46 @@ impl<'de> serde::de::DeserializeSeed<'de> for InOrder {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Anything at all more than `MAX_WIRE_NESTING` levels under the value is
+    /// too deep: a text as much as a list, a map as much as a list.
+    #[test]
+    fn a_value_is_too_deep_when_anything_sits_past_the_limit() {
+        let wrapped = |levels: usize, leaf: Js, in_maps: bool| {
+            (0..levels).fold(leaf, |inside, _| if in_maps { object_of(vec![("v", inside)]) } else { Js::array(vec![inside]) })
+        };
+        for in_maps in [false, true] {
+            for leaf in [Js::str("leaf"), Js::Number(1.0), Js::array(vec![])] {
+                let at_limit = wrapped(MAX_WIRE_NESTING - usize::from(matches!(leaf, Js::Array(_))), leaf.clone(), in_maps);
+                assert!(!nests_too_deep(&at_limit), "{leaf:?}, maps: {in_maps}");
+                let past_limit = wrapped(MAX_WIRE_NESTING + 1, leaf.clone(), in_maps);
+                assert!(nests_too_deep(&past_limit), "{leaf:?}, maps: {in_maps}");
+            }
+        }
+        // The last of many members is the deep one.
+        let wide = Js::array((0..1000).map(|n| Js::Number(f64::from(n))).chain([wrapped(MAX_WIRE_NESTING, Js::Null, false)]).collect());
+        assert!(nests_too_deep(&wide));
+        assert!(!nests_too_deep(&Js::str("a text")));
+        assert!(!nests_too_deep(&Js::array(vec![Js::array(vec![]), Js::str("a"), object_of(vec![("k", Js::Null)])])));
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn a_deep_value_is_plain_json_without_ending_the_process() {
+        use crate::deep::testing::{nested_lists, on_a_small_stack, LEVELS};
+        let levels = on_a_small_stack(|| {
+            let mut json = json_of_js(&nested_lists(Js::Number(1.0)));
+            let mut levels = 0;
+            // Letting go of the JSON is serde_json's recursion, which a tree
+            // this deep must not reach: it is taken apart from the inside.
+            while let Json::Array(mut members) = json {
+                json = members.pop().expect("one member a level");
+                levels += 1;
+            }
+            levels
+        });
+        assert_eq!(levels, LEVELS);
+    }
 
     #[test]
     fn a_record_fails_only_the_request_it_is_written_for() {

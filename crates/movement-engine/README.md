@@ -1281,6 +1281,8 @@ scripts/build-movement-wasm.sh    # the artifact, its sha256 and size
 cargo test -p listen-fire-engine     # the executor, builders, evaluator, run, ABI and environment services, natively
 ```
 
+A native build needs a C compiler on the path (`cc`): `stacker`, which gives a deep recursion more stack (`deep.rs`), builds assembly through `psm`. That holds for a program that depends on this crate as well, such as `examples/rust-embed`. The WASM build needs none.
+
 The TypeScript side: `packages/movement-engine/services/movement_engine/__test__/rust_engine.unit.test.ts`
 (the shim against a scripted double, and its routes against the host
 manifest), `rust_engine_abi.unit.test.ts` (the committed artifact), `rust_run.unit.test.ts` and `rust_write.unit.test.ts`

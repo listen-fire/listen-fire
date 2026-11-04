@@ -182,7 +182,7 @@ impl Js {
             // Array.prototype.join: a null or undefined member is empty, and a
             // list already being joined (a cycle) is empty too.
             Js::Array(array) => joining(Rc::as_ptr(array).cast(), String::new, || {
-                array.items().iter().map(|item| if item.is_nullish() { String::new() } else { item.to_js_string() }).collect::<Vec<_>>().join(",")
+                crate::deep::walking(|| array.items().iter().map(|item| if item.is_nullish() { String::new() } else { item.to_js_string() }).collect::<Vec<_>>().join(","))
             }),
             Js::Object(_) | Js::Record(_) | Js::File(_) => "[object Object]".into(),
         }
@@ -192,12 +192,14 @@ impl Js {
     pub fn to_text(&self) -> Result<String, Thrown> {
         match self {
             Js::Array(array) => joining(Rc::as_ptr(array).cast(), || Ok(String::new()), || {
-                let items = array.items().clone();
-                let mut parts = Vec::with_capacity(items.len());
-                for item in &items {
-                    parts.push(if item.is_nullish() { String::new() } else { item.to_text()? });
-                }
-                Ok(parts.join(","))
+                crate::deep::walking(|| {
+                    let items = array.items().clone();
+                    let mut parts = Vec::with_capacity(items.len());
+                    for item in &items {
+                        parts.push(if item.is_nullish() { String::new() } else { item.to_text()? });
+                    }
+                    Ok(parts.join(","))
+                })
             }),
             Js::Object(_) => Ok("[object Object]".into()),
             other => Ok(other.to_js_string()),
@@ -530,6 +532,20 @@ mod tests {
             assert!(matches!(object_property(&map, key), Js::Undefined), "{key}");
         }
         assert_eq!(Js::object(map).to_text().unwrap(), "[object Object]");
+    }
+
+    /// A value is as deep as the loop that built it, and nothing about the
+    /// stack a conversion runs on bounds that.
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn a_deep_list_is_text_without_ending_the_process() {
+        use crate::deep::testing::{nested_lists, on_a_small_stack};
+        let (joined, as_text) = on_a_small_stack(|| {
+            let value = nested_lists(Js::str("leaf"));
+            (value.to_js_string(), value.to_text())
+        });
+        assert_eq!(joined, "leaf");
+        assert_eq!(as_text, Ok("leaf".to_string()));
     }
 
     #[test]

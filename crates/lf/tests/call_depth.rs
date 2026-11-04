@@ -188,3 +188,25 @@ fn a_value_as_deep_as_a_value_crosses_is_returned() {
         assert!(said.contains("returned: "), "{levels}: {}", said.chars().take(400).collect::<String>());
     }
 }
+
+fn lists_nested_by_a_loop(levels: usize, end: &str) -> String {
+    let members = vec!["1"; levels].join(",");
+    format!("function b(run: <manual-[:Invocations]->>) {{\n  x = reduce([{members}], (acc, i) => {{ return [acc] }}, [\"leaf\"])\n  {end}\n}}")
+}
+
+/// The walks over a value that have no limit of their own, at the depth
+/// where the stack of the main thread ended them: past what 8 MiB held, a
+/// release build's frame for one level being what it is. Building such a value
+/// takes a minute (the loop that nests it is quadratic), so this runs on a
+/// release build only, as the limit of 10,000 does. Each walk's own behaviour
+/// at depth is also tested, in a second, in the engine crate.
+#[test]
+#[cfg_attr(debug_assertions, ignore = "a minute on a release build: see the head of this file")]
+fn a_value_of_any_depth_is_written_as_text_searched_and_parked_without_ending_the_process() {
+    let levels = 100_000;
+    // Text conversion, then the search for records and files that a park makes
+    // of every value in scope, which the 3,000 level cap then refuses.
+    let (code, said) = Project::new(&lists_nested_by_a_loop(levels, "n = Text.length(\"${x}\")\n  await sleep(1h)\n  return n")).run(&[]);
+    assert_eq!(code, Some(1), "the run should fail, not take the process down:\n{}", said.chars().take(400).collect::<String>());
+    assert!(said.contains("MOVENG_RUNTIME") && said.contains("nested more than 3000 levels"), "{}", said.chars().take(400).collect::<String>());
+}

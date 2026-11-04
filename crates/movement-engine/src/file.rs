@@ -61,12 +61,18 @@ pub fn display(file: &FileHandle) -> Js {
 /// `holdsFile`: a file anywhere in a value, through its lists and dicts.
 pub fn holds_file(value: &Js) -> bool {
     if crate::js::holds_itself(value) {
-        return holds_file(&crate::js::acyclic(value));
+        return file_within(&crate::js::acyclic(value));
     }
+    file_within(value)
+}
+
+/// The walk, which asks about a circle once at the top: a value that holds no
+/// circle holds none below it either.
+fn file_within(value: &Js) -> bool {
     match value {
         Js::File(_) => true,
-        Js::Array(list) => list.items().iter().any(holds_file),
-        Js::Object(dict) if crate::js::is_dict(value) => dict.entries().iter().any(|(_, item)| holds_file(item)),
+        Js::Array(list) => crate::deep::walking(|| list.items().iter().any(file_within)),
+        Js::Object(dict) if crate::js::is_dict(value) => crate::deep::walking(|| dict.entries().iter().any(|(_, item)| file_within(item))),
         _ => false,
     }
 }
@@ -90,12 +96,15 @@ fn file_field_value(value: &Js) -> Js {
     let of = |kind: &str, of: Js| crate::env::object_of(vec![("kind", Js::str(kind)), ("of", of)]);
     match value {
         Js::File(_) => crate::env::object_of(vec![("kind", Js::str("file")), ("file", value.clone())]),
-        Js::Array(list) => of("list", Js::array(list.items().iter().map(file_field_value).collect())),
+        Js::Array(list) => of("list", crate::deep::walking(|| Js::array(list.items().iter().map(file_field_value).collect()))),
         Js::Object(dict) if crate::js::is_dict(value) => {
-            let mut members = JsObject::new();
-            for (key, item) in dict.entries() {
-                members.set(key.clone(), file_field_value(item));
-            }
+            let members = crate::deep::walking(|| {
+                let mut members = JsObject::new();
+                for (key, item) in dict.entries() {
+                    members.set(key.clone(), file_field_value(item));
+                }
+                members
+            });
             of("map", Js::object(members))
         }
         other => crate::env::object_of(vec![("kind", Js::str("data")), ("value", other.clone())]),
@@ -117,6 +126,27 @@ pub fn for_test(id: u32, handle: Option<&str>, name: Option<&str>) -> Js {
 
 #[cfg(test)]
 mod tests {
+    /// A file at the bottom of a value as deep as a loop makes one is found,
+    /// and a value with none is cleared, on whatever stack the walk has.
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn a_deep_value_is_searched_for_files_without_ending_the_process() {
+        use crate::deep::testing::{nested_lists, nested_maps, on_a_small_stack};
+        use crate::js::{Js, JsObject};
+        let (without, with_in_lists, with_in_maps, fields) = on_a_small_stack(|| {
+            let file = super::for_test(1, Some("h"), Some("a.pdf"));
+            let mut record = JsObject::new();
+            record.set("held".into(), nested_lists(file.clone()));
+            record.set("plain".into(), nested_lists(Js::Number(1.0)));
+            let fields = super::file_fields_of(&record).map(|fields| fields.to_js_string());
+            (super::holds_file(&nested_lists(Js::Number(1.0))), super::holds_file(&nested_lists(file.clone())), super::holds_file(&nested_maps(file)), fields)
+        });
+        assert!(!without);
+        assert!(with_in_lists);
+        assert!(with_in_maps);
+        assert!(fields.is_some(), "the field holding a file is the one named");
+    }
+
     /// JSON of a file — a prompt fragment, a trace's sample — is its opaque
     /// view, as the TypeScript's `toJSON` writes it: never its source.
     #[test]

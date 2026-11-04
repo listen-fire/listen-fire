@@ -126,3 +126,32 @@ mod native {
         Box::pin(OnEnoughStack { future: Some(Box::pin(future)) })
     }
 }
+
+/// What a test of a walker needs: a value nested far past what the stack it
+/// runs on holds, so that a walk with no stack to ask for ends the whole test
+/// process rather than failing one test.
+#[cfg(all(test, not(target_arch = "wasm32")))]
+pub(crate) mod testing {
+    use crate::js::Js;
+
+    /// More levels than a stack of `SMALL_STACK` holds at any frame size a
+    /// walk could have (a frame is 16 bytes at the least).
+    pub(crate) const LEVELS: usize = 20_000;
+    const SMALL_STACK: usize = 256 * 1024;
+
+    /// `work` on a thread of its own with a small stack, which is the stack a
+    /// walk would run on were it called from deep inside a run.
+    pub(crate) fn on_a_small_stack<R: Send + 'static>(work: impl FnOnce() -> R + Send + 'static) -> R {
+        std::thread::Builder::new().stack_size(SMALL_STACK).spawn(work).expect("a thread").join().expect("the walk finished")
+    }
+
+    /// `leaf` wrapped in a list, `LEVELS` times.
+    pub(crate) fn nested_lists(leaf: Js) -> Js {
+        (0..LEVELS).fold(leaf, |inside, _| Js::array(vec![inside]))
+    }
+
+    /// `leaf` wrapped in a map, `LEVELS` times.
+    pub(crate) fn nested_maps(leaf: Js) -> Js {
+        (0..LEVELS).fold(leaf, |inside, _| crate::env::object_of(vec![("v", inside)]))
+    }
+}
