@@ -26,6 +26,8 @@ env: { LOG_LEVEL: info }        # optional
 
 The adapter protocol's ([the envelope](adapter-protocol.md#the-envelope), [the transport](adapter-protocol.md#transport)): one `POST` per method, the method in the body, the install's settings in `settings` on every request.
 
+- Every request carries `hostRelease`, the release of the `listen-fire` that sent it (`"0.15.2"`; adapter protocol 2.8). **A request without it comes from a runner before 0.15.2.** A module serving runners of several releases answers each by its line: the methods it answers, and the meaning of those whose meaning changed under one name (see Changes). The movements and secrets slots share this envelope, so their requests carry it too.
+
 - A method's `params` is one object, keyed in camel case. Its `result` is the answer; `null` for a method that answers nothing.
 - An absent optional string is `null`.
 - Instants are `Date.toISOString` strings; ids and tokens are strings the module mints.
@@ -141,6 +143,7 @@ A run's `outcome` is the JSON object listen-fire settled it with: `{ writes, wri
 
 ## Changes
 
+- **Unreleased** (listen-fire 0.15.2; adapter protocol 2.8; a module may take it): every request carries `hostRelease`, the release of the runner that sent it ([The envelope](#the-envelope)); one without it comes from a runner before 0.15.2. Why: a module serving a 0.12 runner and a 0.15 runner at once must answer each by its own method set, and `waits.sweep` and `inbound.keepDelivery`'s `arrivalMark` changed meaning in 0.13 under the same names, so a misread caller gets a wrong answer rather than an error.
 - **Unreleased** (after listen-fire 0.13.0; a store keeps it as it keeps the rest of a state): a resolution and a state may carry `members`, each member's own `{ heads, parents? }` of a listen through or onto a union, beside `heads` and `parents`, theirs together. The listen is one, under one pipeline, so its state is one row.
 
 - **2026-11-02** (listen-fire 0.13.x; a store module that answers `unjudged.note` must take it): `unjudged.note`, and each of `inbound.keepDelivery`'s `unjudged`, carry `adapter` (the module the arrival came from) and `landing` (what landed, as its module reported it), which the store keeps and `unjudged.list` answers. Why: `@lf/system` never reports an arrival that is itself one of its `Arrival Not Judged` events, and knew one by a prefix of the record id it minted; it now compares the landing's `Kind` on its own `Events`, which needs the landing kept. `@lf/postgres-store`'s migration 17 and the SQLite state file add `arrival_unjudged.adapter` and `.landing`; a fact kept before has neither. A store that drops them leaves `@lf/system` unable to tell its own reports, and two listens on `Events` that cannot judge them would report each other's, once a poll.

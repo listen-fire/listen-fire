@@ -301,6 +301,10 @@ impl Drop for SlotClient {
     }
 }
 
+/// Every slot request: the envelope, the install's settings, and this
+/// listen-fire's release (`hostRelease`, adapter protocol 2.8), so a module
+/// serving runners of several releases (a platform's store) answers each by
+/// its line. A request without it comes from a runner before 2.8.
 fn request_body(method: &str, params: Obj, settings: &Obj) -> String {
     Js::from(obj! {
         "protocolVersion" => Js::str(PROTOCOL_VERSION),
@@ -308,6 +312,7 @@ fn request_body(method: &str, params: Obj, settings: &Obj) -> String {
         "cacheScopeId" => Js::str("<slot>"),
         "params" => Js::from(params),
         "settings" => Js::from(settings.clone()),
+        "hostRelease" => Js::str(env!("CARGO_PKG_VERSION")),
     })
     .to_json()
 }

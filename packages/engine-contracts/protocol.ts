@@ -39,7 +39,7 @@ export const MANIFEST_PROTOCOL_VERSION = 2;
 
 /** The highest minor of version 2 this release speaks: a host reads 2.0 to
  *  2.`PROTOCOL_MINOR` (docs/contracts/adapter-protocol.md "Minors of version 2"). */
-export const PROTOCOL_MINOR = 7;
+export const PROTOCOL_MINOR = 8;
 
 /** The method that names a minor's feature, by name or by its ending
  *  (`<slot>.watch`). Data, so the Rust twin (module-wire
@@ -50,7 +50,8 @@ export type ProtocolMinorUse = { method: string } | { methodEndingWith: string }
  *  speaking the minor may call it; a module offering it needs nothing of an
  *  older host, which never calls it, so offering one never raises the minor
  *  a module states. A minor that names no method has no row: 2.0, 2.3
- *  (labelled poll events) and 2.7 (`pollAgainAt`), each a host behaviour. */
+ *  (labelled poll events), 2.7 (`pollAgainAt`) and 2.8 (`hostRelease` on a
+ *  slot request), each a host behaviour. */
 export const PROTOCOL_MINORS: readonly { minor: number; feature: string; uses: ProtocolMinorUse }[] = [
   { minor: 1, feature: 'a <slot>.watch method', uses: { methodEndingWith: '.watch' } },
   { minor: 2, feature: 'work.enqueueIfAbsent', uses: { method: 'work.enqueueIfAbsent' } },

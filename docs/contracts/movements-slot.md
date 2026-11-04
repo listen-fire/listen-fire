@@ -163,5 +163,6 @@ Every movements module answers the same cases:
 
 ## Changes
 
+- **Unreleased** (listen-fire 0.15.2; adapter protocol 2.8; a module may take it): every request carries `hostRelease`, the release of the runner that sent it; one without it comes from a runner before 0.15.2 ([the store slot's envelope](store-slot.md#the-envelope)).
 - **2026-10-23** (within adapter protocol 2): `movements.watch`, so `listen-fire serve` and `listen-fire drain` follow the module's change events instead of listing on a timer; every movements module must answer it, and its conformance cases join the rest. `LF_MOVEMENTS_REFRESH_MS` is now only the pause after a module that answers at once with no events.
 - **2026-10-22** (within adapter protocol 2): the movements slot, its methods, and its conformance cases.

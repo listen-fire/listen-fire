@@ -22,6 +22,10 @@ export const SlotRequestEnvelope = z.object({
   cacheScopeId: z.string().optional(),
   params: z.record(z.string(), z.unknown()).default({}),
   settings: z.record(z.string(), z.unknown()).optional(),
+  /** Adapter protocol 2.8: the release of the runner that sent the request
+   *  (`"0.15.2"`), so a module serving runners of several releases answers
+   *  each by its line. A request without it comes from a runner before 2.8. */
+  hostRelease: z.string().optional(),
 });
 
 export const SlotError = z.object({
