@@ -129,7 +129,7 @@ fn single_hop_edge(hops_raw: &str) -> Option<String> {
 /// has.
 pub fn address_absence(instance: &InstanceRef, hops_raw: &str) -> Absence {
     let graph = &instance.name;
-    let instead = |position: &str| format!("<{}-[:{}]->>", crate::families::names::spell_name(graph), crate::families::names::spell_name(position));
+    let instead = |position: &str| format!("{}-[:{}]->", crate::families::names::spell_name(graph), crate::families::names::spell_name(position));
     let Some(edge) = single_hop_edge(hops_raw) else {
         let written = format!("'<{graph}{}>' names no position: a type's address is one hop off the system", hops_raw.trim());
         let landing = crate::families::listens::settings_become::walked_landing(&instance.schema, &format!("__movement_path_root__{}", hops_raw.trim()))
@@ -138,7 +138,7 @@ pub fn address_absence(instance: &InstanceRef, hops_raw: &str) -> Absence {
         return match landing {
             Some(landing) => {
                 let replacement = instead(&landing);
-                Absence { message: format!("{written}; its walk lands on '{landing}', so write `{replacement}`"), replacement: Some(replacement) }
+                Absence { message: format!("{written}; its walk lands on '{landing}', so write `<{replacement}>`"), replacement: Some(replacement) }
             }
             None => Absence { message: written, replacement: None },
         };
@@ -155,7 +155,7 @@ pub fn address_absence(instance: &InstanceRef, hops_raw: &str) -> Absence {
     match available.as_slice() {
         [only] => {
             let replacement = instead(only);
-            Absence { message: format!("{written}; write `{replacement}`"), replacement: Some(replacement) }
+            Absence { message: format!("{written}; write `<{replacement}>`"), replacement: Some(replacement) }
         }
         _ => Absence { message: written, replacement: None },
     }
@@ -164,6 +164,8 @@ pub fn address_absence(instance: &InstanceRef, hops_raw: &str) -> Absence {
 /// `address_absence`'s answer.
 pub struct Absence {
     pub message: String,
-    /// The address to write instead, where the catalog names one.
+    /// The address to write instead, where the catalog names one, without the
+    /// type's brackets: whether they are part of what it replaces is the
+    /// caller's to know (a union member's are not).
     pub replacement: Option<String>,
 }

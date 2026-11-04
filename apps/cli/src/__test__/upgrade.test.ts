@@ -364,6 +364,47 @@ test('listen-fire upgrade settles a library and its importer in one call', () =>
   assert.equal(lf(dir, 'check').code, 0);
 });
 
+const WALKED_012 = `import { acme_crm } from adapters
+import { acme } from credentials
+
+crm = connect acme_crm using acme
+
+function whole(c: <crm-[:Company]->-[:Comments]->>) {
+  return c.Text
+}
+function either(c: <crm-[:Company]->-[:Comments]-> | crm-[:Note]->>) {
+  return c.Text
+}
+`;
+
+test('listen-fire upgrade lists the address a walked parameter type names, and applies it only with --all, a union member without its own brackets', () => {
+  const dir = project();
+  rmSync(join(dir, 'movements', 'companies.mvt'));
+  const file = join(dir, 'movements', 'walked.mvt');
+  writeFileSync(file, WALKED_012);
+  pinned(dir, '0.12.13');
+
+  const listed = lf(dir, 'upgrade');
+  assert.equal(listed.code, 1, listed.out);
+  assert.equal((listed.out.match(/error MOV_UNKNOWN_POSITION .*its walk lands on 'Comment', so write `<crm-\[:Comment\]->>`/g) ?? []).length, 2, listed.out);
+  assert.match(listed.out, /fix \(not applied, may change meaning; --all applies it\): "<crm-\[:Comment\]->>"/);
+  assert.match(listed.out, /fix \(not applied, may change meaning; --all applies it\): "crm-\[:Comment\]->"/);
+  assert.match(listed.out, /lf\.yaml: engine: left at 0\.12\.13 until the 2 remaining diagnostic\(s\) are fixed/);
+  assert.equal(readFileSync(file, 'utf8'), WALKED_012);
+  assert.match(readFileSync(join(dir, 'lf.yaml'), 'utf8'), /^engine: 0\.12\.13$/m);
+
+  const applied = lf(dir, 'upgrade', '--all');
+  assert.equal(applied.code, 0, applied.out);
+  assert.equal(
+    readFileSync(file, 'utf8'),
+    WALKED_012.replace('<crm-[:Company]->-[:Comments]->>', '<crm-[:Comment]->>').replace('<crm-[:Company]->-[:Comments]-> | crm-[:Note]->>', '<crm-[:Comment]-> | crm-[:Note]->>'),
+  );
+  assert.match(applied.out, new RegExp(String.raw`lf\.yaml: engine: ${RELEASE_RE} \(was 0\.12\.13\)`));
+  const checked = lf(dir, 'check');
+  assert.equal(checked.code, 0, checked.out);
+  assert.doesNotMatch(checked.out, /MOV_PARSE|MOV_UNKNOWN_POSITION/);
+});
+
 /** The example project with `name.mvt` its only movement; `upgradesTo`
  *  pins it 0.12.13 first. */
 function only012(name: string, source: string): { dir: string; file: string } {

@@ -1577,16 +1577,21 @@ impl crate::checker::Checker<'_> {
     /// type naming a position its graph's schema does not have.
     pub fn report_param_position(&mut self, type_: &movement_parser::ast::ParamTypeRef, scope: ScopeId) {
         use movement_parser::ast::ParamTypeRef;
-        let reference = match type_ {
-            ParamTypeRef::Name(reference) => reference,
+        match type_ {
+            ParamTypeRef::Name(reference) => self.report_param_reference(reference, scope, true),
             ParamTypeRef::Union(union) => {
                 for member in &union.members {
-                    self.report_param_position(&ParamTypeRef::Name(member.clone()), scope);
+                    self.report_param_reference(member, scope, false);
                 }
-                return;
             }
-            ParamTypeRef::Value(_) => return,
-        };
+            ParamTypeRef::Value(_) => {}
+        }
+    }
+
+    /// One written address of a parameter type. `bracketed` says its span
+    /// holds the type's `<` and `>`: the whole type's does, a union member's
+    /// does not (the union's brackets stand around all its members).
+    fn report_param_reference(&mut self, reference: &movement_parser::ast::TypeRef, scope: ScopeId, bracketed: bool) {
         if reference.hops_raw.is_none() && reference.position.is_none() {
             return;
         }
@@ -1621,7 +1626,10 @@ impl crate::checker::Checker<'_> {
             if crate::types::event_address::position_from_address(instance, hops).is_none() && !refused {
                 let absence = crate::types::event_address::address_absence(instance, hops);
                 // Offered, never safe: the meaning may change (`address_absence`).
-                let fix = absence.replacement.map(|text| serde_json::json!({ "edits": [{ "span": reference.span, "text": text }] }));
+                let fix = absence.replacement.map(|address| {
+                    let text = if bracketed { format!("<{address}>") } else { address };
+                    serde_json::json!({ "edits": [{ "span": reference.span, "text": text }] })
+                });
                 self.push(Diagnostic { fix, ..Diagnostic::error(codes::UNKNOWN_POSITION, absence.message, reference.span) });
             }
             return;

@@ -36,6 +36,18 @@ fn offered(d: &Diagnostic) -> (Option<&str>, Option<bool>) {
     (fix["edits"][0]["text"].as_str(), fix.get("safe").and_then(|s| s.as_bool()))
 }
 
+/// The source with the diagnostic's one edit applied (spans are 1-based line and column).
+fn rewritten(body: &str, d: &Diagnostic) -> String {
+    let source = format!("{PRELUDE}{body}");
+    let edit = &d.fix.as_ref().expect("a replacement is offered")["edits"][0];
+    let offset = |at: &serde_json::Value| {
+        let (line, col) = (at["line"].as_u64().unwrap() as usize, at["col"].as_u64().unwrap() as usize);
+        source.split_inclusive('\n').take(line - 1).map(str::len).sum::<usize>() + col - 1
+    };
+    let (start, end) = (offset(&edit["span"]["start"]), offset(&edit["span"]["end"]));
+    format!("{}{}{}", &source[..start], edit["text"].as_str().unwrap(), &source[end..])
+}
+
 #[test]
 fn a_longer_walk_names_the_record_it_lands_on() {
     let found = unknown_positions("function digest(f: <chat-[:Channels]->-[:Messages]->-[:Files]->>) {\n  return f.Name\n}\n");
@@ -47,6 +59,34 @@ fn a_longer_walk_names_the_record_it_lands_on() {
     assert_eq!(offered(&found[0]), (Some("<chat-[:File]->>"), None));
     let edit = &found[0].fix.as_ref().unwrap()["edits"][0]["span"];
     assert_eq!((edit["start"]["line"].as_u64(), edit["start"]["col"].as_u64()), (Some(4), Some(20)), "{edit}");
+    // The edit ends after the closing `>`: it replaces the whole type, brackets included.
+    assert_eq!((edit["end"]["line"].as_u64(), edit["end"]["col"].as_u64()), (Some(4), Some(20 + "<chat-[:Channels]->-[:Messages]->-[:Files]->>".len() as u64)), "{edit}");
+    assert_eq!(
+        rewritten("function digest(f: <chat-[:Channels]->-[:Messages]->-[:Files]->>) {\n  return f.Name\n}\n", &found[0]),
+        format!("{PRELUDE}function digest(f: <chat-[:File]->>) {{\n  return f.Name\n}}\n")
+    );
+}
+
+#[test]
+fn a_union_member_is_replaced_without_brackets_so_the_union_keeps_its_own() {
+    let body = "function digest(f: <chat-[:Channels]->-[:Messages]->-[:Files]-> | chat-[:Message]->>) {\n  return f.Name\n}\n";
+    let found = unknown_positions(body);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!(offered(&found[0]), (Some("chat-[:File]->"), None));
+    assert_eq!(
+        rewritten(body, &found[0]),
+        format!("{PRELUDE}function digest(f: <chat-[:File]-> | chat-[:Message]->>) {{\n  return f.Name\n}}\n")
+    );
+    let edit = &found[0].fix.as_ref().unwrap()["edits"][0]["span"];
+    assert_eq!(edit["start"]["col"].as_u64(), Some(20 + 1), "{edit}");
+}
+
+#[test]
+fn a_later_union_member_the_connection_no_longer_has_names_the_one_it_has() {
+    let body = "function issue(e: <chat-[:Message]-> | sys-[:`Validation Issue`]->>) {\n  return e.Reason\n}\n";
+    let found = unknown_positions(body);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!(rewritten(body, &found[0]), format!("{PRELUDE}function issue(e: <chat-[:Message]-> | sys-[:Event]->>) {{\n  return e.Reason\n}}\n"));
 }
 
 #[test]
