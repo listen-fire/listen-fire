@@ -130,3 +130,47 @@ fn a_type_with_10000_parts_is_within_the_limit() {
     let (found, _) = errors_under(&[], &[format!("  x = {}", big_map(9_997))]);
     assert!(found.is_empty(), "{:?}", codes(&found));
 }
+
+/// However long an unoptimised build on a loaded machine takes to read a text
+/// whose cost grows with a power of its nesting. A cost that doubles with each
+/// level is out of reach of it by years.
+const NESTING_BUDGET: Duration = Duration::from_secs(60);
+
+/// Checks a file on a thread of its own, so a text that would take years fails
+/// the test rather than hanging it. Its stack is the deep-nesting tests' own:
+/// unoptimised frames are several times a release build's.
+fn file_errors_within_budget(source: String) -> Vec<Diagnostic> {
+    let (sent, received) = std::sync::mpsc::channel();
+    std::thread::Builder::new()
+        .stack_size(256 << 20)
+        .spawn(move || {
+            let catalog = CatalogSnapshot::load(CATALOG).unwrap();
+            let options = CheckOptions { upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
+            let found = check_source(&source, &catalog, options).unwrap();
+            let _ = sent.send(found.into_iter().filter(Diagnostic::is_error).collect::<Vec<_>>());
+        })
+        .expect("spawning the checking thread");
+    received.recv_timeout(NESTING_BUDGET).unwrap_or_else(|_| panic!("not checked within {NESTING_BUDGET:?}"))
+}
+
+/// `depth` calls of `map`, each on a line of its own, its members `member(level)`
+/// and its closure holding the next.
+fn nested_maps(depth: usize, member: impl Fn(usize) -> String, innermost: &str) -> String {
+    (0..depth).rev().fold(innermost.to_string(), |inner, level| format!("map([{}], (x{level}) => {{\n  return {inner}\n}})", member(level)))
+}
+
+#[test]
+fn closures_nested_as_deep_as_the_grammar_allows_check_within_the_budget() {
+    let nested = nested_maps(40, |_| "1".to_string(), "x39 + 1");
+    let found = file_errors_within_budget(format!("function m() {{\n  y = {nested}\n}}\n"));
+    assert_eq!(codes(&found), Vec::<&str>::new());
+}
+
+#[test]
+fn an_old_spelling_at_every_level_of_that_nesting_is_reported_once() {
+    let nested = nested_maps(40, |level| format!("UPPER(\"{level}\")"), "1");
+    let found = file_errors_within_budget(format!("function m() {{\n  y = {nested}\n}}\n"));
+    assert_eq!(codes(&found), ["MOV_V5_SPELLING"; 40]);
+    let lines: std::collections::BTreeSet<usize> = found.iter().map(|d| d.span.start.line).collect();
+    assert_eq!(lines, (0..40).map(|level| 2 + level).collect());
+}

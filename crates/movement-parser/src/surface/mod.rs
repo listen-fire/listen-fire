@@ -14,6 +14,7 @@ pub mod table;
 mod tests;
 
 use std::cell::RefCell;
+use std::collections::HashSet;
 
 use serde::Serialize;
 
@@ -110,17 +111,27 @@ pub struct SourceEdit {
     pub text: String,
 }
 
+/// What one parse has gathered.
+#[derive(Default)]
+struct Gathering {
+    findings: Vec<SpellingFinding>,
+    /// Each block closure read for its findings, by where it starts and its
+    /// text. A block sits inside the slot of every call around it, so without
+    /// this each level of nesting would read everything below it twice more.
+    blocks_read: HashSet<(usize, usize, String)>,
+}
+
 thread_local! {
-    static SCOPE: RefCell<Vec<Vec<SpellingFinding>>> = const { RefCell::new(Vec::new()) };
+    static SCOPE: RefCell<Vec<Gathering>> = const { RefCell::new(Vec::new()) };
 }
 
 /// Runs `f`, gathering the findings every slot read in it reports (the
 /// statement parser's `parse_program`).
 pub fn collecting<T>(f: impl FnOnce() -> T) -> (T, Vec<SpellingFinding>) {
-    SCOPE.with(|s| s.borrow_mut().push(Vec::new()));
+    SCOPE.with(|s| s.borrow_mut().push(Gathering::default()));
     let out = f();
-    let findings = SCOPE.with(|s| s.borrow_mut().pop()).unwrap_or_default();
-    (out, findings)
+    let gathered = SCOPE.with(|s| s.borrow_mut().pop()).unwrap_or_default();
+    (out, gathered.findings)
 }
 
 /// Records a finding in the innermost collecting scope, if there is one.
@@ -130,12 +141,20 @@ pub fn collecting<T>(f: impl FnOnce() -> T) -> (T, Vec<SpellingFinding>) {
 /// statement) and through the slot that call's expression is.
 pub fn report(finding: SpellingFinding) {
     SCOPE.with(|s| {
-        if let Some(findings) = s.borrow_mut().last_mut()
-            && !findings.contains(&finding)
+        if let Some(gathering) = s.borrow_mut().last_mut()
+            && !gathering.findings.contains(&finding)
         {
-            findings.push(finding);
+            gathering.findings.push(finding);
         }
     });
+}
+
+/// Whether a block closure is still to be read for its findings. A read does
+/// nothing but report, so with no scope to report into there is nothing to
+/// read, and a second read of the same text at the same place reports only
+/// what `report` would drop.
+fn first_read_of_block(text: &str, origin: Loc) -> bool {
+    SCOPE.with(|s| s.borrow_mut().last_mut().is_some_and(|gathering| gathering.blocks_read.insert((origin.line, origin.col, text.to_string()))))
 }
 
 /// Reads a current-spelling expression into the canonical tree; the findings are where
@@ -165,7 +184,11 @@ fn read_blocks(e: &crate::tree::MExpr, src: &Utf16, start: Loc) {
     if let crate::tree::MExpr::Closure { body, .. } = e
         && let crate::tree::ClosureBody::Block { at } = body.as_ref()
     {
-        crate::stmt::read_block_for_findings(&src.text(at.start, at.end), loc_in(src, start, at.start));
+        let text = src.text(at.start, at.end);
+        let origin = loc_in(src, start, at.start);
+        if first_read_of_block(&text, origin) {
+            crate::stmt::read_block_for_findings(&text, origin);
+        }
     }
     crate::tree::shared::expr(e, &mut |child| read_blocks(child, src, start));
 }
