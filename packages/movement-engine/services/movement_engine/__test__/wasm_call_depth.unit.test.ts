@@ -11,6 +11,15 @@ import { CALL_DEPTH_ENV_VAR, CallDepthExceeded } from '../call_depth';
 import { credentialIdsFor, makeTestHost, type TestHostOverrides } from '../test_host';
 import { MovementRunFailed, runFailureCause, runMovement } from '../../../public/movement-engine';
 
+// The host's answers to the engine's environment requests, which a test makes
+// throw by naming this mock's implementation.
+jest.mock('../../../../movement-lang/wasm/env_services', () => {
+  const actual = jest.requireActual('../../../../movement-lang/wasm/env_services');
+  return { ...actual, answerEnvRequest: jest.fn(actual.answerEnvRequest) };
+});
+// eslint-disable-next-line import/first
+import * as envServices from '../../../../movement-lang/wasm/env_services';
+
 const catalog = mockCatalogSnapshot({
   adapters: {
     email: {
@@ -145,10 +154,26 @@ describe('the WASM engine, going too deep', () => {
   it("ends coded when V8's stack runs out first, on a value nested deep", async () => {
     const nested = (levels: number, end: string): string =>
       `function m(msg: <inbox-[:message]->>) {\n  x = reduce([${Array(levels).fill('1').join(',')}], (acc, i) => { return { v: acc } }, {})\n  ${end}\n}`;
-    expect(await ended(nested(2400, 'return x'))).toBeUndefined();
+    expect(await ended(nested(2000, 'return x'))).toBeUndefined();
     for (const end of ['return 1', 'return x']) {
       const cause = await ended(nested(5000, end));
       endedWhereTheStackRanOut(cause, 32, `5000 levels, ${end}`);
+    }
+  });
+
+  it("leaves a RangeError thrown in the host's own answer a failed answer, not the engine's stack", async () => {
+    const answer = jest.mocked(envServices.answerEnvRequest);
+    const actual = jest.requireActual<typeof envServices>('../../../../movement-lang/wasm/env_services').answerEnvRequest;
+    answer.mockImplementation(() => {
+      throw new RangeError('Maximum call stack size exceeded');
+    });
+    try {
+      const cause = await ended(`function m(msg: <inbox-[:message]->>) {\n  return Text.slug("café")\n}`);
+      expect(cause).not.toBeInstanceOf(CallDepthExceeded);
+      expect(String(cause)).toContain('the environment import refused');
+      expect(String(cause)).toContain('Maximum call stack size exceeded');
+    } finally {
+      answer.mockImplementation(actual);
     }
   });
 

@@ -390,7 +390,8 @@ interface BufferExports {
 }
 
 /** What V8 throws through an instance when its own stack runs out. By its
- *  message, since the class is another realm's where a test runner's is. */
+ *  message, since the class is another realm's where a test runner's is (and
+ *  an engine that words it otherwise, as Bun's does, reads as a crash). */
 function isStackOverflow(error: unknown): boolean {
   return error instanceof Error && error.name === 'RangeError' && error.message === 'Maximum call stack size exceeded';
 }
@@ -587,17 +588,19 @@ function newInstance(module: WasmModule): Record<string, unknown> {
     read ??= exportReader(raw, 'movement engine');
     const exports = read;
     let status = OK;
-    let reply: unknown;
+    let bytes: Uint8Array;
     try {
       const request: unknown = JSON.parse(decoder.decode(memoryBytes(exports).slice(requestPtr, requestPtr + requestLen)));
-      reply = answerEnvRequest(request);
+      bytes = encoder.encode(JSON.stringify(answerEnvRequest(request)));
     } catch (error) {
-      // Not an answer: the engine is out of stack, wherever it was when it asked.
-      if (isStackOverflow(error)) throw error;
+      // Whatever the host's answer throws, its own stack overflow included
+      // (a service recursing on a deep value), is a failed answer. From in
+      // here the host's recursion cannot be told from the engine's frames
+      // having filled V8's stack; the engine's running out surfaces from its
+      // call, at the next frame that needs stack.
       status = ERROR;
-      reply = { error: { message: error instanceof Error ? error.message : String(error) } };
+      bytes = encoder.encode(JSON.stringify({ error: { message: error instanceof Error ? error.message : String(error) } }));
     }
-    const bytes = encoder.encode(JSON.stringify(reply));
     const ptr = exports.buffers.alloc(bytes.length);
     memoryBytes(exports).set(bytes, ptr);
     const view = new DataView(memoryBuffer(exports));
