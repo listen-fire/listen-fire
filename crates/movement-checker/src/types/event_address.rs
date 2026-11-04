@@ -113,11 +113,35 @@ fn single_hop_edge(hops_raw: &str) -> Option<String> {
 }
 
 /// Why an address names no position, in the author's words: what was looked
-/// for and, where the catalog says, what there is instead.
-pub fn address_absence(instance: &InstanceRef, hops_raw: &str) -> String {
+/// for and, where the catalog says, what there is instead; and the address
+/// to write instead, where the catalog says which one it is.
+///
+/// - A longer walk is typed by the record it lands on (as a settings
+///   listen's rewrite types its parameter): `<chat-[:File]->>` for
+///   `<chat-[:Channels]->-[:Messages]->-[:Files]->>`.
+/// - A hop naming no position, on a connection that has only one, names that
+///   one.
+///
+/// Neither is offered as a safe rewrite. Before 0.13 an address naming no
+/// position left its parameter untyped: typing it checks what went unchecked,
+/// and a fired parameter is seeded as that record. A hop naming a position
+/// the connection no longer has (one per kind of event) widens to the one it
+/// has.
+pub fn address_absence(instance: &InstanceRef, hops_raw: &str) -> Absence {
     let graph = &instance.name;
+    let instead = |position: &str| format!("<{}-[:{}]->>", crate::families::names::spell_name(graph), crate::families::names::spell_name(position));
     let Some(edge) = single_hop_edge(hops_raw) else {
-        return format!("'<{graph}{}>' names no position: a type's address is one hop off the system", hops_raw.trim());
+        let written = format!("'<{graph}{}>' names no position: a type's address is one hop off the system", hops_raw.trim());
+        let landing = crate::families::listens::settings_become::walked_landing(&instance.schema, &format!("__movement_path_root__{}", hops_raw.trim()))
+            .map(|(landing, _)| landing)
+            .filter(|landing| position_ref_in(instance, landing).is_some());
+        return match landing {
+            Some(landing) => {
+                let replacement = instead(&landing);
+                Absence { message: format!("{written}; its walk lands on '{landing}', so write `{replacement}`"), replacement: Some(replacement) }
+            }
+            None => Absence { message: written, replacement: None },
+        };
     };
     let schema = &instance.schema;
     let mut available: Vec<&str> = schema.unions.iter().flat_map(|u| u.keys()).map(String::as_str).collect();
@@ -127,5 +151,19 @@ pub fn address_absence(instance: &InstanceRef, hops_raw: &str) -> String {
         }
     }
     let has = if available.is_empty() { String::new() } else { format!(" — it has: {}", available.join(", ")) };
-    format!("'{graph}' has no position type '{edge}'{has}")
+    let written = format!("'{graph}' has no position type '{edge}'{has}");
+    match available.as_slice() {
+        [only] => {
+            let replacement = instead(only);
+            Absence { message: format!("{written}; write `{replacement}`"), replacement: Some(replacement) }
+        }
+        _ => Absence { message: written, replacement: None },
+    }
+}
+
+/// `address_absence`'s answer.
+pub struct Absence {
+    pub message: String,
+    /// The address to write instead, where the catalog names one.
+    pub replacement: Option<String>,
 }

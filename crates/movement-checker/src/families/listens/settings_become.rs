@@ -476,7 +476,7 @@ fn field_change(statement: &ListenDeclaration, change: &FieldChange, alias: &str
 /// narrowed its hops by their WHEREs (`refinements`), and whether any was:
 /// read off the traversal as it is spelled, so each hop's WHERE is keyed as
 /// a check of the rewrite keys it.
-fn walked_landing(schema: &InstanceSchema, path: &str) -> Option<(String, bool)> {
+pub(crate) fn walked_landing(schema: &InstanceSchema, path: &str) -> Option<(String, bool)> {
     let refinements = schema.refinements.as_ref();
     let Expression::Traverse { steps, .. } = crate::slots::expression_of_text(&format!("{path}.`__probe__`")).ok()? else { return None };
     let mut at: Option<String> = None;

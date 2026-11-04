@@ -1619,8 +1619,10 @@ impl crate::checker::Checker<'_> {
         if let Some(hops) = &reference.hops_raw {
             // A hop or a pin refused above already says why the address lands nowhere.
             if crate::types::event_address::position_from_address(instance, hops).is_none() && !refused {
-                let message = crate::types::event_address::address_absence(instance, hops);
-                self.report(codes::UNKNOWN_POSITION, message, reference.span);
+                let absence = crate::types::event_address::address_absence(instance, hops);
+                // Offered, never safe: the meaning may change (`address_absence`).
+                let fix = absence.replacement.map(|text| serde_json::json!({ "edits": [{ "span": reference.span, "text": text }] }));
+                self.push(Diagnostic { fix, ..Diagnostic::error(codes::UNKNOWN_POSITION, absence.message, reference.span) });
             }
             return;
         }

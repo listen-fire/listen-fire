@@ -33,7 +33,7 @@ use crate::scope::{Resolution, ScopeId, SymbolId, SymbolKind};
 const EVERY_KEY: &str = "every";
 const POLL_INTERVAL_KEY: &str = "pollIntervalSeconds";
 
-mod settings_become;
+pub(crate) mod settings_become;
 mod traversal;
 
 /// `SUPPRESS_SELF_KEY`: the listen key every listener accepts.

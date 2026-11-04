@@ -20,6 +20,7 @@ named in [`RELEASING.md`](RELEASING.md).
 
 <!-- add merged PRs here -->
 
+- `MOV_UNKNOWN_POSITION` on a parameter type names the address to write, where the catalog says which one it is. A walk of more than one hop (`<chat-[:Channels]->-[:Messages]->-[:Files]->>`, which 0.12 allowed) names the record it lands on, `<chat-[:File]->>`. A hop naming a position the connection no longer has, on a connection with only one (a 0.12 `@lf/system` event kind), names that one, `<sys-[:Event]->>`. Neither is rewritten unasked: the parameter was untyped before 0.13, and a kind's position widens to every event. `listen-fire upgrade` lists the rewrite and applies it with `--all`.
 - `listen-fire upgrade` settles a project in one call. An importer is checked through the library it imports, and it was checked against the library as it was before its rewrite, so a fix inside a library cleared its importers' errors only on a second call. Each round now checks every file against the others as rewritten, until a round rewrites nothing; a round that keeps rewriting is refused, naming the files, and nothing is written.
 
 ## [0.15.1] - 2026-11-03
