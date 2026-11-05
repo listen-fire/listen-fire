@@ -434,15 +434,32 @@ function describe(err: unknown): string {
 }
 
 // Only the fields read here are declared; the rest of Google's parsed result
-// set passes through unread.
+// set passes through unread. `extensions` is a bonus on top of a result, so one
+// the provider reshaped is dropped rather than costing the whole search.
 const SerpReply = z.object({
-  organic: z.array(z.object({ link: z.string().optional(), title: z.string().optional(), description: z.string().optional() })),
+  organic: z.array(
+    z.object({
+      link: z.string().optional(),
+      title: z.string().optional(),
+      description: z.string().optional(),
+      extensions: z.array(z.object({ text: z.string().nullish() }).catch({})).nullish().catch(null),
+    }),
+  ),
 });
 
 function organicResults(body: unknown): SearchResult[] {
   const parsed = SerpReply.safeParse(body);
   if (!parsed.success) throw new Error('Bright Data search answered without an organic result list');
-  return parsed.data.organic.map((hit) => ({ link: hit.link ?? null, title: hit.title ?? null, snippet: hit.description ?? null }));
+  return parsed.data.organic.map((hit) => ({ link: hit.link ?? null, title: hit.title ?? null, snippet: snippetOf(hit) }));
+}
+
+/** Google's extensions often read "location · role · organisation", which the
+ *  description leaves out. They go first so that whoever clips a long snippet
+ *  keeps them and loses the free text. */
+function snippetOf(hit: { description?: string; extensions?: Array<{ text?: string | null }> | null }): string | null {
+  const extensions = (hit.extensions ?? []).flatMap((extension) => extension.text?.trim() || []);
+  if (extensions.length === 0) return hit.description ?? null;
+  return [...extensions, ...(hit.description ? [hit.description] : [])].join(' · ');
 }
 
 /** A page's readable text: scripts, styles and tags dropped, entities read,

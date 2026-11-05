@@ -111,4 +111,30 @@ describe("Bright Data's limits off the platform", () => {
     await jest.advanceTimersByTimeAsync(1);
     await expect(next).resolves.toContain('a page');
   });
+
+  it("carries a result's extensions into its snippet, ahead of the description, and skips those with no text", async () => {
+    const reply = {
+      organic: [
+        {
+          link: 'https://www.linkedin.com/in/jane-doe',
+          title: 'Jane Doe',
+          description: 'Jane Doe runs Acme.',
+          extensions: [{ type: 'text', text: 'Berlin · Founder · Acme' }, { type: 'text', text: '' }, { type: 'text' }, { type: 'text', text: '500+ followers' }],
+        },
+        { link: 'https://example.com/only', title: 'Only extensions', extensions: [{ type: 'text', text: 'Founder' }] },
+        { link: 'https://example.com/none', title: 'No extensions', description: 'Plain.' },
+        { link: 'https://example.com/odd', title: 'Reshaped', description: 'Survives.', extensions: 'not a list' },
+        { link: 'https://example.com/odd-item', title: 'Reshaped item', description: 'Survives too.', extensions: [{ text: 7 }, { text: 'Kept' }] },
+      ],
+    };
+    const { tools } = await toolsOver(async () => new Response(JSON.stringify(reply), { status: 200 }));
+    const found = await tools.search('q');
+    expect((found.items ?? []).map((hit) => hit.snippet)).toEqual([
+      'Berlin · Founder · Acme · 500+ followers · Jane Doe runs Acme.',
+      'Founder',
+      'Plain.',
+      'Survives.',
+      'Kept · Survives too.',
+    ]);
+  });
 });
