@@ -1,5 +1,17 @@
 # @listen-fire/movement-lang
 
+## 0.15.2
+
+### Patch Changes
+
+- 430fec9: The engine's artifact carries the deep-recursion fix. A run that goes deeper than the WASM engine's stack holds ends with `CallDepthExceeded` (`MOVENG_CALL_DEPTH`, `stackRanOut: true`, its message saying the engine's stack ran out) where it crashed before, on the engine's own check or, when V8's stack runs out first, by the host. `movement-lang` exports `EngineStackRanOut`, what an engine segment throws for the second. The shadow stack goes from 2 MiB to 3 MiB, so whatever fitted before still does.
+  
+  A value nested past 3,000 levels is refused as it crosses to the host, by name. This ships in a patch and not under a new compatibility key: the rule about a tightened engine rule does not apply, since the cap refuses only what crashed before.
+- 125360f: Checking a movement of nested closures no longer doubles in time with each level: forty nested `map` closures, near the grammar's nesting limit, check in under a second, where twenty took a minute. Which programs are accepted and every diagnostic are unchanged.
+- c6f4821: Runners sharing a secrets module share each webhook: registering never replaces or narrows it, and the last holder to leave removes it. A call to a secrets module now fails after 60 s (`LF_SECRETS_CALL_TIMEOUT_MS`) instead of freezing the process, and a token refresh keeps a rotated token when only `webhook_holders` moved during it.
+- c13588e: `MOV_UNKNOWN_POSITION` on a parameter type names the address to write where the catalog says which one it is: a longer walk names the record it lands on (`<chat-[:File]->>`), and a hop naming a position a connection with only one no longer has names that one. `listen-fire upgrade` lists it and applies it only with `--all`.
+- e38722c: `listen-fire upgrade` settles a project in one call: a library's rewrite clears what its importers reported, where a second call was needed before.
+
 ## 0.15.1
 
 ### Patch Changes

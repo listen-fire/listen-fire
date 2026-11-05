@@ -1,5 +1,14 @@
 # @listen-fire/engine-contracts
 
+## 0.15.2
+
+### Patch Changes
+
+- 430fec9: The engine's artifact carries the deep-recursion fix. A run that goes deeper than the WASM engine's stack holds ends with `CallDepthExceeded` (`MOVENG_CALL_DEPTH`, `stackRanOut: true`, its message saying the engine's stack ran out) where it crashed before, on the engine's own check or, when V8's stack runs out first, by the host. `movement-lang` exports `EngineStackRanOut`, what an engine segment throws for the second. The shadow stack goes from 2 MiB to 3 MiB, so whatever fitted before still does.
+  
+  A value nested past 3,000 levels is refused as it crosses to the host, by name. This ships in a patch and not under a new compatibility key: the rule about a tightened engine rule does not apply, since the cap refuses only what crashed before.
+- 45a5957: Adapter protocol 2.8: a slot request may carry `hostRelease`, the release of the runner that sent it (`SlotRequestEnvelope`); one without it did not state its sender's release (a runner before 0.15.2, or a host or module that does not set it). `PROTOCOL_MINOR` is 8. `SlotClient` (`@listen-fire/engine/public/module-wire`) takes an optional `hostRelease` and sends it when set.
+
 ## 0.15.1
 
 No changes in this release.

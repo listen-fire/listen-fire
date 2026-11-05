@@ -146,6 +146,6 @@ await contractCase.run({
 
 ## Changes
 
-- **Unreleased** (listen-fire 0.15.2; adapter protocol 2.8; a module may take it): a runner's requests carry `hostRelease`, the release of the runner that sent it; one without it did not state its sender's release (a runner before 0.15.2, or a host that does not set it) ([the store slot's envelope](store-slot.md#the-envelope)).
+- **listen-fire 0.15.2** (adapter protocol 2.8; a module may take it): a runner's requests carry `hostRelease`, the release of the runner that sent it; one without it did not state its sender's release (a runner before 0.15.2, or a host that does not set it) ([the store slot's envelope](store-slot.md#the-envelope)).
 - **listen-fire 0.15.2** (within adapter protocol 2; nothing for a module to change): a lease on a ref no entry has is relied on, as the conformance cases already required, and a module other than the secrets file may hold a credential's `webhook_holders`.
 - **2026-10-22** (within adapter protocol 2): the secrets slot, its methods, and its conformance cases.
