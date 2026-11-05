@@ -32,6 +32,10 @@ export interface SecretsModule {
   calls: string[];
   /** The refs whose lease is held now. */
   leased(): string[];
+  /** A lease on `ref` held from outside every runner, until the function it answers is called. */
+  takeLease(ref: string): () => void;
+  /** From now on each method fails, or never answers, until called with none. A manifest is still answered. */
+  misbehave(how?: 'fail' | 'hang'): void;
   close(): Promise<void>;
 }
 
@@ -53,6 +57,8 @@ export async function serveSecretsModule(
   const bindings = new Map<string, { external: string; binding: Binding }>();
   const leases = new Map<string, { token: string; until: number }>();
   const calls: string[] = [];
+  let misbehaving: 'fail' | 'hang' | undefined;
+  const hung: Array<() => void> = [];
   const put = (ref: string, entry: Seeded) => {
     bindings.set(ref, { external: entry.external, binding: entry.binding });
     vault.put(ref, entry.fields);
@@ -78,6 +84,8 @@ export async function serveSecretsModule(
     answer: async (method, params, settings) => {
       if (typeof settings.vault !== 'string' || settings.vault === '') throw new SlotRefusal('settings', 'the `vault` setting is missing');
       calls.push(`${method} ${typeof params.ref === 'string' ? params.ref : ''}`.trim());
+      if (misbehaving === 'hang') await new Promise<void>((release) => hung.push(release));
+      if (misbehaving === 'fail') throw new SlotRefusal('unavailable', 'the vault is down');
       switch (method) {
         case 'secrets.resolve':
           return resolve(parse(Ref, method, params).ref);
@@ -141,7 +149,21 @@ export async function serveSecretsModule(
       return out;
     },
     leased: () => [...leases].filter(([, lease]) => lease.until > Date.now()).map(([ref]) => ref),
-    close: () => served.close(),
+    takeLease: (ref) => {
+      const token = randomUUID();
+      leases.set(ref, { token, until: Number.MAX_SAFE_INTEGER });
+      return () => {
+        if (leases.get(ref)?.token === token) leases.delete(ref);
+      };
+    },
+    misbehave: (how) => {
+      misbehaving = how;
+      if (how !== 'hang') hung.splice(0).forEach((release) => release());
+    },
+    close: () => {
+      hung.splice(0).forEach((release) => release());
+      return served.close();
+    },
   };
 }
 

@@ -242,7 +242,20 @@ impl SecretsFamily {
             reference: reference.to_string(),
             detail: redact_secrets(&why, current.fields.values()),
         })?;
-        let outcome = self.backend.write_back(reference, &changed, &current.version).map_err(SecretError::Store)?;
+        // The token call may outlast the lease, and the provider has rotated the
+        // token by now: a renewal that moved the version meanwhile must not cost
+        // the only refresh token it still takes.
+        let mut against = current.version.clone();
+        let mut read = current.fields.clone();
+        let outcome = loop {
+            match self.backend.write_back(reference, &changed, &against).map_err(SecretError::Store)? {
+                WriteBack::Conflict(now) if differs_only_in_holders(&read, &now.fields) => {
+                    against = now.version;
+                    read = now.fields;
+                }
+                outcome => break outcome,
+            }
+        };
         self.settle(reference, outcome, current.fields.values().chain(changed.values()))
     }
 
@@ -570,6 +583,40 @@ mod tests {
             assert!(matches!(f.backend.write_back("acme", &theirs, &seen).unwrap(), WriteBack::Written(_)));
             let answered = f.refresh("acme", &seen, &refresher).await.unwrap();
             assert_eq!((calls.get(), answered.fields["access_token"].as_str()), (1, "theirs"));
+        });
+    }
+
+    /// A token call outlasting the credential's lease: another runner's renewal
+    /// writes the holders, and the provider has already rotated the token.
+    #[test]
+    fn a_write_back_conflicting_only_on_the_holders_keeps_the_rotated_token() {
+        block_on(async {
+            let f = family(false, Rc::default());
+            let refresher = |current: Record| -> LocalFuture<'_, Result<Fields, String>> {
+                let renewed = fields(&[(WEBHOOK_HOLDERS_FIELD, "{\"edge\":{}}")]);
+                assert!(matches!(f.backend.write_back("acme", &renewed, &current.version).unwrap(), WriteBack::Written(_)));
+                Box::pin(async { Ok(fields(&[("refresh_token", "r1")])) })
+            };
+            let seen = f.resolve("acme").unwrap().version;
+            let refreshed = f.refresh("acme", &seen, &refresher).await.unwrap();
+            assert_eq!(refreshed.fields["refresh_token"], "r1", "the rotated token is the only one the provider still takes");
+            assert_eq!(refreshed.fields[WEBHOOK_HOLDERS_FIELD], "{\"edge\":{}}", "and the renewal is kept");
+            assert_eq!(f.backend.resolve("acme").unwrap().unwrap().fields["refresh_token"], "r1");
+        });
+    }
+
+    #[test]
+    fn a_write_back_conflicting_on_anything_else_is_still_refused() {
+        block_on(async {
+            let f = family(false, Rc::default());
+            let refresher = |current: Record| -> LocalFuture<'_, Result<Fields, String>> {
+                let theirs = fields(&[("refresh_token", "theirs")]);
+                assert!(matches!(f.backend.write_back("acme", &theirs, &current.version).unwrap(), WriteBack::Written(_)));
+                Box::pin(async { Ok(fields(&[("refresh_token", "mine")])) })
+            };
+            let seen = f.resolve("acme").unwrap().version;
+            assert_eq!(f.refresh("acme", &seen, &refresher).await.unwrap_err(), SecretError::Conflict("acme".into()));
+            assert_eq!(f.backend.resolve("acme").unwrap().unwrap().fields["refresh_token"], "theirs");
         });
     }
 

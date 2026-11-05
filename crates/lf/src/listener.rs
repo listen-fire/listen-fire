@@ -169,6 +169,7 @@ pub async fn run(project: Project, serving: Serving<'_>) -> Result<i32, String> 
     // Doors only, nothing drains here: the webhooks still follow the heads
     // the workers resolve (a drain follows them as it drains).
     let drain = if doors_only { tokio::task::spawn_local(follow_heads_forever(session.clone())) } else { tokio::task::spawn_local(drain_forever(session.clone(), poke.clone())) };
+    let renewing = tokio::task::spawn_local(renew_forever(session.clone()));
     let stop = stopped();
     println!("listen-fire serving on http://127.0.0.1:{port}/hooks/<external>/<install>");
     for line in hook_urls(&session, &format!("http://127.0.0.1:{port}")) {
@@ -179,7 +180,7 @@ pub async fn run(project: Project, serving: Serving<'_>) -> Result<i32, String> 
     }
 
     stop.await;
-    for task in [doors, watching, drain] {
+    for task in [doors, watching, drain, renewing] {
         task.abort();
         let _ = task.await;
     }
@@ -326,6 +327,21 @@ async fn follow_heads_forever(session: Rc<Session>) {
         tick.tick().await;
         if let Err(message) = session.follow_kept_heads(&session.file_set()).await {
             println!("following the listens' heads failed: {message}");
+        }
+    }
+}
+
+/// What this runner holds, said again on a timer of its own. A long pass of the
+/// drain or a store that errors must not stop it: the entries would lapse while
+/// the runner still listens, and another runner would remove its webhooks.
+async fn renew_forever(session: Rc<Session>) {
+    let every = session.registrations.renewal_every();
+    let mut tick = tokio::time::interval_at(tokio::time::Instant::now() + every, every);
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    loop {
+        tick.tick().await;
+        for line in crate::subscriptions::hold(&session).await {
+            eprintln!("listen-fire: {line}");
         }
     }
 }

@@ -1137,7 +1137,7 @@ impl Session {
             true => crate::subscriptions::reconcile(self).await,
             false => crate::subscriptions::retry_failed(self).await,
         };
-        for line in lines.into_iter().chain(crate::subscriptions::hold(self).await) {
+        for line in lines {
             eprintln!("listen-fire: {line}");
         }
         Ok(())

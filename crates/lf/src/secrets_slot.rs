@@ -46,6 +46,26 @@ use crate::secrets::{Binding, Credentials, ENV_PREFIX, SecretsFile, install_of, 
 use crate::secrets_family::{Fields, FileLock, LOCK_WAIT, Lease, LocalFuture, POLL_EVERY, Record, SecretsBackend, WriteBack, content_version};
 use crate::slot_client::SlotClient;
 
+/// How long one call to a secrets module may take, unless
+/// `LF_SECRETS_CALL_TIMEOUT_MS` says otherwise. A call blocks the runner's one
+/// thread, doors and drain and stopping included, and a runner on a shared
+/// module makes them every few minutes, so one that never answers must end.
+/// Every method is a store's read or write. `secrets.lock` answers at once
+/// (the LOCK_WAIT of 10 s is listen-fire asking again, each time a call of its
+/// own). The longest a call can rightly take is a module's first, which may
+/// spend slot_client's START_TIMEOUT of 30 s starting before it is asked, so
+/// this leaves as long again for the answer. It is also the longest a stopped
+/// runner waits for a module that has hung.
+const DEFAULT_SECRETS_CALL_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// `LF_SECRETS_CALL_TIMEOUT_MS`: how long one call to a secrets module may take.
+fn secrets_call_timeout_of(raw: Option<&str>) -> Result<Duration, String> {
+    match raw {
+        None | Some("") => Ok(DEFAULT_SECRETS_CALL_TIMEOUT),
+        Some(raw) => raw.trim().parse::<u64>().ok().filter(|ms| *ms > 0).map(Duration::from_millis).ok_or_else(|| format!("LF_SECRETS_CALL_TIMEOUT_MS is \"{raw}\": it must be a positive whole number of milliseconds")),
+    }
+}
+
 /// The slot's methods (engine-contracts `slots/secrets.ts` `SECRETS_METHODS`).
 pub const SECRETS_METHODS: &[&str] = &[
     "secrets.resolve",
@@ -320,7 +340,8 @@ pub struct ProcessSecrets {
 
 impl ProcessSecrets {
     pub fn start(name: &str, process: &ProcessModule, settings: &BTreeMap<String, String>) -> Result<ProcessSecrets, String> {
-        Ok(ProcessSecrets { name: name.to_string(), client: SlotClient::start("secrets", name, process, settings)? })
+        let within = secrets_call_timeout_of(std::env::var("LF_SECRETS_CALL_TIMEOUT_MS").ok().as_deref())?;
+        Ok(ProcessSecrets { name: name.to_string(), client: SlotClient::start("secrets", name, process, settings)?.answering_within(within) })
     }
 
     fn call(&self, method: &str, params: Obj) -> Result<Js, String> {
@@ -624,6 +645,16 @@ mod tests {
         write_staged(&path, "secrets", text).unwrap();
         let module = FileSecretsModule::at(&path).unwrap();
         (path, module)
+    }
+
+    #[test]
+    fn a_secrets_call_timeout_is_a_positive_number_of_milliseconds() {
+        assert_eq!(secrets_call_timeout_of(None), Ok(DEFAULT_SECRETS_CALL_TIMEOUT));
+        assert_eq!(secrets_call_timeout_of(Some("")), Ok(DEFAULT_SECRETS_CALL_TIMEOUT));
+        assert_eq!(secrets_call_timeout_of(Some("1500")), Ok(Duration::from_millis(1500)));
+        for raw in ["0", "-1", "soon"] {
+            assert_eq!(secrets_call_timeout_of(Some(raw)), Err(format!("LF_SECRETS_CALL_TIMEOUT_MS is \"{raw}\": it must be a positive whole number of milliseconds")));
+        }
     }
 
     #[test]

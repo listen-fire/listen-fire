@@ -34,6 +34,20 @@ class Provider {
   readonly live = new Map<string, Webhook>();
   made = 0;
   removed: string[] = [];
+  /** Each `ensureEventSubscription`, by whether it named a `current`. */
+  asked = { current: 0, fresh: 0 };
+  /** Refuses a call that names a `current`, as a provider that is down does. */
+  refusesCurrent = false;
+  /** Answers null to a call that names no `current`: it registered nothing. */
+  registersNothing = false;
+  /** Registers, and issues no secret. */
+  issuesNoSecret = false;
+  /** Lists `refreshEventSubscription`, and how often it has been asked. */
+  listsRefresh = false;
+  refreshes = 0;
+  /** How long one poll of `Ticks` takes, and how many are in flight. */
+  pollMs = 0;
+  polling = 0;
   private constructor(
     private readonly server: Server,
     readonly url: string,
@@ -90,7 +104,9 @@ class Provider {
           supportedTriggers: ['webhook'],
           runtimeCapabilities: { traversal: { incoming: false, edgeProperties: false }, resources: false },
           credentials: [{ name: 'feed', kind: 'static', fields: [{ name: 'token', optional: true }] }],
-          methods: ['listEntryPoints', 'describe', 'getFieldValue', 'getRelated', 'preprocessInbound', 'ensureEventSubscription', 'removeEventSubscription'],
+          methods: ['listEntryPoints', 'describe', 'getFieldValue', 'getRelated', 'preprocessInbound', 'ensureEventSubscription', 'removeEventSubscription', 'poll', ...(this.listsRefresh ? ['refreshEventSubscription'] : [])],
+          poll: { intervalSeconds: 1 },
+          ...(this.issuesNoSecret ? { inbound: { providerKey: 'feed', scheme: 'module', secretIssuedBy: 'provider' } } : {}),
         };
       case 'listEntryPoints':
         return [
@@ -105,8 +121,12 @@ class Provider {
             delivery: 'connection',
             capability: { filter: 'native', supportsLimit: false },
           },
+          { typeId: 'Tick', displayName: 'Tick', collectionName: 'Ticks', writable: false, readable: false, listenable: true, identity: 'Id', delivery: 'polled', pollEverySeconds: 1 },
         ];
       case 'describe':
+        if (params.typeId === 'Tick') {
+          return { typeId: 'Tick', displayName: 'Tick', fields: [{ fieldId: 'Id', displayName: 'Id', kind: 'string', writable: false, required: true }], references: [] };
+        }
         return {
           typeId: 'Note',
           displayName: 'Note',
@@ -131,15 +151,28 @@ class Provider {
         return { events: [], arrivals };
       }
       case 'ensureEventSubscription': {
-        if (params.current !== undefined) return null;
+        const current = params.current as { externalId: string } | undefined;
+        this.asked[current === undefined ? 'fresh' : 'current'] += 1;
+        if (current !== undefined && this.refusesCurrent) throw new Error('the provider is down');
+        // What it has removed it does not hold: asked about one, it makes another.
+        if (current !== undefined && this.live.has(current.externalId)) return null;
+        if (this.registersNothing) return null;
         this.made += 1;
         const id = `wh-${this.made}`;
         await new Promise((done) => setTimeout(done, this.latencyMs));
         const url = params.callbackUrl as string;
         const filter = params.filter as { right?: { value?: string } } | undefined;
         this.live.set(id, { id, key: url.split('/').at(-1)!, title: filter?.right?.value, secret: `secret-${id}`, url });
-        return { externalId: id, secret: `secret-${id}` };
+        return this.issuesNoSecret ? { externalId: id } : { externalId: id, secret: `secret-${id}` };
       }
+      case 'refreshEventSubscription':
+        this.refreshes += 1;
+        return {};
+      case 'poll':
+        this.polling += 1;
+        await new Promise((done) => setTimeout(done, this.pollMs));
+        this.polling -= 1;
+        return { arrivals: [] };
       case 'removeEventSubscription': {
         const id = params.externalId as string;
         this.removed.push(id);
@@ -154,16 +187,18 @@ class Provider {
 
 const header = readFileSync(join(EXAMPLE, 'lf.yaml'), 'utf8').split('\n').filter((line) => line.startsWith('engine:')).join('\n');
 
-/** The movement a runner serves: a listen on the notes titled each of `titles`. */
-function movement(titles: string[]): string {
+/** The movement a runner serves: a listen on the notes titled each of `titles`,
+ *  and with `polled` one on `Ticks`, which keeps its drain in the provider's poll. */
+function movement(titles: string[], polled = false): string {
   const functions = titles.map((t) => `function on_${t}(note: <f-[:Note]->>) {\n  return "${t}"\n}\n`).join('\n');
   const listens = titles.map((t) => `listen to f-[n:Notes WHERE n.Title == "${t}"]-> fire on_${t}\n`).join('');
-  return `import { feed } from adapters\nimport { shared } from credentials\n\nf = connect feed using shared\n\n${functions}\n${listens}`;
+  const ticks = polled ? 'function on_tick(tick: <f-[:Tick]->>) {\n  return "tick"\n}\n\nlisten to f-[:Ticks]-> fire on_tick\n' : '';
+  return `import { feed } from adapters\nimport { shared } from credentials\n\nf = connect feed using shared\n\n${functions}\n${ticks}${listens}`;
 }
 
 /** A project of its own: its movement, the provider, the vault (none: the
  *  secrets file) and the address its webhooks are registered at. */
-function project(provider: Provider, titles: string[], options: { vault?: SecretsModule; publicUrl?: string } = {}): string {
+function project(provider: Provider, titles: string[], options: { vault?: SecretsModule; publicUrl?: string; polled?: boolean } = {}): string {
   const dir = mkdtempSync(join(tmpdir(), 'lf-shared-webhook-'));
   for (const folder of ['.lf', 'movements', 'externals/feed']) mkdirSync(join(dir, folder), { recursive: true });
   writeFileSync(join(dir, 'lf.yaml'), `${header}\nmovements: movements\nexternals: externals\npublicUrl: ${options.publicUrl ?? PUBLIC}\n`);
@@ -171,7 +206,7 @@ function project(provider: Provider, titles: string[], options: { vault?: Secret
     join(dir, 'externals/feed/lf-external.yaml'),
     `name: feed\nkind: adapter\nprotocol: 2\nurl: ${provider.url}\nwebhook:\n  signature: hmac-sha256\n  secretField: webhook_secret\n  deliveryIdHeader: X-Feed-Delivery\n`,
   );
-  writeFileSync(join(dir, 'movements/noted.mvt'), movement(titles));
+  writeFileSync(join(dir, 'movements/noted.mvt'), movement(titles, options.polled));
   if (options.vault !== undefined) {
     mkdirSync(join(dir, 'externals/acme_vault'));
     writeFileSync(join(dir, 'externals/acme_vault/lf-external.yaml'), `name: acme_vault\nkind: core\nslot: secrets\nurl: ${options.vault.url}\nsettings:\n  - { name: vault, label: the vault credentials are kept in }\n`);
@@ -446,4 +481,132 @@ test('a read-only secrets module writes no holders: a webhook is refused where i
     await vault.close();
     await provider.close();
   }
+});
+
+test('a runner whose drain is busy for longer than a lease keeps its webhook: its renewal has a timer of its own', () =>
+  world(async (provider, vault, serving) => {
+    provider.pollMs = 20_000;
+    const busy = await serving(project(provider, ['x'], { vault, polled: true }), SHORT_LEASE);
+    await busy.waitFor(REGISTERED);
+    const other = await serving(project(provider, ['y'], { vault }), SHORT_LEASE);
+    await other.waitFor(REGISTERED);
+    await until('the drain is in its poll', () => provider.polling > 0);
+    await sleep(5_000);
+    assert.equal(provider.polling, 1, 'still in it, three leases on');
+    assert.deepEqual(provider.titles(), ['x', 'y']);
+    assert.deepEqual(provider.removed, [], 'the other runner removed nothing the busy one holds');
+  }));
+
+test('a secrets module that fails during a renewal removes nothing, the runner lives, and the decision is made once it answers', () =>
+  world(async (provider, vault, serving) => {
+    const dying = await served(project(provider, ['x'], { vault }), [], SHORT_LEASE);
+    await dying.waitFor(REGISTERED);
+    const dead = provider.only();
+    const living = await serving(project(provider, ['y'], { vault }), SHORT_LEASE);
+    await living.waitFor(REGISTERED);
+    const own = [...provider.live.values()].find((webhook) => webhook.title === 'y')!;
+
+    vault.misbehave('fail');
+    await dying.kill();
+    await living.waitFor(/the secrets could not be read again: .*the vault is down/);
+    await sleep(3_000);
+    assert.deepEqual(provider.removed, [], 'it could not tell who holds the webhook, so it removed nothing');
+    assert.equal(provider.live.size, 2);
+    assert.equal(await deliver(living, own, 'n-1', 'y'), 200, 'and its doors still answer');
+
+    vault.misbehave();
+    await until('the dead holder’s webhook goes', () => !provider.live.has(dead.id));
+    assert.deepEqual(provider.removed, [dead.id]);
+    assert.ok(provider.live.has(own.id), 'its own stays');
+  }));
+
+test('a secrets module that hangs stops the doors only until the timeout, and SIGTERM stops the runner within it', () =>
+  world(async (provider, vault, serving) => {
+    const timeout = { ...SHORT_LEASE, LF_SECRETS_CALL_TIMEOUT_MS: '1000' };
+    const runner = await serving(project(provider, ['x'], { vault }), timeout);
+    await runner.waitFor(REGISTERED);
+    const webhook = provider.only();
+    try {
+      vault.misbehave('hang');
+      await runner.waitFor(/did not answer within 1s/, 8_000);
+      const asked = Date.now();
+      assert.equal(await Promise.race([deliver(runner, webhook, 'n-1', 'x'), sleep(5_000)]), 200, 'the doors answer again');
+      assert.ok(Date.now() - asked < 3_000, 'within about one timeout');
+      assert.deepEqual(provider.removed, []);
+      assert.equal(provider.only().id, webhook.id);
+
+      const told = Date.now();
+      const stopped = await Promise.race([runner.stop().then(() => true), sleep(5_000).then(() => false)]);
+      assert.ok(stopped, 'SIGTERM stopped it');
+      assert.ok(Date.now() - told < 3_000, `within about one timeout, not ${Date.now() - told}ms`);
+    } finally {
+      // Whatever came of it, the runner can then be stopped.
+      vault.misbehave();
+    }
+  }));
+
+test('a lease that cannot be had removes nothing: the decision is a failure said, and the runner goes on', () =>
+  world(async (provider, vault, serving) => {
+    const before = await serving(project(provider, ['x'], { vault }));
+    await before.waitFor(REGISTERED);
+    await before.stop();
+    const webhook = provider.only();
+
+    const release = vault.takeLease(`shared#webhook:${webhook.key}`);
+    try {
+      const other = await serving(project(provider, ['y'], { vault }));
+      await other.waitFor(/its webhook is not registered — .*kept credential "shared#webhook:edge-[0-9a-f]+" locked by another listen-fire/);
+      await other.waitFor(REGISTERED);
+      assert.deepEqual(provider.removed, [], 'nobody decided, so nothing went');
+      assert.ok(provider.live.has(webhook.id));
+    } finally {
+      release();
+    }
+  }));
+
+test('a renewal leaves a failed registration’s retry in place', () =>
+  world(async (provider, vault, serving) => {
+    const dir = project(provider, ['x'], { vault });
+    const first = await serving(dir);
+    await first.waitFor(REGISTERED);
+    await first.stop();
+
+    provider.refusesCurrent = true;
+    const second = await serving(dir, SHORT_LEASE);
+    await second.waitFor(/its webhook is not registered — .*the provider is down/);
+    assert.equal(provider.asked.current, 1);
+    // Several renewals, none of which asks the module anything; then it is back.
+    await sleep(2_000);
+    provider.refusesCurrent = false;
+    await until('its retry is made, after its backoff', () => provider.asked.current >= 2, 35_000);
+    await second.waitFor(/webhook wh-1 is registered for the arrivals on Notes at /);
+  }));
+
+test('renewals repeat no call meant to be once: no refresh of a webhook with no expiry, no webhook the module declined', async (t) => {
+  await t.test('a webhook kept with no expiry is refreshed once, not at every renewal', () =>
+    world(async (provider, vault, serving) => {
+      provider.listsRefresh = true;
+      const runner = await serving(project(provider, ['x'], { vault }), SHORT_LEASE);
+      await runner.waitFor(REGISTERED);
+      await until('its refresh learns it states no expiry', () => provider.refreshes >= 1);
+      await sleep(2_500);
+      assert.equal(provider.refreshes, 1);
+    }));
+  await t.test('a module that answers null to a call with no `current` is not asked again', () =>
+    world(async (provider, vault, serving) => {
+      provider.registersNothing = true;
+      const runner = await serving(project(provider, ['x'], { vault }), SHORT_LEASE);
+      await runner.waitFor(/webhook {2}is registered for the arrivals on Notes at /);
+      await sleep(2_000);
+      assert.equal(provider.asked.fresh, 1);
+    }));
+  await t.test('a webhook withdrawn for having no secret is not registered and withdrawn again', () =>
+    world(async (provider, vault, serving) => {
+      provider.issuesNoSecret = true;
+      const runner = await serving(project(provider, ['x'], { vault }), SHORT_LEASE);
+      await runner.waitFor(/registering its webhook returned no secret/);
+      await sleep(2_000);
+      assert.equal(provider.made, 1);
+      assert.deepEqual(provider.removed, ['wh-1']);
+    }));
 });
