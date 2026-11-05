@@ -169,6 +169,7 @@ pub async fn run(project: Project, serving: Serving<'_>) -> Result<i32, String> 
     // Doors only, nothing drains here: the webhooks still follow the heads
     // the workers resolve (a drain follows them as it drains).
     let drain = if doors_only { tokio::task::spawn_local(follow_heads_forever(session.clone())) } else { tokio::task::spawn_local(drain_forever(session.clone(), poke.clone())) };
+    let stop = stopped();
     println!("listen-fire serving on http://127.0.0.1:{port}/hooks/<external>/<install>");
     for line in hook_urls(&session, &format!("http://127.0.0.1:{port}")) {
         println!("{line}");
@@ -177,10 +178,13 @@ pub async fn run(project: Project, serving: Serving<'_>) -> Result<i32, String> 
         println!("doors only: nothing drains in this process; workers (`listen-fire drain`) run what the doors queue");
     }
 
-    stopped().await;
+    stop.await;
     for task in [doors, watching, drain] {
         task.abort();
         let _ = task.await;
+    }
+    for line in crate::subscriptions::leave(&session).await {
+        println!("{line}");
     }
     // The last holder: the session goes; its module processes stop as listen-fire exits (crate::module_hosts::stop_all).
     drop(session);
@@ -266,25 +270,33 @@ fn hook_url(base: &str, external: &str, credential: &str) -> Option<String> {
     Some(url.to_string())
 }
 
+/// What `listen-fire serve` waits on. SIGTERM's handler is in place from this
+/// call, not from the first await: one sent the moment the serving line is
+/// printed stops the process in order, not by the signal's default action.
 #[cfg(unix)]
-async fn stopped() {
+fn stopped() -> impl std::future::Future<Output = ()> {
     use tokio::signal::unix::{SignalKind, signal};
-    match signal(SignalKind::terminate()) {
-        Ok(mut term) => {
-            tokio::select! {
-                _ = tokio::signal::ctrl_c() => {}
-                _ = term.recv() => {}
+    let term = signal(SignalKind::terminate());
+    async move {
+        match term {
+            Ok(mut term) => {
+                tokio::select! {
+                    _ = tokio::signal::ctrl_c() => {}
+                    _ = term.recv() => {}
+                }
             }
-        }
-        Err(_) => {
-            let _ = tokio::signal::ctrl_c().await;
+            Err(_) => {
+                let _ = tokio::signal::ctrl_c().await;
+            }
         }
     }
 }
 
 #[cfg(not(unix))]
-async fn stopped() {
-    let _ = tokio::signal::ctrl_c().await;
+fn stopped() -> impl std::future::Future<Output = ()> {
+    async {
+        let _ = tokio::signal::ctrl_c().await;
+    }
 }
 
 /// The drain: one pass at a time in this process (the run lease keeps any

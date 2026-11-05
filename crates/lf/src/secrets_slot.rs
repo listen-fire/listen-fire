@@ -124,6 +124,11 @@ pub trait SecretsStore: SecretsBackend {
     fn label(&self) -> String;
     /// Where a credential that is not there was looked for.
     fn looked_in(&self) -> String;
+    /// Whether other listen-fire processes may share what it holds, so that a
+    /// webhook kept here may have other holders (crate::subscriptions).
+    fn shared(&self) -> bool {
+        false
+    }
     fn list(&self) -> Result<Vec<Listed>, String>;
     /// Every credential with its fields: `list`, then each resolved.
     fn entries(&self) -> Result<Vec<Stored>, String> {
@@ -406,6 +411,10 @@ impl SecretsStore for ProcessSecrets {
 
     fn looked_in(&self) -> String {
         self.client.label.clone()
+    }
+
+    fn shared(&self) -> bool {
+        true
     }
 
     fn entries_writable(&self, reference: &str) -> Result<(), EntryError> {

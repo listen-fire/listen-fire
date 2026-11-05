@@ -155,6 +155,9 @@ pub struct SecretsFamily {
     warn: Box<dyn Fn(&str)>,
 }
 
+/// A credential's field naming who holds its webhooks (crate::subscriptions).
+pub const WEBHOOK_HOLDERS_FIELD: &str = "webhook_holders";
+
 const POLL: Duration = Duration::from_millis(20);
 /// How long a lock is waited for, and when one left by a process that died
 /// is taken over.
@@ -227,9 +230,12 @@ impl SecretsFamily {
     async fn refresh_now(&self, reference: &str, seen_version: &str, refresher: &Refresher<'_>) -> Result<Record, SecretError> {
         let _held = self.lock(reference).await?;
         self.backend.assert_writable(reference).map_err(SecretError::Store)?;
+        let seen = self.cached(reference).filter(|record| record.version == seen_version);
         let current = self.fresh(reference)?;
         // Somebody refreshed it since the caller read it: theirs is the answer.
-        if current.version != seen_version {
+        // A runner renewing its hold on a webhook moves the version every few
+        // minutes and refreshes nothing, so its token is still to be refreshed.
+        if current.version != seen_version && !seen.is_some_and(|seen| differs_only_in_holders(&seen.fields, &current.fields)) {
             return Ok(current);
         }
         let changed = refresher(current.clone()).await.map_err(|why| SecretError::RefreshFailed {
@@ -288,6 +294,11 @@ impl SecretsFamily {
         held.lease = Some(self.backend.lock(reference, LEASE_TTL_MS).await.map_err(SecretError::Store)?);
         Ok(held)
     }
+}
+
+fn differs_only_in_holders(seen: &Fields, current: &Fields) -> bool {
+    let others = |fields: &'_ Fields| fields.iter().filter(|(k, _)| *k != WEBHOOK_HOLDERS_FIELD).map(|(k, v)| (k.clone(), v.clone())).collect::<Vec<_>>();
+    others(seen) == others(current)
 }
 
 struct Held<'b> {
@@ -534,6 +545,31 @@ mod tests {
             assert_eq!(calls.get(), 1);
             assert_eq!(one.unwrap().fields["access_token"], "a1");
             assert_eq!(two.unwrap().fields["access_token"], "a1");
+        });
+    }
+
+    #[test]
+    fn a_runner_renewing_its_hold_on_a_webhook_does_not_pass_for_a_refresh() {
+        block_on(async {
+            let f = family(false, Rc::default());
+            let calls = Cell::new(0);
+            let refresher = |_current: Record| -> LocalFuture<'_, Result<Fields, String>> {
+                calls.set(calls.get() + 1);
+                Box::pin(async { Ok(fields(&[("access_token", "a1")])) })
+            };
+            let seen = f.resolve("acme").unwrap().version;
+            let renewed = fields(&[(WEBHOOK_HOLDERS_FIELD, "{}")]);
+            assert!(matches!(f.backend.write_back("acme", &renewed, &seen).unwrap(), WriteBack::Written(_)));
+            let refreshed = f.refresh("acme", &seen, &refresher).await.unwrap();
+            assert_eq!((calls.get(), refreshed.fields["access_token"].as_str()), (1, "a1"), "its token was still to be refreshed");
+            assert_eq!(refreshed.fields[WEBHOOK_HOLDERS_FIELD], "{}", "and the hold is kept");
+
+            // Another's refresh is one: its token is the answer, as ever.
+            let seen = refreshed.version;
+            let theirs = fields(&[("access_token", "theirs")]);
+            assert!(matches!(f.backend.write_back("acme", &theirs, &seen).unwrap(), WriteBack::Written(_)));
+            let answered = f.refresh("acme", &seen, &refresher).await.unwrap();
+            assert_eq!((calls.get(), answered.fields["access_token"].as_str()), (1, "theirs"));
         });
     }
 

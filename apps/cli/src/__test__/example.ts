@@ -44,6 +44,8 @@ export interface Served {
   /** Resolves with the first output line matching, or rejects after `ms`. */
   waitFor(pattern: RegExp, ms?: number): Promise<string>;
   stop(): Promise<void>;
+  /** Killed outright, as a crash leaves it: nothing it does on stopping runs. */
+  kill(): Promise<void>;
 }
 
 /** `listen-fire serve` on a free port (or the `--port` in `args`), its output and
@@ -92,6 +94,10 @@ export async function served(dir: string, args: string[] = [], env: Record<strin
     waitFor,
     stop: async () => {
       server.kill('SIGTERM');
+      await exited;
+    },
+    kill: async () => {
+      server.kill('SIGKILL');
       await exited;
     },
   };
