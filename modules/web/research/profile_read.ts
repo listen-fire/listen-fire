@@ -79,14 +79,20 @@ export async function readProfileIndex(
 }
 
 /** The read with the profile service's text and whatever the index left unknown
- *  filled in from it. No service, or nothing from it, leaves the read as it was. */
-export async function readProfilePage(read: ProfileRead, options: ReadOptions): Promise<ProfileRead> {
+ *  filled in from it. No service, or nothing from it, leaves the read as it was.
+ *  A caller with a deadline passes the time it has left as `waitMs`, which can
+ *  only shorten the wait. */
+export async function readProfilePage(
+  read: ProfileRead,
+  options: ReadOptions & { waitMs?: number },
+): Promise<ProfileRead> {
   const { profileUrl, identity } = read;
   const { log, run } = options;
+  const maxWaitMs = Math.min(PROFILE_WAIT_MS, options.waitMs ?? PROFILE_WAIT_MS);
   const profiles = tools().profiles;
   if (!profiles) return read;
   try {
-    const profile = await profiles.getProfileTextByUrl(profileUrl, { maxWaitMs: PROFILE_WAIT_MS });
+    const profile = await profiles.getProfileTextByUrl(profileUrl, { maxWaitMs });
     const text = profile?.text?.trim();
     if (!text) return read;
     const { name, headline } = readProfileLines(text);
@@ -122,21 +128,23 @@ export async function readProfile(
   return isThin(index.identity) ? readProfilePage(index, args) : index;
 }
 
-/** A first line reading `Label: value` marks the labelled record the hosted
- *  reader writes. Plain text never opens that way, because its first line is a
- *  person's name. The labels are that reader's own field names, not LinkedIn's
- *  words, so they do not vary with the profile's language. */
-const LABELLED_LINE = /^[\p{L} ]{1,30}:\s/u;
+/** Every header the hosted reader can open a profile with. Plain text never
+ *  opens on one, because its first line is a person's name. The labels are that
+ *  reader's own field names, not LinkedIn's words, so they do not vary with the
+ *  profile's language. The list and experience headers end at the colon, their
+ *  entries being on the lines below. */
+const LABELLED_HEADER =
+  /^(?:Name|Position|Current company|City|Country|Past experience|Education):(?:\s|$)/;
 
 /** The name and headline in either form the service returns: plain lines, which
  *  open with the two of them, or a labelled record, where a field left empty is
- *  simply missing and so the next line must not be taken for it. */
+ *  simply missing and so no other line may be taken for it. */
 function readProfileLines(text: string): { name: string | null; headline: string | null } {
   const lines = text
     .split('\n')
     .map((line) => line.trim())
     .filter(Boolean);
-  if (!LABELLED_LINE.test(lines[0] ?? '')) return { name: lines[0] ?? null, headline: lines[1] ?? null };
+  if (!LABELLED_HEADER.test(lines[0] ?? '')) return { name: lines[0] ?? null, headline: lines[1] ?? null };
   const field = (label: string) =>
     lines.find((line) => line.startsWith(`${label}:`))?.slice(label.length + 1).trim() || null;
   return { name: field('Name'), headline: field('Position') };

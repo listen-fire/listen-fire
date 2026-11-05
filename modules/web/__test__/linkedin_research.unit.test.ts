@@ -37,9 +37,11 @@ interface Script {
   plans?: Array<Record<string, unknown>>;
   /** What the index answers to a query. An unlisted query finds nothing. */
   index?: Record<string, SearchResult[]>;
-  writer?: Record<string, unknown>;
+  writer?: Record<string, unknown> | Error;
   profileText?: string | null;
   pages?: Record<string, string>;
+  /** Runs inside each planner call, so a test can let the clock pass. */
+  onPlan?: () => void;
 }
 
 function scripted(script: Script) {
@@ -48,6 +50,7 @@ function scripted(script: Script) {
     planner: [] as string[],
     writer: [] as string[],
     profiles: [] as string[],
+    profileWaits: [] as Array<number | undefined>,
     fetches: [] as string[],
   };
   const plans = script.plans ?? [{ queries: [], terms: [], organisation: '', tied_down: true }];
@@ -57,11 +60,13 @@ function scripted(script: Script) {
     models: {
       anthropicChat: async (options) => {
         const plan = plans[Math.min(asked.planner.length, plans.length - 1)];
+        script.onPlan?.();
         asked.planner.push(`${options.system}\n---\n${options.userMessage}`);
         return JSON.stringify(plan);
       },
       anthropicChatStructured: async (options) => {
         asked.writer.push(String(options.userMessage));
+        if (script.writer instanceof Error) throw script.writer;
         return (script.writer ?? FOUND) as never;
       },
       anthropicWebChat: async () => {
@@ -80,8 +85,9 @@ function scripted(script: Script) {
       script.profileText === undefined
         ? undefined
         : {
-            getProfileTextByUrl: async (url) => {
+            getProfileTextByUrl: async (url, budget) => {
               asked.profiles.push(url);
+              asked.profileWaits.push(budget?.maxWaitMs);
               return script.profileText ? { text: script.profileText } : null;
             },
           },
@@ -144,6 +150,13 @@ describe('planning', () => {
     expect(asked.searches).toEqual([SITE_QUERY, queries[0], queries[1]]);
   });
 
+  it('tells the planner a location is never a term, and an organisation is never the caller\'s alone', async () => {
+    const { tools, asked } = scripted({ index: { [SITE_QUERY]: [OWN_ENTRY] } });
+    await research(tools);
+    expect(asked.planner[0]).toContain('A location is never a term');
+    expect(asked.planner[0]).toContain('Never report one that only the caller\'s text names');
+  });
+
   it('refuses a query that searches on a location alone, and tells the planner why it should not write one', async () => {
     const { tools, asked } = scripted({
       index: { [SITE_QUERY]: [OWN_ENTRY] },
@@ -152,7 +165,7 @@ describe('planning', () => {
     await research(tools);
     expect(asked.searches).toContain('"Jane Doe" Sverige drones');
     expect(asked.searches).not.toContain('"Jane Doe" Sverige');
-    expect(asked.planner[0]).toContain('A location alone is a consistency term and never what a query searches on');
+    expect(asked.planner[0]).toContain('A location is never what a query searches on alone');
   });
 
   it('does not count a query with nothing distinctive in it towards the two', async () => {
@@ -204,11 +217,60 @@ describe('the profile read as the last resort', () => {
   it('is not bought by a planner that failed', async () => {
     const { tools, asked } = scripted({
       index: { [SITE_QUERY]: [OWN_ENTRY] },
-      plans: [{ queries: [], terms: [] }],
+      plans: [{ queries: 'not a list' }],
       profileText: PROFILE_TEXT,
     });
     await research(tools);
     expect(asked.profiles).toEqual([]);
+    expect(asked.searches).toEqual([SITE_QUERY]);
+  });
+
+  it('keeps the queries of a reply that forgot to say whether anything ties the person down, and buys no read', async () => {
+    const { tools, asked } = scripted({
+      index: { [SITE_QUERY]: [OWN_ENTRY] },
+      plans: [{ queries: ['"Jane Doe" Acme'], terms: ['Acme'], organisation: '' }],
+      profileText: PROFILE_TEXT,
+    });
+    await research(tools);
+    expect(asked.searches).toContain('"Jane Doe" Acme');
+    expect(asked.profiles).toEqual([]);
+    expect(asked.planner).toHaveLength(2);
+  });
+
+  describe('against the three minutes', () => {
+    afterEach(() => jest.restoreAllMocks());
+
+    const late = (elapsedMs: number) => {
+      let now = 1_000_000;
+      jest.spyOn(Date, 'now').mockImplementation(() => now);
+      return () => {
+        now += elapsedMs;
+      };
+    };
+
+    it('waits for the profile no longer than what is left of them', async () => {
+      const pass = late(172_000);
+      const { tools, asked } = scripted({
+        index: { [SITE_QUERY]: [OWN_ENTRY] },
+        plans: [{ queries: [], terms: [], organisation: '', tied_down: false }],
+        profileText: PROFILE_TEXT,
+        onPlan: pass,
+      });
+      await research(tools);
+      expect(asked.profileWaits).toEqual([8_000]);
+    });
+
+    it('waits the fixed time when there is plenty left', async () => {
+      const pass = late(1_000);
+      const { tools, asked } = scripted({
+        index: { [SITE_QUERY]: [OWN_ENTRY] },
+        plans: [{ queries: [], terms: [], organisation: '', tied_down: false }],
+        profileText: PROFILE_TEXT,
+        onPlan: pass,
+      });
+      await research(tools);
+      expect(asked.profileWaits).toEqual([75_000]);
+    });
   });
 
   it('keeps the confidence once the profile has been read', async () => {
@@ -243,7 +305,8 @@ describe('the retry', () => {
     expect(asked.planner[1]).toContain('Jane Doe, a golfer');
     expect(asked.searches).toEqual([SITE_QUERY, '"Jane Doe" one', '"Jane Doe" two', '"Jane Doe" three']);
     expect(asked.writer[0]).toContain('Consistency terms (the acceptance rule): Acme');
-    expect(output.properties).toBeDefined();
+    expect(output.properties).toMatchObject({ activity_summary: 'Runs Acme [1].' });
+    expect(output.properties?.activity_text).not.toContain('golfer');
   });
 
   it('is not asked for when no search is left, the identity searches counting', async () => {
@@ -298,13 +361,18 @@ describe('the text handed back', () => {
   const plan = { queries: [{ query, worth_reading: true }], terms: ['Acme'], organisation: '', tied_down: true };
   const article = { link: 'https://news.example/acme', title: 'Acme grows', snippet: 'Jane Doe, who runs Acme, said so.' };
 
-  it('comes back with low confidence and no summary when the writer finds nothing', async () => {
+  it('comes back as the text alone, with no summary and no confidence, when the writer finds nothing', async () => {
     const { tools } = scripted({ index: { [SITE_QUERY]: [OWN_ENTRY], [query]: [article] }, plans: [plan], writer: NOTHING });
     const { properties } = await research(tools);
 
-    expect(properties?.activity_confidence).toBe('low');
-    expect(properties?.activity_summary).toBeUndefined();
+    expect(Object.keys(properties ?? {})).toEqual(['activity_text']);
     expect(properties?.activity_text).toContain('https://news.example/acme\nAcme grows\nJane Doe, who runs Acme, said so.');
+  });
+
+  it('comes back the same way when the writer fails outright', async () => {
+    const { tools } = scripted({ index: { [SITE_QUERY]: [OWN_ENTRY], [query]: [article] }, plans: [plan], writer: new Error('the writer is down') });
+    const { properties } = await research(tools);
+    expect(Object.keys(properties ?? {})).toEqual(['activity_text']);
   });
 
   it('comes back alongside a summary when the writer found something', async () => {
@@ -426,21 +494,132 @@ describe('the text handed back', () => {
   });
 });
 
-describe('the confidence on the index alone', () => {
-  it('stays low on a thin title with a found answer', async () => {
+describe('what ties a person down', () => {
+  const query = '"Jane Doe" Acme';
+  const acme = { link: 'https://news.example/acme', title: 'Acme grows', snippet: 'Jane Doe, who runs Acme, said so.' };
+  // The title gives Sverige as the place, as OWN_ENTRY's does.
+  const dentist = { link: 'https://news.example/dentist', title: 'Jane Doe opens a clinic', snippet: 'Jane Doe, a dentist in Sverige, opened a second clinic.' };
+
+  it('keeps a same city namesake out of the text, however the planner terms read', async () => {
     const { tools } = scripted({
-      index: { [SITE_QUERY]: [OWN_ENTRY] },
-      plans: [{ queries: [], terms: ['Acme'], organisation: '', tied_down: true }],
+      index: { [SITE_QUERY]: [OWN_ENTRY], [query]: [dentist, acme] },
+      plans: [{ queries: [query], terms: ['Acme', 'Sverige'], organisation: '', tied_down: true }],
     });
-    expect((await research(tools)).properties?.activity_confidence).toBe('low');
+    const text = String((await research(tools)).properties?.activity_text);
+    expect(text).toContain('https://news.example/acme');
+    expect(text).not.toContain('dentist');
   });
 
-  it('stays low on a rich title when the only result is the profile entry', async () => {
-    const { tools } = scripted({
-      index: { [SITE_QUERY]: [{ link: PROFILE, title: 'Jane Doe - Founder - Acme | LinkedIn', snippet: 'Runs Acme' }] },
-      plans: [{ queries: [], terms: ['Acme'], organisation: 'Acme', tied_down: true }],
+  it('admits nothing on a location written as a term', async () => {
+    const { tools, asked } = scripted({
+      index: { [SITE_QUERY]: [{ ...OWN_ENTRY, snippet: 'A profile.' }], [query]: [dentist] },
+      plans: [{ queries: [query], terms: ['Sverige'], organisation: '', tied_down: true }],
+      writer: NOTHING,
     });
-    expect((await research(tools)).properties?.activity_confidence).toBe('low');
+    expect(await research(tools)).toEqual({});
+    expect(asked.writer[0]).toContain('Consistency terms (the acceptance rule): the headline above');
+    expect(asked.writer[0]).toContain('Location: Sverige');
+  });
+
+  it('tells the writer a location supports a result and never suffices', async () => {
+    const { tools, asked } = scripted({ index: { [SITE_QUERY]: [OWN_ENTRY] } });
+    await research(tools);
+    expect(asked.writer[0]).toContain('Location: Sverige');
+    expect(asked.writer[0]).not.toContain('Consistency terms (the acceptance rule): Sverige');
+  });
+
+  describe('and what the caller said', () => {
+    const context = 'Jane mentioned her work at Northwind in Slack';
+
+    it('never becomes the organisation by itself', async () => {
+      const { tools, asked } = scripted({
+        index: { [SITE_QUERY]: [OWN_ENTRY] },
+        plans: [{ queries: [], terms: ['Northwind'], organisation: 'Northwind', tied_down: true }],
+        writer: { ...FOUND, current_organisation: '' },
+      });
+      const { properties } = await research(tools, { context });
+      expect(asked.writer[0]).toContain('Organisation as read from the headline: unknown');
+      expect(properties?.current_organisation).toBe('');
+    });
+
+    it('stays the organisation when the index says it too', async () => {
+      const { tools, asked } = scripted({
+        index: { [SITE_QUERY]: [{ ...OWN_ENTRY, snippet: 'Experience: Northwind · Education: Example University' }] },
+        plans: [{ queries: [], terms: ['Northwind'], organisation: 'Northwind', tied_down: true }],
+        writer: { ...FOUND, current_organisation: '' },
+      });
+      const { properties } = await research(tools, { context });
+      expect(asked.writer[0]).toContain('Organisation as read from the headline: Northwind');
+      expect(properties?.current_organisation).toBe('Northwind');
+    });
+
+    it('still gives a term to a result that names the person and it', async () => {
+      const northwind = { link: 'https://news.example/northwind', title: 'Northwind hires', snippet: 'Jane Doe joined Northwind this spring.' };
+      const { tools } = scripted({
+        index: { [SITE_QUERY]: [OWN_ENTRY], '"Jane Doe" Northwind': [northwind] },
+        plans: [{ queries: ['"Jane Doe" Northwind'], terms: ['Northwind'], organisation: '', tied_down: true }],
+      });
+      const { properties } = await research(tools, { context });
+      expect(properties?.activity_text).toContain('https://news.example/northwind\nNorthwind hires\nJane Doe joined Northwind this spring.');
+    });
+
+    it('may settle that the person is tied down, which skips the paid read', async () => {
+      const { tools, asked } = scripted({
+        index: { [SITE_QUERY]: [OWN_ENTRY] },
+        plans: [{ queries: [], terms: ['Northwind'], organisation: '', tied_down: true }],
+        profileText: PROFILE_TEXT,
+      });
+      await research(tools, { context });
+      expect(asked.profiles).toEqual([]);
+    });
+  });
+
+  describe('and the confidence', () => {
+    const rich = { link: PROFILE, title: 'Jane Doe - Founder - Acme | LinkedIn', snippet: 'Runs Acme' };
+    const tiedDown = { queries: [query], terms: ['Acme'], organisation: 'Acme', tied_down: true };
+    const outside = { ...FOUND, confidence: 'high', sources: ['https://news.example/acme'] };
+
+    it('is the writer\'s when an accepted source lies beyond their own addresses, even on a thin title', async () => {
+      const thin = scripted({ index: { [SITE_QUERY]: [OWN_ENTRY], [query]: [acme] }, plans: [tiedDown], writer: outside });
+      expect((await research(thin.tools)).properties?.activity_confidence).toBe('high');
+
+      const full = scripted({ index: { [SITE_QUERY]: [rich], [query]: [acme] }, plans: [tiedDown], writer: { ...outside, confidence: 'medium' } });
+      expect((await research(full.tools)).properties?.activity_confidence).toBe('medium');
+    });
+
+    it('is low when the accepted sources are only their own addresses', async () => {
+      const post = 'https://www.linkedin.com/posts/jane-doe_launch-activity-1-abc';
+      const { tools } = scripted({
+        index: { [SITE_QUERY]: [rich] },
+        plans: [tiedDown],
+        writer: { ...FOUND, confidence: 'high', sources: [PROFILE, post] },
+      });
+      expect((await research(tools)).properties?.activity_confidence).toBe('low');
+    });
+
+    it('is low when the writer cites nothing, whatever it claims', async () => {
+      const { tools } = scripted({ index: { [SITE_QUERY]: [rich] }, plans: [tiedDown], writer: { ...FOUND, confidence: 'high', sources: [] } });
+      expect((await research(tools)).properties?.activity_confidence).toBe('low');
+    });
+
+    it('is low when nothing tied the person down and no profile was read', async () => {
+      const { tools } = scripted({
+        index: { [SITE_QUERY]: [rich], [query]: [acme] },
+        plans: [{ ...tiedDown, tied_down: false }],
+        writer: outside,
+      });
+      expect((await research(tools)).properties?.activity_confidence).toBe('low');
+    });
+
+    it('is the writer\'s once the profile has been read, though the first plan found nothing to tie them down', async () => {
+      const { tools } = scripted({
+        index: { [SITE_QUERY]: [OWN_ENTRY], [query]: [acme] },
+        plans: [{ ...tiedDown, tied_down: false }, tiedDown],
+        profileText: PROFILE_TEXT,
+        writer: outside,
+      });
+      expect((await research(tools)).properties?.activity_confidence).toBe('high');
+    });
   });
 });
 
@@ -474,6 +653,22 @@ describe('the shared profile reader', () => {
 
     const { read: named } = await read({}, 'Name: Jane Doe\nCity: Zürich');
     expect(named.identity).toMatchObject({ name: 'Jane Doe', headline: null });
+  });
+
+  it.each([
+    ['Past experience', 'Past experience:\n  - Founder @ Acme (2020)'],
+    ['Education', 'Education:\n  - BSc in Physics @ Example University'],
+    ['Current company', 'Current company: Founder @ Acme'],
+    ['City', 'City: Zürich'],
+    ['Country', 'Country: CH'],
+  ])('reads a record opening on %s as having no name and no headline', async (_header, text) => {
+    const { read: profile } = await read({}, text);
+    expect(profile.identity).toMatchObject({ name: null, headline: null });
+  });
+
+  it('finds the name and headline of a labelled record wherever they sit', async () => {
+    const { read: profile } = await read({}, 'Past experience:\n  - Founder @ Acme\nName: Jane Doe\nPosition: Founder');
+    expect(profile.identity).toMatchObject({ name: 'Jane Doe', headline: 'Founder' });
   });
 
   it('still reads the profile on its own when the index is thin, and not when it is rich', async () => {

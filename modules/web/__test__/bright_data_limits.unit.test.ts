@@ -112,7 +112,7 @@ describe("Bright Data's limits off the platform", () => {
     await expect(next).resolves.toContain('a page');
   });
 
-  it("carries a result's extensions into its snippet, ahead of the description, and skips those with no text", async () => {
+  it("carries a result's extensions into its snippet, ahead of the description, and skips those with no text, a sitelink, a repeat or what the description says", async () => {
     const reply = {
       organic: [
         {
@@ -124,7 +124,19 @@ describe("Bright Data's limits off the platform", () => {
         { link: 'https://example.com/only', title: 'Only extensions', extensions: [{ type: 'text', text: 'Founder' }] },
         { link: 'https://example.com/none', title: 'No extensions', description: 'Plain.' },
         { link: 'https://example.com/odd', title: 'Reshaped', description: 'Survives.', extensions: 'not a list' },
-        { link: 'https://example.com/odd-item', title: 'Reshaped item', description: 'Survives too.', extensions: [{ text: 7 }, { text: 'Kept' }] },
+        { link: 'https://example.com/odd-item', title: 'Reshaped item', description: 'Survives too.', extensions: [{ text: 7 }, { type: 'text', text: 'Kept' }] },
+        {
+          link: 'https://example.com/sitelinks',
+          title: 'Sitelinks',
+          description: 'Founded in Berlin.',
+          extensions: [
+            { type: 'text', text: 'Berlin' },
+            { type: 'site_link', text: 'Careers', link: 'https://example.com/careers' },
+            { type: 'text', text: 'Founder' },
+            { type: 'text', text: 'Founder' },
+            { type: 'text', text: 'founded in berlin' },
+          ],
+        },
       ],
     };
     const { tools } = await toolsOver(async () => new Response(JSON.stringify(reply), { status: 200 }));
@@ -135,6 +147,7 @@ describe("Bright Data's limits off the platform", () => {
       'Plain.',
       'Survives.',
       'Kept · Survives too.',
+      'Founder · Founded in Berlin.',
     ]);
   });
 });

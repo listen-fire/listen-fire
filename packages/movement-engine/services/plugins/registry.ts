@@ -224,7 +224,8 @@ const LINKEDIN_ENRICHMENT_SIGNATURE: TransformSignature = {
 const LINKEDIN_RESEARCH_SIGNATURE: TransformSignature = {
   name: 'linkedin-research',
   description:
-    "From a LinkedIn profile address, research what that person is currently doing — their role, their organisation, and their recent public activity — and attach a summary, a confidence, the sources it rests on, and the passages found about them.",
+    "From a LinkedIn profile address, research what that person is currently doing — their role, their organisation, and their recent public activity — and attach a summary, a confidence, the sources it rests on, and the passages found about them. " +
+    'Passages with no summary mean the research could not confirm anything beyond that text.',
   params: [
     {
       name: 'url',
@@ -295,7 +296,7 @@ const LINKEDIN_RESEARCH_SIGNATURE: TransformSignature = {
         optional: true,
         description:
           'Passages that name this person and something tying them to this identity, each under its source ' +
-          'address. Can arrive at low confidence with no summary.',
+          'address. Can arrive alone, with no summary and no confidence: research could not confirm anything beyond that text.',
       },
     },
   },

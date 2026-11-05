@@ -442,7 +442,7 @@ const SerpReply = z.object({
       link: z.string().optional(),
       title: z.string().optional(),
       description: z.string().optional(),
-      extensions: z.array(z.object({ text: z.string().nullish() }).catch({})).nullish().catch(null),
+      extensions: z.array(z.object({ type: z.string().nullish(), text: z.string().nullish() }).catch({})).nullish().catch(null),
     }),
   ),
 });
@@ -455,11 +455,24 @@ function organicResults(body: unknown): SearchResult[] {
 
 /** Google's extensions often read "location · role · organisation", which the
  *  description leaves out. They go first so that whoever clips a long snippet
- *  keeps them and loses the free text. */
-function snippetOf(hit: { description?: string; extensions?: Array<{ text?: string | null }> | null }): string | null {
-  const extensions = (hit.extensions ?? []).flatMap((extension) => extension.text?.trim() || []);
+ *  keeps them and loses the free text. Only the plain text kind is carried: a
+ *  sitelink's text is a navigation label pointing at another page, not
+ *  something the result says about its subject. Text the description already
+ *  holds would only repeat itself in every prompt, so it is left out. */
+function snippetOf(hit: {
+  description?: string;
+  extensions?: Array<{ type?: string | null; text?: string | null }> | null;
+}): string | null {
+  const description = hit.description ?? '';
+  const extensions: string[] = [];
+  for (const extension of hit.extensions ?? []) {
+    const text = extension.type === 'text' ? extension.text?.trim() : undefined;
+    if (!text || extensions.includes(text)) continue;
+    if (description.toLowerCase().includes(text.toLowerCase())) continue;
+    extensions.push(text);
+  }
   if (extensions.length === 0) return hit.description ?? null;
-  return [...extensions, ...(hit.description ? [hit.description] : [])].join(' · ');
+  return [...extensions, ...(description ? [description] : [])].join(' · ');
 }
 
 /** A page's readable text: scripts, styles and tags dropped, entities read,

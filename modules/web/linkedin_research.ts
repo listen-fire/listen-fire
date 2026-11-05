@@ -21,12 +21,22 @@
 // consistency term returns nothing at all — the pipeline skips a stage whose
 // plugins found nothing, and absent fields are the honest answer where no public
 // signal exists. Passages found with no account written from them come back on
-// their own, at low confidence: the caller asked for what the web says, and the
-// writing model declining to conclude does not make the text any less there.
+// their own, as `activity_text` alone: the caller asked for what the web says,
+// and the writing model declining to conclude does not make the text any less
+// there. No confidence and no summary go with it, so a program that never reads
+// `activity_text` sees what it saw before this field existed.
 //
 // What the caller already knows about the person arrives as `context`. It steers
 // the searches and is never evidence: the writing model does not see it, and a
-// result must still name the person.
+// result must still name the person. The planner may take consistency terms from
+// it, which is what it is for, and may let it settle that the person is tied
+// down, but the organisation the planner reports must come from the headline, the
+// index or the profile, so the context alone can never name where someone works.
+//
+// A location ties nobody down, since everyone who lives there shares it. It is
+// kept out of the consistency terms, and the writing model gets it on a line of
+// its own as support for a result that matches a term, never as a reason to
+// accept one.
 
 import { z } from 'zod';
 
@@ -178,6 +188,43 @@ function searchesOnLocationAlone(query: string, identity: ProfileIdentity): bool
   return rest.length > 0 && rest.every((word) => place.has(word));
 }
 
+/** Whether a term is only the place the title gave. A place says where someone
+ *  is and not who, so it can never be what makes a passage theirs. */
+function namesLocation(term: string, identity: ProfileIdentity): boolean {
+  if (!identity.location) return false;
+  const place = new Set(wordsOf(identity.location));
+  const words = wordsOf(term);
+  return words.length > 0 && words.every((word) => place.has(word));
+}
+
+/** The organisation the planner reports, unless the caller's text is the only
+ *  place it can have come from. The planner is told to read it from the headline,
+ *  the index or the profile; this holds it to that, because an organisation the
+ *  caller merely mentioned would otherwise be shown to the writer as read from
+ *  the headline and come back as where the person works. A name the caller's text
+ *  does not contain is kept, since a planner may well write "Acme" for "Acme Inc". */
+function organisationFromEvidence(
+  organisation: string | null,
+  args: { read: ProfileRead; ownFields: ResolvedField[]; context: string },
+): string | null {
+  if (!organisation) return null;
+  const { read, ownFields, context } = args;
+  const named = comparable(organisation);
+  if (!comparable(context).includes(named)) return organisation;
+  const evidence = comparable(
+    [
+      read.identity.headline,
+      read.identity.organisation,
+      read.indexText,
+      read.text,
+      ...ownFields.map((field) => String(field.value)),
+    ]
+      .filter(Boolean)
+      .join(' '),
+  );
+  return evidence.includes(named) ? organisation : null;
+}
+
 /** Whether loading this result could tell us anything about the person at all:
  *  its title or snippet has to name them or their organisation. A result that
  *  names neither cannot enrich them however promising the query was, and
@@ -215,7 +262,7 @@ const planSchema = z.object({
     )
     .optional(),
   terms: z.array(z.string()).optional(),
-  tied_down: z.boolean(),
+  tied_down: z.boolean().optional(),
 });
 
 type PlannedQuery = { query: string; worthReading: boolean };
@@ -247,11 +294,11 @@ You are given who they are, taken from their LinkedIn profile: what the search i
 
 Return ONLY valid JSON, no markdown, with:
 - "queries": up to TWO search queries most likely to surface their RECENT activity — posts and articles under their name, press, funding or launch announcements naming them, event, podcast or conference appearances, pages of their organisation that list them. Write a second only when it covers different ground from the first. Quote the person's name. Do not search for their LinkedIn profile — we already have it. Each entry is an object: { "query": "...", "worth_reading": true|false } where worth_reading says whether a result from this query is likely to repay loading the whole page rather than reading its snippet.
-- "terms": the 2 or 3 terms — the organisation, the field, the location — that a search result must be consistent with to be about THIS person and not a namesake. Take them from the headline, what the search index says and the caller's text. When those name no organisation and you are given the profile page, take them from the most recent roles it lists instead.
-- "organisation": the organisation the headline names, "" if it names none. A LinkedIn headline often reads as one phrase rather than segments, so this is where the organisation is read out of it.
+- "terms": the 2 or 3 terms that tie this person down, which a search result must be consistent with to be about THIS person and not a namesake: organisations, schools, specific fields. A location is never a term, because everyone who lives there shares it. Take them from the headline, what the search index says and the caller's text. When those name no organisation and you are given the profile page, take them from the most recent roles it lists instead.
+- "organisation": the organisation the headline, what the search index says, or the profile page names, "" if they name none. A LinkedIn headline often reads as one phrase rather than segments, so this is where the organisation is read out of it. Never report one that only the caller's text names: that text steers the searches and says nothing about where this person works.
 - "tied_down": true when anything you were given ties this person down to an employer, a school or a field; false otherwise. A location does not count. Whatever you were given may be in any language.
 
-An organisation the caller's text names belongs in a query. A location alone is a consistency term and never what a query searches on: the person's name with a city finds everyone of that name in that city. When you have only a location, quote the name and add words such as founder, talk or interview.
+An organisation the caller's text names belongs in a query. A location is never what a query searches on alone: the person's name with a city finds everyone of that name in that city. When you have only a location, quote the name and add words such as founder, talk or interview.
 
 A headline saying "Stealth", "Stealth Startup", "Stealth Mode", "Confidential", "Self-employed", "Independent" or "Freelance" names no organisation: it is what someone writes when they will not say where they work. Report "" for "organisation" in that case, never search for the placeholder as if it were a company, and do not use it as a consistency term. Every query must name the person, or a real organisation they are attached to.
 
@@ -259,13 +306,13 @@ When the headline is such a placeholder and the profile page lists earlier roles
 
 const SYNTHESIS_SYSTEM = `You are writing a short, honest account of what one person is currently doing, from their LinkedIn headline and a set of web search results.
 
-THE ACCEPTANCE RULE. Attribute a result to this person only if it is consistent with the consistency terms you are given — the organisation, the field, or the location from their own headline. A result that merely matches the name is a namesake's news and must be excluded. If the evidence is thin, say it is thin; never pad the answer.
+THE ACCEPTANCE RULE. Attribute a result to this person only if it is consistent with the consistency terms you are given — the organisation, the school or the field from their own headline. A result that merely matches the name is a namesake's news and must be excluded. The location is given on its own line: it can support a result that also matches a term, and never suffices alone, because everyone who lives there shares it. If the evidence is thin, say it is thin; never pad the answer.
 
 A result marked "(their own address)" is their own LinkedIn profile or a post of theirs, so it is theirs and the acceptance rule does not apply to it. The profile's own entry says no more than the headline does and never raises the confidence; a post of theirs is a source like any other.
 
 Report your answer through the tool. Every field is required; when nothing survives the acceptance rule, report found = false with empty strings and an empty source list.
 
-- "found": true only if at least one source consistent with the headline was found.
+- "found": true only if at least one source consistent with the consistency terms was found.
 - "confidence": "high" when the headline and at least two independent recent sources agree; "medium" when the headline plus one recent source agree, or when several sources agree but nothing is dated within about a year; "low" when you have the headline only, or sources that are consistent but thin.
 - "current_role" and "current_organisation": as you read them, "" when unknown. When the headline is a placeholder ("Stealth", "Self-employed", "Independent") and the profile shows earlier founder, co-founder or CTO roles, report the most recent such venture as a likely guess: "current_organisation" is that venture's name and "current_role" says both, e.g. "Founder, in stealth (previously Co-founder & CTO)".
 - "summary": the answer, in prose. In that same placeholder case, lead with the history: "Previously co-founded Acme (industrial drones); now in stealth." Otherwise, their current role and organisation, what they appear to be doing or building now, recent notable activity with dates where you know them, and an explicit hedge where the public record ends ("appears to be starting something in X, unconfirmed"). Cite every claim with a bracketed number, [1], [2].
@@ -285,6 +332,9 @@ export const linkedinResearchPlugin: WebPlugin = {
     const run = runFields();
     const deadline = Date.now() + WALL_CLOCK_MS;
     const budgetLeft = () => Date.now() < deadline;
+    // The profile service waits as long as it is told to, so it is told only
+    // what is left: a read started at the last minute must not outrun the deadline.
+    const timeLeft = () => Math.max(0, deadline - Date.now());
 
     const slug = profileSlug(input.config.url);
     if (!slug) {
@@ -316,7 +366,7 @@ export const linkedinResearchPlugin: WebPlugin = {
     // not supply one: that would make it the only evidence of who this is. So
     // there is nothing for a planner to judge, and the profile is all that's left.
     if (!read.identity.name && budgetLeft()) {
-      read = await readProfilePage(read, { log: LOG, run });
+      read = await readProfilePage(read, { log: LOG, run, waitMs: timeLeft() });
     }
     if (!read.identity.name && !read.text) {
       logger.info(`${LOG} No identity established — giving up before planning`, { slug, ...run });
@@ -328,7 +378,7 @@ export const linkedinResearchPlugin: WebPlugin = {
 
     // A planner that failed said nothing about this person, so it buys no read.
     if (plan && !plan.tiedDown && !read.text && budgetLeft()) {
-      const withProfile = await readProfilePage(read, { log: LOG, run });
+      const withProfile = await readProfilePage(read, { log: LOG, run, waitMs: timeLeft() });
       if (withProfile.text) {
         read = withProfile;
         const replanned = budgetLeft() ? await planQueries({ read, ownFields, context, run }) : null;
@@ -497,16 +547,19 @@ export const linkedinResearchPlugin: WebPlugin = {
         profileRead,
         ...run,
       });
-      return activityText
-        ? { properties: { activity_text: activityText, activity_confidence: 'low' } }
-        : {};
+      // Text with no summary and no confidence: research could not confirm
+      // anything beyond it, and a program that never reads the text sees an
+      // empty answer, as before.
+      return activityText ? { properties: { activity_text: activityText } } : {};
     }
 
-    // The index alone cannot support more than a hedge, however many results
-    // agreed with it: what they agreed with was two words of stale headline.
-    const onlyTheIndex = thinAfterIdentity || (!read.text && beyondProfile().length === 0);
-    const confidence = onlyTheIndex ? 'low' : synthesis.confidence;
     const sources = synthesis.sources.filter((s) => s.trim());
+    // Agreement with the person's own addresses is agreement with a headline,
+    // which says no more than the headline does. And a person nothing ever tied
+    // down was searched for on a name alone, whatever the writer then concluded.
+    const onlyTheirOwn = sources.every((source) => belongsToProfile(source, slug));
+    const neverTiedDown = !plan?.tiedDown && !read.text;
+    const confidence = onlyTheirOwn || neverTiedDown ? 'low' : synthesis.confidence;
 
     logger.info(`${LOG} Researched`, {
       slug,
@@ -585,10 +638,15 @@ async function planQueries(args: {
     return {
       queries,
       // A placeholder is no consistency term either: "stealth" in a snippet says
-      // nothing about whose news it is.
-      terms: (parsed.terms ?? []).filter((t) => distinctiveOrganisation(t) !== null),
-      organisation: parsed.organisation?.trim() || null,
-      tiedDown: parsed.tied_down,
+      // nothing about whose news it is. Nor is the place the title gave, which a
+      // planner told not to use as a term may still write.
+      terms: (parsed.terms ?? []).filter(
+        (term) => distinctiveOrganisation(term) !== null && !namesLocation(term, identity),
+      ),
+      organisation: organisationFromEvidence(parsed.organisation?.trim() || null, { read, ownFields, context }),
+      // A reply that forgot the flag keeps its queries: calling the person tied
+      // down only spends no paid read, which is the cheap way to be wrong.
+      tiedDown: parsed.tied_down ?? true,
     };
   } catch (error) {
     logger.warn(`${LOG} The query planner failed`, { error: describeError(error), ...run });
