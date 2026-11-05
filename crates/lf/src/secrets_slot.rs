@@ -55,7 +55,12 @@ use crate::slot_client::SlotClient;
 /// own). The longest a call can rightly take is a module's first, which may
 /// spend slot_client's START_TIMEOUT of 30 s starting before it is asked, so
 /// this leaves as long again for the answer. It is also the longest a stopped
-/// runner waits for a module that has hung.
+/// runner waits for a module that has hung. After a timeout the module is not
+/// asked for as long again, except `secrets.writeBack`: the provider has
+/// already rotated the token by then, and a write back refused unasked loses
+/// the only one it still takes, which costs a new sign in, not a wait.
+/// (`secrets.replace` is not exempt: it writes back what it just read, never a
+/// token the provider rotated since.)
 const DEFAULT_SECRETS_CALL_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// `LF_SECRETS_CALL_TIMEOUT_MS`: how long one call to a secrets module may take.
@@ -341,7 +346,12 @@ pub struct ProcessSecrets {
 impl ProcessSecrets {
     pub fn start(name: &str, process: &ProcessModule, settings: &BTreeMap<String, String>) -> Result<ProcessSecrets, String> {
         let within = secrets_call_timeout_of(std::env::var("LF_SECRETS_CALL_TIMEOUT_MS").ok().as_deref())?;
-        Ok(ProcessSecrets { name: name.to_string(), client: SlotClient::start("secrets", name, process, settings)?.answering_within(within) })
+        ProcessSecrets::start_within(name, process, settings, within)
+    }
+
+    fn start_within(name: &str, process: &ProcessModule, settings: &BTreeMap<String, String>, within: Duration) -> Result<ProcessSecrets, String> {
+        let client = SlotClient::start("secrets", name, process, settings)?.answering_within(within).always_asking(&["secrets.writeBack"]);
+        Ok(ProcessSecrets { name: name.to_string(), client })
     }
 
     fn call(&self, method: &str, params: Obj) -> Result<Js, String> {
@@ -645,6 +655,70 @@ mod tests {
         write_staged(&path, "secrets", text).unwrap();
         let module = FileSecretsModule::at(&path).unwrap();
         (path, module)
+    }
+
+    /// A secrets module at a url that never answers `secrets.resolve` and takes
+    /// every write back, whose requests the test reads back.
+    fn module_stalling_on_resolve() -> (String, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/", listener.local_addr().unwrap());
+        let methods = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let log = methods.clone();
+        std::thread::spawn(move || {
+            for mut stream in listener.incoming().flatten() {
+                let log = log.clone();
+                std::thread::spawn(move || {
+                    let mut received = Vec::new();
+                    let mut chunk = [0u8; 4096];
+                    let body = loop {
+                        let n = stream.read(&mut chunk).unwrap();
+                        received.extend_from_slice(&chunk[..n]);
+                        let text = String::from_utf8_lossy(&received).to_string();
+                        if let Some((head, rest)) = text.split_once("\r\n\r\n") {
+                            let length = head.lines().find_map(|l| l.to_ascii_lowercase().strip_prefix("content-length:").map(|v| v.trim().parse::<usize>().unwrap())).unwrap_or(0);
+                            if rest.len() >= length {
+                                break rest[..length].to_string();
+                            }
+                        }
+                        if n == 0 {
+                            return;
+                        }
+                    };
+                    let request = Js::parse(body.as_bytes()).unwrap();
+                    let method = request.get("method").and_then(Js::as_str).unwrap().to_string();
+                    log.lock().unwrap().push(method.clone());
+                    let result = match method.as_str() {
+                        "manifest" => crate::slot_server::manifest("acme_vault", "secrets", SECRETS_METHODS),
+                        "secrets.writeBack" => Js::Obj(obj! { "kind" => Js::str("written"), "record" => Js::Obj(obj! { "fields" => request.get("params").and_then(|p| p.get("fields")).cloned().unwrap(), "version" => Js::str("v2") }) }),
+                        _ => loop {
+                            std::thread::park();
+                        },
+                    };
+                    let answer = Js::Obj(obj! { "ok" => Js::Bool(true), "result" => result }).to_json();
+                    let _ = write!(stream, "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{answer}", answer.len());
+                });
+            }
+        });
+        (url, methods)
+    }
+
+    /// The token was rotated at the provider while another call stalled: the
+    /// write back that follows is the only copy of the new one.
+    #[test]
+    fn a_write_back_in_the_quiet_after_a_stalled_call_still_reaches_the_module() {
+        let (url, methods) = module_stalling_on_resolve();
+        let process = ProcessModule { dir: PathBuf::from("."), command: Vec::new(), env: Default::default(), url: Some(url), auth_field: None };
+        let module = ProcessSecrets::start_within("acme_vault", &process, &BTreeMap::new(), Duration::from_millis(150)).unwrap();
+        assert!(module.resolve("acme").unwrap_err().contains("did not answer within"));
+        let refused = module.resolve("acme").unwrap_err();
+        assert!(refused.contains("so it was not asked"), "the quiet is on: {refused}");
+
+        let rotated: Fields = [("refresh_token".to_string(), "r2".to_string())].into_iter().collect();
+        let outcome = module.write_back("acme", &rotated, "v1").unwrap();
+        let WriteBack::Written(kept) = outcome else { panic!("the module takes the write back") };
+        assert_eq!(kept.fields["refresh_token"], "r2");
+        assert_eq!(*methods.lock().unwrap(), ["manifest", "secrets.resolve", "secrets.writeBack"], "the second resolve was never sent, the write back was");
     }
 
     #[test]

@@ -60,11 +60,19 @@ impl SlotError {
     }
 }
 
+/// How long one call may take, and whether a module that just failed to answer
+/// in time is spared it (`answer_within`).
+#[derive(Clone, Copy)]
+struct Within {
+    limit: Duration,
+    heeds_silence: bool,
+}
+
 /// A method and its request body, how long it may take, and where its answer goes.
 struct Job {
     method: String,
     body: String,
-    within: Option<Duration>,
+    within: Option<Within>,
     reply: mpsc::Sender<Result<Js, SlotError>>,
 }
 
@@ -166,6 +174,9 @@ pub struct SlotClient {
     settings: Obj,
     /// How long `call` waits for an answer; a slot's own to choose.
     within: Option<Duration>,
+    /// Methods asked even while the module is being left alone, each under the
+    /// ordinary time: a slot's own to choose.
+    always_asked: &'static [&'static str],
 }
 
 /// Where the module answers, and the secret it requires.
@@ -246,7 +257,7 @@ impl SlotClient {
                 }
             })
             .map_err(|e| format!("{label}: no thread to call it from: {e}"))?;
-        Ok(SlotClient { label, reached, jobs: Some(jobs), worker: Some(worker), settings: declared, within: None })
+        Ok(SlotClient { label, reached, jobs: Some(jobs), worker: Some(worker), settings: declared, within: None, always_asked: &[] })
     }
 
     /// `call` fails as a transport fault when the module has not answered
@@ -254,6 +265,14 @@ impl SlotClient {
     /// and whose every caller already treats a failed call as a failed call.
     pub fn answering_within(mut self, within: Duration) -> SlotClient {
         self.within = Some(within);
+        self
+    }
+
+    /// `methods` are asked even in the time a module is left alone after one
+    /// call went unanswered, though each still ends at `answering_within`: for
+    /// a call whose loss cannot be redone, which one more wait is cheaper than.
+    pub fn always_asking(mut self, methods: &'static [&'static str]) -> SlotClient {
+        self.always_asked = methods;
         self
     }
 
@@ -286,7 +305,8 @@ impl SlotClient {
     pub fn call(&self, method: &str, params: Obj) -> Result<Js, SlotError> {
         let (reply, answer) = mpsc::channel();
         let jobs = self.jobs.as_ref().ok_or_else(|| SlotError::transport(format!("{} is closed", self.label)))?;
-        let job = Job { method: method.to_string(), body: self.body(method, params), within: self.within, reply };
+        let within = self.within.map(|limit| Within { limit, heeds_silence: !self.always_asked.contains(&method) });
+        let job = Job { method: method.to_string(), body: self.body(method, params), within, reply };
         jobs.send(job).map_err(|_| SlotError::transport(format!("{} is closed", self.label)))?;
         answer.recv().unwrap_or_else(|_| Err(SlotError::transport("no answer".into()))).map_err(|e| self.named(method, e))
     }
@@ -326,13 +346,14 @@ impl Drop for SlotClient {
 /// not answered is not asked again for that long: one decision makes several
 /// calls, and waiting out each would multiply how long the caller's thread
 /// stands still, and so how long a stopping process takes to stop.
-async fn answer_within(call: impl std::future::Future<Output = Result<Js, SlotError>>, within: Duration, silent_until: &mut Option<Instant>) -> Result<Js, SlotError> {
-    if silent_until.is_some_and(|until| Instant::now() < until) {
-        return Err(SlotError::transport(format!("did not answer within {within:?} a moment ago, so it was not asked")));
+async fn answer_within(call: impl std::future::Future<Output = Result<Js, SlotError>>, within: Within, silent_until: &mut Option<Instant>) -> Result<Js, SlotError> {
+    let Within { limit, heeds_silence } = within;
+    if heeds_silence && silent_until.is_some_and(|until| Instant::now() < until) {
+        return Err(SlotError::transport(format!("did not answer within {limit:?} a moment ago, so it was not asked")));
     }
-    tokio::time::timeout(within, call).await.unwrap_or_else(|_| {
-        *silent_until = Some(Instant::now() + within);
-        Err(SlotError::transport(format!("did not answer within {within:?}")))
+    tokio::time::timeout(limit, call).await.unwrap_or_else(|_| {
+        *silent_until = Some(Instant::now() + limit);
+        Err(SlotError::transport(format!("did not answer within {limit:?}")))
     })
 }
 
@@ -388,21 +409,36 @@ mod tests {
     fn a_call_past_its_time_fails_as_a_fault_and_the_module_is_left_alone_for_as_long() {
         let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
         let within = Duration::from_millis(40);
+        let heeding = Within { limit: within, heeds_silence: true };
         let mut silent_until = None;
         let never = || std::future::pending::<Result<Js, SlotError>>();
         let started = Instant::now();
-        let first = runtime.block_on(answer_within(never(), within, &mut silent_until)).unwrap_err();
+        let first = runtime.block_on(answer_within(never(), heeding, &mut silent_until)).unwrap_err();
         assert_eq!((first.code.as_str(), first.message.as_str()), ("transport", "did not answer within 40ms"));
         assert!(started.elapsed() >= within);
 
         let asked = Instant::now();
-        let second = runtime.block_on(answer_within(never(), within, &mut silent_until)).unwrap_err();
+        let second = runtime.block_on(answer_within(never(), heeding, &mut silent_until)).unwrap_err();
         assert!(second.message.contains("so it was not asked"), "{second:?}");
         assert!(asked.elapsed() < within, "answered at once, however many calls one decision makes");
 
         std::thread::sleep(within);
-        let answered = runtime.block_on(answer_within(std::future::ready(Ok(Js::Null)), within, &mut silent_until));
+        let answered = runtime.block_on(answer_within(std::future::ready(Ok(Js::Null)), heeding, &mut silent_until));
         assert_eq!(answered, Ok(Js::Null), "asked again once that time has passed");
+    }
+
+    #[test]
+    fn a_call_that_must_be_asked_is_asked_in_the_quiet_and_still_ends_at_its_time() {
+        let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let limit = Duration::from_millis(40);
+        let mut silent_until = Some(Instant::now() + Duration::from_secs(60));
+        let regardless = Within { limit, heeds_silence: false };
+        let answered = runtime.block_on(answer_within(std::future::ready(Ok(Js::Null)), regardless, &mut silent_until));
+        assert_eq!(answered, Ok(Js::Null), "reached the module although it was being left alone");
+        let started = Instant::now();
+        let hung = runtime.block_on(answer_within(std::future::pending::<Result<Js, SlotError>>(), regardless, &mut silent_until)).unwrap_err();
+        assert_eq!(hung.message, "did not answer within 40ms", "waited its time, not refused");
+        assert!(started.elapsed() >= limit);
     }
 
     #[test]

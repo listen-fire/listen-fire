@@ -86,6 +86,7 @@ listen-fire waits 60 s for an answer to any one call, and `LF_SECRETS_CALL_TIMEO
 
 - **A call past its time fails as a transport fault**, like a module that refuses connections. listen-fire says so and carries on: it removes no webhook, and the runner lives.
 - **That module is then not asked again for as long.** Calls in that time fail at once, so one decision's several calls cost one wait. A runner told to stop therefore exits within the one wait.
+- **A write back is always asked**, in that time too, under the ordinary limit: by then the provider has rotated the token, and refusing the write unasked would lose the only one it still takes. A runner's webhook lease may stand for up to 120 s after a timeout, because unlocks are skipped in that time and lapse on their own.
 - **Answer well inside it.** Every method is a read or a write. `secrets.lock` answers at once when a lease is held, and listen-fire does the asking again.
 
 ### Whole entries

@@ -18,7 +18,10 @@ import { serveSecretsModule, type SecretsModule } from './secrets_module/serve';
 
 const PUBLIC = 'https://hooks.example/lf';
 const REGISTERED = /registered webhook wh-\d+ for the arrivals on Notes at /;
-const SHORT_LEASE = { LF_WEBHOOK_LEASE_MS: '1500' };
+// Long enough that a loaded machine stalling a runner for a couple of seconds
+// does not lapse its entries, as a test of one that really died does not mean.
+// Each test waits some multiple of it (a renewal comes each third).
+const SHORT_LEASE = { LF_WEBHOOK_LEASE_MS: '4500' };
 
 interface Webhook {
   id: string;
@@ -313,7 +316,7 @@ test('runners wanting different notes keep a webhook each: what is registered is
     await second.waitFor(REGISTERED);
     assert.deepEqual(provider.titles(), ['x', 'y'], 'the second narrowed nothing');
     // Past two leases, each runner having renewed and seen the other's: still both.
-    await sleep(3_500);
+    await sleep(10_500);
     assert.deepEqual(provider.titles(), ['x', 'y']);
     assert.deepEqual(provider.removed, [], 'neither removed the other, live');
     for (const webhook of provider.live.values()) assert.equal(await holderCount(vault, webhook.key), 1);
@@ -485,13 +488,13 @@ test('a read-only secrets module writes no holders: a webhook is refused where i
 
 test('a runner whose drain is busy for longer than a lease keeps its webhook: its renewal has a timer of its own', () =>
   world(async (provider, vault, serving) => {
-    provider.pollMs = 20_000;
+    provider.pollMs = 30_000;
     const busy = await serving(project(provider, ['x'], { vault, polled: true }), SHORT_LEASE);
     await busy.waitFor(REGISTERED);
     const other = await serving(project(provider, ['y'], { vault }), SHORT_LEASE);
     await other.waitFor(REGISTERED);
     await until('the drain is in its poll', () => provider.polling > 0);
-    await sleep(5_000);
+    await sleep(15_000);
     assert.equal(provider.polling, 1, 'still in it, three leases on');
     assert.deepEqual(provider.titles(), ['x', 'y']);
     assert.deepEqual(provider.removed, [], 'the other runner removed nothing the busy one holds');
@@ -509,7 +512,7 @@ test('a secrets module that fails during a renewal removes nothing, the runner l
     vault.misbehave('fail');
     await dying.kill();
     await living.waitFor(/the secrets could not be read again: .*the vault is down/);
-    await sleep(3_000);
+    await sleep(9_000);
     assert.deepEqual(provider.removed, [], 'it could not tell who holds the webhook, so it removed nothing');
     assert.equal(provider.live.size, 2);
     assert.equal(await deliver(living, own, 'n-1', 'y'), 200, 'and its doors still answer');
@@ -522,23 +525,24 @@ test('a secrets module that fails during a renewal removes nothing, the runner l
 
 test('a secrets module that hangs stops the doors only until the timeout, and SIGTERM stops the runner within it', () =>
   world(async (provider, vault, serving) => {
-    const timeout = { ...SHORT_LEASE, LF_SECRETS_CALL_TIMEOUT_MS: '1000' };
+    const timeout = { ...SHORT_LEASE, LF_SECRETS_CALL_TIMEOUT_MS: '2000' };
     const runner = await serving(project(provider, ['x'], { vault }), timeout);
     await runner.waitFor(REGISTERED);
     const webhook = provider.only();
     try {
       vault.misbehave('hang');
-      await runner.waitFor(/did not answer within 1s/, 8_000);
+      await runner.waitFor(/did not answer within 2s/, 15_000);
       const asked = Date.now();
-      assert.equal(await Promise.race([deliver(runner, webhook, 'n-1', 'x'), sleep(5_000)]), 200, 'the doors answer again');
-      assert.ok(Date.now() - asked < 3_000, 'within about one timeout');
+      assert.equal(await Promise.race([deliver(runner, webhook, 'n-1', 'x'), sleep(10_000)]), 200, 'the doors answer again');
+      assert.ok(Date.now() - asked < 5_000, 'within about one timeout');
       assert.deepEqual(provider.removed, []);
       assert.equal(provider.only().id, webhook.id);
 
       const told = Date.now();
-      const stopped = await Promise.race([runner.stop().then(() => true), sleep(5_000).then(() => false)]);
+      const stopped = await Promise.race([runner.stop().then(() => true), sleep(10_000).then(() => false)]);
       assert.ok(stopped, 'SIGTERM stopped it');
-      assert.ok(Date.now() - told < 3_000, `within about one timeout, not ${Date.now() - told}ms`);
+      // A couple of waits at the most; a wait for each call a stop makes would be far past this.
+      assert.ok(Date.now() - told < 6_000, `within about one timeout, not ${Date.now() - told}ms`);
     } finally {
       // Whatever came of it, the runner can then be stopped.
       vault.misbehave();
@@ -576,7 +580,7 @@ test('a renewal leaves a failed registration’s retry in place', () =>
     await second.waitFor(/its webhook is not registered — .*the provider is down/);
     assert.equal(provider.asked.current, 1);
     // Several renewals, none of which asks the module anything; then it is back.
-    await sleep(2_000);
+    await sleep(6_000);
     provider.refusesCurrent = false;
     await until('its retry is made, after its backoff', () => provider.asked.current >= 2, 35_000);
     await second.waitFor(/webhook wh-1 is registered for the arrivals on Notes at /);
@@ -589,7 +593,7 @@ test('renewals repeat no call meant to be once: no refresh of a webhook with no 
       const runner = await serving(project(provider, ['x'], { vault }), SHORT_LEASE);
       await runner.waitFor(REGISTERED);
       await until('its refresh learns it states no expiry', () => provider.refreshes >= 1);
-      await sleep(2_500);
+      await sleep(7_500);
       assert.equal(provider.refreshes, 1);
     }));
   await t.test('a module that answers null to a call with no `current` is not asked again', () =>
@@ -597,7 +601,7 @@ test('renewals repeat no call meant to be once: no refresh of a webhook with no 
       provider.registersNothing = true;
       const runner = await serving(project(provider, ['x'], { vault }), SHORT_LEASE);
       await runner.waitFor(/webhook {2}is registered for the arrivals on Notes at /);
-      await sleep(2_000);
+      await sleep(6_000);
       assert.equal(provider.asked.fresh, 1);
     }));
   await t.test('a webhook withdrawn for having no secret is not registered and withdrawn again', () =>
@@ -605,7 +609,7 @@ test('renewals repeat no call meant to be once: no refresh of a webhook with no 
       provider.issuesNoSecret = true;
       const runner = await serving(project(provider, ['x'], { vault }), SHORT_LEASE);
       await runner.waitFor(/registering its webhook returned no secret/);
-      await sleep(2_000);
+      await sleep(6_000);
       assert.equal(provider.made, 1);
       assert.deepEqual(provider.removed, ['wh-1']);
     }));
