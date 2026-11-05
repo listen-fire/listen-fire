@@ -36,6 +36,38 @@ describe('readTitle', () => {
   });
 });
 
+describe('an index entry with no headline', () => {
+  it.each([
+    ['Jane Doe - Berlin, Deutschland | Berufliches Profil', 'Berlin, Deutschland'],
+    ['Jane Doe - München, Bayern, Deutschland | Berufliches Profil', 'München, Bayern, Deutschland'],
+    ['Jane Doe - Argentina | Perfil profesional', 'Argentina'],
+    ['Jane Doe - Sverige | Yrkesprofil', 'Sverige'],
+    ['Jane Doe - United Kingdom | Professional Profile', 'United Kingdom'],
+    ['Jane Doe – United Kingdom | Professional Profile | LinkedIn', 'United Kingdom'],
+  ])('reads a location, not a role, and is thin: %s', (title, location) => {
+    const identity = readTitle(title);
+    expect(identity).toEqual({ name: 'Jane Doe', headline: null, role: null, organisation: null, location });
+    expect(isThin(identity)).toBe(true);
+  });
+
+  it('keeps the role and organisation when the label follows a real headline', () => {
+    expect(readTitle('Jane Doe - Founder - Acme | Professional Profile')).toEqual({
+      name: 'Jane Doe',
+      headline: 'Founder - Acme',
+      role: 'Founder',
+      organisation: 'Acme',
+      location: null,
+    });
+  });
+
+  it('leaves a headline written with bars alone', () => {
+    const identity = readTitle('Jane Doe - Co-Founder Acme | Lawyer | ex BCG');
+    expect(identity.role).toBe('Co-Founder Acme | Lawyer | ex BCG');
+    expect(identity.location).toBeNull();
+    expect(isThin(identity)).toBe(false);
+  });
+});
+
 describe('isThin', () => {
   it.each([
     'Jane Doe - Stealth | LinkedIn',

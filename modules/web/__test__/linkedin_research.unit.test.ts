@@ -18,7 +18,10 @@ const PROFILE_TEXT = [
   'Acme Drones · Co-founder & CTO · 2013–2022 · Zürich',
 ].join('\n');
 
-function stealthTools(asked: { profiles: string[]; planner: string[] }): WebTools {
+function stealthTools(
+  asked: { profiles: string[]; planner: string[] },
+  indexTitle = 'Jane Doe - Stealth | LinkedIn',
+): WebTools {
   return {
     log: quiet,
     logFields: () => ({}),
@@ -48,7 +51,7 @@ function stealthTools(asked: { profiles: string[]; planner: string[] }): WebTool
     search: async (query) =>
       query.includes('Acme Drones')
         ? { items: [{ link: 'https://news.example/acme-drones', title: 'Acme Drones', snippet: 'Jane Doe, CTO of Acme Drones' }] }
-        : { items: [{ link: PROFILE, title: 'Jane Doe - Stealth | LinkedIn', snippet: '' }] },
+        : { items: [{ link: PROFILE, title: indexTitle, snippet: '' }] },
     findLinkedIn: async () => [],
     scrape: async () => '',
     missingScraperSettings: () => [],
@@ -77,5 +80,19 @@ describe('linkedin-research on a stealth headline', () => {
       activity_confidence: 'medium',
       current_organisation: 'Acme Drones',
     });
+  });
+});
+
+describe('linkedin-research on an index entry with only a location', () => {
+  it('reads the profile, and tells the planner the location and the real headline', async () => {
+    const asked = { profiles: [] as string[], planner: [] as string[] };
+    const tools = stealthTools(asked, 'Jane Doe - Sverige | Yrkesprofil');
+    await withTools(tools, () =>
+      linkedinResearchPlugin.run({ kind: 'context-dependent', config: { url: PROFILE }, extractedContext: {} }),
+    );
+
+    expect(asked.profiles).toEqual([PROFILE]);
+    expect(asked.planner[0]).toContain('Headline: Stealth');
+    expect(asked.planner[0]).toContain('Location: Sverige');
   });
 });

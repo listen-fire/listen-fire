@@ -55,7 +55,13 @@ export async function readProfile(args: {
   const { slug, search, log, run } = args;
   const profileUrl = canonicalProfileUrl(slug);
 
-  const identity: ProfileIdentity = { name: null, headline: null, role: null, organisation: null };
+  const identity: ProfileIdentity = {
+    name: null,
+    headline: null,
+    role: null,
+    organisation: null,
+    location: null,
+  };
   for (const query of [profileUrl, `site:linkedin.com/in/${slug}`]) {
     const results = await search(query);
     const match = results.find((r) => matchesSlug(r.link, slug));
@@ -103,6 +109,7 @@ export function describeProfile(read: ProfileRead): string {
     identity.name ? `Name: ${identity.name}` : null,
     identity.headline ? `Headline: ${identity.headline}` : null,
     identity.organisation ? `Organisation: ${identity.organisation}` : null,
+    identity.location ? `Location: ${identity.location}` : null,
     read.text ? `\nThe profile's own text:\n${read.text}` : null,
     !identity.name && !read.text ? 'Nothing could be read about who holds it.' : null,
   ]

@@ -342,6 +342,8 @@ export const linkedinResearchPlugin: WebPlugin = {
         slug,
         searches: identity.searches + activitySearches + (organisationSearched ? 1 : 0),
         results: hits.length,
+        // A wrong empty can only be checked afterwards against what it was given.
+        seen: hits.map((h) => ({ title: h.title, link: h.link })),
         profileServiceRan,
         ...run,
       });
@@ -394,6 +396,7 @@ async function identityFromIndex(
     headline: null,
     role: null,
     organisation: null,
+    location: null,
     profileText: null,
     searches: 0,
   };
@@ -468,6 +471,7 @@ async function planQueries(
     `Name: ${identity.name ?? 'unknown'}`,
     `Headline: ${identity.headline ?? 'unknown'}`,
     `Organisation: ${identity.organisation ?? 'unknown'}`,
+    identity.location ? `Location: ${identity.location}` : null,
     ownFields.length
       ? `Other fields on the record about them:\n${describeFields(ownFields)}`
       : 'No other fields on the record about them.',
@@ -521,6 +525,7 @@ async function synthesise(args: {
     `Name: ${identity.name ?? 'unknown'}`,
     `Headline: ${identity.headline ?? 'unknown'}`,
     `Organisation as read from the headline: ${organisation ?? 'unknown'}`,
+    identity.location ? `Location: ${identity.location}` : null,
     `Consistency terms (the acceptance rule): ${terms.length ? terms.join(', ') : 'the headline above'}`,
     identity.profileText ? `Profile page:\n${identity.profileText}` : null,
     ownFields.length ? `Fields on the record about them:\n${describeFields(ownFields)}` : null,
