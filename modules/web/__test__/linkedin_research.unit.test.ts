@@ -482,6 +482,32 @@ describe('the text handed back', () => {
     expect(asked.fetches).toEqual(links.slice(0, 2));
   });
 
+  it('tries four addresses at most when pages will not load', async () => {
+    const links = ['a', 'b', 'c', 'd', 'e', 'f'].map((id) => `https://news.example/${id}`);
+    const { tools, asked } = scripted({
+      index: {
+        [SITE_QUERY]: [OWN_ENTRY],
+        [query]: links.map((link) => ({ link, title: 'Acme', snippet: 'Jane Doe of Acme' })),
+      },
+      plans: [plan],
+    });
+    await research(tools);
+    expect(asked.fetches).toEqual(links.slice(0, 4));
+  });
+
+  it('does not ask the writer to choose among namesakes when nothing ties the person to a result', async () => {
+    const stranger = { link: 'https://stranger.example/team', title: 'Team', snippet: 'Jane Doe leads sales at Northwind' };
+    const { tools, asked } = scripted({
+      index: { [SITE_QUERY]: [OWN_ENTRY], '"Jane Doe" startup': [stranger] },
+      plans: [{ queries: ['"Jane Doe" startup'], terms: [], organisation: '', tied_down: false }],
+    });
+    const output = await research(tools);
+    expect(asked.writer).toEqual([]);
+    expect(output.properties?.current_organisation).toBeUndefined();
+    expect(output.properties?.activity_summary).toBeUndefined();
+    expect(output.properties?.activity_text ?? '').not.toContain('Northwind');
+  });
+
   it('reads a decorated name as the person, and one word between the names', async () => {
     const { tools } = scripted({
       index: {

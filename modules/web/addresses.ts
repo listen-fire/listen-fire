@@ -37,7 +37,10 @@ export function isLinkedInUrl(url: string): boolean {
  *  Render the message + stack explicitly so a failure is legible. */
 export function describeError(e: unknown): string {
   if (e instanceof Error) return e.stack ?? `${e.name}: ${e.message}`;
-  return typeof e === 'string' ? e : safeStringifyError(e);
+  if (typeof e === 'string') return e;
+  // An error from another realm fails `instanceof`, and would log as `{}`.
+  const message = (e as { message?: unknown } | null)?.message;
+  return typeof message === 'string' ? message : safeStringifyError(e);
 }
 
 function safeStringifyError(e: unknown): string {

@@ -80,6 +80,9 @@ import { LINKEDIN_RESEARCH_PLUGIN } from 'movement-engine/public/plugins';
 const MAX_SEARCHES = 4;
 const MAX_ACTIVITY_QUERIES = 2;
 const MAX_FETCHES = 2;
+/** A real run tried eighteen addresses to read none: a failure isn't charged,
+ *  but each one spends the wall clock another person's search is waiting on. */
+const MAX_FETCH_ATTEMPTS = 4;
 
 /** How long a fetched page is worth reading. The synthesiser sees an excerpt
  *  of each page, never the whole thing — the answer is a paragraph. */
@@ -503,7 +506,7 @@ export const linkedinResearchPlugin: WebPlugin = {
     }
 
     const excerpts: Array<{ url: string; text: string }> = [];
-    for (const url of fetchCandidates) {
+    for (const url of fetchCandidates.slice(0, MAX_FETCH_ATTEMPTS)) {
       if (excerpts.length >= MAX_FETCHES || !budgetLeft()) break;
       const text = await fetchExcerpt(url, run);
       if (text) excerpts.push({ url, text });
@@ -523,6 +526,20 @@ export const linkedinResearchPlugin: WebPlugin = {
       hits: hits.filter((hit) => !belongsToAnotherProfile(hit.link, slug)),
       excerpts,
     });
+
+    // With no headline, no profile and no term, only the name could connect a
+    // result to this person. A real run gave a stranger's employer that way, so
+    // the writer isn't asked to choose among namesakes.
+    if (thinAfterIdentity && terms.length === 0 && !plan?.tiedDown) {
+      logger.info(`${LOG} Nothing ties this person to a result — not asking the writer`, {
+        slug,
+        searches,
+        results: hits.length,
+        seen: hits.map((h) => ({ title: h.title, link: h.link })),
+        ...run,
+      });
+      return activityText ? { properties: { activity_text: activityText } } : {};
+    }
 
     const synthesis = await synthesise({
       identity,
