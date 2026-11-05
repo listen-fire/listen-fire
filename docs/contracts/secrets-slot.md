@@ -77,7 +77,16 @@ A refresh spends a refresh token that rotates: two listen-fire processes must no
 - **`secrets.unlock`** with the lease's token frees it. A token that is not the lease's frees nothing, and answers `null`.
 - **A token is new each time.** A lease granted after an unlock or a lapse has a token of its own.
 - **A `ref` need not name an entry.** listen-fire also leases `<credential>#webhook:<key>` while it decides about one webhook, apart from the credential's own lease ([A webhook several runners share](adapter-protocol.md#a-webhook-several-runners-share)). The conformance cases already lease a ref no entry has.
-- **A module that cannot hold a lease** (a store with a compare-and-swap of its own, that makes a concurrent refresh a conflict anyway) may grant every lock. The cost is a refresh token spent twice, and the second refresh is refused by the provider, so grant honestly where you can.
+- **A module one runner uses that cannot hold a lease** (a store with a compare-and-swap of its own, that makes a concurrent refresh a conflict anyway) may grant every lock. The cost is a refresh token spent twice, and the second refresh is refused by the provider, so grant honestly where you can.
+- **A module several runners share must hold real leases.** `secrets.replace` writes the whole entry with no version check, so only the lease protects it. Without one, a runner can write back a token another has just rotated, or erase another runner's holder entry or webhook record.
+
+### How long a call may take
+
+listen-fire waits 60 s for an answer to any one call, and `LF_SECRETS_CALL_TIMEOUT_MS` changes that. A call blocks the runner's one thread, so a module that never answers must not hold it for good.
+
+- **A call past its time fails as a transport fault**, like a module that refuses connections. listen-fire says so and carries on: it removes no webhook, and the runner lives.
+- **That module is then not asked again for as long.** Calls in that time fail at once, so one decision's several calls cost one wait. A runner told to stop therefore exits within the one wait.
+- **Answer well inside it.** Every method is a read or a write. `secrets.lock` answers at once when a lease is held, and listen-fire does the asking again.
 
 ### Whole entries
 

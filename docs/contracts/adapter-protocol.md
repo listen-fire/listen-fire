@@ -1176,8 +1176,10 @@ a subscription kept in the credential's own fields), of holders by instance.
   [the credential's own lease](secrets-slot.md#the-lease) left free, since a
   token's refresh takes that during the very calls made under this one. Under
   it, read the credential again, and only then decide. A lease that lapses
-  under a slow call can at worst make a second subscription; it never loses a
-  holder or removes one in use.
+  under a slow call never loses a holder. It can make a second subscription. It
+  can also let a host join a subscription whose removal is already under way:
+  that subscription goes, its record goes with it, and the host that joined
+  registers it anew at its next renewal.
 - Write its entry before it asks the module, so nobody removes what it is
   registering.
 - Find others' subscriptions by reading the credential again at each pass, not
@@ -1185,7 +1187,11 @@ a subscription kept in the credential's own fields), of holders by instance.
 - Remove a subscription it does not want only when no other entry for it is
   live, on its own last listen going or on its next renewal after the others
   lapsed. Otherwise drop its own entry and leave it.
-- Remove the entry with the subscription.
+- Remove the entry with the subscription, and only if the credential still
+  holds the id it removed: a newer registration under the key stays. Drop only
+  its own holder entry, since another's is live if that host joined meanwhile.
+- Hold its renewal apart from its other work, so that no slow step stops it.
+  `listen-fire` renews on a timer of its own, whatever its drain is doing.
 
 **What each case comes to.**
 
@@ -1197,9 +1203,12 @@ a subscription kept in the credential's own fields), of holders by instance.
   want its subscription removes it at its first renewal after that. One that
   comes back within the lease finds it held, and its old entry lapses.
 - **A lone host** sees no other entries, so it removes a subscription at once
-  when its last listen goes, as it always has. After a crash its own old entry
-  counts as another's until it lapses, and a listen removed while it was down
-  then goes up to one lease and one renewal late.
+  when its last listen goes, as it always has. A clean stop leaves no entry, so
+  it causes no delay.
+- **A lone host after a crash** finds its own old entry, which counts as another
+  host's until it lapses. Until then a `publicUrl` it changed does not move the
+  subscription, and a listen removed while it was down does not remove it. Each
+  takes effect up to one lease and one renewal late: about 20 minutes.
 - **A subscription with no entries** (registered before this rule, or by a host
   that has stopped) is held by nobody known. A host that wants it adopts it,
   asking with `current`. One that does not removes it on its first pass, as a
@@ -1208,9 +1217,23 @@ a subscription kept in the credential's own fields), of holders by instance.
   and **a credential `LF_SECRET__…` lies over** keep no entries. A runner there
   has only its own view, and behaves as a lone host. A store that is a file may
   still be read by two processes on one machine: they do not follow this rule.
+- **A secrets module that fails or does not answer** decides nothing. The call
+  is a failure said by that runner: nothing is removed, the runner lives, and
+  the decision is made again once the module answers
+  ([How long a call may take](secrets-slot.md#how-long-a-call-may-take)). An
+  outage longer than the lease lets every entry lapse, so the first host to
+  renew afterwards may remove a subscription another host wants. That host then
+  registers it anew at its next renewal.
 
 **What a deployer must do.**
 
+- **Give a runner with an environment overlay its own credential.** A runner
+  with any `LF_SECRET__…` field on a shared credential follows none of this: it
+  sees no holders and removes whatever its own listens do not want, including
+  webhooks other runners hold. Those runners go on believing their webhook is
+  there and receive nothing. Give that runner a credential of its own.
+- **Use a secrets module that holds real leases.** Several runners on one module
+  depend on them ([The lease](secrets-slot.md#the-lease)).
 - **Give every runner on a credential one `publicUrl`.** A host at another
   address does not move a subscription others listen through: it says so, and
   nothing reaches its own door.
