@@ -224,7 +224,7 @@ const LINKEDIN_ENRICHMENT_SIGNATURE: TransformSignature = {
 const LINKEDIN_RESEARCH_SIGNATURE: TransformSignature = {
   name: 'linkedin-research',
   description:
-    "From a LinkedIn profile address, research what that person is currently doing — their role, their organisation, and their recent public activity — and attach a summary, a confidence, and the sources it rests on.",
+    "From a LinkedIn profile address, research what that person is currently doing — their role, their organisation, and their recent public activity — and attach a summary, a confidence, the sources it rests on, and the passages found about them.",
   params: [
     {
       name: 'url',
@@ -233,6 +233,13 @@ const LINKEDIN_RESEARCH_SIGNATURE: TransformSignature = {
       description:
         'The LinkedIn profile address of the person to research. Normally a field an earlier ' +
         'stage extracted, so each person is researched from their own address.',
+    },
+    {
+      name: 'context',
+      type: { kind: 'string' },
+      description:
+        'Text the caller already has about this person, such as the message that mentioned them. ' +
+        'It guides the search and is never evidence alone.',
     },
   ],
   // The address comes from the fields the enclosing extract has produced, and
@@ -249,6 +256,7 @@ const LINKEDIN_RESEARCH_SIGNATURE: TransformSignature = {
       current_role: { kind: 'string' },
       current_organisation: { kind: 'string' },
       activity_sources: { kind: 'string' },
+      activity_text: { kind: 'string' },
     },
   },
   // What the person is currently doing, read by name. Every field is optional:
@@ -281,6 +289,13 @@ const LINKEDIN_RESEARCH_SIGNATURE: TransformSignature = {
         type: { kind: 'string' },
         optional: true,
         description: 'The addresses the reading rests on, one per line.',
+      },
+      activity_text: {
+        type: { kind: 'string' },
+        optional: true,
+        description:
+          'Passages that name this person and something tying them to this identity, each under its source ' +
+          'address. Can arrive at low confidence with no summary.',
       },
     },
   },

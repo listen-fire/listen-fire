@@ -13,13 +13,20 @@
 // prompt over.
 //
 // Budget, acceptance rule and stop condition are fixed contracts, not author
-// knobs: four searches at most and usually two or three, two fetches, two
-// model calls, three minutes. Searches are the scarce part: the search zone
-// accepts about fourteen a minute across every run in the process, so each
-// one a profile spends is time another profile waits. Spending
-// the budget without finding anything consistent returns nothing at all —
-// the pipeline skips a stage whose plugins found nothing, and absent fields
-// are the honest answer where no public signal exists.
+// knobs: four searches at most, the identity ones included, two fetches, three
+// planner calls, one writing call, three minutes. Searches are the scarce part:
+// the search zone accepts about fourteen a minute across every run in the
+// process, so each one a profile spends is time another profile waits. Spending
+// the budget without finding one passage that names the person and a
+// consistency term returns nothing at all — the pipeline skips a stage whose
+// plugins found nothing, and absent fields are the honest answer where no public
+// signal exists. Passages found with no account written from them come back on
+// their own, at low confidence: the caller asked for what the web says, and the
+// writing model declining to conclude does not make the text any less there.
+//
+// What the caller already knows about the person arrives as `context`. It steers
+// the searches and is never evidence: the writing model does not see it, and a
+// result must still name the person.
 
 import { z } from 'zod';
 
@@ -27,6 +34,7 @@ import type { ResolvedField } from './extracted_fields';
 import type { PluginOutput, WebPlugin } from './plugin';
 import type { Anchors, SearchHit } from './search_hygiene';
 import type { ProfileIdentity } from './linkedin_identity';
+import type { ProfileRead } from './research/profile_read';
 
 import { parseJson } from '@listen-fire/anthropic';
 import { describeError, looksLikeNonHtmlAddress } from './addresses';
@@ -40,23 +48,27 @@ import {
   runSearch,
 } from './search_hygiene';
 import {
-  canonicalProfileUrl,
+  belongsToAnotherProfile,
+  belongsToProfile,
   isLinkedInLink,
   isThin,
   matchesSlug,
   profileSlug,
-  readTitle,
 } from './linkedin_identity';
+import { readProfileIndex, readProfilePage } from './research/profile_read';
 import { LINKEDIN_RESEARCH_PLUGIN } from 'movement-engine/public/plugins';
 
 
 // ── Budget ────────────────────────────────────────────────────────────────
 
 /** At most four searches: one to establish identity (a second only when the
- *  first did not turn up the profile), one for activity, and one for the
- *  organisation only when the activity search said nothing about it. Two
- *  fetches. Two model calls. */
-const MAX_ACTIVITY_QUERIES = 1;
+ *  first did not turn up the profile), up to two for activity, one retry when
+ *  those found nothing that names the person with a consistency term, and one
+ *  for the organisation only when a search is left and nothing has said anything
+ *  about it. Two fetches. Three planner calls at most: the first plan, a second
+ *  with the profile text, and the retry. One writing call. */
+const MAX_SEARCHES = 4;
+const MAX_ACTIVITY_QUERIES = 2;
 const MAX_FETCHES = 2;
 
 /** How long a fetched page is worth reading. The synthesiser sees an excerpt
@@ -68,10 +80,14 @@ const PAGE_EXCERPT_CHARS = 4000;
  *  supporting pages inside a three-minute budget. */
 const PAGE_FETCH_TIMEOUT_MS = 20 * SECOND;
 
-/** The profile service collects asynchronously, so waiting is the whole cost.
- *  This is only spent when the index gave a thin headline, and it has to fit
- *  inside the wall clock alongside the searches. */
-const PROFILE_WAIT_MS = 75 * SECOND;
+/** The planner is the cheap model, and a whole email thread as context would
+ *  make it the expensive call. */
+const CONTEXT_CHARS = 2000;
+
+/** Long enough for a caller to read what a page says about the person, short
+ *  enough that one page cannot fill `activity_text`. */
+const PASSAGE_CHARS = 800;
+const ACTIVITY_TEXT_CHARS = 3000;
 
 /** After this the plugin issues no new external work and writes up what it
  *  has. The profile service wait counts toward it. */
@@ -86,27 +102,80 @@ const AGGREGATOR_SITES = [
 
 const LOG = '[transform:linkedin-research]';
 
-// ── Identity ──────────────────────────────────────────────────────────────
-
-/** Who the profile is, plus the profile text when the service was asked for
- *  it. The address and the index entry are read by `./linkedin_identity`.*/
-interface Identity extends ProfileIdentity {
-  profileText: string | null;
-}
-
 // ── What makes a query, or a result, about this person ────────────────────
+
+/** The name without the decoration a LinkedIn name carries ("Dr. Jane Doe, PhD
+ *  (she/her)"). Nobody searches for or writes about the decorated form, so a
+ *  comparison against it would miss every result about them. */
+function bareName(name: string): string {
+  return name
+    .replace(/\(.*?\)|,.*$/g, ' ')
+    .trim()
+    .replace(/^(?:\S+\.\s+)+(?=\S+\s)/, '');
+}
 
 /** The terms that make a query or a result about THIS person rather than about
  *  their subject in general: their name, their surname on its own — a page's
  *  title carries the surname alone often enough to matter — and their
  *  organisation, when they have a distinctive one. */
-function anchorsOf(identity: Identity, organisation: string | null): Anchors {
-  const name = identity.name?.trim();
+function anchorsOf(identity: ProfileIdentity, organisation: string | null): Anchors {
+  const name = identity.name ? bareName(identity.name) : null;
   const parts = name ? name.split(/\s+/) : [];
   return [
     ...(name ? (parts.length > 1 ? [name, parts[parts.length - 1]] : [name]) : []),
     ...(organisation ? [organisation] : []),
   ];
+}
+
+/** Text as words a comparison can trust: no accents, no case, no punctuation,
+ *  and a space at each end so that a term only ever matches whole words. "AI"
+ *  must not be found in "said". */
+function comparable(text: string): string {
+  const words = text
+    .normalize('NFD')
+    .replace(/\p{M}/gu, '')
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .trim();
+  return ` ${words} `;
+}
+
+function wordsOf(text: string): string[] {
+  return comparable(text).split(' ').filter(Boolean);
+}
+
+/** Whether a text names this person, in full rather than by surname: this rule
+ *  decides what is handed back as being about them, where a surname is what
+ *  every namesake shares. Tolerates one word between the two names. */
+function namesPerson(text: string, name: string | null): boolean {
+  if (!name) return false;
+  const words = wordsOf(bareName(name));
+  const first = words[0];
+  const last = words[words.length - 1];
+  if (!first || !last) return false;
+  const haystack = comparable(text);
+  if (first === last) return haystack.includes(` ${first} `);
+  return new RegExp(` ${first} (?:\\S+ )?${last} `, 'u').test(haystack);
+}
+
+/** The rule for a passage: it names the person and a consistency term, in the
+ *  same stretch of text. With no terms nothing can pass, unlike `isConsistent`,
+ *  because here there is no model downstream to catch a namesake. */
+function namesPersonAndTerm(text: string, name: string | null, terms: string[]): boolean {
+  if (!namesPerson(text, name)) return false;
+  const haystack = comparable(text);
+  return terms.some((term) => term.trim() && haystack.includes(comparable(term)));
+}
+
+/** Whether a query has nothing to search on but the person's name and where they
+ *  live, which finds everyone of that name who lives there. Only a location the
+ *  title gave can be checked here; the planner's prompt covers the rest. */
+function searchesOnLocationAlone(query: string, identity: ProfileIdentity): boolean {
+  if (!identity.location) return false;
+  const place = new Set(wordsOf(identity.location));
+  const name = new Set(wordsOf(identity.name ?? ''));
+  const rest = wordsOf(query).filter((word) => !name.has(word));
+  return rest.length > 0 && rest.every((word) => place.has(word));
 }
 
 /** Whether loading this result could tell us anything about the person at all:
@@ -146,9 +215,19 @@ const planSchema = z.object({
     )
     .optional(),
   terms: z.array(z.string()).optional(),
+  tied_down: z.boolean(),
 });
 
 type PlannedQuery = { query: string; worthReading: boolean };
+
+interface Plan {
+  queries: PlannedQuery[];
+  terms: string[];
+  organisation: string | null;
+  /** The planner's judgement that something ties this person down. A word list
+   *  could not make this call across LinkedIn's languages. */
+  tiedDown: boolean;
+}
 
 /** Every field required, `found: false` carrying empty ones: a forced tool
  *  call has to fill the shape it is given, and "found nothing" is an answer
@@ -164,12 +243,15 @@ const synthesisSchema = z.object({
 
 const PLANNER_SYSTEM = `You are planning web searches to find out what a specific person is doing NOW.
 
-You are given who they are, taken from their LinkedIn profile, and any other fields the record about them carries.
+You are given who they are, taken from their LinkedIn profile: what the search index says about them, any other fields the record about them carries, and sometimes text the caller already has about them. The caller's text steers your searches and is not itself evidence about what they are doing.
 
 Return ONLY valid JSON, no markdown, with:
-- "queries": the ONE search query most likely to surface their RECENT activity — posts and articles under their name, press, funding or launch announcements naming them, event, podcast or conference appearances, pages of their organisation that list them. Pick the single query that best covers what this person is likely to have in the public record; only one is run. Quote the person's name. Do not search for their LinkedIn profile — we already have it. Each entry is an object: { "query": "...", "worth_reading": true|false } where worth_reading says whether a result from this query is likely to repay loading the whole page rather than reading its snippet.
-- "terms": the 2 or 3 terms from the headline — the organisation, the field, the location — that a search result must be consistent with to be about THIS person and not a namesake. When the headline names no organisation and you are given the profile page, take them from the most recent roles it lists instead.
+- "queries": up to TWO search queries most likely to surface their RECENT activity — posts and articles under their name, press, funding or launch announcements naming them, event, podcast or conference appearances, pages of their organisation that list them. Write a second only when it covers different ground from the first. Quote the person's name. Do not search for their LinkedIn profile — we already have it. Each entry is an object: { "query": "...", "worth_reading": true|false } where worth_reading says whether a result from this query is likely to repay loading the whole page rather than reading its snippet.
+- "terms": the 2 or 3 terms — the organisation, the field, the location — that a search result must be consistent with to be about THIS person and not a namesake. Take them from the headline, what the search index says and the caller's text. When those name no organisation and you are given the profile page, take them from the most recent roles it lists instead.
 - "organisation": the organisation the headline names, "" if it names none. A LinkedIn headline often reads as one phrase rather than segments, so this is where the organisation is read out of it.
+- "tied_down": true when anything you were given ties this person down to an employer, a school or a field; false otherwise. A location does not count. Whatever you were given may be in any language.
+
+An organisation the caller's text names belongs in a query. A location alone is a consistency term and never what a query searches on: the person's name with a city finds everyone of that name in that city. When you have only a location, quote the name and add words such as founder, talk or interview.
 
 A headline saying "Stealth", "Stealth Startup", "Stealth Mode", "Confidential", "Self-employed", "Independent" or "Freelance" names no organisation: it is what someone writes when they will not say where they work. Report "" for "organisation" in that case, never search for the placeholder as if it were a company, and do not use it as a consistency term. Every query must name the person, or a real organisation they are attached to.
 
@@ -178,6 +260,8 @@ When the headline is such a placeholder and the profile page lists earlier roles
 const SYNTHESIS_SYSTEM = `You are writing a short, honest account of what one person is currently doing, from their LinkedIn headline and a set of web search results.
 
 THE ACCEPTANCE RULE. Attribute a result to this person only if it is consistent with the consistency terms you are given — the organisation, the field, or the location from their own headline. A result that merely matches the name is a namesake's news and must be excluded. If the evidence is thin, say it is thin; never pad the answer.
+
+A result marked "(their own address)" is their own LinkedIn profile or a post of theirs, so it is theirs and the acceptance rule does not apply to it. The profile's own entry says no more than the headline does and never raises the confidence; a post of theirs is a source like any other.
 
 Report your answer through the tool. Every field is required; when nothing survives the acceptance rule, report found = false with empty strings and an empty source list.
 
@@ -210,48 +294,71 @@ export const linkedinResearchPlugin: WebPlugin = {
       });
       return {};
     }
-    const profileUrl = canonicalProfileUrl(slug);
 
     // Ancestor context is deliberately dropped: a company's fields are not
     // this person's, and feeding them in is how a colleague's news ends up in
     // someone else's summary.
     const ownFields = resolvePersonContext(input.extractedContext).own;
+    const context =
+      typeof input.config.context === 'string' ? input.config.context.trim().slice(0, CONTEXT_CHARS) : '';
+
+    let searches = 0;
+    const search = (query: string): Promise<SearchHit[]> => {
+      searches += 1;
+      return runSearch(query, LOG, run);
+    };
+    const canSearch = () => searches < MAX_SEARCHES && budgetLeft();
 
     // ── 1. Identity from the index ────────────────────────────────────────
-    const identity = await identityFromIndex(slug, profileUrl, run);
+    let read = await readProfileIndex({ slug, search, log: LOG, run });
 
-    // ── 2. The profile service, only when the index came back thin ────────
-    let profileServiceRan = false;
-    if (isThin(identity) && tools().profiles && budgetLeft()) {
-      profileServiceRan = true;
-      await readProfile(profileUrl, identity, run);
+    // With no name no query can be about this person, and the caller's text must
+    // not supply one: that would make it the only evidence of who this is. So
+    // there is nothing for a planner to judge, and the profile is all that's left.
+    if (!read.identity.name && budgetLeft()) {
+      read = await readProfilePage(read, { log: LOG, run });
     }
-
-    // The profile's own text is more than the index, even when its headline
-    // is a placeholder: the experience history is what the planner anchors on.
-    const thinAfterIdentity = isThin(identity) && !identity.profileText;
-    if (!identity.name && thinAfterIdentity) {
-      logger.info(`${LOG} No identity established — giving up before planning`, {
-        slug,
-        profileServiceRan,
-        ...run,
-      });
+    if (!read.identity.name && !read.text) {
+      logger.info(`${LOG} No identity established — giving up before planning`, { slug, ...run });
       return {};
     }
 
-    // ── 3. Plan and run the activity queries ──────────────────────────────
-    const plan = budgetLeft()
-      ? await planQueries(identity, ownFields, run)
-      : { queries: [] as PlannedQuery[], terms: [] as string[], organisation: null };
+    // ── 2. Plan, with the profile as the last resort ──────────────────────
+    let plan = budgetLeft() ? await planQueries({ read, ownFields, context, run }) : null;
+
+    // A planner that failed said nothing about this person, so it buys no read.
+    if (plan && !plan.tiedDown && !read.text && budgetLeft()) {
+      const withProfile = await readProfilePage(read, { log: LOG, run });
+      if (withProfile.text) {
+        read = withProfile;
+        const replanned = budgetLeft() ? await planQueries({ read, ownFields, context, run }) : null;
+        plan = replanned ?? plan;
+      }
+    }
+
+    const { identity } = read;
+    const terms = plan?.terms ?? [];
 
     // The organisation the headline names is reported and given to the
     // synthesiser as it stands; only a distinctive one is something to search
     // for, and only a distinctive one tells a result apart from a stranger's.
-    const organisation = identity.organisation ?? plan.organisation;
+    const organisation = identity.organisation ?? plan?.organisation ?? null;
     const searchableOrganisation = distinctiveOrganisation(organisation);
     const anchors = anchorsOf(identity, searchableOrganisation);
+    const passageTerms = searchableOrganisation ? [...terms, searchableOrganisation] : terms;
 
+    // ── 3. What the identity searches already paid for ────────────────────
+    // A result with no snippet has only its title, which the identity already
+    // read. Strangers in those searches are dropped by address, not by a model.
     const hits: SearchHit[] = [];
+    for (const hit of read.seen) {
+      if (belongsToProfile(hit.link, slug) && hit.snippet.trim()) addHit(hits, hit);
+    }
+    // The profile's own entry repeats the headline the terms came from, so it
+    // always agrees with them and says nothing about whether anything was found.
+    const beyondProfile = () => hits.filter((hit) => !matchesSlug(hit.link, slug));
+
+    // ── 4. Run the activity queries, and retry once if they missed ────────
     const fetchCandidates: string[] = [];
     const considerReading = (link: string) => {
       const unreadable = unreadableAddress(link);
@@ -265,48 +372,80 @@ export const linkedinResearchPlugin: WebPlugin = {
       }
       fetchCandidates.push(link);
     };
-    let activitySearches = 0;
-    for (const planned of plan.queries) {
-      if (activitySearches >= MAX_ACTIVITY_QUERIES || !budgetLeft()) break;
-      // A query naming neither the person nor a real organisation searches for
-      // the topic, not for them — every result it returns is somebody else's.
-      if (!containsAnchor(planned.query, anchors)) {
-        logger.info(`${LOG} Dropped a query with nothing distinctive in it`, {
-          query: planned.query,
-          ...run,
-        });
-        continue;
-      }
-      activitySearches += 1;
-      const results = await runSearch(planned.query, LOG, run);
-      for (const hit of results) {
-        if (!addHit(hits, hit)) continue;
-        // Loading a page costs a large part of the wall clock, so a result
-        // that already fails the acceptance rule is read as a snippet and
-        // never opened: a namesake's page is not worth twenty seconds.
-        if (
-          planned.worthReading &&
-          !isLinkedInLink(hit.link) &&
-          isConsistent(hit, plan.terms) &&
-          canEnrich(hit, anchors)
-        ) {
-          considerReading(hit.link);
+
+    const tried: string[] = [];
+    const runQueries = async (queries: PlannedQuery[], limit: number) => {
+      let ran = 0;
+      for (const planned of queries) {
+        if (ran >= limit || !canSearch()) break;
+        // A query naming neither the person nor a real organisation searches for
+        // the topic, not for them — every result it returns is somebody else's.
+        if (!containsAnchor(planned.query, anchors)) {
+          logger.info(`${LOG} Dropped a query with nothing distinctive in it`, {
+            query: planned.query,
+            ...run,
+          });
+          continue;
+        }
+        if (searchesOnLocationAlone(planned.query, identity)) {
+          logger.info(`${LOG} Dropped a query that searches on a location alone`, {
+            query: planned.query,
+            ...run,
+          });
+          continue;
+        }
+        if (tried.includes(planned.query)) continue;
+        ran += 1;
+        tried.push(planned.query);
+        const results = await search(planned.query);
+        for (const hit of results) {
+          if (!addHit(hits, hit)) continue;
+          // Loading a page costs a large part of the wall clock, so a result
+          // that already fails the acceptance rule is read as a snippet and
+          // never opened: a namesake's page is not worth twenty seconds.
+          if (
+            planned.worthReading &&
+            !isLinkedInLink(hit.link) &&
+            isConsistent(hit, terms) &&
+            canEnrich(hit, anchors)
+          ) {
+            considerReading(hit.link);
+          }
         }
       }
+    };
+
+    await runQueries(plan?.queries ?? [], MAX_ACTIVITY_QUERIES);
+
+    const foundSomething = beyondProfile().some(
+      (hit) =>
+        !belongsToAnotherProfile(hit.link, slug) &&
+        namesPersonAndTerm(`${hit.title} ${hit.snippet}`, identity.name, passageTerms),
+    );
+    // Asked only when a search is left to spend on the answer. Only the query is
+    // taken from it: terms written after seeing the results could be read off a
+    // namesake's page, which would make that namesake consistent.
+    if (plan && plan.queries.length > 0 && !foundSomething && canSearch()) {
+      const retry = await planQueries({
+        read,
+        ownFields,
+        context,
+        missed: { tried, seen: beyondProfile() },
+        run,
+      });
+      if (retry) await runQueries(retry.queries, 1);
     }
 
-    // ── 4. Expand the organisation, then read the best two pages ──────────
-    // Only when the activity search said nothing about the organisation: a
-    // result that already names it is the context this search would buy.
+    // ── 5. Expand the organisation, then read the best two pages ──────────
+    // Only when no search said anything about the organisation: a result that
+    // already names it is the context this search would buy.
     const organisationCovered =
       searchableOrganisation !== null &&
-      hits.some((hit) => containsAnchor(`${hit.title} ${hit.snippet}`, [searchableOrganisation]));
-    let organisationSearched = false;
-    if (searchableOrganisation && !organisationCovered && budgetLeft()) {
-      organisationSearched = true;
-      const results = await runSearch(`"${searchableOrganisation}" ${AGGREGATOR_SITES}`, LOG, run);
+      beyondProfile().some((hit) => containsAnchor(`${hit.title} ${hit.snippet}`, [searchableOrganisation]));
+    if (searchableOrganisation && !organisationCovered && canSearch()) {
+      const results = await search(`"${searchableOrganisation}" ${AGGREGATOR_SITES}`);
       for (const hit of results) {
-        if (!isConsistent(hit, plan.terms)) continue;
+        if (!isConsistent(hit, terms)) continue;
         if (addHit(hits, hit) && !isLinkedInLink(hit.link) && canEnrich(hit, anchors)) {
           considerReading(hit.link);
         }
@@ -320,17 +459,28 @@ export const linkedinResearchPlugin: WebPlugin = {
       if (text) excerpts.push({ url, text });
     }
 
-    // ── 5. Synthesise ─────────────────────────────────────────────────────
+    // ── 6. Synthesise ─────────────────────────────────────────────────────
+    const profileRead = read.text !== null;
+    const thinAfterIdentity = isThin(identity) && !read.text;
     if (hits.length === 0 && thinAfterIdentity) {
-      logger.info(`${LOG} Nothing to synthesise from`, { slug, profileServiceRan, ...run });
+      logger.info(`${LOG} Nothing to synthesise from`, { slug, profileRead, ...run });
       return {};
     }
 
+    const activityText = activityTextOf({
+      name: identity.name,
+      terms: passageTerms,
+      hits: hits.filter((hit) => !belongsToAnotherProfile(hit.link, slug)),
+      excerpts,
+    });
+
     const synthesis = await synthesise({
       identity,
-      profileUrl,
+      slug,
+      profileUrl: read.profileUrl,
+      profileText: read.text,
       organisation,
-      terms: plan.terms,
+      terms,
       ownFields,
       hits,
       excerpts,
@@ -338,27 +488,30 @@ export const linkedinResearchPlugin: WebPlugin = {
     });
 
     if (!synthesis?.found || !synthesis.summary.trim()) {
-      logger.info(`${LOG} Nothing consistent with the headline — attaching nothing`, {
+      logger.info(`${LOG} Nothing consistent with the headline — attaching ${activityText ? 'the passages' : 'nothing'}`, {
         slug,
-        searches: identity.searches + activitySearches + (organisationSearched ? 1 : 0),
+        searches,
         results: hits.length,
         // A wrong empty can only be checked afterwards against what it was given.
         seen: hits.map((h) => ({ title: h.title, link: h.link })),
-        profileServiceRan,
+        profileRead,
         ...run,
       });
-      return {};
+      return activityText
+        ? { properties: { activity_text: activityText, activity_confidence: 'low' } }
+        : {};
     }
 
     // The index alone cannot support more than a hedge, however many results
     // agreed with it: what they agreed with was two words of stale headline.
-    const confidence = thinAfterIdentity ? 'low' : synthesis.confidence;
+    const onlyTheIndex = thinAfterIdentity || (!read.text && beyondProfile().length === 0);
+    const confidence = onlyTheIndex ? 'low' : synthesis.confidence;
     const sources = synthesis.sources.filter((s) => s.trim());
 
     logger.info(`${LOG} Researched`, {
       slug,
-      profileServiceRan,
-      searches: identity.searches + activitySearches + (organisationSearched ? 1 : 0),
+      profileRead,
+      searches,
       results: hits.length,
       fetched: excerpts.length,
       confidence,
@@ -373,6 +526,7 @@ export const linkedinResearchPlugin: WebPlugin = {
         current_role: synthesis.current_role.trim() || identity.role || '',
         current_organisation: synthesis.current_organisation.trim() || organisation || '',
         activity_sources: sources.map((s, i) => `${i + 1}. ${s}`).join('\n'),
+        ...(activityText ? { activity_text: activityText } : {}),
       },
     };
   },
@@ -380,102 +534,34 @@ export const linkedinResearchPlugin: WebPlugin = {
 
 // ── Steps ─────────────────────────────────────────────────────────────────
 
-/**
- * Ask the index about the address itself, then — if nothing it returned is
- * actually that profile — about the slug. Two searches at most, and the second
- * only buys anything when the first found the person's name attached to
- * somebody else's page.
- */
-async function identityFromIndex(
-  slug: string,
-  profileUrl: string,
-  run: Record<string, unknown>,
-): Promise<Identity & { searches: number }> {
-  const blank: Identity & { searches: number } = {
-    name: null,
-    headline: null,
-    role: null,
-    organisation: null,
-    location: null,
-    profileText: null,
-    searches: 0,
-  };
-
-  for (const query of [profileUrl, `site:linkedin.com/in/${slug}`]) {
-    blank.searches += 1;
-    const results = await runSearch(query, LOG, run);
-    const match = results.find((r) => matchesSlug(r.link, slug));
-    if (!match) continue;
-    const read = readTitle(match.title);
-    logger.info(`${LOG} Identity from the index`, {
-      slug,
-      name: read.name,
-      headline: read.headline,
-      ...run,
-    });
-    return { ...blank, ...read };
-  }
-
-  logger.info(`${LOG} The index knows nothing about this address`, { slug, ...run });
-  return blank;
-}
-
-/**
- * Read the profile itself. Only reached when the index gave nothing to check a
- * result against — no headline, or a placeholder one — because it costs a
- * paid fetch and up to its whole wait. The
- * text's first lines are the name and headline in every vintage the service
- * returns, so that is where identity comes from; the rest goes to the
- * synthesiser as evidence.
- */
-async function readProfile(
-  profileUrl: string,
-  identity: Identity,
-  run: Record<string, unknown>,
-): Promise<void> {
-  try {
-    const profile = await tools().profiles?.getProfileTextByUrl(profileUrl, {
-      maxWaitMs: PROFILE_WAIT_MS,
-    });
-    const text = profile?.text?.trim();
-    if (!text) {
-      logger.info(`${LOG} The profile service had nothing`, { profileUrl, ...run });
-      return;
-    }
-    identity.profileText = text.slice(0, PAGE_EXCERPT_CHARS);
-    const lines = text
-      .split('\n')
-      .map((l) => l.trim())
-      .filter(Boolean);
-    identity.name ??= lines[0] ?? null;
-    const headline = lines[1] ?? null;
-    identity.headline ??= headline;
-    identity.role ??= headline;
-    logger.info(`${LOG} Read the profile`, { profileUrl, chars: text.length, ...run });
-  } catch (error) {
-    logger.warn(`${LOG} The profile service failed`, {
-      profileUrl,
-      error: describeError(error),
-      ...run,
-    });
-  }
-}
-
-async function planQueries(
-  identity: Identity,
-  ownFields: ResolvedField[],
-  run: Record<string, unknown>,
-): Promise<{ queries: PlannedQuery[]; terms: string[]; organisation: string | null }> {
-  const empty = { queries: [] as PlannedQuery[], terms: [] as string[], organisation: null };
+async function planQueries(args: {
+  read: ProfileRead;
+  ownFields: ResolvedField[];
+  context: string;
+  /** Set on the retry: what the searches so far came back with. */
+  missed?: { tried: string[]; seen: SearchHit[] };
+  run: Record<string, unknown>;
+}): Promise<Plan | null> {
+  const { read, ownFields, context, missed, run } = args;
+  const { identity } = read;
   const userMessage = [
     `Name: ${identity.name ?? 'unknown'}`,
     `Headline: ${identity.headline ?? 'unknown'}`,
     `Organisation: ${identity.organisation ?? 'unknown'}`,
     identity.location ? `Location: ${identity.location}` : null,
+    read.indexText ? `What the search index says about them: ${read.indexText}` : null,
     ownFields.length
       ? `Other fields on the record about them:\n${describeFields(ownFields)}`
       : 'No other fields on the record about them.',
-    identity.profileText ? `Profile page:\n${identity.profileText}` : null,
+    context ? `Text the caller already has about them (it steers the searches, it is not evidence):\n${context}` : null,
+    read.text ? `Profile page:\n${read.text}` : null,
+    missed
+      ? [
+          'The searches so far found nothing that names this person together with a consistency term. Write ONE different query, using what these results suggest.',
+          `Searches already run: ${missed.tried.join('; ') || 'none, because those you wrote named nobody or searched on a location alone'}`,
+          `What came back:\n${missed.seen.map((h) => `- ${h.title}\n  ${h.snippet}`).join('\n') || 'nothing'}`,
+        ].join('\n')
+      : null,
   ]
     .filter((part): part is string => part != null)
     .join('\n');
@@ -488,7 +574,7 @@ async function planQueries(
       label: 'plugin_linkedin_research_plan',
     });
     const parsed = readReply(raw, planSchema, 'The query planner', run);
-    if (!parsed) return empty;
+    if (!parsed) return null;
     const queries = (parsed.queries ?? [])
       .map((q) =>
         typeof q === 'string'
@@ -502,16 +588,68 @@ async function planQueries(
       // nothing about whose news it is.
       terms: (parsed.terms ?? []).filter((t) => distinctiveOrganisation(t) !== null),
       organisation: parsed.organisation?.trim() || null,
+      tiedDown: parsed.tied_down,
     };
   } catch (error) {
     logger.warn(`${LOG} The query planner failed`, { error: describeError(error), ...run });
-    return empty;
+    return null;
   }
 }
 
+/** The passage worth keeping from this text, under its source address, or null.
+ *  Clipped first and tested after, so the rule holds of what the caller reads. */
+function passageOf(args: { link: string; text: string; name: string | null; terms: string[] }): string | null {
+  const clipped = args.text.slice(0, PASSAGE_CHARS);
+  return namesPersonAndTerm(clipped, args.name, args.terms) ? `${args.link}\n${clipped}` : null;
+}
+
+/** The first stretch of a page around a mention of the person that holds the
+ *  rule. A page is tested stretch by stretch: naming the person in a comment and
+ *  the term in the footer says nothing about either. */
+function pagePassage(args: { url: string; text: string; name: string | null; terms: string[] }): string | null {
+  const { url, text, name, terms } = args;
+  const sentences = text
+    .split(/\n+|(?<=[.!?])\s+/)
+    .map((sentence) => sentence.trim())
+    .filter(Boolean);
+  for (const [at, sentence] of sentences.entries()) {
+    if (!namesPerson(sentence, name)) continue;
+    const around = sentences.slice(Math.max(0, at - 1), at + 2).join(' ');
+    const passage = passageOf({ link: url, text: around, name, terms });
+    if (passage) return passage;
+  }
+  return null;
+}
+
+/** The text behind the answer. Pages come first: they were opened because they
+ *  looked worth reading, and a search's snippets could otherwise fill the cap. */
+function activityTextOf(args: {
+  name: string | null;
+  terms: string[];
+  hits: SearchHit[];
+  excerpts: Array<{ url: string; text: string }>;
+}): string | null {
+  const { name, terms, hits, excerpts } = args;
+  const passages = [
+    ...excerpts.map((page) => pagePassage({ url: page.url, text: page.text, name, terms })),
+    ...hits.map((hit) => passageOf({ link: hit.link, text: `${hit.title}\n${hit.snippet}`, name, terms })),
+  ].filter((passage): passage is string => passage != null);
+
+  const kept: string[] = [];
+  let length = 0;
+  for (const passage of passages) {
+    if (length + passage.length > ACTIVITY_TEXT_CHARS) break;
+    kept.push(passage);
+    length += passage.length;
+  }
+  return kept.length ? kept.join('\n\n') : null;
+}
+
 async function synthesise(args: {
-  identity: Identity;
+  identity: ProfileIdentity;
+  slug: string;
   profileUrl: string;
+  profileText: string | null;
   organisation: string | null;
   terms: string[];
   ownFields: ResolvedField[];
@@ -519,7 +657,7 @@ async function synthesise(args: {
   excerpts: Array<{ url: string; text: string }>;
   run: Record<string, unknown>;
 }): Promise<z.infer<typeof synthesisSchema> | null> {
-  const { identity, profileUrl, organisation, terms, ownFields, hits, excerpts, run } = args;
+  const { identity, slug, profileUrl, profileText, organisation, terms, ownFields, hits, excerpts, run } = args;
   const userMessage = [
     `Profile address: ${profileUrl}`,
     `Name: ${identity.name ?? 'unknown'}`,
@@ -527,11 +665,11 @@ async function synthesise(args: {
     `Organisation as read from the headline: ${organisation ?? 'unknown'}`,
     identity.location ? `Location: ${identity.location}` : null,
     `Consistency terms (the acceptance rule): ${terms.length ? terms.join(', ') : 'the headline above'}`,
-    identity.profileText ? `Profile page:\n${identity.profileText}` : null,
+    profileText ? `Profile page:\n${profileText}` : null,
     ownFields.length ? `Fields on the record about them:\n${describeFields(ownFields)}` : null,
     hits.length
       ? `Search results:\n${hits
-          .map((h) => `- ${h.title}\n  ${h.link}\n  ${h.snippet}`)
+          .map((h) => `- ${h.title}${belongsToProfile(h.link, slug) ? ' (their own address)' : ''}\n  ${h.link}\n  ${h.snippet}`)
           .join('\n')}`
       : 'No search results.',
     excerpts.length

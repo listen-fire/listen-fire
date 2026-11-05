@@ -1,4 +1,4 @@
-import { isThin, readTitle } from '../linkedin_identity';
+import { belongsToAnotherProfile, belongsToProfile, isThin, profileSlug, readTitle } from '../linkedin_identity';
 
 describe('readTitle', () => {
   it('strips a localised suffix: Norwegian', () => {
@@ -79,5 +79,38 @@ describe('isThin', () => {
 
   it('counts a real role as something to check against', () => {
     expect(isThin(readTitle('Jane Doe - Founder - Acme | LinkedIn'))).toBe(false);
+  });
+});
+
+describe('whose address this is', () => {
+  it.each([
+    'https://www.linkedin.com/in/jane-doe',
+    'https://de.linkedin.com/in/Jane-Doe/details/experience',
+    'https://www.linkedin.com/posts/jane-doe_launch-activity-1-abc',
+    'https://uk.linkedin.com/posts/Jane-Doe_launch',
+  ])('%s is jane-doe', (link) => {
+    expect(belongsToProfile(link, 'jane-doe')).toBe(true);
+    expect(belongsToAnotherProfile(link, 'jane-doe')).toBe(false);
+  });
+
+  it.each([
+    'https://www.linkedin.com/in/jane-doe-42',
+    'https://www.linkedin.com/posts/jane-doe-42_launch-activity-1-abc',
+    'https://www.linkedin.com/posts/jane-doey_launch',
+  ])('%s is somebody else', (link) => {
+    expect(belongsToProfile(link, 'jane-doe')).toBe(false);
+    expect(belongsToAnotherProfile(link, 'jane-doe')).toBe(true);
+  });
+
+  it.each(['https://news.example/jane-doe', 'https://www.linkedin.com/company/acme', 'https://evil.example/linkedin.com/in/jane-doe'])(
+    '%s says nothing either way',
+    (link) => {
+      expect(belongsToProfile(link, 'jane-doe')).toBe(false);
+      expect(belongsToAnotherProfile(link, 'jane-doe')).toBe(false);
+    },
+  );
+
+  it('reads an address that will not decode as written, rather than throwing', () => {
+    expect(profileSlug('https://www.linkedin.com/in/jane%E9-doe')).toBe('jane%E9-doe');
   });
 });

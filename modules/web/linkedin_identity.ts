@@ -18,8 +18,18 @@ export function profileSlug(value: unknown): string | null {
   if (typeof value !== 'string') return null;
   const match = PROFILE_SLUG_REGEX.exec(value.trim());
   if (!match) return null;
-  const slug = decodeURIComponent(match[1]).trim();
+  const slug = decodedSegment(match[1]).trim();
   return slug ? slug : null;
+}
+
+/** An address from the index can carry a stray `%`, and one bad result must not
+ *  end a run: a segment that will not decode is read as written. */
+function decodedSegment(segment: string): string {
+  try {
+    return decodeURIComponent(segment);
+  } catch {
+    return segment;
+  }
 }
 
 export function canonicalProfileUrl(slug: string): string {
@@ -33,6 +43,24 @@ export function isLinkedInLink(link: string): boolean {
 export function matchesSlug(link: string, slug: string): boolean {
   const linked = profileSlug(link);
   return linked != null && linked.toLowerCase() === slug.toLowerCase();
+}
+
+const POST_REGEX = /^(?:https?:\/\/)?(?:[\w-]+\.)?linkedin\.com\/posts\/([^/?#\s]+)/i;
+
+/** Whether this address is the profile, or a post published from it. A post's
+ *  address opens with its author's slug and an underscore, so `jane-doe-2_…` is
+ *  never `jane-doe`'s. */
+export function belongsToProfile(link: string, slug: string): boolean {
+  if (matchesSlug(link, slug)) return true;
+  const post = POST_REGEX.exec(link.trim());
+  return post != null && decodedSegment(post[1]).toLowerCase().startsWith(`${slug.toLowerCase()}_`);
+}
+
+/** A person has one profile, so an address that is another profile or another
+ *  profile's post is somebody else's whatever its text says: the same name and
+ *  the same city is exactly what a namesake looks like. */
+export function belongsToAnotherProfile(link: string, slug: string): boolean {
+  return (profileSlug(link) != null || POST_REGEX.test(link.trim())) && !belongsToProfile(link, slug);
 }
 
 /** Who a profile is, as far as anything outside LinkedIn can tell. */
