@@ -35,7 +35,9 @@ export function lf(dir: string, ...args: string[]): { code: number; out: string 
     encoding: 'utf8',
     env: { ...process.env, NODE_NO_WARNINGS: '1' },
   });
-  return { code: run.status ?? -1, out: `${run.stdout}${run.stderr}` };
+  // A process that never started has no output to explain the failure itself.
+  const failedToStart = run.error === undefined ? '' : `${run.error.message}\n`;
+  return { code: run.status ?? -1, out: `${failedToStart}${run.stdout}${run.stderr}` };
 }
 
 export interface Served {
