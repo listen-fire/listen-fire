@@ -164,6 +164,11 @@ describe('@lf/email checks its own inbound', () => {
     expect(forwarded['sender']).toBe('ada@example.com');
     const direct = await landed(request({ body: mailgunForm(), secret: MAILGUN_KEY }));
     expect(direct['forwardedThrough']).toEqual([]);
+    // Direct mail is delivered to the recipient, so a header naming the recipient forwards through nothing.
+    const toRecipient = await landed(request({ body: mailgunForm(MAILGUN_KEY, { 'Delivered-To': 'IN+k@lf.test', 'X-Original-To': 'in+k@lf.test' }), secret: MAILGUN_KEY }));
+    expect(toRecipient['forwardedThrough']).toEqual([]);
+    const both = await landed(request({ body: mailgunForm(MAILGUN_KEY, { 'X-Forwarded-For': 'dealflow@portfolio.example', 'Delivered-To': 'in+k@lf.test' }), secret: MAILGUN_KEY }));
+    expect(both['forwardedThrough']).toEqual(['dealflow@portfolio.example']);
     const body = JSON.stringify({ type: 'email.received', data: { email_id: 'em_1', from: 'Ada <ada@example.com>', to: ['in+k@lf.test'] } });
     expect((await landed(request({ body, headers: resendDelivery(body), secret: RESEND_SECRET })))['forwardedThrough']).toEqual([]);
   });

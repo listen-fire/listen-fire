@@ -663,7 +663,9 @@ function parseIntermediateRecipients(payload: Record<string, unknown>): string[]
 export function forwardedThrough(payload: Record<string, unknown>): string[] {
   const { out, push } = collectingAddresses();
   pushForwardingHeaders(payload, push);
-  return out;
+  // `Delivered-To` of a message that was never forwarded names its own inbox.
+  const delivered = parseEmailAddress(typeof payload['recipient'] === 'string' ? payload['recipient'] : undefined);
+  return out.filter((address) => address !== delivered);
 }
 
 /** Bare addresses, deduped, in the order they are pushed. */
