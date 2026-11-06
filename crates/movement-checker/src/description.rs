@@ -120,6 +120,13 @@ pub fn connection_root(name: impl Into<String>, schema: Rc<InstanceSchema>) -> P
     Position::Meta { instance: Rc::new(Instance { name: name.into(), schema, declared: None, adapter: None, address: None }) }
 }
 
+/// Each record type a connection's schema holds, by the name its module shows,
+/// with where to describe it. A type nothing has looked at has nothing to say.
+pub fn described_record_types(connection: &Position) -> Vec<(String, Position)> {
+    let Position::Meta { instance } = connection else { return Vec::new() };
+    instance.schema.positions.iter().filter(|(_, schema)| schema.undescribed != Some(true)).map(|(name, _)| (display_name_of(instance, name), Position::record(instance.clone(), name))).collect()
+}
+
 /// What is at `landing`.
 pub fn describe_landing(landing: &Position, showing: Showing) -> Description {
     Asked { read_as: landing, showing }.at(landing)
@@ -272,7 +279,7 @@ impl Asked<'_> {
             landing: landing_of_edge(at, &edge.name),
             ..edge.clone()
         });
-        Description { members: members.iter().map(member_name).collect(), fields: self.read_fields(), edges: edges.collect(), ..Description::default() }
+        Description { members: members.iter().map(landing_name).collect(), fields: self.read_fields(), edges: edges.collect(), ..Description::default() }
     }
 
     fn edge(&self, from: &Position, name: &str, facts: EdgeFacts<'_>) -> DescribedEdge {
@@ -331,13 +338,13 @@ impl Asked<'_> {
     }
 }
 
-/// One of several records, by its type's name as its module shows it.
-fn member_name(member: &Position) -> String {
-    match member {
+/// A landing, by its type's name as its module shows it.
+pub fn landing_name(landing: &Position) -> String {
+    match landing {
         Position::Position(record) => display_name_of(&record.instance, &record.position),
         Position::Handle(handle) => handle.position.as_deref().map_or_else(|| handle.written_type.clone(), |name| display_name_of(&handle.instance, name)),
-        Position::MaybeEmpty(of) => member_name(of),
-        Position::Meta { .. } | Position::Union(_) | Position::Extract { .. } | Position::Closure(_) | Position::Local(_) | Position::OneOf(_) => describe_position(member),
+        Position::MaybeEmpty(of) => landing_name(of),
+        Position::Meta { .. } | Position::Union(_) | Position::Extract { .. } | Position::Closure(_) | Position::Local(_) | Position::OneOf(_) => describe_position(landing),
     }
 }
 

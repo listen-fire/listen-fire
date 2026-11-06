@@ -9,9 +9,10 @@
 //! `introspectedSchema`) is not described: the summary says so, and what to do.
 
 use crate::check::{LOCAL_TENANT, describe_as};
+use crate::schema_view::{LEGEND, SchemaView};
 use crate::connect::{find_external, known_modules, process_env};
 use crate::externals::{External, ExternalManifest, RunningExternal, start_externals};
-use crate::json::{Js, Obj};
+use crate::json::Js;
 use crate::obj;
 use crate::oauth2::{Declaration, DeclarationKind};
 use crate::project::Project;
@@ -57,70 +58,6 @@ enum Schema {
     FromAccount,
     /// The module has no schema to read (a plugin module), or could not give one without a credential.
     Unread(String),
-}
-
-/// What a described schema offers a program: the edges a walk or a listen
-/// starts from, the record types, and what it writes. `modules show` prints
-/// a module's own; `listen-fire catalog` prints each connection's, live
-/// types included (crate::catalog::catalog_text).
-#[derive(Default)]
-pub(crate) struct SchemaView {
-    collections: Vec<Edge>,
-    records: Vec<Record>,
-    writes: Vec<Write>,
-}
-
-/// An edge from the connection or from a record, and how a program may follow it.
-struct Edge {
-    name: String,
-    target: String,
-    access: EdgeAccess,
-}
-
-/// What a program does with an edge: walk it, listen on it, or only write along it.
-#[derive(Clone, Copy)]
-enum EdgeAccess {
-    Read,
-    ReadAndListen,
-    ListenOnly,
-    WriteOnly,
-}
-
-impl EdgeAccess {
-    fn of(edge: &Js) -> EdgeAccess {
-        match (!Js::is_false(edge.get("readable")), Js::is_true(edge.get("listenable"))) {
-            (true, false) => EdgeAccess::Read,
-            (true, true) => EdgeAccess::ReadAndListen,
-            (false, true) => EdgeAccess::ListenOnly,
-            (false, false) => EdgeAccess::WriteOnly,
-        }
-    }
-
-    fn mark(self) -> &'static str {
-        match self {
-            EdgeAccess::Read => "",
-            EdgeAccess::ReadAndListen => " (listenable)",
-            EdgeAccess::ListenOnly => " (listen only)",
-            EdgeAccess::WriteOnly => " (write only)",
-        }
-    }
-}
-
-struct Record {
-    name: String,
-    description: Option<String>,
-    fields: Vec<(String, String)>,
-    edges: Vec<Edge>,
-    /// The fields a read's WHERE must set with `==`: the read's arguments (an MCP tool's).
-    pinned: Vec<String>,
-}
-
-/// A write: along an edge from a record, or from the connection's own collection.
-struct Write {
-    along: String,
-    target: String,
-    /// A field and whether the write requires it.
-    fields: Vec<(String, bool)>,
 }
 
 struct Plugin {
@@ -219,7 +156,10 @@ async fn read_module(project: &Project, reference: &str, external: &External, cr
         Schema::FromAccount
     } else {
         match describe_as(running, &Vec::new(), None, None).await {
-            Ok((_, schema)) => Schema::Described(SchemaView::of(&schema)),
+            Ok((_, schema)) => match SchemaView::of(&external.manifest.name, &schema) {
+                Ok(view) => Schema::Described(view),
+                Err(why) => Schema::Unread(format!("its schema does not read ({why})")),
+            },
             Err(why) => Schema::Unread(format!("the module cannot describe itself without a credential ({})", last_clause(first_line(&why)))),
         }
     };
@@ -349,191 +289,6 @@ fn needs_of(running: &RunningExternal) -> Vec<String> {
     needs
 }
 
-// ── The schema, as a program sees it ─────────────────────────────────────────
-
-fn object(value: Option<&Js>) -> Obj {
-    match value {
-        Some(Js::Obj(o)) => o.clone(),
-        _ => Obj::new(),
-    }
-}
-
-fn edge_of(name: &str, edge: &Js) -> Edge {
-    Edge { name: name.to_string(), target: edge.get("target").and_then(Js::as_str).unwrap_or("(several)").to_string(), access: EdgeAccess::of(edge) }
-}
-
-impl SchemaView {
-    /// The view of a described schema (`InstanceSchema`, docs/contracts/catalog-snapshot.md).
-    pub(crate) fn of(schema: &Js) -> SchemaView {
-        let positions = object(schema.get("positions"));
-        let collections: Vec<Edge> = object(schema.get("collections")).iter().filter(|(_, c)| c.get("target").and_then(Js::as_str).is_some()).map(|(name, c)| edge_of(name, c)).collect();
-        let mut records = Vec::new();
-        for (name, position) in &positions {
-            if Js::is_true(position.get("undescribed")) {
-                continue;
-            }
-            let properties = object(position.get("properties"));
-            let fields = properties.iter().map(|(field, type_)| (field.clone(), derived_enum(field, type_, &properties).unwrap_or_else(|| type_text(type_)))).collect();
-            // A write-only edge is said under the writes.
-            let edges = object(position.get("edges")).iter().map(|(edge_name, edge)| edge_of(edge_name, edge)).filter(|edge| !matches!(edge.access, EdgeAccess::WriteOnly)).collect();
-            let pinned = position.get("pinnedProperties").and_then(Js::as_array).unwrap_or_default().iter().filter_map(Js::as_str).map(str::to_string).collect();
-            records.push(Record { name: name.clone(), description: position.get("description").and_then(Js::as_str).map(str::to_string), fields, edges, pinned });
-        }
-
-        let writable_roots = object(schema.get("writableRoots"));
-        let shapes: Obj = writable_roots.clone().into_iter().chain(object(schema.get("createShapes"))).collect();
-        let write_fields = |target: &str| -> Vec<(String, bool)> {
-            let Some(shape) = shapes.get(target) else { return Vec::new() };
-            let required: Vec<&str> = shape.get("requiredFields").and_then(Js::as_array).unwrap_or_default().iter().filter_map(Js::as_str).collect();
-            object(shape.get("fields")).keys().map(|f| (f.clone(), required.contains(&f.as_str()))).collect()
-        };
-        let mut writes = Vec::new();
-        for collection in &collections {
-            if writable_roots.contains_key(&collection.target) {
-                writes.push(Write { along: format!("the connection's {}", collection.name), target: collection.target.clone(), fields: write_fields(&collection.target) });
-            }
-        }
-        for (name, position) in &positions {
-            for (edge_name, edge) in object(position.get("edges")) {
-                if !Js::is_true(edge.get("writable")) {
-                    continue;
-                }
-                let target = edge.get("target").and_then(Js::as_str).unwrap_or_default().to_string();
-                let write_only = if Js::is_false(edge.get("readable")) { ", write only" } else { "" };
-                writes.push(Write { along: format!("{name}.{edge_name}{write_only}"), fields: write_fields(&target), target });
-            }
-        }
-        SchemaView { collections, records, writes }
-    }
-
-    fn read_only(&self) -> bool {
-        self.writes.is_empty()
-    }
-
-    /// Where a walk or a listen starts: `Ticks -> Tick (listen only)`.
-    pub(crate) fn starts(&self) -> Vec<String> {
-        self.collections.iter().map(|edge| format!("{} -> {}{}", edge.name, edge.target, edge.access.mark())).collect()
-    }
-
-    /// Each record type in one line, its fields then its edges:
-    /// `Tick: Fired at date, Schedule cron, Zone zone`.
-    pub(crate) fn record_summaries(&self) -> Vec<String> {
-        self.records
-            .iter()
-            .map(|record| {
-                let parts: Vec<String> = record.fields.iter().map(|(n, t)| format!("{n} {t}")).chain(record.edges.iter().map(|e| format!("{} -> {}{}", e.name, e.target, e.access.mark()))).collect();
-                format!("{}: {}", record.name, if parts.is_empty() { "(no fields)".into() } else { parts.join(", ") })
-            })
-            .collect()
-    }
-
-    /// Where a walk or a listen starts, the record types and the writes, a blank line before each.
-    pub(crate) fn lines(&self, out: &mut Vec<String>) {
-        if !self.collections.is_empty() {
-            out.push(String::new());
-            out.push("reads: start a walk (or a listen, where marked) from the connection with".into());
-            out.extend(self.starts().into_iter().map(|start| format!("  {start}")));
-        }
-        if !self.records.is_empty() {
-            out.push(String::new());
-            let pins = if self.records.iter().any(|r| !r.pinned.is_empty()) { "; pinned: the fields a read's WHERE must set with ==" } else { "" };
-            out.push(format!("record types (a name with a space is written in backticks{pins}):"));
-            for record in &self.records {
-                out.push(format!("  {}{}", record.name, record.description.as_deref().map(|d| format!(": {}", first_sentence(d))).unwrap_or_default()));
-                if !record.fields.is_empty() {
-                    out.push(format!("    fields: {}", record.fields.iter().map(|(n, t)| format!("{n} {t}")).collect::<Vec<_>>().join(", ")));
-                }
-                if !record.pinned.is_empty() {
-                    out.push(format!("    pinned: {}", record.pinned.join(", ")));
-                }
-                if !record.edges.is_empty() {
-                    out.push(format!("    edges: {}", record.edges.iter().map(|e| format!("{} -> {}{}", e.name, e.target, e.access.mark())).collect::<Vec<_>>().join(", ")));
-                }
-            }
-        }
-        if !self.writes.is_empty() {
-            out.push(String::new());
-            out.push("writes (a * is required):".into());
-            for write in &self.writes {
-                let fields: Vec<String> = write.fields.iter().map(|(n, required)| format!("{n}{}", if *required { "*" } else { "" })).collect();
-                out.push(format!("  a {} along {}: {}", write.target, write.along, if fields.is_empty() { "(no fields)".into() } else { fields.join(", ") }));
-            }
-        }
-    }
-
-    fn to_json(&self) -> Obj {
-        let edge = |e: &Edge| {
-            Js::Obj(obj! {
-                "name" => Js::str(&e.name),
-                "target" => Js::str(&e.target),
-                "readable" => Js::Bool(matches!(e.access, EdgeAccess::Read | EdgeAccess::ReadAndListen)),
-                "listenable" => Js::Bool(matches!(e.access, EdgeAccess::ReadAndListen | EdgeAccess::ListenOnly)),
-            })
-        };
-        obj! {
-            "collections" => Js::Arr(self.collections.iter().map(edge).collect()),
-            "records" => Js::Arr(self.records.iter().map(|r| Js::Obj(obj! {
-                "name" => Js::str(&r.name),
-                "description" => r.description.as_deref().map_or(Js::Null, Js::str),
-                "fields" => Js::Arr(r.fields.iter().map(|(n, t)| Js::Obj(obj! { "name" => Js::str(n), "type" => Js::str(t) })).collect()),
-                "pinned" => Js::strings(&r.pinned),
-                "edges" => Js::Arr(r.edges.iter().map(edge).collect()),
-            })).collect()),
-            "writes" => Js::Arr(self.writes.iter().map(|w| Js::Obj(obj! {
-                "along" => Js::str(&w.along),
-                "target" => Js::str(&w.target),
-                "fields" => Js::Arr(w.fields.iter().map(|(n, required)| Js::Obj(obj! { "name" => Js::str(n), "required" => Js::Bool(*required) })).collect()),
-            })).collect()),
-        }
-    }
-}
-
-/// An enum's options, when the type is one.
-fn enum_options(type_: &Js) -> Option<Vec<&str>> {
-    (type_.get("kind").and_then(Js::as_str) == Some("enum")).then(|| type_.get("options").and_then(Js::as_array).unwrap_or_default().iter().filter_map(Js::as_str).collect())
-}
-
-/// `enum(invoice.<Kind>)`: an enum field whose options are exactly another
-/// enum field's of the same record, each with one text before it (Stripe's
-/// `Type`, each `Kind` after `invoice.`), said by that field, so the options
-/// are listed once. The two option lists are compared, never read for meaning.
-fn derived_enum(field: &str, type_: &Js, properties: &Obj) -> Option<String> {
-    let options = enum_options(type_)?;
-    let first = options.first()?;
-    properties.iter().filter(|(other, _)| other.as_str() != field).find_map(|(other, other_type)| {
-        let theirs = enum_options(other_type)?;
-        if theirs.len() != options.len() {
-            return None;
-        }
-        theirs.iter().find_map(|their| {
-            let prefix = first.strip_suffix(their).filter(|p| !p.is_empty())?;
-            let derived = options.iter().all(|o| o.strip_prefix(prefix).is_some_and(|rest| theirs.contains(&rest)));
-            derived.then(|| format!("enum({prefix}<{other}>)"))
-        })
-    })
-    .filter(|derived| derived.len() < type_text(type_).len())
-}
-
-/// A field's type as a program spells it: `text`, `enum(open|paid)`, `list<text>`.
-fn type_text(type_: &Js) -> String {
-    match type_ {
-        Js::Str(name) => name.clone(),
-        Js::Obj(_) => match type_.get("kind").and_then(Js::as_str) {
-            Some("enum") => {
-                let options: Vec<&str> = type_.get("options").and_then(Js::as_array).unwrap_or_default().iter().filter_map(Js::as_str).collect();
-                format!("enum({})", options.join("|"))
-            }
-            Some("list") => format!("list<{}>", type_.get("of").map_or_else(|| "?".to_string(), |of| type_text(of))),
-            // A scalar its adapter parses, said by the text it is written as
-            // (`Schedule cron`, `Zone timeZone`), else by its name.
-            Some("owned") => type_.get("format").or_else(|| type_.get("name")).and_then(Js::as_str).unwrap_or("owned").to_string(),
-            Some(other) => other.to_string(),
-            None => "?".to_string(),
-        },
-        _ => "?".to_string(),
-    }
-}
-
 // ── Output ───────────────────────────────────────────────────────────────────
 
 impl Summary {
@@ -553,6 +308,9 @@ impl Summary {
     fn to_text(&self) -> String {
         let mut out = Vec::new();
         let mut line = |text: String| out.push(text);
+        if matches!(self.schema, Schema::Described(_)) {
+            line(LEGEND.into());
+        }
         line(format!("{} ({})", self.reference, self.kind));
         if let Some(description) = &self.description {
             line(description.clone());
@@ -640,7 +398,7 @@ impl Summary {
             ("adapter", true) => line(format!("use: c = connect {}", self.connect_name)),
             _ => {}
         }
-        out.join("\n")
+        movement_parser::util::form::external_text(&out.join("\n")).into_owned()
     }
 
     fn to_json(&self) -> String {
@@ -684,30 +442,4 @@ pub(crate) fn first_sentence(text: &str) -> String {
 /// What an uninstalled `@lf/<folder>` would be called as an external.
 fn external_name(reference: &str) -> String {
     reference.rsplit('/').next().unwrap_or(reference).chars().map(|c| if c.is_ascii_alphanumeric() || c == '_' { c } else { '_' }).collect()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn view_of(properties: &str) -> Vec<String> {
-        let schema = Js::parse(format!(r#"{{"positions":{{"InvoiceChange":{{"properties":{properties},"edges":{{}}}}}}}}"#).as_bytes()).unwrap();
-        let mut out = Vec::new();
-        SchemaView::of(&schema).lines(&mut out);
-        out
-    }
-
-    #[test]
-    fn an_enum_that_is_another_enum_of_its_record_with_one_text_before_each_option_is_said_by_that_enum() {
-        let out = view_of(
-            r#"{"Kind":{"kind":"enum","options":["paid","payment_failed"]},"Type":{"kind":"enum","options":["invoice.paid","invoice.payment_failed"]},"Status":{"kind":"enum","options":["invoice.paid","other"]}}"#,
-        );
-        assert_eq!(out.last().unwrap(), "    fields: Kind enum(paid|payment_failed), Type enum(invoice.<Kind>), Status enum(invoice.paid|other)");
-    }
-
-    #[test]
-    fn an_enum_is_listed_where_saying_it_by_another_would_be_no_shorter() {
-        let out = view_of(r#"{"Kind":{"kind":"enum","options":["paid"]},"Type":{"kind":"enum","options":["invoice.paid"]}}"#);
-        assert_eq!(out.last().unwrap(), "    fields: Kind enum(paid), Type enum(invoice.paid)");
-    }
 }

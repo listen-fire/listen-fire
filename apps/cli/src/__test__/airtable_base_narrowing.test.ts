@@ -134,8 +134,7 @@ test('the catalog text, before a program connects at a base, says how to and wha
     writeFileSync(join(dir, 'movements/pipeline.mvt'), program({ base: 'Pipeline Tracker', table: 'Companies', field: 'Name' }).replace('pipeline = connect airtable using my_airtable', 'pipeline = connect airtable using my_airtable { base: "Pipeline Tracker" }'));
     const after = lfSync(dir, 'catalog');
     assert.equal(after.code, 0, after.out);
-    assert.match(after.out, /^ {2}Companies -> Companies$/m);
-    assert.match(after.out, /^ {2}a Companies along the connection's Companies: Name, Stage, Tags, Notes$/m);
+    assert.match(after.out, /^ {2}-\[:Companies\]-> Companies \[r w\]: Name, Stage, Tags, Notes$/m);
   } finally {
     await fake.stop();
   }
@@ -178,6 +177,47 @@ listen to manual-[:Invocations]-> fire track
     const kept = await rows();
     assert.equal(kept.length, 1, JSON.stringify(kept));
     assert.match(JSON.stringify(kept[0].fields), /Won/);
+  } finally {
+    await fake.stop();
+  }
+});
+
+// An address spells a base as a program does, and goes through the check's own
+// narrowing: the module is asked which base the WHERE selects, so what is
+// described there is that base's tables, whichever way the base is written.
+test('an address narrows by a WHERE and connects in a position as a program does', async () => {
+  const fake = await fakeChannels();
+  try {
+    const dir = await connected(fake.url);
+    const shown = (address: string) => {
+      const run = lfSync(dir, 'catalog', address);
+      assert.equal(run.code, 0, `${address}: ${run.out}`);
+      return run.out;
+    };
+    const whole = shown('@lf/airtable:my_airtable');
+    assert.match(whole, /^connection my_airtable: `@lf\/airtable`$/m);
+    assert.doesNotMatch(whole, /^ {2}Companies/m);
+
+    const narrowed = shown('@lf/airtable:my_airtable-[b:Bases WHERE b.Name == "Pipeline Tracker"]->');
+    assert.match(narrowed, /^ {2}-\[:Companies\]-> Companies \[r w( fires)?\]: Name, Stage, Tags, Notes$/m);
+    assert.match(narrowed, /^ {2}-\[:Contacts\]-> Contacts /m);
+    assert.match(shown('@lf/airtable:my_airtable-[b:Bases WHERE b.Name == "Pipeline Tracker"]->-[:Companies]->'), /^fields:\n(.*\n)*? {2}Name\b/m);
+
+    const at = shown('@lf/airtable:my_airtable { base: "Pipeline Tracker" }');
+    assert.match(at, /^connection my_airtable::.*Pipeline Tracker.*: `@lf\/airtable`, in the position its program's connect names$/m);
+    assert.match(at, /^ {2}-\[:Companies\]-> Companies \[r w( fires)?\]: Name, Stage, Tags, Notes$/m);
+    assert.match(shown('@lf/airtable:my_airtable { base: "Pipeline Tracker" }-[:Companies]->'), /^fields:\n(.*\n)*? {2}Name\b/m);
+
+    // A name the WHERE does not hold, as a program's check says it.
+    const nowhere = lfSync(dir, 'catalog', '@lf/airtable:my_airtable-[b:Bases WHERE b.Name == "Pipeline Trackr"]->');
+    assert.equal(nowhere.code, 1, nowhere.out);
+    assert.match(nowhere.out, /^error MOV_UNKNOWN_POSITION .*has no Base whose Name is "Pipeline Trackr" — it has: "Pipeline Tracker", "Ops" — did you mean 'Pipeline Tracker'\?$/m);
+    assert.doesNotMatch(nowhere.out, /^fields/m);
+
+    // A further hop off it lists that base's tables.
+    const misspelt = lfSync(dir, 'catalog', '@lf/airtable:my_airtable { base: "Pipeline Tracker" }-[:Companys]->');
+    assert.equal(misspelt.code, 1, misspelt.out);
+    assert.match(misspelt.out, /^error MOV_\w+ .*'Companys'.*Companies, Contacts/m);
   } finally {
     await fake.stop();
   }

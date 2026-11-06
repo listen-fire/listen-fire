@@ -1615,17 +1615,17 @@ mod tests {
     #[test]
     fn a_type_with_no_position_says_what_it_is_on_its_root_edge() {
         let entries = [
-            js(r#"{"typeId":"Form","displayName":"Form","writable":true,"readable":false,"collectionName":"Forms"}"#),
+            js(r#"{"typeId":"Ask","displayName":"Ask","writable":true,"readable":false,"collectionName":"Asks"}"#),
             js(r#"{"typeId":"Deals","displayName":"Deals","writable":true,"readable":true}"#),
         ];
         let described = |id: &str| js(&format!(r#"{{"typeId":"{id}","displayName":"{id}","description":"What a {id} is.","fields":[{{"fieldId":"Title","displayName":"Title","kind":"string","writable":true,"required":true,"description":"Its title."}}],"references":[]}}"#));
-        let descriptors: IndexMap<String, Js> = ["Form", "Deals"].map(|id| (id.to_string(), described(id))).into_iter().collect();
-        let schema = describe_external_schema("forms", &entries, &descriptors);
+        let descriptors: IndexMap<String, Js> = ["Ask", "Deals"].map(|id| (id.to_string(), described(id))).into_iter().collect();
+        let schema = describe_external_schema("asks", &entries, &descriptors);
         let collection = |name: &str| schema.get("collections").and_then(|c| c.get(name));
-        assert_eq!(collection("Forms").and_then(|c| c.get("description")).and_then(Js::as_str), Some("What a Form is."));
+        assert_eq!(collection("Asks").and_then(|c| c.get("description")).and_then(Js::as_str), Some("What a Ask is."));
         assert_eq!(collection("Deals").and_then(|c| c.get("description")), None);
         assert_eq!(schema.get("positions").and_then(|p| p.get("Deals")).and_then(|d| d.get("description")).and_then(Js::as_str), Some("What a Deals is."));
-        assert_eq!(schema.get("writableRoots").and_then(|w| w.get("Form")).and_then(|f| f.get("fieldDocs")).and_then(|d| d.get("Title")).and_then(Js::as_str), Some("Its title."));
+        assert_eq!(schema.get("writableRoots").and_then(|w| w.get("Ask")).and_then(|f| f.get("fieldDocs")).and_then(|d| d.get("Title")).and_then(Js::as_str), Some("Its title."));
     }
 
     #[test]

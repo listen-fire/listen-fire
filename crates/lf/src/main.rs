@@ -17,7 +17,7 @@
 //!   listen-fire drain [--until-idle] [--max-seconds N]  a worker over the work queue (scale from zero)
 //!   listen-fire serve [--port N] [--doors-only]  the inbound doors and the work drain (--doors-only: no drain)
 //!   listen-fire cancel <run-id> [--reason <text>]
-//!   listen-fire catalog [--dir <project>]        each connection as a program reads, writes and listens to it; --json: the snapshot `check` reads
+//!   listen-fire catalog ['<address>'] [--dir <project>]  each connection as a program reads, writes and listens to it, or the one connection or place an address names; --json: the snapshot `check` reads
 //!   listen-fire lsp [--dir <project>]            the language server, over stdio (src/lsp.rs)
 //!   listen-fire modules [show <module>]          the modules this listen-fire can install; one module's summary (src/modules.rs)
 //!   listen-fire connect [<module>]               set a module up (src/connect.rs)
@@ -49,6 +49,7 @@
 #![cfg_attr(not(feature = "serve"), allow(dead_code))]
 
 #[cfg(feature = "anthropic")]
+mod address;
 mod anthropic;
 mod arrivals;
 mod backend;
@@ -113,6 +114,7 @@ mod listener {
     }
 }
 mod refinements;
+mod schema_view;
 mod lsp;
 mod member_walk;
 mod modules;
@@ -204,7 +206,7 @@ const USAGE: &str = "usage: listen-fire <init|check|example|catalog|lsp|run|resu
   init      scaffold a starter project in the folder (default: the current one): lf.yaml, a movement, .gitignore
   check     every diagnostic the project's movement files have (as `listen-fire check`)
   example   unsure how to write something? ask in your own words (`listen-fire example create or update`): a few checked lines of listen-fire doing it; with no words, every example's intent
-  catalog   each connection the project holds, as a program reads, writes and listens to it: its record types with their fields, edges and writes, in the notation of `modules show`, its live types included (--json: the catalog snapshot the files are checked against)
+  catalog   each connection the project holds, as a program reads, writes and listens to it: its record types with their fields, edges and writes, in the notation of `modules show`, its live types included (--json: the catalog snapshot the files are checked against); `catalog '<address>'`: one connection ('@lf/slack:team_workspace', '#acme_crm'; a position as connect writes it, '@lf/airtable:acme { baseId: \"x\" }') or one place in it, written as a program hops ('@lf/slack:team_workspace-[:Channels]->-[:Messages]->'): its fields, and each edge leaving it with the fields where it lands. Single quotes: in double quotes a shell runs a backticked edge name
   lsp       the language server (LSP over stdin/stdout): diagnostics, completion, hover, definitions and fixes for the movement files
   run       run <movement>: one manual invocation, to the `listen to manual-[:Invocations]-> fire <movement>` listens (--text: the Invocation's Text); --event: judge the event file's arrivals against the listens on their edges and run each; --poll <movement>: poll now, once, each polled edge a listen that fires it is on, once for every listen sharing the poll
   resume    step every parked leaf of one run now; with no run, drain the due work and what is due in every parked run (a timer not yet come stays parked)
@@ -454,6 +456,14 @@ async fn run(argv: Vec<String>) -> Result<i32, String> {
         "init" => init::run(&args.rest.first().map(PathBuf::from).unwrap_or_else(|| args.dir.clone()), &mut out),
         "check" => check::run(&load()?, args.json, &mut out).await,
         "example" => examples::run(&args.rest, &mut out),
+        "catalog" if !args.rest.is_empty() => match args.rest.as_slice() {
+            [_] if args.json => Err("listen-fire catalog <address> has no --json form yet: it is not designed. Leave out --json for the text, or the address for the whole snapshot".to_string()),
+            [one] => address::run(&load()?, one, &mut out).await,
+            _ => {
+                eprintln!("usage: listen-fire catalog ['<address>'] [--json]");
+                Ok(2)
+            }
+        },
         "catalog" => match check::open_checking_in(&load()?, check::Scope::Held).await? {
             check::Opened::Ready(checking) => {
                 // A connection that cannot be described hides no other: the

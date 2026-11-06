@@ -20,6 +20,15 @@ named in [`RELEASING.md`](RELEASING.md).
 
 <!-- add merged PRs here -->
 
+- `listen-fire catalog` and `listen-fire modules show` print one notation, the language's own. No program's meaning or check result changes, and no pin moves; only this text does. Nothing in this repository reads the text but its tests.
+  - An edge is written as a program hops it, then where it lands: ``-[:`Linked Users`]-> Linked User`` for `Linked Users -> Linked User`.
+  - An edge that only reads has no mark. Any other lists all it can do: `[w]`, `[fires]`, `[r fires]`, `[r w]`, `[w fires]`, `[r w fires]`, for `(write only)`, `(listen only)` and `(listenable)`.
+  - The `writes` list goes. What a write takes sits on its edge, on its own line: ``-[:Replies]-> Message [w]: Text!, `Reply Markup` ``.
+  - A field's marks are `!` required (`*` before), `*` identifying and `~` read only (both new). One legend line at the top of the text says so.
+  - A name and a type are spelled as a program writes them: `` `Message Id` `` with its backticks, `text[]` for `list<text>`, `text | null` for `maybeAbsent`, `"open" | "paid"` for `enum(open|paid)`, and a type its module names by that name (`Cron`, not `cron`). A field whose options are another's with a text before each (Stripe's `Type`) lists them all, for `enum(invoice.<Kind>)`, which no program could write.
+  - `modules show --json` keeps its shape, each `type` spelled as above. A collection gains `description` where its module gives one.
+- `listen-fire catalog '<address>'` prints one connection (`'@lf/slack:team_workspace'`) or one place in it (`'@lf/slack:team_workspace-[:Channels]->-[:Messages]->'`): its description, its fields, and each edge leaving it with the fields where it lands. An address is what a program writes (a position as `connect` writes it, a `#name` for a project's own module), and the parser and the checker read it as one, so a walk follows any edge, a hop can have a `WHERE`, and a misspelt edge lists the edges there are. A refused address prints what refused it and exits 1. Only the module the address names is started. `--json` with an address is refused until its form is designed.
+
 ## [0.15.2] - 2026-11-05
 
 A patch of 0.15; it reads the same pins (`0.15.x`). A run that recurses too deep ends with `MOVENG_CALL_DEPTH` instead of taking the process down, and runners sharing a secrets module share each webhook. The bundled `linkedin-research` plugin finds text about a person more cheaply, with an optional `context` input and an optional `activity_text` output ([its changelog](modules/web/CHANGELOG.md)).

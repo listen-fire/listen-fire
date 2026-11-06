@@ -6,10 +6,12 @@
 use std::rc::Rc;
 
 use indexmap::IndexMap;
+use movement_parser::util::form::external_text;
 
 use crate::externals::{RunningExternal, plugin_entries};
 use crate::json::{Js, Obj};
 use crate::obj;
+use crate::schema_view::{LEGEND, SchemaView};
 use crate::secrets::{Binding, Credential, Credentials};
 use crate::sources::MovementFile;
 
@@ -263,55 +265,29 @@ fn adapter_snapshot_of(adapter: AdapterDeclarations) -> Js {
 /// `listen-fire catalog` without `--json`: each connection the project holds
 /// (a program connecting it or not), as a program reads, writes and listens to
 /// it, in the notation `listen-fire modules show` prints a module in
-/// (crate::modules::SchemaView), from the schema the catalog holds for it, so
-/// its live types (an MCP server's tools, a CRM's fields) are there. Then the
-/// plugins the files import, the units every program has, and the credentials
-/// no installed module describes.
+/// (crate::schema_view), from the schema the catalog holds for it, so its live
+/// types (an MCP server's tools, a CRM's fields) are there. Then the plugins
+/// the files import, the units every program has, and the credentials no
+/// installed module describes.
 pub fn catalog_text(catalog: &Js) -> String {
-    let adapters = match catalog.get("adapters") {
-        Some(Js::Obj(adapters)) => adapters.clone(),
-        _ => Obj::new(),
-    };
-    let credentials = match catalog.get("credentials") {
-        Some(Js::Obj(credentials)) => credentials.clone(),
-        _ => Obj::new(),
-    };
+    let adapters = object_of(catalog.get("adapters"));
+    let credentials = object_of(catalog.get("credentials"));
     let mut out = vec![
+        LEGEND.to_string(),
         "each connection the project holds, as a program reads, writes and listens to it (listen-fire catalog --json: the whole snapshot)".to_string(),
         "a record type is named one hop off its connection: a parameter holding a Message of connection c is typed <c-[:Message]->>".to_string(),
+        "one place, with each edge leaving it and what lands there: listen-fire catalog '<module>:<credential>-[:<edge>]->' (no credential: '<module>-[:<edge>]->'; single quotes, since in double quotes a shell runs a backticked edge name)".to_string(),
     ];
     let is_unit = |name: &str| movement_parser::version::RUN_HOST_UNITS.contains(&name);
     for (name, adapter) in adapters.iter().filter(|(name, _)| !is_unit(name)) {
-        let spelled = match adapter.get("package").and_then(Js::as_str) {
-            Some(package) => format!("`{package}`"),
-            None => format!("#{name}"),
-        };
-        let schemas = match adapter.get("schemas") {
-            Some(Js::Obj(schemas)) if !schemas.is_empty() => schemas.clone(),
-            _ => {
-                out.push(String::new());
-                out.push(format!("module {spelled}: no connection described"));
-                continue;
-            }
-        };
-        for (key, schema) in &schemas {
+        let schemas = object_of(adapter.get("schemas"));
+        if schemas.is_empty() {
             out.push(String::new());
-            let (header, using, positioned) = match key.as_str() {
-                "" => (format!("connection {name} (no credential): {spelled}"), String::new(), false),
-                credential if credentials.contains_key(credential) => (format!("connection {credential}: {spelled}"), format!(" using {credential}"), false),
-                // A connection in a position (an Airtable base) is the program's own construction.
-                positioned => (format!("connection {positioned}: {spelled}, in the position its program's connect names"), " using <credential> as the program's connect says".to_string(), true),
-            };
-            out.push(header);
-            if let Some(description) = adapter.get("description").and_then(Js::as_str) {
-                out.push(description.to_string());
-            }
-            let connect = format!("c = connect {spelled}{using}");
-            out.push(format!("use: {connect}"));
-            if !positioned {
-                out.extend(position_lines(adapter, key, &connect));
-            }
-            crate::modules::SchemaView::of(schema).lines(&mut out);
+            out.push(format!("module {}: no connection described", spelled_module(name, adapter)));
+            continue;
+        }
+        for (key, schema) in &schemas {
+            connection_lines(&Connection { name, adapter, key, schema, credentials: &credentials }, &mut out);
         }
     }
 
@@ -331,12 +307,12 @@ pub fn catalog_text(catalog: &Js) -> String {
     // Every program has them, and the handbook's chapter on each has the
     // listens written out, so here each is where it starts and what lands:
     // a listen on a schedule reads its tick's fields.
-    let units: Vec<(&String, crate::modules::SchemaView)> =
-        adapters.iter().filter(|(name, _)| is_unit(name)).filter_map(|(name, adapter)| Some((name, crate::modules::SchemaView::of(adapter.get("schemas")?.get("")?)))).collect();
+    let units: Vec<(&String, SchemaView)> =
+        adapters.iter().filter(|(name, _)| is_unit(name)).filter_map(|(name, adapter)| Some((name, SchemaView::of(name, adapter.get("schemas")?.get("")?).ok()?))).collect();
     if !units.is_empty() {
         let chapters: Vec<String> = units.iter().map(|(name, _)| format!("system:{name}")).collect();
         out.push(String::new());
-        out.push(format!("always connected (a program names each with no connect; a name with a space is written in backticks; see handbook: {}):", chapters.join(", ")));
+        out.push(format!("always connected (a program names each with no connect; see handbook: {}):", chapters.join(", ")));
         for (name, view) in &units {
             out.push(format!("  {name}: {}", view.starts().join(", ")));
             out.extend(view.record_summaries().into_iter().map(|record| format!("    {record}")));
@@ -358,7 +334,69 @@ pub fn catalog_text(catalog: &Js) -> String {
         out.push(String::new());
         out.push(format!("credentials no installed module describes (its module is not installed here, or does not declare that credential): {}", unconnected.join(", ")));
     }
-    out.join("\n")
+    external_text(&out.join("\n")).into_owned()
+}
+
+/// One connection's block of `catalog_text`, alone (`listen-fire catalog
+/// <address>`): that adapter's schema filed under the first of `keys` it has.
+pub fn connection_text(catalog: &Js, adapter_name: &str, keys: &[String]) -> Option<String> {
+    let adapter = catalog.get("adapters")?.get(adapter_name)?;
+    let schemas = object_of(adapter.get("schemas"));
+    let (key, schema) = keys.iter().find_map(|key| schemas.get_key_value(key))?;
+    let credentials = object_of(catalog.get("credentials"));
+    let mut out = vec![LEGEND.to_string()];
+    connection_lines(&Connection { name: adapter_name, adapter, key, schema, credentials: &credentials }, &mut out);
+    Some(external_text(&out.join("\n")).into_owned())
+}
+
+fn object_of(value: Option<&Js>) -> Obj {
+    match value {
+        Some(Js::Obj(object)) => object.clone(),
+        _ => Obj::new(),
+    }
+}
+
+/// A module as a program's `connect` writes it.
+fn spelled_module(name: &str, adapter: &Js) -> String {
+    match adapter.get("package").and_then(Js::as_str) {
+        Some(package) => format!("`{package}`"),
+        None => format!("#{name}"),
+    }
+}
+
+/// One connection of the catalog.
+struct Connection<'a> {
+    name: &'a str,
+    adapter: &'a Js,
+    /// What its schema is filed under.
+    key: &'a str,
+    schema: &'a Js,
+    credentials: &'a Obj,
+}
+
+fn connection_lines(connection: &Connection<'_>, out: &mut Vec<String>) {
+    let Connection { name, adapter, key, schema, credentials } = connection;
+    let spelled = spelled_module(name, adapter);
+    out.push(String::new());
+    let (header, using, positioned) = match *key {
+        "" => (format!("connection {name} (no credential): {spelled}"), String::new(), false),
+        credential if credentials.contains_key(credential) => (format!("connection {credential}: {spelled}"), format!(" using {credential}"), false),
+        // A connection in a position (an Airtable base) is the program's own construction.
+        positioned => (format!("connection {positioned}: {spelled}, in the position its program's connect names"), " using <credential> as the program's connect says".to_string(), true),
+    };
+    out.push(header);
+    if let Some(description) = adapter.get("description").and_then(Js::as_str) {
+        out.push(description.to_string());
+    }
+    let connect = format!("c = connect {spelled}{using}");
+    out.push(format!("use: {connect}"));
+    if !positioned {
+        out.extend(position_lines(adapter, key, &connect));
+    }
+    match SchemaView::of(key, schema) {
+        Ok(view) => view.lines(out),
+        Err(why) => out.push(format!("its schema does not read: {why}")),
+    }
 }
 
 /// How a connection with no position is connected in one (its module's
@@ -473,51 +511,50 @@ mod text_tests {
         .unwrap();
         let text = catalog_text(&catalog);
         let expected = [
+            LEGEND,
             "each connection the project holds, as a program reads, writes and listens to it (listen-fire catalog --json: the whole snapshot)",
             "a record type is named one hop off its connection: a parameter holding a Message of connection c is typed <c-[:Message]->>",
+            "one place, with each edge leaving it and what lands there: listen-fire catalog '<module>:<credential>-[:<edge>]->' (no credential: '<module>-[:<edge>]->'; single quotes, since in double quotes a shell runs a backticked edge name)",
             "",
             "connection crm: `@lf/mcp`",
             "Any remote MCP server.",
             "use: c = connect `@lf/mcp` using crm",
             "",
-            "reads: start a walk (or a listen, where marked) from the connection with",
-            "  find_customer -> find_customer",
-            "  add_note -> add_note (write only)",
+            "start a walk, a write or a listen from the connection with:",
+            "  -[:find_customer]-> find_customer",
+            "  -[:add_note]-> add_note [w]: customer!, body",
             "",
-            "record types (a name with a space is written in backticks; pinned: the fields a read's WHERE must set with ==):",
+            "record types (pinned: the fields a read's WHERE must set with ==):",
             "  find_customer: The customer with this email",
-            "    fields: email text, plan enum(monthly|yearly)",
+            r#"    fields: email text, plan "monthly" | "yearly""#,
             "    pinned: email",
-            "",
-            "writes (a * is required):",
-            "  a add_note along the connection's add_note: customer*, body",
             "",
             "connection stripe_account: `@lf/stripe`",
             "use: c = connect `@lf/stripe` using stripe_account",
             "",
-            "reads: start a walk (or a listen, where marked) from the connection with",
-            "  Invoices -> Invoice",
+            "start a walk, a write or a listen from the connection with:",
+            "  -[:Invoices]-> Invoice",
             "",
-            "record types (a name with a space is written in backticks):",
+            "record types:",
             "  Invoice",
             "    fields: Id text",
-            "    edges: Changes -> InvoiceChange (listen only), Customer -> Customer",
+            "    edges: -[:Changes]-> InvoiceChange [fires], -[:Customer]-> Customer",
             "",
             "connection acme_crm (no credential): #acme_crm",
             "use: c = connect #acme_crm",
             "",
-            "reads: start a walk (or a listen, where marked) from the connection with",
-            "  Company -> Company (listenable)",
+            "start a walk, a write or a listen from the connection with:",
+            "  -[:Company]-> Company [r fires]",
             "",
-            "record types (a name with a space is written in backticks):",
+            "record types:",
             "  Company",
             "    fields: Name text",
             "",
             "plugins (use: import { <name> } from plugins, then call it by position, settings last):",
             "  render(text, pageSize?): A PDF of the text.",
             "",
-            "always connected (a program names each with no connect; a name with a space is written in backticks; see handbook: system:manual):",
-            "  manual: Invocations -> Invocation (listen only)",
+            "always connected (a program names each with no connect; see handbook: system:manual):",
+            "  manual: -[:Invocations]-> Invocation [fires]",
             "    Invocation: Text text",
             "",
             "credentials no installed module describes (its module is not installed here, or does not declare that credential): crm_two (mcp)",

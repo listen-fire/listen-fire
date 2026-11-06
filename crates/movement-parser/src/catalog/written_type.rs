@@ -12,9 +12,11 @@
 //!
 //! - `| null` or `|` under or over a list (`text[] | null`, `(text | null)[]`):
 //!   the grammar's own two forms put together, as TypeScript writes them.
-//! - An enum: `enum(a|b)`, with `…` last when other values are legal too. A
-//!   program declares a closed set by name (`type T = <"a" | "b">`); a field
-//!   has no such name, and this is the text the tools already print.
+//! - An enum: `"a" | "b"`, as a program declares a closed set of texts
+//!   (`type T = <"a" | "b">`), each value as the parser's string literal reads
+//!   it. `…` comes last when other values are legal too, and `…+3` counts the
+//!   options cut; neither is a program's. In a list it takes parentheses, as
+//!   any union does: `("a" | "b")[]`.
 //! - A type its module names, or a record a field holds: that name, as a
 //!   program writes a name.
 //! - A record nobody can name: `record`.
@@ -111,7 +113,7 @@ impl WrittenType {
     }
 
     /// As `spell`, an enum showing at most `enum_options` of its options and
-    /// counting the rest (`enum(a|b|…+3)`).
+    /// counting the rest (`"a" | "b" | …+3`).
     pub fn spell_showing(&self, enum_options: Option<usize>) -> String {
         let spell = |type_: &WrittenType| type_.spell_showing(enum_options);
         match self {
@@ -119,8 +121,9 @@ impl WrittenType {
             WrittenType::Words(words) => words.clone(),
             WrittenType::Unknown => "?".to_string(),
             WrittenType::Null => "null".to_string(),
-            WrittenType::List(of) => match **of {
+            WrittenType::List(of) => match &**of {
                 WrittenType::Union(_) => format!("({})[]", spell(of)),
+                WrittenType::Enum { options, open } if enum_parts(options, *open, enum_options).len() > 1 => format!("({})[]", spell(of)),
                 WrittenType::Closure { .. } => format!("<{}>[]", spell(of)),
                 _ => format!("{}[]", spell(of)),
             },
@@ -141,15 +144,40 @@ impl WrittenType {
                 format!("[{}]", slots.join(", "))
             }
             WrittenType::Dict(of) => format!("dict({})", spell(of)),
-            WrittenType::Enum { options, open } => {
-                let shown = enum_options.map_or(options.len(), |limit| limit.min(options.len()));
-                let hidden = options.len() - shown;
-                let more = if hidden > 0 { vec![format!("…+{hidden}")] } else if *open { vec!["…".to_string()] } else { Vec::new() };
-                let parts: Vec<&str> = options[..shown].iter().map(String::as_str).chain(more.iter().map(String::as_str)).collect();
-                format!("enum({})", parts.join("|"))
-            }
+            WrittenType::Enum { options, open } => match enum_parts(options, *open, enum_options) {
+                parts if parts.is_empty() => "never".to_string(),
+                parts => parts.join(" | "),
+            },
         }
     }
+}
+
+/// An enum's options as string literals, then what says there are others.
+fn enum_parts(options: &[String], open: bool, limit: Option<usize>) -> Vec<String> {
+    let shown = limit.map_or(options.len(), |limit| limit.min(options.len()));
+    let hidden = options.len() - shown;
+    let more = if hidden > 0 { Some(format!("…+{hidden}")) } else { open.then(|| "…".to_string()) };
+    options[..shown].iter().map(|option| string_literal(option)).chain(more).collect()
+}
+
+/// `value` as the parser's string literal reads it back (`lex_string`).
+fn string_literal(value: &str) -> String {
+    let mut literal = String::with_capacity(value.len() + 2);
+    literal.push('"');
+    let mut chars = value.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '"' => literal.push_str("\\\""),
+            '\\' => literal.push_str("\\\\"),
+            '\n' => literal.push_str("\\n"),
+            '\t' => literal.push_str("\\t"),
+            '\r' => literal.push_str("\\r"),
+            '$' if chars.peek() == Some(&'{') => literal.push_str("\\$"),
+            c => literal.push(c),
+        }
+    }
+    literal.push('"');
+    literal
 }
 
 impl From<&FieldType> for WrittenType {
@@ -224,9 +252,13 @@ mod tests {
     #[test]
     fn a_type_no_program_writes_takes_the_nearest_spelling() {
         for (type_, written) in [
-            (json!({ "kind": "enum", "options": ["open", "paid"] }), "enum(open|paid)"),
-            (json!({ "kind": "enum", "options": ["open"], "open": {} }), "enum(open|…)"),
-            (json!({ "kind": "enum", "options": [] }), "enum()"),
+            (json!({ "kind": "enum", "options": ["open", "paid"] }), r#""open" | "paid""#),
+            (json!({ "kind": "enum", "options": ["open"], "open": {} }), r#""open" | …"#),
+            (json!({ "kind": "enum", "options": [] }), "never"),
+            (json!({ "kind": "list", "of": { "kind": "enum", "options": ["open", "paid"] } }), r#"("open" | "paid")[]"#),
+            (json!({ "kind": "list", "of": { "kind": "enum", "options": ["open"] } }), r#""open"[]"#),
+            (json!({ "kind": "list", "of": { "kind": "enum", "options": ["open"], "open": {} } }), r#"("open" | …)[]"#),
+            (json!({ "kind": "maybeAbsent", "of": { "kind": "enum", "options": ["open", "paid"] } }), r#""open" | "paid" | null"#),
             (json!({ "kind": "owned", "name": "Cron", "owner": "cron" }), "Cron"),
             (json!({ "kind": "record" }), "record"),
             (json!({ "kind": "record", "position": { "kind": "position", "position": "Deal Row" } }), "`Deal Row`"),
@@ -242,11 +274,26 @@ mod tests {
     fn how_many_of_an_enums_options_show_is_the_callers() {
         let options = json!({ "kind": "enum", "options": ["a", "b", "c"] });
         let written = WrittenType::from(&field(options));
-        assert_eq!(written.spell_showing(Some(2)), "enum(a|b|…+1)");
-        assert_eq!(written.spell_showing(Some(3)), "enum(a|b|c)");
+        assert_eq!(written.spell_showing(Some(2)), r#""a" | "b" | …+1"#);
+        assert_eq!(written.spell_showing(Some(3)), r#""a" | "b" | "c""#);
         let open = WrittenType::from(&field(json!({ "kind": "enum", "options": ["a", "b", "c"], "open": {} })));
-        assert_eq!(open.spell_showing(Some(2)), "enum(a|b|…+1)");
-        assert_eq!(open.spell_showing(Some(3)), "enum(a|b|c|…)");
+        assert_eq!(open.spell_showing(Some(2)), r#""a" | "b" | …+1"#);
+        assert_eq!(open.spell_showing(Some(3)), r#""a" | "b" | "c" | …"#);
+        let in_a_list = WrittenType::List(Box::new(written));
+        assert_eq!(in_a_list.spell_showing(Some(0)), "…+3[]");
+        assert_eq!(in_a_list.spell_showing(Some(1)), r#"("a" | …+2)[]"#);
+    }
+
+    /// Spelled, and read back by the parser's own string literal.
+    #[test]
+    fn an_enums_value_is_quoted_and_escaped_as_the_parsers_string_literal_reads_it() {
+        for value in ["plain", "with \"quotes\"", "back\\slash", "line\nbreak", "tab\there", "return\rhere", "${not} an interpolation", "$ alone", "it's"] {
+            let spelled = string_literal(value);
+            match crate::expr::parse_expression_raw(&spelled) {
+                Ok(crate::tree::MExpr::String { ref parts, .. }) => assert_eq!(*parts, [crate::tree::StringPart::Text(value.to_string())], "{spelled}"),
+                other => panic!("{spelled}: {other:?}"),
+            }
+        }
     }
 
     /// The forms the module's head says are the grammar's, held to it: a
@@ -261,7 +308,8 @@ mod tests {
         }
         assert!(parses(&takes("<(c: <text>) => <text>>[]")));
         assert!(parses("node N {\n  x: <text | null>\n}\n"));
-        for written in ["text[] | null", "(text | null)[]", "enum(a|b)", "dict(text)", "[text, number]"] {
+        assert!(parses("type T = <\"a\" | \"b\">\n"));
+        for written in ["text[] | null", "(text | null)[]", "dict(text)", "[text, number]"] {
             assert!(!parses(&takes(&format!("<{written}>"))), "the grammar reads {written} now: move it up in the module's head");
         }
     }

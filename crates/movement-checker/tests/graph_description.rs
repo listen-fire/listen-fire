@@ -400,7 +400,7 @@ fn a_type_known_only_by_what_is_written_to_it_has_its_write_fields_and_its_root_
     assert_eq!(description.description.as_deref(), Some("Ask a person to approve."));
     let names: Vec<&str> = description.fields.shown.iter().map(|f| f.name.as_str()).collect();
     assert_eq!(names, ["Amount", "Customer"]);
-    assert_eq!(field(&description, "Amount").type_, "enum(low|medium|high)");
+    assert_eq!(field(&description, "Amount").type_, r#""low" | "medium" | "high""#);
     assert_eq!(field(&description, "Amount").marks, [Mark::Required]);
     assert_eq!(field(&description, "Customer").description.as_deref(), Some("Who it is for: the template's first placeholder."));
     assert!(!field(&description, "Customer").write_only);
@@ -421,7 +421,7 @@ fn how_much_shows_is_the_callers() {
     assert_eq!(description.fields.cut, 3);
 
     let enums = describe_landing(Walks::connected().described("c-[:approve]->").landing.as_ref().expect("it lands"), Showing { fields: None, enum_options: Some(1) });
-    assert_eq!(field(&enums, "Amount").type_, "enum(low|…+2)");
+    assert_eq!(field(&enums, "Amount").type_, r#""low" | …+2"#);
 }
 
 #[test]
