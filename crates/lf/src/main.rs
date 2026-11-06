@@ -48,6 +48,7 @@
 // reached through it: what is unreached there is the doors', not dead.
 #![cfg_attr(not(feature = "serve"), allow(dead_code))]
 
+mod actor;
 #[cfg(feature = "anthropic")]
 mod anthropic;
 mod arrivals;

@@ -25,7 +25,7 @@ use crate::json::Js;
 use crate::project::Project;
 use crate::refinements::{InstanceChain, Refining, refine_instance_schema};
 use crate::protocol::shape_error;
-use crate::schema::{Declarant, RETIRED_ENTRY_KEYS, RETIRED_MANIFEST_KEYS, ambiguous_arrivals, describe_external_schema, reference_name, retired_entry_key, retired_reference_key, undeclared_arrival_field, unreadable_answer_shape_from, unreadable_listening, unreadable_literals_from, unreadable_owned_field, unreadable_record_field, unreadable_settings_become};
+use crate::schema::{Declarant, Introspected, RETIRED_ENTRY_KEYS, RETIRED_MANIFEST_KEYS, ambiguous_arrivals, describe_external_schema, reference_name, retired_entry_key, retired_reference_key, undeclared_arrival_field, unreadable_answer_shape_from, unreadable_listening, unreadable_literals_from, unreadable_owned_field, unreadable_record_field, unreadable_settings_become};
 use crate::secrets::{Construction, Credential, Credentials, Imported, MissingCredential, Secrets, imported_credentials, missing_credentials};
 use crate::sources::{MovementFile, Parsed, scan_movements};
 
@@ -291,7 +291,7 @@ async fn describe_connection(running: &RunningExternal, credentials: &Credential
         }
     };
     let walker = Walker::new(&walk, adapter_type);
-    let refining = Refining { adapter: &running.external.manifest.name, entries: &entries, walker: &walker };
+    let refining = Refining { adapter: &running.external.manifest.name, entries: &entries, methods: &running.methods, walker: &walker };
     let schema = refine_instance_schema(described.clone(), &chains.iter().collect::<Vec<_>>(), &refining).await?;
     Ok(Some(Described { entries, described, chains, schema, position_options }))
 }
@@ -457,7 +457,8 @@ pub(crate) async fn describe_as(running: &RunningExternal, credentials: &Credent
             return Err(format!("Remote adapter \"{name}\" declares {refusal}"));
         }
     }
-    let schema = describe_external_schema(name, &entry_list, &descriptors);
+    let (reached, offered) = crate::actor::with_actor_descriptors(&entry_list, &descriptors, &running.methods).map_err(|refusal| format!("Remote adapter \"{name}\" describes {refusal}"))?;
+    let schema = describe_external_schema(name, &Introspected { entries: &entry_list, reached: &reached, descriptors: &offered });
     Ok((entry_list, schema))
 }
 

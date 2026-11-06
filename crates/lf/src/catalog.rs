@@ -187,7 +187,7 @@ pub fn unit_schema(unit: &str) -> Js {
     let entries = crate::units::entry_points(unit);
     let descriptors: IndexMap<String, Js> =
         crate::units::descriptors(unit).into_iter().map(|d| (d.get("typeId").and_then(Js::as_str).unwrap_or_default().to_string(), d)).collect();
-    crate::schema::describe_external_schema(unit, &entries, &descriptors)
+    crate::schema::describe_external_schema(unit, &crate::schema::Introspected { entries: &entries, reached: &crate::units::reached(unit), descriptors: &descriptors })
 }
 
 /// A static credential every field of which may be left out. An OAuth 2

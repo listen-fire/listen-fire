@@ -541,6 +541,8 @@ pub struct Refining<'a, 'w, W> {
     pub adapter: &'a str,
     /// Its `listEntryPoints` answer, for projecting a walked node.
     pub entries: &'a [Js],
+    /// What its module lists: whether what lands off a walked node says who acted (crate::actor).
+    pub methods: &'a [String],
     pub walker: &'a Walker<'w, W>,
 }
 
@@ -662,7 +664,7 @@ impl<W: Walk> Grafting<'_, '_, '_, W> {
         let Some(descriptor) = self.input.walker.describe_member(selected).await? else { return Ok(None) };
         let member_type = descriptor.get("displayName").and_then(Js::as_str).unwrap_or_default().to_string();
         let landings = self.landings_of(selected, &descriptor).await?;
-        let projected = project_refined(self.input, &Refined { name: &refined_name, synthetic: &format!("{type_name}::{synthetic}"), descriptor: &descriptor, landings: &landings });
+        let projected = project_refined(self.input, &Refined { name: &refined_name, synthetic: &format!("{type_name}::{synthetic}"), descriptor: &descriptor, landings: &landings })?;
         let Some(Js::Obj(mut position)) = projected.position else { return Ok(None) };
         // The member is still one of the type, and the WHERE that picked it
         // ranges over the type: the type's own fields are read as the type
@@ -768,7 +770,7 @@ struct Projected {
 /// `projectRefinedPosition`: the walked member as a position under its
 /// refined name, projected with the nodes its edges land on, each under its
 /// own name.
-fn project_refined<W>(input: &Refining<'_, '_, W>, refined: &Refined) -> Projected {
+fn project_refined<W>(input: &Refining<'_, '_, W>, refined: &Refined) -> Result<Projected, String> {
     let entry = |type_id: &str, name: &str| Js::Obj(obj! { "typeId" => Js::str(type_id), "displayName" => Js::str(name), "readable" => Js::Bool(true), "writable" => Js::Bool(false) });
     let mut entries = input.entries.to_vec();
     entries.push(entry(refined.synthetic, refined.name));
@@ -777,10 +779,12 @@ fn project_refined<W>(input: &Refining<'_, '_, W>, refined: &Refined) -> Project
         entries.push(entry(target, target));
         descriptors.insert(target.clone(), descriptor.clone());
     }
+    // A walked edge's landing is described only here, so what lands on it is offered here.
+    let (reached, descriptors) = crate::actor::with_actor_descriptors(&entries, &descriptors, input.methods).map_err(|refusal| format!("Remote adapter \"{}\" describes {refusal}", input.adapter))?;
     let projected = crate::schema::instance_schema_from_descriptors(&crate::schema::ProjectionInput {
         adapter_type: input.adapter,
         entries: &entries,
-        reached: &[],
+        reached: &reached,
         descriptors: &descriptors,
         meta_descriptor: None,
         supports_in_place_update: false,
@@ -789,11 +793,11 @@ fn project_refined<W>(input: &Refining<'_, '_, W>, refined: &Refined) -> Project
         lazily_walked: false,
     });
     let of = |map: &str, name: &str| projected.schema.get(map).and_then(|m| m.get(name)).cloned();
-    Projected {
+    Ok(Projected {
         position: of("positions", refined.name),
         landings: refined.landings.iter().filter_map(|(target, _)| Some((target.clone(), of("positions", target)?))).collect(),
         create_shapes: refined.landings.iter().filter_map(|(target, _)| Some((target.clone(), of("createShapes", target)?))).collect(),
-    }
+    })
 }
 
 /// Which member a WHERE selects, or why it selects none.
@@ -952,7 +956,7 @@ mod tests {
     fn refined_with(walk: &Sheets, source: &str) -> Result<Js, String> {
         let walker = Walker::new(walk, "sheets");
         let found = chains(source);
-        block_on(refine_instance_schema(schema(), &found.iter().collect::<Vec<_>>(), &Refining { adapter: "sheets", entries: &[], walker: &walker }))
+        block_on(refine_instance_schema(schema(), &found.iter().collect::<Vec<_>>(), &Refining { adapter: "sheets", entries: &[], methods: &[], walker: &walker }))
     }
 
     fn refined(source: &str) -> (Js, Vec<String>) {
@@ -983,6 +987,25 @@ mod tests {
             .filter(|d| d.severity.is_none())
             .map(|d| (d.code, d.message))
             .collect()
+    }
+
+    /// A walked edge's landing is described only by the walk, so it is offered
+    /// who acted there, or a filter narrowed to it could not read it.
+    #[test]
+    fn what_lands_on_a_walked_edge_may_say_who_acted_when_its_module_reports_it() {
+        let walk = Sheets { asked: RefCell::new(Vec::new()), failing: false };
+        let walker = Walker::new(&walk, "sheets");
+        let member = Js::parse(br#"{"typeId":"t","displayName":"Table","fields":[],"references":[{"fieldId":"Changes","name":"Changes","targetTypeId":"Change","listenable":true}]}"#).unwrap();
+        let landing = Js::parse(br#"{"typeId":"Change","displayName":"Change","fields":[],"references":[]}"#).unwrap();
+        let landings = [("Change".to_string(), landing)];
+        let refined = Refined { name: "Base \"x\"", synthetic: "Base::x", descriptor: &member, landings: &landings };
+        let actor_of = |methods: &[String]| {
+            let input = Refining { adapter: "sheets", entries: &[], methods, walker: &walker };
+            let projected = project_refined(&input, &refined).unwrap();
+            projected.landings[0].1.get("properties").and_then(|p| p.get("Actor")).map(Js::to_json)
+        };
+        assert_eq!(actor_of(&["extractActor".to_string()]).as_deref(), Some(r#"{"kind":"maybeAbsent","of":{"kind":"record","position":{"kind":"position","position":"Actor"}}}"#));
+        assert_eq!(actor_of(&[]), None);
     }
 
     const SELECT: &str = "  sheet = only(s-[x:Spreadsheet WHERE x.Title == \"Pipeline Sheet\"]->)\n  if (sheet == null) { fail(\"none\") }";

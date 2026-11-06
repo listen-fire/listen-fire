@@ -74,7 +74,7 @@ fn items(value: Option<&Js>) -> &[Js] {
 }
 
 /// `referenceTargetTypeIds`: one target, or several de-duplicated in order.
-fn reference_target_type_ids(reference: &Js) -> Vec<String> {
+pub fn reference_target_type_ids(reference: &Js) -> Vec<String> {
     match reference.get("targetTypeIds") {
         None => vec![key(reference.get("targetTypeId"))],
         Some(ids) => items(Some(ids)).iter().map(|i| key(Some(i))).collect::<IndexSet<_>>().into_iter().collect(),
@@ -1321,14 +1321,22 @@ fn described(declared: &Js) -> Option<String> {
     declared.get("description").and_then(Js::as_str).filter(|d| !d.is_empty()).map(str::to_string)
 }
 
+/// An adapter's introspection answers, and what the host adds to them.
+pub struct Introspected<'a> {
+    pub entries: &'a [Js],
+    /// Types with a position and no root collection (crate::actor).
+    pub reached: &'a [Js],
+    pub descriptors: &'a IndexMap<String, Js>,
+}
+
 /// The projection over an adapter's own introspection answers, as
 /// `listen-fire check` and a session ask it of each adapter external (crate::check `describe_external`).
-pub fn describe_external_schema(adapter_type: &str, entries: &[Js], descriptors: &IndexMap<String, Js>) -> Js {
+pub fn describe_external_schema(adapter_type: &str, introspected: &Introspected) -> Js {
     instance_schema_from_descriptors(&ProjectionInput {
         adapter_type,
-        entries,
-        reached: &[],
-        descriptors,
+        entries: introspected.entries,
+        reached: introspected.reached,
+        descriptors: introspected.descriptors,
         meta_descriptor: None,
         // A remote adapter always has `updateRecord` (it is not one of the
         // optional methods the client prunes), so `typeof … === 'function'`.
@@ -1394,7 +1402,7 @@ mod tests {
                  "references": [{ "fieldId": "notes", "name": "Notes", "targetTypeId": "co", "cardinality": "many", "direction": "outgoing", "description": "What people wrote." }] }"#,
         );
         let descriptors: IndexMap<String, Js> = [("co".to_string(), descriptor)].into_iter().collect();
-        let schema = describe_external_schema("crm", &entries, &descriptors);
+        let schema = describe_external_schema("crm", &Introspected { entries: &entries, reached: &[], descriptors: &descriptors });
         let company = schema.get("positions").and_then(|p| p.get("Company")).unwrap();
         assert_eq!(company.get("description").and_then(Js::as_str), Some("A company."));
         let docs = company.get("fieldDocs").unwrap();
@@ -1562,7 +1570,7 @@ mod tests {
     fn tick_schema(entry: &str) -> Js {
         let tick = js(r#"{ "typeId": "tick", "displayName": "Tick", "fields": [{ "fieldId": "schedule", "displayName": "Schedule", "kind": "owned", "owned": { "name": "Cron" }, "writable": false, "required": true }], "references": [] }"#);
         let descriptors: IndexMap<String, Js> = [("tick".to_string(), tick)].into_iter().collect();
-        describe_external_schema("cron", &[js(entry)], &descriptors)
+        describe_external_schema("cron", &Introspected { entries: &[js(entry)], reached: &[], descriptors: &descriptors })
     }
 
     #[test]
@@ -1617,7 +1625,7 @@ mod tests {
         )]
         .into_iter()
         .collect();
-        let schema = describe_external_schema("airtable", &entries, &descriptors);
+        let schema = describe_external_schema("airtable", &Introspected { entries: &entries, reached: &[], descriptors: &descriptors });
         assert_eq!(schema.get("positions").and_then(|p| p.get("Deals")).and_then(|d| d.get("properties")).and_then(|p| p.get("Name")).map(Js::to_json).as_deref(), Some(r#"{"kind":"maybeAbsent","of":"text"}"#));
         assert_eq!(schema.get("writableRoots").and_then(|w| w.get("Deals")).and_then(|d| d.get("fields")).and_then(|f| f.get("Name")).map(Js::to_json).as_deref(), Some(r#""text""#));
     }

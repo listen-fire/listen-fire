@@ -113,6 +113,7 @@ pub fn descriptors(unit: &str) -> Vec<Js> {
                     field("actorName", "Run by (name)", "string", false),
                     field("text", "Text", "string", false),
                     field("content", "Content", "string", false),
+                    crate::wire::json_of_js(&crate::actor::record_field()),
                 ],
                 "references": [{ "fieldId": "files", "targetTypeId": "file", "cardinality": "many", "direction": "outgoing", "name": "Files", "writable": false }],
             }),
@@ -126,9 +127,16 @@ pub fn descriptors(unit: &str) -> Vec<Js> {
                 ],
                 "references": [],
             }),
+            crate::wire::json_of_js(&crate::actor::descriptor()),
         ],
     };
     list.iter().map(js_of_json).collect()
+}
+
+/// The types the unit holds that no program walks to: a schedule has nobody
+/// acting; a manual run has its caller.
+pub fn reached(unit: &str) -> Vec<Js> {
+    if unit == CRON { Vec::new() } else { vec![crate::actor::reached_entry()] }
 }
 
 /// The type a position naming none is read as: what lands on the unit's edge.
