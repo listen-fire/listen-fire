@@ -131,6 +131,7 @@ listen to chat-[ch:Channels WHERE ch.Name IN ["deals"]]->-[m:Messages WHERE m.\`
 - A thread reply is not one of a channel's \`Messages\`: it is its thread's \`Replies\`, heard in the channels you name with \`chat-[ch:Channels WHERE ch.Name == "deals"]->-[:Messages]->-[:Replies]->\`.
 - A reply or a reaction arrives with its channel but not the message it is under, so a listen on \`Replies\` or \`Reactions\` narrows by channel only; a filter on that message is refused while you write it.
 - A reaction on a file arrives on the \`Reactions\` of each message that shares the file, as a reaction on that message.
+- A connection made with the setting \`drop_own_messages=on\` hears no message the app itself posted, so a listen on a channel the app also writes to does not run on its own posts.
 
 ### a-poll-that-keeps-answering
 

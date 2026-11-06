@@ -17,6 +17,7 @@ import type {
   WireCredentialDeclarationShape,
   WireDeclaredLimitShape,
   WireInboundDeclarationShape,
+  WireModuleSettingShape,
   WirePluginResultShape,
 } from 'engine-contracts';
 import type { ZodType } from 'zod';
@@ -290,6 +291,10 @@ export interface AdapterModuleDefinition extends Common {
   kind: 'adapter';
   /** What the host's catalog, editor and checker read about the adapter. */
   manifest: AdapterManifest;
+  /** Construction arguments an install may give (`listen-fire connect`
+   *  asks for them), read from `ctx.config.constructionArgs`. A module that
+   *  declares none receives none. */
+  settings?: readonly WireModuleSettingShape[];
   /** How its provider signs webhooks; the host verifies each delivery. */
   inbound?: WireInboundDeclarationShape;
   /** A polled source: the host calls `poll` this often per listen in the

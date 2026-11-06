@@ -5,7 +5,7 @@
 // lf-platform's apps/api recorded parity (slack_parity.unit.test.ts).
 
 import type { AddressInfo } from 'node:net';
-import type { CredentialFields, ModuleCredential, ModuleFiles } from 'module-kit';
+import type { CredentialFields, ModuleCredential, ModuleFiles, ModuleLog } from 'module-kit';
 
 import { createServer, type Server } from 'node:http';
 
@@ -100,13 +100,14 @@ function unnamedChannel(id: string) {
   return { recordId: id, recordType: 'Channel', fields: { id, name: null, Id: id, Name: null }, unknown: ['Name'] };
 }
 
-function load(input: { credential: ModuleCredential; hosted?: SlackHosted; files?: ModuleFiles; fetch?: typeof fetch }) {
+function load(input: { credential: ModuleCredential; hosted?: SlackHosted; files?: ModuleFiles; fetch?: typeof fetch; constructionArgs?: Record<string, string>; log?: ModuleLog }) {
   const definition = input.hosted === undefined ? slackModule : slackModuleWith(input.hosted);
   return adapterInProcess(definition, {
     tenant: 'team-1',
     credential: input.credential,
     ...(input.fetch !== undefined ? { fetch: input.fetch } : {}),
-    log: silent,
+    log: input.log ?? silent,
+    ...(input.constructionArgs !== undefined ? { constructionArgs: input.constructionArgs } : {}),
     files: input.files ?? refusingFiles('no files'),
     kv: refusingKv('no kv'),
     validateResults: true,
@@ -301,6 +302,50 @@ describe('@lf/slack', () => {
     } finally {
       await api.close();
     }
+  });
+
+  describe('drop_own_messages', () => {
+    const message = (fields: Record<string, unknown>) => ({ type: 'event_callback', event: { type: 'message', channel: 'C1', text: 'hi', ts: '1700000000.000100', ...fields } });
+    const arrived = async (setting: string | undefined, fields: Record<string, unknown>, options: { faults?: Map<string, 'down'>; log?: ModuleLog } = {}) => {
+      const api = await slackApi({ C1: 'deals' }, options.faults);
+      try {
+        const { adapter } = load({
+          credential: credential({ accessToken: 'xoxb-own', baseUrl: api.baseUrl }),
+          constructionArgs: setting === undefined ? {} : { drop_own_messages: setting },
+          ...(options.log !== undefined ? { log: options.log } : {}),
+        });
+        return (await adapter.preprocessInbound?.({ raw: message(fields) }))?.arrivals ?? [];
+      } finally {
+        await api.close();
+      }
+    };
+
+    it('is a setting the connection may give, and need not', () => {
+      const { manifest } = load({ credential: credential({ accessToken: 'xoxb-1' }) });
+      expect(manifest.settings).toEqual([expect.objectContaining({ name: 'drop_own_messages', optional: true })]);
+    });
+
+    it('on, drops a message the app posted, by its user id and by its bot id', async () => {
+      expect(await arrived('on', { user: 'UBOT' })).toEqual([]);
+      expect(await arrived('on', { bot_id: 'B1', subtype: 'bot_message' })).toEqual([]);
+    });
+
+    it('on, still delivers another bot, and a member', async () => {
+      expect(await arrived('on', { bot_id: 'B2', subtype: 'bot_message' })).toHaveLength(1);
+      expect(await arrived('on', { user: 'U1' })).toHaveLength(1);
+    });
+
+    it('unset, or anything but "on", delivers the app\'s own message as before', async () => {
+      expect(await arrived(undefined, { user: 'UBOT' })).toHaveLength(1);
+      expect(await arrived('off', { user: 'UBOT' })).toHaveLength(1);
+    });
+
+    it('on, with the app not identifiable, delivers the message and says why it could not tell', async () => {
+      const warn = jest.fn();
+      const arrivals = await arrived('on', { user: 'UBOT' }, { faults: new Map([['auth.test', 'down']]), log: { ...silent, warn } });
+      expect(arrivals).toHaveLength(1);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('drop_own_messages'), expect.anything());
+    });
   });
 
   it('a delivery\'s lookups are bounded by the operator\'s settings, each a default where unset or out of range', async () => {

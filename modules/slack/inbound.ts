@@ -60,6 +60,8 @@ const slackInnerEventSchema = z
   .object({
     type: z.string(),
     user: z.string().optional(),
+    // The app that posted a bot's message, whatever its `user`.
+    bot_id: z.string().optional(),
     channel: z.string().optional(),
     ts: z.string().optional(),
     event_ts: z.string().optional(),
@@ -284,6 +286,11 @@ function slackChannelRecord(id: string, name: string | null): AwaitLanding {
 export interface SlackArrivalLookups {
   channelName(channelId: string): Promise<string | null>;
   botUserId(): Promise<string | null>;
+  botId(): Promise<string | null>;
+  /** The connection's `drop_own_messages`: a message the app itself posted is
+   *  no arrival. */
+  dropOwnMessages: boolean;
+  warn(message: string): void;
   /** The messages that share a file (`files.info`'s `shares`): none for a
    *  file in no conversation, null when Slack could not say. */
   fileShares(fileId: string): Promise<SlackMessageAt[] | null>;
@@ -483,6 +490,18 @@ async function messageReactionArrival(input: { event: z.infer<typeof slackInnerE
   };
 }
 
+/** Whether the app itself posted `event`: as its bot user, or as its bot (a
+ *  `bot_message` names no user). When Slack cannot say who the app is, nothing
+ *  is dropped: a message that cannot be identified is a message. */
+async function postedByApp(event: z.infer<typeof slackInnerEventSchema>, botUserId: string | null, lookups: SlackArrivalLookups): Promise<boolean> {
+  const botId = await lookups.botId();
+  if (botUserId === null && botId === null) {
+    lookups.warn('drop_own_messages is on, but Slack did not say who the app is, so its own messages are delivered');
+    return false;
+  }
+  return (botUserId !== null && event.user === botUserId) || (botId !== null && event.bot_id === botId);
+}
+
 /** What one Events API event says arrived: a top-level message on its
  *  channel's `Messages`; a thread reply on its root's `Replies`; a reaction
  *  on its message's `Reactions`; a deleted message the end of its edges. A
@@ -504,7 +523,9 @@ async function eventArrivals(event: z.infer<typeof slackInnerEventSchema>, looku
   }
   // An edit or a deletion is hidden.
   if (event.hidden === true || event.ts === undefined) return [];
-  const message = slackMessageRecord({ channel, message: { ...event }, botUserId: await lookups.botUserId() });
+  const botUserId = await lookups.botUserId();
+  if (lookups.dropOwnMessages && (await postedByApp(event, botUserId, lookups))) return [];
+  const message = slackMessageRecord({ channel, message: { ...event }, botUserId });
   const occurredAt = isoInstantFromSlackTs(event.ts);
   const when = { ...slackActorOf(event.user), ...(occurredAt !== null ? { occurredAt } : {}) };
   // A root message carries no `thread_ts`, or its own `ts` there. Each is

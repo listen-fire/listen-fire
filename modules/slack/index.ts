@@ -68,6 +68,7 @@ export function slackSourcesFrom(ctx: ModuleContext, hosted: SlackHosted = {}): 
       const which = `no usable Slack credential for team ${ctx.config.tenant} (credentialsId=${ctx.config.credentialRef ?? 'unset'}).`;
       return op === 'streamSlackFileBytes' ? `slack.${op}: ${which}` : `SlackAdapter.${op}: ${which} Connect Slack.`;
     },
+    dropOwnMessages: ctx.config.constructionArgs.drop_own_messages === 'on',
     tenant: ctx.config.tenant,
     ...(ctx.config.credentialRef !== undefined ? { credentialRef: ctx.config.credentialRef } : {}),
     log: ctx.log,
@@ -110,6 +111,8 @@ export function slackModuleWith(hosted: SlackHosted): AdapterModuleDefinition {
         ],
       },
     ],
+    // Whether the connection hears the app's own messages. Off unless "on".
+    settings: [{ name: 'drop_own_messages', label: 'Drop messages the app itself posts (on, or leave empty)', optional: true }],
     // Slack signs every delivery with the app's signing secret (`v0`), and
     // its door answers the one-time `url_verification` challenge unsigned.
     // The same scheme and header the door has always read, so every

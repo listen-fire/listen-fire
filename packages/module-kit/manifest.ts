@@ -44,6 +44,7 @@ function adapterManifest(definition: AdapterModuleDefinition, instance: AdapterM
     ...(manifest.introspectedSchema === true ? { introspectedSchema: true } : {}),
     ...(manifest.resendWindowSeconds !== undefined ? { resendWindowSeconds: manifest.resendWindowSeconds } : {}),
     ...(definition.credentials.length > 0 ? { credentials: [...definition.credentials] } : {}),
+    ...(definition.settings !== undefined && definition.settings.length > 0 ? { settings: definition.settings.map((setting) => ({ ...setting })) } : {}),
     ...(definition.inbound !== undefined ? { inbound: definition.inbound } : {}),
     ...(definition.poll !== undefined ? { poll: definition.poll } : {}),
     ...(definition.periodic !== undefined && definition.periodic.length > 0 ? { periodic: [...definition.periodic] } : {}),

@@ -126,6 +126,8 @@ export interface SlackSources extends SlackWriteHost {
   client(): Promise<SlackAPIClient | null>;
   /** Why `client` gave none, for the error a call that needs one raises. */
   missingClient(op: string): string;
+  /** The connection's `drop_own_messages` setting, on only when "on". */
+  dropOwnMessages?: boolean;
   /** The tenant, on log lines. */
   tenant: string;
   /** The host's name for the install's credential, which a file's source
@@ -359,6 +361,9 @@ export class SlackAdapter extends BaseAdapter {
     const arrivals = await slackArrivals(input.raw, {
       channelName: (channelId) => this.resolveChannelName(channelId),
       botUserId: () => this.botUserId(),
+      botId: () => this.botId(),
+      dropOwnMessages: this.sources.dropOwnMessages === true,
+      warn: (message) => this.sources.log.warn(`[SlackAdapter] ${message}`, { teamId: this.sources.tenant }),
       fileShares: (fileId) => this.fileShares(fileId),
     });
     return { events: [], ...(arrivals.length > 0 ? { arrivals } : {}) };
@@ -1448,6 +1453,13 @@ export class SlackAdapter extends BaseAdapter {
   private async botUserId(): Promise<string | null> {
     const who = await this.lookup('the app\'s bot user (auth.test, Mentions App)', (client) => client.lookups.auth.test());
     return typeof who?.user_id === 'string' ? who.user_id : null;
+  }
+
+  /** The app's bot id, from the same cached `auth.test`: what a `bot_message`
+   *  names in place of a user. */
+  private async botId(): Promise<string | null> {
+    const who = await this.lookup('the app\'s bot (auth.test, drop_own_messages)', (client) => client.lookups.auth.test());
+    return typeof who?.bot_id === 'string' ? who.bot_id : null;
   }
 
   /**
