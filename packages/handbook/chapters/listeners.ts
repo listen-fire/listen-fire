@@ -68,6 +68,26 @@ Once the system answers again, \`listen-fire listens replay <file>:<movement> --
 - Race every wait on a person or a system with a \`sleep\`: a record deleted while a run waits on it leaves the wait waiting.
 - \`listen to sys-[e:Events WHERE e.Kind == "Wait Lost Its Record"]-> fire …\` hears each wait whose record was deleted.
 
+### who-acted
+
+What lands can say who acted. \`listen-fire\` and the platform both give a landing an \`Actor\`, once its system reports who acted, and a filter and a run read it like any other field:
+
+- \`Id\` — the system's own id for them.
+- \`Email\` and \`Domain\` — their address in lower case, and the part after its last \`@\`.
+- \`Phone\` — digits only, country code first.
+- \`Name\` — as the system reports it.
+- \`Proven\` — true when the module checked that the system vouches for who it names.
+
+\`Actor\` is missing when the system names nobody, and so are all of its fields but \`Id\` and \`Proven\`, so read it with \`?.\`. A \`Domain\` is exact: \`"acme.test"\` does not match \`acme.test.example.com\`.
+
+\`\`\`
+listen to inbox-[e:Emails WHERE e.Key == "deals" AND e.Actor?.Domain == "acme.test"]-> fire \`Intake\`
+\`\`\`
+
+\`Proven\` is false for email: nothing in a message vouches for its \`From\` line. Slack, Telegram, Attio, WhatsApp and Granola set it when they name someone.
+
+If a system has a field of its own called \`Actor\`, that field is the one you read.
+
 ### inbound-mail
 
 \`\`connect \`@lf/email\` \`\` is inbound mail. Which carrier delivers it is a setting of the deployment, not a choice an automation makes.`,
