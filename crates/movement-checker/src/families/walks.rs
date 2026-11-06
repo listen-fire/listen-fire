@@ -125,7 +125,7 @@ fn report_step(typing: &mut Typing, from: &Position, edge: &str, filter: Option<
                 typing.report(codes::TRAVERSE_UNKNOWN_EDGE, format!("{} has no edge '{edge}'{}", describe_position(from), it_has(&available)));
                 return;
             };
-            if edge_schema.listenable == Some(true) {
+            if edge_schema.listenable == Some(true) && !typing.describing {
                 report_listenable_step(typing, &describe_edge_owner(from), edge, edge_is_readable(edge_schema), filter);
             }
             // A write-only edge is the writes family's (MOV_WRITE_ONLY_EDGE).
@@ -146,7 +146,7 @@ fn report_step(typing: &mut Typing, from: &Position, edge: &str, filter: Option<
             }
             if carrying.len() == u.variants.len() {
                 // Held to the rule one record type's edge is.
-                if carried.iter().all(|e| e.listenable == Some(true)) {
+                if carried.iter().all(|e| e.listenable == Some(true)) && !typing.describing {
                     report_listenable_step(typing, &describe_position(from), edge, carried.iter().all(|e| edge_is_readable(e)), filter);
                 }
                 return;
@@ -899,6 +899,9 @@ fn report_read(typing: &mut Typing, position: &Position, property: &str) {
 /// Called by the type core once a hop's ordering is known, before its WHERE
 /// is typed (`checkHopLimitOrder`).
 pub fn observe_hop_order(typing: &mut Typing, step: &EdgeStep, ordering: CollectionOrder) {
+    if typing.describing {
+        return;
+    }
     let Some(cardinality) = &step.cardinality else { return };
     let Some(limit) = &cardinality.limit else { return };
     if cardinality.order_by.is_some() || ordering != CollectionOrder::Unordered {
@@ -920,6 +923,9 @@ pub fn observe_hop_order(typing: &mut Typing, step: &EdgeStep, ordering: Collect
 /// landed. A hop nothing `fetched` (a listen's hop judged on each arrival)
 /// costs no fetch, so what its source can filter is not said of it.
 pub fn observe_hop(typing: &mut Typing, from: Option<&Position>, step: &EdgeStep, target: Option<&Position>, fetched: bool) {
+    if typing.describing {
+        return;
+    }
     let Some(from) = from else { return };
     check_pins(typing, step, target);
     let edge = step.edge_type_id.as_str();

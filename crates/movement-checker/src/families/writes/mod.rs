@@ -749,34 +749,13 @@ impl Checker<'_> {
             self.push_typed(diagnostics);
         }
 
-        let root = instance
-            .schema
-            .writable_roots
-            .get(&written)
+        let root = crate::types::position::write_shape_of(&instance.schema, &written)
             .cloned()
-            .or_else(|| instance.schema.create_shapes.as_ref().and_then(|c| c.get(&written).cloned()))
             .or_else(|| if purpose == Purpose::Match { readable_match_root(instance.schema.positions.get(&written)) } else { None });
-        let result_shape: Vec<(String, Ty)> = match &root {
-            Some(root) => root.result_shape.iter().map(|(k, v)| (k.clone(), Ty::from_schema(v))).collect(),
-            None => instance
-                .schema
-                .positions
-                .get(&written)
-                .map(|p| p.properties.iter().map(|(k, v)| (k.clone(), Ty::from_schema(v))).collect())
-                .unwrap_or_default(),
-        };
-        let handle = Position::Handle(HandlePosition {
-            instance: instance.clone(),
-            position: instance.schema.positions.contains_key(&written).then(|| written.clone()),
-            written_type: written.clone(),
-            result_shape: result_shape.into_iter().collect(),
-            edges: root.as_ref().and_then(|r| r.edges.clone()),
-            generic_landings: None,
-            answer_fields: None,
-            written: purpose == Purpose::Write,
-            set_fields: None,
-            identity: Default::default(),
-        });
+        let handle = Position::Handle(HandlePosition::of_shape(
+            &instance,
+            crate::types::position::WriteLanding { written_type: &written, root: root.as_ref(), written: purpose == Purpose::Write },
+        ));
         let parent_type = match &parent {
             Position::Position(p) => Some(p.position.clone()),
             Position::Handle(h) => h.position.clone(),
@@ -1916,6 +1895,9 @@ fn handle_in_field_message(field_name: &str, subject: &str, target: &Ty, value: 
 
 /// A hop along an edge its system offers nothing to read along.
 pub fn report_write_only_edge(typing: &mut Typing, from: Option<&Position>, step: &movement_parser::lowering::expression::EdgeStep, landing: Option<&crate::types::position::EdgeLanding>) {
+    if typing.describing {
+        return;
+    }
     let (Some(from), Some(crate::types::position::EdgeLanding::Untyped { edge: Some(schema) })) = (from, landing) else { return };
     let from = match from {
         Position::MaybeEmpty(of) => &**of,

@@ -11,6 +11,7 @@ mod checker;
 pub mod codes;
 pub mod compatible;
 mod cron;
+pub mod description;
 mod diagnostic;
 pub mod families;
 pub mod host;

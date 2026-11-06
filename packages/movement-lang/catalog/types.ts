@@ -1071,6 +1071,9 @@ export interface CollectionSchema extends EdgeListening {
   cursor?: boolean;
   identity?: string;
   version?: string;
+  /** What the module says of what lands here, where the type has no position
+   *  to say it on (one known only by what is written to it). */
+  description?: string;
 }
 
 

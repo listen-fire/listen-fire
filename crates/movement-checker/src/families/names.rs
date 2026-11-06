@@ -47,6 +47,16 @@ pub fn spell_name(name: &str) -> String {
     if is_bare_ident(name) { name.to_string() } else { format!("`{name}`") }
 }
 
+/// A name read above the statement that binds it.
+pub(crate) fn read_before_binding(name: &str) -> String {
+    format!("'{name}' is read before its binding statement — statements run in source order, so move this after the statement that binds '{name}'")
+}
+
+/// A name nothing binds.
+pub(crate) fn unknown_name(name: &str) -> String {
+    format!("Unknown name '{name}' — every name must be imported, bound by '=', a movement parameter, or a traversal alias in scope")
+}
+
 /// `importLine`.
 pub fn import_line(name: &str, namespace: &str) -> String {
     format!("import {{ {} }} from {namespace}", spell_name(name))
@@ -129,13 +139,7 @@ impl Checker<'_> {
     pub fn report_resolution_failure(&mut self, name: &str, span: Span, resolution: Resolution) {
         match resolution {
             Resolution::Found(_) => {}
-            Resolution::Pending => self.report(
-                codes::USE_BEFORE_BIND,
-                format!(
-                    "'{name}' is read before its binding statement — statements run in source order, so move this after the statement that binds '{name}'"
-                ),
-                span,
-            ),
+            Resolution::Pending => self.report(codes::USE_BEFORE_BIND, read_before_binding(name), span),
             Resolution::Escaped { block_name } => {
                 let hint = match block_name {
                     Some(block) => format!(" — return it from the block instead ('{block} = … {{ … return {name} }}')"),
@@ -175,13 +179,7 @@ impl Checker<'_> {
                     diagnostic.fix = Some(json!({ "edits": [insert_line_at_top(&line)] }));
                     self.push(diagnostic);
                 } else {
-                    self.report(
-                        codes::NAME_UNRESOLVED,
-                        format!(
-                            "Unknown name '{name}' — every name must be imported, bound by '=', a movement parameter, or a traversal alias in scope"
-                        ),
-                        span,
-                    );
+                    self.report(codes::NAME_UNRESOLVED, unknown_name(name), span);
                 }
             }
         }

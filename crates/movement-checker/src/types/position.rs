@@ -7,7 +7,7 @@ use std::collections::BTreeSet;
 use std::rc::Rc;
 
 use indexmap::IndexMap;
-use movement_parser::catalog::types::{EdgeSchema, InstanceSchema, JsMap, PositionSchema};
+use movement_parser::catalog::types::{EdgeSchema, InstanceSchema, JsMap, PositionSchema, WritableRootSchema};
 
 use super::field::{Ty, field_type_equals, maybe_absent, strip_absent, is_maybe_absent};
 
@@ -365,6 +365,44 @@ pub struct HandlePosition {
     /// write or match makes one, and the same object wherever it is passed
     /// on. A clone keeps it; a copy that changes the handle takes a new one.
     pub identity: HandleIdentity,
+}
+
+/// What `HandlePosition::of_shape` builds a handle from.
+pub struct WriteLanding<'a> {
+    pub written_type: &'a str,
+    /// The type's write shape, where it has one (`write_shape_of`).
+    pub root: Option<&'a WritableRootSchema>,
+    /// A write made it; a match or a description only stands there.
+    pub written: bool,
+}
+
+impl HandlePosition {
+    /// Where a write of a type lands: what it can read back and walk on from
+    /// is what its write shape says, else what its position declares.
+    pub fn of_shape(instance: &InstanceRef, landing: WriteLanding<'_>) -> HandlePosition {
+        let WriteLanding { written_type, root, written } = landing;
+        let result_shape = match root {
+            Some(root) => root.result_shape.iter().map(|(k, v)| (k.clone(), Ty::from_schema(v))).collect(),
+            None => instance.schema.positions.get(written_type).map(|p| p.properties.iter().map(|(k, v)| (k.clone(), Ty::from_schema(v))).collect()).unwrap_or_default(),
+        };
+        HandlePosition {
+            instance: instance.clone(),
+            position: instance.schema.positions.contains_key(written_type).then(|| written_type.to_string()),
+            written_type: written_type.to_string(),
+            result_shape,
+            edges: root.and_then(|r| r.edges.clone()),
+            generic_landings: None,
+            answer_fields: None,
+            written,
+            set_fields: None,
+            identity: Default::default(),
+        }
+    }
+}
+
+/// The write shape of a type: a root of the instance's, else one reached along an edge.
+pub fn write_shape_of<'s>(schema: &'s InstanceSchema, written_type: &str) -> Option<&'s WritableRootSchema> {
+    schema.writable_roots.get(written_type).or_else(|| schema.create_shapes.as_ref().and_then(|shapes| shapes.get(written_type)))
 }
 
 /// See `HandlePosition::identity`.
@@ -988,6 +1026,70 @@ pub fn edge_landing(from: &Position, edge: &str) -> EdgeLanding {
     landing_of(from, edge)
 }
 
+/// Where `edge` off `from` lands for a description, which follows any edge:
+/// one a program may not read along lands as if it could, and a type known
+/// only by what is written to it lands where a write of it lands. A type
+/// nothing describes at all still lands nowhere.
+pub fn edge_landing_describing(from: &Position, edge: &str) -> EdgeLanding {
+    match from {
+        Position::MaybeEmpty(of) => return edge_landing_describing(of, edge),
+        Position::OneOf(members) => return landing_of_every_member(members, edge, edge_landing_describing),
+        _ => {}
+    }
+    let schema = match landing_of(from, edge) {
+        EdgeLanding::Untyped { edge: schema } => schema,
+        landed => return landed,
+    };
+    let unlanded = |schema| EdgeLanding::Untyped { edge: schema };
+    let target = match (from, &schema) {
+        (Position::Meta { instance }, _) => instance.schema.collections.get(edge).map(|collection| collection.target.clone()),
+        (Position::Handle(handle), Some(declared)) => Some(handle.generic_landings.as_ref().and_then(|g| g.get(edge)).unwrap_or(&declared.target).clone()),
+        (_, Some(declared)) => Some(declared.target.clone()),
+        (_, None) => None,
+    };
+    let (Some(target), Some(instance)) = (target, instance_of_ref(Some(from))) else { return unlanded(schema) };
+    if let Position::Union(union) = from
+        && let Some(landing) = union_landing_apart(union, edge)
+    {
+        return EdgeLanding::Landed { landing, edge: schema };
+    }
+    let landing = position_ref_in(instance, &target).map(|landing| narrowing_landing(from, edge, landing)).or_else(|| {
+        let root = write_shape_of(&instance.schema, &target)?;
+        let handle = HandlePosition::of_shape(instance, WriteLanding { written_type: &target, root: Some(root), written: false });
+        // Nothing is unknown about this type's edges: none listed means there are none.
+        Some(Position::Handle(HandlePosition { edges: Some(handle.edges.clone().unwrap_or_default()), ..handle }))
+    });
+    match landing {
+        Some(landing) => EdgeLanding::Landed { landing, edge: schema },
+        None => unlanded(schema),
+    }
+}
+
+/// `edge` off a union whose members' edges land on different record types.
+fn union_landing_apart(union: &UnionPosition, edge: &str) -> Option<Position> {
+    let targets: Vec<(&str, &str)> = union.variants.iter().filter_map(|v| Some((v.as_str(), union.instance.schema.positions.get(v)?.edges.get(edge)?.target.as_str()))).collect();
+    let (_, first) = targets.first()?;
+    if targets.iter().all(|(_, target)| target == first) {
+        return None;
+    }
+    super::union_walk::joined_landing(union, edge, &targets)
+}
+
+/// Every record `members` may be lands, each by `step`; the landings joined.
+fn landing_of_every_member(members: &[Position], edge: &str, step: fn(&Position, &str) -> EdgeLanding) -> EdgeLanding {
+    let landings: Option<Vec<Position>> = members
+        .iter()
+        .map(|member| match step(member, edge) {
+            EdgeLanding::Landed { landing, .. } => Some(landing),
+            _ => None,
+        })
+        .collect();
+    match landings.as_deref().map(|l| l.iter().collect::<Vec<_>>()).and_then(|l| super::unions::join_positions(&l)) {
+        Some(joined) => EdgeLanding::Landed { landing: joined.position, edge: None },
+        None => EdgeLanding::Untyped { edge: None },
+    }
+}
+
 fn landing_of(from: &Position, edge: &str) -> EdgeLanding {
     if edge.starts_with('#') {
         return EdgeLanding::Untyped { edge: None };
@@ -1093,19 +1195,7 @@ fn landing_of(from: &Position, edge: &str) -> EdgeLanding {
         },
         Position::MaybeEmpty(of) => landing_of(of, edge),
         // Every record it may be lands; the typing walks each (`stepEveryMember`).
-        Position::OneOf(members) => {
-            let landings: Option<Vec<Position>> = members
-                .iter()
-                .map(|member| match landing_of(member, edge) {
-                    EdgeLanding::Landed { landing, .. } => Some(landing),
-                    _ => None,
-                })
-                .collect();
-            match landings.as_deref().map(|l| l.iter().collect::<Vec<_>>()).and_then(|l| super::unions::join_positions(&l)) {
-                Some(joined) => EdgeLanding::Landed { landing: joined.position, edge: None },
-                None => EdgeLanding::Untyped { edge: None },
-            }
-        }
+        Position::OneOf(members) => landing_of_every_member(members, edge, landing_of),
     }
 }
 

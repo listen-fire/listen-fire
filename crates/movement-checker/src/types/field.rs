@@ -9,9 +9,10 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use movement_parser::catalog::types::{Composite, FieldType as SchemaFieldType, JsMap, OwnedFormat, Scalar};
+use movement_parser::catalog::written_type::{WrittenRest, WrittenType};
 
 use super::unions::{joined_under, one_record_of};
-use super::position::{ClosureType, PlaneType, Position, describe_position, positions_match, record_field_types, same_starting_point};
+use super::position::{ClosureType, PlaneType, Position, describe_position, display_name_of, positions_match, record_field_types, same_starting_point};
 
 #[derive(Debug, Clone)]
 pub enum Ty {
@@ -1578,4 +1579,72 @@ pub fn describe_field_type(ty: &Ty) -> String {
 fn describe_member(ty: &Ty) -> String {
     let described = describe_field_type(ty);
     if matches!(ty, Ty::Union(_)) { format!("({described})") } else { described }
+}
+
+/// `ty` as a program writes it, in the parser's forms (`WrittenType`), which
+/// hold every format this has: what only typing holds is said by those forms too.
+pub fn written_type(ty: &Ty) -> WrittenType {
+    match ty {
+        Ty::Text => WrittenType::name("text"),
+        Ty::Number => WrittenType::name("number"),
+        Ty::Boolean => WrittenType::name("boolean"),
+        Ty::Date => WrittenType::name("date"),
+        Ty::Datetime => WrittenType::name("datetime"),
+        Ty::File => WrittenType::name("file"),
+        Ty::Json => WrittenType::name("json"),
+        Ty::Absent => WrittenType::Null,
+        Ty::Never => WrittenType::name("never"),
+        Ty::List { of, .. } => WrittenType::List(Box::new(written_type(of))),
+        Ty::Tuple { of, rest } => WrittenType::Tuple {
+            slots: of.iter().map(|slot| slot.as_ref().map_or(WrittenType::Unknown, written_type)).collect(),
+            rest: rest.as_ref().map(|rest| WrittenRest { at: rest.at, of: Box::new(rest.of.as_deref().map_or(WrittenType::Unknown, written_type)) }),
+        },
+        Ty::Dict { shape: Some(shape), .. } => WrittenType::keys(shape.iter().map(|(key, slot)| (key.clone(), slot.as_ref().map_or(WrittenType::Unknown, written_type)))),
+        Ty::Dict { of, shape: None } => WrittenType::Dict(Box::new(written_type(of))),
+        Ty::Enum { options, open } => WrittenType::Enum { options: options.clone(), open: open.is_some() },
+        Ty::Owned(owned) => WrittenType::name(&owned.name),
+        Ty::MaybeAbsent(of) => WrittenType::or_null(written_type(of)),
+        Ty::Union(members) => WrittenType::union(members.iter().map(written_type)),
+        Ty::Record(None) => WrittenType::name("record"),
+        Ty::Record(Some(position)) => written_position(position),
+        Ty::HeldRecord(held) => written_position(&held.position),
+    }
+}
+
+/// `ty` spelled whole.
+pub fn spell_type(ty: &Ty) -> String {
+    written_type(ty).spell()
+}
+
+/// A record as a value's type: its type's name, one of several as a union of them.
+fn written_position(position: &Position) -> WrittenType {
+    match position {
+        Position::Position(record) => WrittenType::name(display_name_of(&record.instance, &record.position)),
+        Position::Union(union) => WrittenType::union(union.variants.iter().map(|variant| WrittenType::name(display_name_of(&union.instance, variant)))),
+        Position::Handle(handle) => WrittenType::name(handle.position.as_deref().map_or(handle.written_type.clone(), |name| display_name_of(&handle.instance, name))),
+        Position::MaybeEmpty(of) => WrittenType::or_null(written_position(of)),
+        Position::OneOf(members) => WrittenType::union(members.iter().map(written_position)),
+        Position::Closure(closure) => WrittenType::Closure {
+            params: closure.params.iter().map(|param| (param.name.clone(), written_plane(&param.plane))).collect(),
+            returns: Box::new(written_return(&closure.returns)),
+        },
+        // The program's own words for what no schema names.
+        Position::Meta { .. } | Position::Extract { .. } | Position::Local(_) => WrittenType::Words(describe_position(position)),
+    }
+}
+
+fn written_plane(plane: &PlaneType) -> WrittenType {
+    match (&plane.pos, &plane.field) {
+        (Some(position), _) => written_position(position),
+        (None, Some(field)) => written_type(field),
+        (None, None) => WrittenType::Unknown,
+    }
+}
+
+fn written_return(shape: &super::position::ReturnShape) -> WrittenType {
+    match (shape.returns, &shape.may_hold) {
+        (false, _) => WrittenType::Words("nothing".to_string()),
+        (true, Some(held)) => written_type(held),
+        (true, None) => written_plane(&shape.plane),
+    }
 }
