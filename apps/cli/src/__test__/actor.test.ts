@@ -99,10 +99,11 @@ test('a manual run has a caller: an invocation offers Actor', () => {
   assert.equal(checked.code, 0, checked.out);
 });
 
-test('a module with its own field named Actor on what lands is refused, naming the module and the record type', () => {
-  const checked = lf(peopleProject('function f(m: <c-[:Messages]->>) {\n  return m.Text\n}\n\nlisten to c-[:Messages]-> fire f\n', { lists: ['getActorCandidates'], ownActorField: true }), 'check');
-  assert.notEqual(checked.code, 0, checked.out);
-  assert.match(checked.out, /"people".*'Message'.*'Actor'/);
+test('a module with its own field named Actor on what lands keeps it: the check passes and says so', () => {
+  const checked = lf(peopleProject('function f(m: <c-[:Messages]->>) {\n  return m.Actor\n}\n\nlisten to c-[:Messages]-> fire f\n', { lists: ['getActorCandidates'], ownActorField: true }), 'check');
+  assert.equal(checked.code, 0, checked.out);
+  assert.equal(checked.out.match(/'Message' has its own 'Actor'/g)?.length, 1, `said once: ${checked.out}`);
+  assert.match(checked.out, /people: 'Message' has its own 'Actor'/);
 });
 
 // ── Written at the door ─────────────────────────────────────────────────────
@@ -159,6 +160,25 @@ test('a mixed case address fires a filter on Email and on Domain; a run reads Pr
     assert.deepEqual(returnedBy(dir, 'byEmail'), [true]);
     assert.deepEqual(returnedBy(dir, 'byDomain'), ['a@x.com']);
     assert.equal(lookups(dir), 0, 'an address the door named costs no call');
+  } finally {
+    await serving.stop();
+  }
+});
+
+test("a module's own Actor field reads as itself at the door: nothing is written over it, named actor or not", async () => {
+  const dir = peopleProject(`${listening('mine', 'm.Actor == "Ann\'s column"', 'm.Actor')}\n${listening('blank', 'm.Text == "empty"', 'm.Actor')}`, { lists: ['getActorCandidates'], ownActorField: true });
+  const serving = await served(dir);
+  try {
+    const named = { identifier: 'U1', scheme: 'email', email: 'a@x.com', proven: true };
+    await wake(serving, [
+      { ...message('m1', named), landing: { recordId: 'm1', recordType: 'Message', fields: { Id: 'm1', Text: 'hi', Actor: "Ann's column" } } },
+      { ...message('m2', named), landing: { recordId: 'm2', recordType: 'Message', fields: { Id: 'm2', Text: 'empty' } } },
+    ]);
+    await ran(serving, 'mine');
+    await ran(serving, 'blank');
+    assert.deepEqual(returnedBy(dir, 'mine'), ["Ann's column"]);
+    assert.deepEqual(returnedBy(dir, 'blank'), [null], 'a blank column is not filled with who acted');
+    assert.equal(lookups(dir), 0);
   } finally {
     await serving.stop();
   }

@@ -780,7 +780,7 @@ fn project_refined<W>(input: &Refining<'_, '_, W>, refined: &Refined) -> Result<
         descriptors.insert(target.clone(), descriptor.clone());
     }
     // A walked edge's landing is described only here, so what lands on it is offered here.
-    let (reached, descriptors) = crate::actor::with_actor_descriptors(&entries, &descriptors, input.methods).map_err(|refusal| format!("Remote adapter \"{}\" describes {refusal}", input.adapter))?;
+    let (reached, descriptors) = crate::actor::with_actor_descriptors(&crate::actor::Introspection { adapter: input.adapter, entries: &entries, descriptors: &descriptors, methods: input.methods });
     let projected = crate::schema::instance_schema_from_descriptors(&crate::schema::ProjectionInput {
         adapter_type: input.adapter,
         entries: &entries,
@@ -1004,7 +1004,7 @@ mod tests {
             let projected = project_refined(&input, &refined).unwrap();
             projected.landings[0].1.get("properties").and_then(|p| p.get("Actor")).map(Js::to_json)
         };
-        assert_eq!(actor_of(&["extractActor".to_string()]).as_deref(), Some(r#"{"kind":"maybeAbsent","of":{"kind":"record","position":{"kind":"position","position":"Actor"}}}"#));
+        assert_eq!(actor_of(&["extractActor".to_string()]).as_deref(), Some(r#"{"kind":"maybeAbsent","of":{"kind":"record","position":{"kind":"position","position":"ListenFireActor"}}}"#));
         assert_eq!(actor_of(&[]), None);
     }
 

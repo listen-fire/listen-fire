@@ -3,6 +3,9 @@
 //! none of this, and to a filter or a run it is an ordinary record field that
 //! may be absent. A module knows nothing of it either: it reports an identity.
 
+use std::collections::BTreeSet;
+use std::sync::Mutex;
+
 use indexmap::{IndexMap, IndexSet};
 
 use crate::arrivals::ArrivalIn;
@@ -13,7 +16,13 @@ use crate::schema::reference_target_type_ids;
 use crate::secrets::Credential;
 use crate::sources::MovementFile;
 
+/// The field a landing gains.
 pub const ACTOR: &str = "Actor";
+
+/// The record type that field holds. Not `Actor`, so a module's own type of that
+/// name (an Attio object) keeps it: types share one namespace, and a field's
+/// name is the module's to take but a type's position name is not.
+pub const ACTOR_TYPE: &str = "ListenFireActor";
 
 /// The field a landing type gains.
 pub fn record_field() -> Js {
@@ -21,7 +30,7 @@ pub fn record_field() -> Js {
         "fieldId" => Js::str(ACTOR),
         "displayName" => Js::str(ACTOR),
         "kind" => Js::str("record"),
-        "record" => Js::Obj(obj! { "typeId" => Js::str(ACTOR) }),
+        "record" => Js::Obj(obj! { "typeId" => Js::str(ACTOR_TYPE) }),
         "mayBeAbsent" => Js::Bool(true),
     })
 }
@@ -32,8 +41,8 @@ pub fn descriptor() -> Js {
     let id = Js::Obj(obj! { "fieldId" => Js::str("Id"), "displayName" => Js::str("Id"), "kind" => Js::str("string"), "writable" => Js::Bool(false), "required" => Js::Bool(true) });
     let proven = Js::Obj(obj! { "fieldId" => Js::str("Proven"), "displayName" => Js::str("Proven"), "kind" => Js::str("boolean"), "writable" => Js::Bool(false), "required" => Js::Bool(true) });
     Js::Obj(obj! {
-        "typeId" => Js::str(ACTOR),
-        "displayName" => Js::str(ACTOR),
+        "typeId" => Js::str(ACTOR_TYPE),
+        "displayName" => Js::str(ACTOR_TYPE),
         "description" => Js::str("Who acted, as listen-fire offers it on what lands."),
         "fields" => Js::Arr(vec![id, text("Email"), text("Domain"), text("Phone"), text("Name"), proven]),
         "references" => Js::Arr(Vec::new()),
@@ -43,7 +52,7 @@ pub fn descriptor() -> Js {
 /// `Actor` as the projection is handed it: `reached`, so it has a position and
 /// no root collection a program could walk.
 pub fn reached_entry() -> Js {
-    Js::Obj(obj! { "typeId" => Js::str(ACTOR), "displayName" => Js::str(ACTOR), "readable" => Js::Bool(true), "writable" => Js::Bool(false) })
+    Js::Obj(obj! { "typeId" => Js::str(ACTOR_TYPE), "displayName" => Js::str(ACTOR_TYPE), "readable" => Js::Bool(true), "writable" => Js::Bool(false) })
 }
 
 /// Whether a module listing `methods` reports who acted.
@@ -65,35 +74,62 @@ fn answers_to_actor(declared: &Js) -> bool {
     ["fieldId", "displayName", "name"].iter().any(|key| declared.get(key).and_then(Js::as_str) == Some(ACTOR))
 }
 
+/// The landing types whose module declared an `Actor` of its own, by module.
+/// The door writes `Actor` into an arrival's fields and holds no descriptors, so
+/// it learns here what introspection decided; a landing listed is the module's.
+static KEPT_BY_MODULE: Mutex<BTreeSet<(String, String)>> = Mutex::new(BTreeSet::new());
+
+/// Whether `adapter`'s landing type `type_id` declares `Actor` itself, so nothing
+/// is written there.
+pub fn kept_by_module(adapter: &str, type_id: &str) -> bool {
+    KEPT_BY_MODULE.lock().is_ok_and(|kept| kept.contains(&(adapter.to_string(), type_id.to_string())))
+}
+
+/// Remember that `adapter` keeps its own `Actor` on `type_id`, and say so the
+/// first time: introspection runs again for every walked position.
+fn keep_module_actor(adapter: &str, type_id: &str, name: &str) {
+    let first = KEPT_BY_MODULE.lock().is_ok_and(|mut kept| kept.insert((adapter.to_string(), type_id.to_string())));
+    if first {
+        eprintln!("listen-fire: {adapter}: '{name}' has its own '{ACTOR}', so listen-fire offers no {ACTOR} on it. What a filter reads is the source system's.");
+    }
+}
+
+/// What a module's introspection answered, for `with_actor_descriptors`.
+pub struct Introspection<'a> {
+    pub adapter: &'a str,
+    pub entries: &'a [Js],
+    pub descriptors: &'a IndexMap<String, Js>,
+    pub methods: &'a [String],
+}
+
 /// What the projection is handed for a module's own introspection: the `reached`
 /// entries, and `descriptors` with `Actor` on each listenable edge's landing
 /// type. Nothing changes for a module that reports nobody.
 ///
-/// A name the module already gives `Actor` is refused rather than overwritten:
-/// the door would write over the module's value, and a filter would read
-/// something other than what the module declared.
-pub fn with_actor_descriptors(entries: &[Js], descriptors: &IndexMap<String, Js>, methods: &[String]) -> Result<(Vec<Js>, IndexMap<String, Js>), String> {
-    let mut offered = descriptors.clone();
+/// A landing that already has an `Actor` of its own is left as the module
+/// described it: the name is the source system's (an Airtable column), and
+/// refusing it would stop a saved project under the same language key.
+pub fn with_actor_descriptors(introspection: &Introspection<'_>) -> (Vec<Js>, IndexMap<String, Js>) {
+    let Introspection { adapter, entries, descriptors, methods } = introspection;
+    let mut offered = (*descriptors).clone();
     if !reports_who_acted(methods) {
-        return Ok((Vec::new(), offered));
-    }
-    if entries.iter().any(answers_to_actor) || descriptors.contains_key(ACTOR) {
-        return Err(format!("a type named '{ACTOR}', a name listen-fire keeps for who acted on what lands: rename it in the source system"));
+        return (Vec::new(), offered);
     }
     for type_id in landing_types(entries, descriptors) {
         let Some(Js::Obj(landing)) = offered.get_mut(&type_id) else { continue };
         let own = |list: &str| landing.get(list).and_then(Js::as_array).is_some_and(|items| items.iter().any(answers_to_actor));
         if own("fields") || own("references") {
-            let name = landing.get("displayName").and_then(Js::as_str).unwrap_or(&type_id);
-            return Err(format!("'{name}': its own '{ACTOR}', a name listen-fire keeps for who acted on what lands: rename it in the source system"));
+            let name = landing.get("displayName").and_then(Js::as_str).unwrap_or(&type_id).to_string();
+            keep_module_actor(adapter, &type_id, &name);
+            continue;
         }
         match landing.entry("fields".to_string()).or_insert_with(|| Js::Arr(Vec::new())) {
             Js::Arr(fields) => fields.push(record_field()),
             other => *other = Js::Arr(vec![record_field()]),
         }
     }
-    offered.insert(ACTOR.to_string(), descriptor());
-    Ok((vec![reached_entry()], offered))
+    offered.insert(ACTOR_TYPE.to_string(), descriptor());
+    (vec![reached_entry()], offered)
 }
 
 /// `normalisedActor`: an identity as the fields of `Actor`, held to the table in
@@ -167,6 +203,10 @@ fn with_candidate_address(identity: &Js, candidates: &Js) -> Js {
 /// no such filter still fires.
 async fn with_actor<R: Reader>(reader: &R, source: &ActorSource<'_>, mut arrival: ArrivalIn, needs_lookup: bool) -> ArrivalIn {
     let Some(named) = arrival.actor.clone().filter(|_| arrival.landing.is_some()) else { return arrival };
+    let record_type = arrival.landing.as_ref().and_then(|landing| landing.get("recordType")).and_then(Js::as_str).unwrap_or_default();
+    if kept_by_module(source.external, record_type) {
+        return arrival;
+    }
     let mut identity = named.clone();
     let mut unread = false;
     if needs_lookup && is_opaque(&named) {
@@ -250,40 +290,56 @@ mod tests {
     fn a_module_reporting_who_acted_offers_actor_on_each_landing_type_and_nowhere_else() {
         let (entries, descriptors) = world();
         for listed in [&["getActorCandidates"][..], &["extractActor"][..]] {
-            let (reached, offered) = with_actor_descriptors(&entries, &descriptors, &methods(listed)).unwrap();
+            let (reached, offered) = offered_to("offers", &entries, &descriptors, listed);
             assert_eq!(reached, vec![reached_entry()]);
             assert_eq!(own_fields(&offered["m"]), ["Text", "Actor"]);
             assert_eq!(own_fields(&offered["r"]), ["Actor"]);
             assert_eq!(own_fields(&offered["o"]), Vec::<String>::new());
-            assert_eq!(offered.get(ACTOR), Some(&descriptor()));
+            assert_eq!(offered.get(ACTOR_TYPE), Some(&descriptor()));
         }
     }
 
     #[test]
     fn a_module_reporting_nobody_is_left_as_it_described_itself() {
         let (entries, descriptors) = world();
-        let (reached, offered) = with_actor_descriptors(&entries, &descriptors, &methods(&["getFieldValue"])).unwrap();
+        let (reached, offered) = offered_to("reports-nobody", &entries, &descriptors, &["getFieldValue"]);
         assert_eq!((reached, offered), (Vec::new(), descriptors));
     }
 
-    #[test]
-    fn a_landing_type_with_its_own_actor_is_refused_naming_the_type() {
-        let (entries, mut descriptors) = world();
-        descriptors.insert("r".into(), js(r#"{"typeId":"r","displayName":"Reply","fields":[{"fieldId":"a","displayName":"Actor","kind":"string"}],"references":[]}"#));
-        let refused = with_actor_descriptors(&entries, &descriptors, &methods(&["extractActor"])).unwrap_err();
-        assert!(refused.starts_with("'Reply': its own 'Actor'"), "{refused}");
-        // A module that reports nobody keeps the name: nothing is added to clash with it.
-        assert!(with_actor_descriptors(&entries, &descriptors, &methods(&[])).is_ok());
+    fn offered_to(adapter: &str, entries: &[Js], descriptors: &IndexMap<String, Js>, listed: &[&str]) -> (Vec<Js>, IndexMap<String, Js>) {
+        with_actor_descriptors(&Introspection { adapter, entries, descriptors, methods: &methods(listed) })
     }
 
     #[test]
-    fn a_type_named_actor_is_refused_a_field_of_that_name_off_the_landings_is_not() {
-        let (mut entries, mut descriptors) = world();
+    fn a_landing_type_with_its_own_actor_keeps_it_and_is_offered_nothing() {
+        let (entries, mut descriptors) = world();
+        descriptors.insert("r".into(), js(r#"{"typeId":"r","displayName":"Reply","fields":[{"fieldId":"a","displayName":"Actor","kind":"string"}],"references":[]}"#));
+        let (_, offered) = offered_to("own-landing", &entries, &descriptors, &["extractActor"]);
+        assert_eq!(own_fields(&offered["r"]), ["Actor"], "only the module's own");
+        assert_eq!(offered["r"], descriptors["r"]);
+        assert_eq!(own_fields(&offered["m"]), ["Text", "Actor"], "a type that did not declare one is still offered it");
+        assert!(kept_by_module("own-landing", "r") && !kept_by_module("own-landing", "m"));
+    }
+
+    #[test]
+    fn a_field_named_actor_on_a_type_nothing_lands_on_does_not_stop_the_offer_elsewhere() {
+        let (entries, mut descriptors) = world();
         descriptors.insert("o".into(), js(r#"{"typeId":"o","displayName":"Other","fields":[{"fieldId":"Actor","displayName":"Actor","kind":"string"}],"references":[]}"#));
-        assert!(with_actor_descriptors(&entries, &descriptors, &methods(&["extractActor"])).is_ok(), "nothing lands on Other");
-        entries.push(js(r#"{"typeId":"x","displayName":"Actor","readable":true,"writable":false}"#));
-        let refused = with_actor_descriptors(&entries, &descriptors, &methods(&["extractActor"])).unwrap_err();
-        assert!(refused.starts_with("a type named 'Actor'"), "{refused}");
+        let (_, offered) = offered_to("own-elsewhere", &entries, &descriptors, &["extractActor"]);
+        assert_eq!(own_fields(&offered["m"]), ["Text", "Actor"]);
+        assert!(!kept_by_module("own-elsewhere", "o"));
+    }
+
+    #[test]
+    fn a_module_type_named_actor_and_the_record_listen_fire_offers_are_two_types() {
+        let (mut entries, mut descriptors) = world();
+        entries.push(js(r#"{"typeId":"Actor","displayName":"Actor","readable":true,"writable":false}"#));
+        descriptors.insert("Actor".into(), js(r#"{"typeId":"Actor","displayName":"Actor","fields":[],"references":[]}"#));
+        let (reached, offered) = offered_to("own-type", &entries, &descriptors, &["extractActor"]);
+        assert_eq!(offered["Actor"], descriptors["Actor"], "the module's type is as it described it");
+        assert_eq!(offered.get(ACTOR_TYPE), Some(&descriptor()));
+        assert_ne!(ACTOR_TYPE, ACTOR);
+        assert_eq!(reached, vec![reached_entry()]);
     }
 
     /// The table in docs/contracts/actor-field.md, identity in and fields out.
