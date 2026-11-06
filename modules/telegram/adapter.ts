@@ -509,6 +509,9 @@ export class TelegramAdapter extends BaseAdapter implements Adapter {
       email,
       ...(firstName !== undefined ? { name: firstName } : {}),
       label: username ? `@${username}` : (firstName ?? senderId),
+      // The sender id is Telegram's, from a delivery the host admits only with
+      // the bot's secret token; the address is the one they bound by handshake.
+      proven: true,
     };
   }
 

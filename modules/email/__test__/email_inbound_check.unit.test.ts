@@ -146,6 +146,8 @@ describe('@lf/email checks its own inbound', () => {
     expect(await adapter.extractActor!({ event: sent })).toMatchObject({ identifier: 'ada@example.com', name: 'Ada', label: 'Ada' });
     // The door names the sender on the arrival itself, and a run reads that.
     expect(sent.arrival?.actor).toEqual({ identifier: 'ada@example.com', scheme: 'email', adapterType: 'email', email: 'ada@example.com', name: 'Ada', label: 'Ada' });
+    // Nothing vouches for a From: line, so the module claims nothing.
+    expect(sent.arrival?.actor).not.toHaveProperty('proven');
     expect(forwarded.arrival?.actor).toEqual({ identifier: 'ada@example.com', scheme: 'email', adapterType: 'email', email: 'ada@example.com', label: 'ada@example.com' });
   });
 

@@ -984,9 +984,9 @@ describe('AttioAdapter — a record’s Changes', () => {
     if (arrival === undefined) throw new Error('no change arrived');
     // The run's trigger, as the host hands it to a run its listen fired.
     // The door names the actor on the arrival itself, by id.
-    expect(arrival.actor).toEqual({ identifier: 'm-1', scheme: 'opaque', adapterType: 'attio', label: 'm-1' });
+    expect(arrival.actor).toEqual({ identifier: 'm-1', scheme: 'opaque', adapterType: 'attio', label: 'm-1', proven: true });
     const event = arrivalTriggerOf({ pipelineInputId: 'crm:stage', adapterType: 'attio', arrival, now: new Date() });
-    expect(await adapter.extractActor({ event })).toEqual({ identifier: 'm-1', scheme: 'opaque', adapterType: 'attio', label: 'm-1' });
+    expect(await adapter.extractActor({ event })).toEqual({ identifier: 'm-1', scheme: 'opaque', adapterType: 'attio', label: 'm-1', proven: true });
     expect(await adapter.getActorCandidates({ event })).toEqual([
       { identity: { identifier: 'm-1', scheme: 'email', adapterType: 'attio', email: 'ada@fund.example' }, source: 'originator' },
     ]);
@@ -1007,7 +1007,7 @@ describe('AttioAdapter — a record’s Changes', () => {
     expect(none.arrival).not.toHaveProperty('actor');
     expect(await adapter.extractActor({ event: none.event })).toBeNull();
     const token = await fired({ type: 'api-token', id: 'm-1' });
-    expect(token.arrival.actor).toEqual({ identifier: 'm-1', scheme: 'opaque', adapterType: 'attio', label: 'm-1' });
+    expect(token.arrival.actor).toEqual({ identifier: 'm-1', scheme: 'opaque', adapterType: 'attio', label: 'm-1', proven: true });
     expect(await adapter.getActorCandidates({ event: token.event })).toEqual([]);
   });
 

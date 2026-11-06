@@ -155,10 +155,11 @@ export const slackEnvelope = slackEnvelopeSchema;
  *  or name, which would take a `users.info` round trip, so the identity is
  *  `opaque` and resolves to no Listen-Fire user until the candidate path
  *  looks the member up. None when the delivery names no member (a bot's
- *  post). */
+ *  post). `proven`: the host admits only a delivery signed with the app's
+ *  secret (`slack_v0`), so the member id is Slack's own. */
 function slackActorOf(userId: string | undefined): { actor: ActorIdentity } | Record<string, never> {
   if (userId === undefined || userId.length === 0) return {};
-  return { actor: { identifier: userId, scheme: 'opaque', adapterType: SLACK_ADAPTER_TYPE, label: userId } };
+  return { actor: { identifier: userId, scheme: 'opaque', adapterType: SLACK_ADAPTER_TYPE, label: userId, proven: true } };
 }
 
 /** The key a message's listenable edges are waited on under, and its

@@ -251,7 +251,10 @@ export function readProfileName(payload: Record<string, unknown>): string | null
 
 /** Who sent a message, as the door names them on its arrival: the bare phone
  *  number of its sender, with the profile name as `name` and `label` when
- *  there is one. None when the message names no number. */
+ *  there is one. None when the message names no number. `proven`: the number
+ *  is read from a request the module has checked against the Meta app's
+ *  secret; a missing secret refuses the request, and a replay is a request
+ *  the host kept after it was admitted. */
 function whatsappActorOf(message: Record<string, unknown>): ActorIdentity | undefined {
   const phone = normalizeWhatsappPhone(readSender(message));
   if (!phone) return undefined;
@@ -262,6 +265,7 @@ function whatsappActorOf(message: Record<string, unknown>): ActorIdentity | unde
     adapterType: WHATSAPP_ADAPTER_TYPE,
     ...(profileName !== null ? { name: profileName } : {}),
     label: profileName ?? phone,
+    proven: true,
   };
 }
 

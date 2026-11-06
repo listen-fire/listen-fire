@@ -136,11 +136,12 @@ export const ATTIO_CHANGE_ACTOR = 'actor';
  *  actor Attio's webhook names, whatever its type. Pure parse — a bare id
  *  with no resolved email maps to no Listen-Fire user (`scheme: 'opaque'`);
  *  the candidate path resolves a workspace member's email separately. None
- *  when the webhook names no actor id. */
+ *  when the webhook names no actor id. `proven`: the host admits only a
+ *  delivery signed with the webhook's secret, so the id is Attio's own. */
 function changeActorOf(actor: { id: string | null } | undefined): ActorIdentity | undefined {
   const id = actor?.id;
   if (id === undefined || id === null || id.length === 0) return undefined;
-  return { identifier: id, scheme: 'opaque', adapterType: ATTIO_ADAPTER_TYPE, label: id };
+  return { identifier: id, scheme: 'opaque', adapterType: ATTIO_ADAPTER_TYPE, label: id, proven: true };
 }
 
 /** One of a change's fields, by name, from what its position holds. */

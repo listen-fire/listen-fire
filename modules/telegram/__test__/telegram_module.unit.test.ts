@@ -111,7 +111,7 @@ describe('@lf/telegram', () => {
     const actor = await adapter.extractActor?.({ event });
     expect(actor).toMatchObject({ identifier: '777', email: 'ada@example.com', label: '@adas' });
     // The door names the sender on the arrival itself, from the host's identities.
-    expect(event.arrival?.actor).toEqual({ identifier: '777', scheme: 'email', adapterType: 'telegram', email: 'ada@example.com', label: '@adas' });
+    expect(event.arrival?.actor).toEqual({ identifier: '777', scheme: 'email', adapterType: 'telegram', email: 'ada@example.com', label: '@adas', proven: true });
     await expect(adapter.getActorCandidates?.({ event })).resolves.toEqual([{ identity: actor, source: 'originator' }]);
     const unbound = await firedBy(adapter, { id: 888 });
     expect(unbound.arrival).not.toHaveProperty('actor');

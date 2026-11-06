@@ -210,7 +210,7 @@ describe('GranolaAdapter', () => {
     if (arrival === undefined || 'gone' in arrival) throw new Error('the poll delivered no meeting');
     // The run's trigger, as the host hands it to a run its listen fired.
     // The door names the owner on the arrival itself.
-    expect(arrival.actor).toEqual({ identifier: 'priya@fund.com', scheme: 'email', adapterType: 'granola', email: 'priya@fund.com', name: 'Priya Owner' });
+    expect(arrival.actor).toEqual({ identifier: 'priya@fund.com', scheme: 'email', adapterType: 'granola', email: 'priya@fund.com', name: 'Priya Owner', proven: true });
     const event = arrivalTriggerOf({ pipelineInputId: 'notes:summarise', adapterType: 'granola', arrival, now: new Date() });
     const actor = await adapter.extractActor({ event });
     expect(actor).toEqual({
@@ -219,6 +219,7 @@ describe('GranolaAdapter', () => {
       adapterType: 'granola',
       email: 'priya@fund.com',
       name: 'Priya Owner',
+      proven: true,
     });
     expect(await adapter.getActorCandidates({ event })).toEqual([{ identity: actor, source: 'originator' }]);
   });

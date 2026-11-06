@@ -201,7 +201,7 @@ describe('@lf/slack', () => {
             edge: 'Messages',
             key: 'C1',
             identity: 'C1:1700000000.000100',
-            actor: { identifier: 'U1', scheme: 'opaque', adapterType: 'slack', label: 'U1' },
+            actor: { identifier: 'U1', scheme: 'opaque', adapterType: 'slack', label: 'U1', proven: true },
             landing: {
               recordId: 'C1:1700000000.000100',
               recordType: 'Message',
@@ -325,7 +325,7 @@ describe('@lf/slack', () => {
             landing: { recordId: 'reaction:C1:1700.1:eyes', recordType: 'Reaction', fields: { ...event, Emoji: 'eyes', Channel: 'C1', Reactor: 'U2' } },
             parents: [{ recordId: 'C1', recordType: 'Channel', fields: { id: 'C1', name: 'deals', Id: 'C1', Name: 'deals' } }],
             about: { recordType: 'Message', externalId: 'C1:1700.1' },
-            actor: { identifier: 'U2', scheme: 'opaque', adapterType: 'slack', label: 'U2' },
+            actor: { identifier: 'U2', scheme: 'opaque', adapterType: 'slack', label: 'U2', proven: true },
             occurredAt: '2023-11-14T22:13:20.000Z',
           },
         ],
@@ -545,7 +545,7 @@ describe('@lf/slack', () => {
               },
             ],
             about: { recordType: 'Message', externalId: 'C1:1700000000.000100' },
-            actor: { identifier: 'U1', scheme: 'opaque', adapterType: 'slack', label: 'U1' },
+            actor: { identifier: 'U1', scheme: 'opaque', adapterType: 'slack', label: 'U1', proven: true },
             occurredAt: '2023-11-14T22:14:20.000Z',
           },
         ],
@@ -632,7 +632,7 @@ describe('@lf/slack', () => {
       const event = arrivalTriggerOf({ pipelineInputId: 'chat:answer', adapterType: 'slack', arrival, now: new Date() });
       actors.push([arrival.edge, await adapter.extractActor?.({ event })]);
     }
-    const actor = (id: string) => ({ identifier: id, scheme: 'opaque', adapterType: 'slack', label: id });
+    const actor = (id: string) => ({ identifier: id, scheme: 'opaque', adapterType: 'slack', label: id, proven: true });
     expect(actors).toEqual([
       ['Messages', actor('U2')],
       ['Reactions', actor('U3')],
