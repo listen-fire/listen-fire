@@ -426,10 +426,13 @@ impl<'s> SegmentAdapters<'s> {
                 }
                 self.rpc(&instance, method, Js::Obj(params)).await?
             }
-            "getFieldValue" => {
-                let value = self.rpc(&instance, method, with_wire_position(&plain, args)).await?;
-                self.owned_field_value(&instance, args, value).await?
-            }
+            "getFieldValue" => match self.held_actor(&instance, &plain).await? {
+                Some(held) => held,
+                None => {
+                    let value = self.rpc(&instance, method, with_wire_position(&plain, args)).await?;
+                    self.owned_field_value(&instance, args, value).await?
+                }
+            },
             "getRelated" => {
                 let related = self.rpc(&instance, method, with_wire_position(&plain, args)).await?;
                 if member("fieldId").as_ref().and_then(Js::as_str) == Some(RESOURCES_REFERENCE_FIELD_ID) {
@@ -504,6 +507,21 @@ impl<'s> SegmentAdapters<'s> {
         let described = self.rpc(instance, "describe", Js::Obj(obj! { "typeId" => Js::str(type_id) })).await?;
         instance.described.borrow_mut().insert(type_id.to_string(), described.clone());
         Ok(described)
+    }
+
+    /// A read of `Actor`, the host's own (crate::actor): the module never
+    /// described it, and a module resolving field names refuses what it does not
+    /// know. None for any other read, and for a module's own field of that name.
+    async fn held_actor(&self, instance: &Instance, read: &Js) -> Result<Option<Js>, CallFailure> {
+        if read.get("fieldId").and_then(Js::as_str) != Some(crate::actor::ACTOR) || !crate::actor::reports_who_acted(&self.running(instance).methods) {
+            return Ok(None);
+        }
+        let position = read.get("position").cloned().unwrap_or(Js::Null);
+        let described = match position.get("recordType").and_then(Js::as_str) {
+            Some(record_type) => self.describe(instance, record_type).await?,
+            None => Js::Null,
+        };
+        Ok(crate::actor::held_on_position(&position, &described))
     }
 
     /// `getFieldValue`'s answer, a file where the external's catalog declares

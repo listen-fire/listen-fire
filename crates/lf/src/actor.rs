@@ -5,9 +5,13 @@
 
 use indexmap::{IndexMap, IndexSet};
 
-use crate::json::Js;
+use crate::arrivals::ArrivalIn;
+use crate::doors::Reader;
+use crate::json::{Js, Obj};
 use crate::obj;
 use crate::schema::reference_target_type_ids;
+use crate::secrets::Credential;
+use crate::sources::MovementFile;
 
 pub const ACTOR: &str = "Actor";
 
@@ -43,7 +47,7 @@ pub fn reached_entry() -> Js {
 }
 
 /// Whether a module listing `methods` reports who acted.
-fn reports_who_acted(methods: &[String]) -> bool {
+pub fn reports_who_acted(methods: &[String]) -> bool {
     methods.iter().any(|m| m == "getActorCandidates" || m == "extractActor")
 }
 
@@ -90,6 +94,124 @@ pub fn with_actor_descriptors(entries: &[Js], descriptors: &IndexMap<String, Js>
     }
     offered.insert(ACTOR.to_string(), descriptor());
     Ok((vec![reached_entry()], offered))
+}
+
+/// `normalisedActor`: an identity as the fields of `Actor`, held to the table in
+/// docs/contracts/actor-field.md, as `packages/engine-contracts/actor.ts` is.
+/// None when the identity names nobody: a field that may be absent is better
+/// than an empty one a filter could match.
+pub fn normalised(identity: &Js) -> Option<Js> {
+    let text = |key: &str| identity.get(key).and_then(Js::as_str);
+    let identifier = text("identifier").filter(|id| !id.trim().is_empty())?;
+    let scheme = text("scheme");
+    let mut fields = obj! { "Id" => Js::str(identifier) };
+    let address = text("email").or((scheme == Some("email")).then_some(identifier)).map(|address| address.trim().to_lowercase()).filter(|address| !address.is_empty());
+    if let Some(address) = address {
+        fields.insert("Email".into(), Js::str(&address));
+        // The last `@`, so `a@x.com.evil.com` can never read as `x.com`.
+        if let Some((_, domain)) = address.rsplit_once('@').filter(|(_, domain)| !domain.is_empty()) {
+            fields.insert("Domain".into(), Js::str(domain));
+        }
+    }
+    if scheme == Some("phone") {
+        let digits: String = identifier.chars().filter(char::is_ascii_digit).collect();
+        if !digits.is_empty() {
+            fields.insert("Phone".into(), Js::Str(digits));
+        }
+    }
+    if let Some(name) = text("name").or_else(|| text("label")).filter(|name| !name.is_empty()) {
+        fields.insert("Name".into(), Js::str(name));
+    }
+    fields.insert("Proven".into(), Js::Bool(Js::is_true(identity.get("proven"))));
+    Some(Js::Obj(fields))
+}
+
+/// Whether anything in `files` could read `Actor`. It only decides whether to
+/// spend a call: matching too much costs one lookup, and no read is missed.
+/// Nothing in the checker says what a fired function reads.
+pub fn needs_lookup(files: &[MovementFile]) -> bool {
+    files.iter().any(|file| file.source.contains(ACTOR))
+}
+
+/// The connection arrivals came through, as a module is asked about them.
+pub struct ActorSource<'a> {
+    pub external: &'a str,
+    pub install: Option<&'a Credential>,
+}
+
+/// An identity the module named no address for: only a lookup can say more.
+fn is_opaque(identity: &Js) -> bool {
+    identity.get("email").and_then(Js::as_str).is_none() && !matches!(identity.get("scheme").and_then(Js::as_str), Some("email" | "phone"))
+}
+
+/// `identity` with the address the module's first originator candidate has for
+/// them. The identity stays as the door named it: `Id` and `Proven` say who the
+/// source system vouched for, whatever a later lookup answers.
+fn with_candidate_address(identity: &Js, candidates: &Js) -> Js {
+    let originator = candidates.as_array().unwrap_or(&[]).iter().find(|candidate| candidate.get("source").and_then(Js::as_str) == Some("originator"));
+    let found = originator.and_then(|candidate| normalised(candidate.get("identity")?));
+    let address = found.as_ref().and_then(|fields| fields.get("Email")).cloned();
+    match (identity, address) {
+        (Js::Obj(named), Some(address)) => {
+            let mut named: Obj = named.clone();
+            named.insert("email".into(), address);
+            Js::Obj(named)
+        }
+        _ => identity.clone(),
+    }
+}
+
+/// `arrival` with `Actor` written into its landing's fields. One whose lookup
+/// failed writes what it has and names `Actor` unread, so a filter reading it
+/// lands as `Arrival Not Judged` rather than as a non match, and a listen with
+/// no such filter still fires.
+async fn with_actor<R: Reader>(reader: &R, source: &ActorSource<'_>, mut arrival: ArrivalIn, needs_lookup: bool) -> ArrivalIn {
+    let Some(named) = arrival.actor.clone().filter(|_| arrival.landing.is_some()) else { return arrival };
+    let mut identity = named.clone();
+    let mut unread = false;
+    if needs_lookup && is_opaque(&named) {
+        let event = crate::routing::arrival_trigger_of("", source.external, &arrival, &crate::store::iso(0));
+        match reader.actor_candidates(source.external, source.install, &event).await {
+            Ok(Some(candidates)) => identity = with_candidate_address(&named, &candidates),
+            Ok(None) => {}
+            Err(why) => {
+                eprintln!("{}: who acted on {} could not be looked up: {why}", source.external, arrival.edge);
+                unread = true;
+            }
+        }
+    }
+    let Some(fields) = normalised(&identity) else { return arrival };
+    let Some(Js::Obj(landing)) = arrival.landing.as_mut() else { return arrival };
+    if let Some(Js::Obj(held)) = landing.get_mut("fields") {
+        held.insert(ACTOR.to_string(), fields);
+    }
+    if unread {
+        match landing.entry("unknown".to_string()).or_insert_with(|| Js::Arr(Vec::new())) {
+            Js::Arr(names) => names.push(Js::str(ACTOR)),
+            other => *other = Js::Arr(vec![Js::str(ACTOR)]),
+        }
+    }
+    arrival
+}
+
+/// Each arrival with `Actor` written, before it is judged or logged: the one
+/// function every path an arrival comes in by calls, so a filter, a run and a
+/// wait read one answer.
+pub async fn with_actors<R: Reader>(reader: &R, source: &ActorSource<'_>, arrivals: Vec<ArrivalIn>, needs_lookup: bool) -> Vec<ArrivalIn> {
+    let mut written = Vec::with_capacity(arrivals.len());
+    for arrival in arrivals {
+        written.push(with_actor(reader, source, arrival, needs_lookup).await);
+    }
+    written
+}
+
+/// `Actor` on a position's data, for a read of it: the host's to answer, since
+/// the module never described it. None when `described` (what the module says of
+/// the record's type) declares a field of that name itself, which is the
+/// module's: a type nothing lands on may.
+pub fn held_on_position(position: &Js, described: &Js) -> Option<Js> {
+    let declares = described.get("fields").and_then(Js::as_array).is_some_and(|fields| fields.iter().any(answers_to_actor));
+    (!declares).then(|| position.get("identity").and_then(|identity| identity.get("data")).and_then(|data| data.get(ACTOR)).cloned().unwrap_or(Js::Null))
 }
 
 #[cfg(test)]
@@ -162,5 +284,39 @@ mod tests {
         entries.push(js(r#"{"typeId":"x","displayName":"Actor","readable":true,"writable":false}"#));
         let refused = with_actor_descriptors(&entries, &descriptors, &methods(&["extractActor"])).unwrap_err();
         assert!(refused.starts_with("a type named 'Actor'"), "{refused}");
+    }
+
+    /// The table in docs/contracts/actor-field.md, identity in and fields out.
+    #[test]
+    fn normalised_is_held_to_the_table_in_the_contract() {
+        let doc = include_str!("../../../docs/contracts/actor-field.md");
+        let rows: Vec<(&str, &str)> = doc.lines().filter_map(|line| line.strip_prefix("| `{")?.strip_suffix("}` |")?.split_once("}` | `{")).collect();
+        assert!(rows.len() >= 8, "{rows:?}");
+        for (identity, fields) in rows {
+            assert_eq!(normalised(&js(&format!("{{{identity}}}"))), Some(js(&format!("{{{fields}}}"))), "{identity}");
+        }
+    }
+
+    #[test]
+    fn an_identity_naming_nobody_has_no_actor() {
+        assert_eq!(normalised(&js(r#"{"identifier":"  ","scheme":"opaque"}"#)), None);
+        assert_eq!(normalised(&js(r#"{"scheme":"opaque"}"#)), None);
+    }
+
+    #[test]
+    fn the_first_originator_gives_an_address_and_the_identity_stays_as_named() {
+        let named = js(r#"{"identifier":"U1","scheme":"opaque","proven":true}"#);
+        let found = with_candidate_address(&named, &js(r#"[{"identity":{"identifier":"relay","scheme":"email","email":"r@x.com"},"source":"relay"},{"identity":{"identifier":"other","scheme":"email","email":"Ann@X.com"},"source":"originator"}]"#));
+        assert_eq!(normalised(&found), Some(js(r#"{"Id":"U1","Email":"ann@x.com","Domain":"x.com","Proven":true}"#)));
+        assert_eq!(with_candidate_address(&named, &js("[]")), named, "no candidate: nothing more is known");
+    }
+
+    #[test]
+    fn a_read_of_actor_is_the_hosts_unless_the_module_declared_the_field_itself() {
+        let position = js(r#"{"identity":{"kind":"stable","recordId":"m1","data":{"Actor":{"Id":"U1"}}}}"#);
+        let undeclared = js(r#"{"fields":[{"fieldId":"t","displayName":"Text"}]}"#);
+        assert_eq!(held_on_position(&position, &undeclared), Some(js(r#"{"Id":"U1"}"#)));
+        assert_eq!(held_on_position(&js(r#"{"identity":{"kind":"stable","recordId":"m1"}}"#), &undeclared), Some(Js::Null), "a record reached by reading has none");
+        assert_eq!(held_on_position(&position, &js(r#"{"fields":[{"fieldId":"a","displayName":"Actor"}]}"#)), None);
     }
 }

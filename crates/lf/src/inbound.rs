@@ -657,6 +657,11 @@ pub trait InboundStore {
     fn refuse_arrivals(&self, _source: &Source, _arrivals: &[crate::arrivals::ArrivalIn]) -> Option<String> {
         None
     }
+    /// Each arrival with what the host adds to a landing written, before it is
+    /// judged or logged (crate::actor).
+    async fn with_actors(&self, _source: &Source, arrivals: Vec<crate::arrivals::ArrivalIn>) -> Vec<crate::arrivals::ArrivalIn> {
+        arrivals
+    }
 }
 
 /// Everything one delivery leaves behind (`InboundStore::keep`).
@@ -832,6 +837,7 @@ async fn receive_delivery<S: InboundStore>(store: &S, provider_key: &str, delive
         (store.preprocess(&source, &body, subscription.checkpoint.as_ref()).await?, external_id, None)
     };
 
+    let extraction = Extraction { arrivals: store.with_actors(&source, extraction.arrivals).await, ..extraction };
     if let Some(message) = store.refuse_arrivals(&source, &extraction.arrivals) {
         eprintln!("Webhook delivery refused for subscription {}: {message}", delivery.subscription_id);
         return refused(Refusal::PayloadMismatch(message));
@@ -921,6 +927,7 @@ pub async fn reread_delivery<S: InboundStore>(store: &S, subscription_id: &str, 
         Extraction { checkpoint: None, ..store.preprocess(&source, &body, captured.checkpoint.as_ref()).await? }
     };
     let arrivals = extraction.arrivals.into_iter().filter(|arrival| brought.contains(&arrival.receipt_key())).collect();
+    let arrivals = store.with_actors(&source, arrivals).await;
     Ok((source, Extraction { arrivals, ..extraction }))
 }
 

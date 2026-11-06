@@ -186,7 +186,8 @@ async fn reread(doors: &LfDoors<'_, SessionReader<'_>>, row: &DeliveryRow, captu
     if row.source == DeliverySource::Emit {
         let install = doors.install(&row.subscription_id).ok_or_else(|| format!("delivery {} was pushed as {}, which is no longer a credential here", row.id, row.subscription_id))?;
         let credential = (install.binding != crate::secrets::Binding::Install).then(|| install.name.clone());
-        return Ok(Reread { adapter: install.external.clone(), install: Some(install.name.clone()), credential, arrivals: crate::inbound::reread_push(captured)? });
+        let arrivals = doors.with_actors(&install.external, Some(install), crate::inbound::reread_push(captured)?).await;
+        return Ok(Reread { adapter: install.external.clone(), install: Some(install.name.clone()), credential, arrivals });
     }
     let (source, extraction) = crate::inbound::reread_delivery(doors, &row.subscription_id, captured).await?;
     Ok(Reread {

@@ -1394,6 +1394,9 @@ impl Session {
                 }
                 None => (arrivals, shared.clone()),
             };
+            // Only what is new: an edge listed whole would ask again of everything still on it, every poll.
+            let reader = crate::doors::SessionReader::of(self);
+            let arrivals = crate::actor::with_actors(&reader, &crate::actor::ActorSource { external: &key.adapter, install: credential }, arrivals, crate::actor::needs_lookup(&set.files)).await;
             let (arrivals, shared) = (&arrivals, &shared);
             let (logged, at) = (crate::arrivals::logged(&arrivals), iso(0));
             let resend_window_ms = crate::externals::resend_window_ms(&self.project, &key.adapter, &resend_manifest);

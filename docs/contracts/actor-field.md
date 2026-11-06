@@ -30,6 +30,17 @@ Identity in, fields out. Each implementation (`normalisedActor` in `packages/eng
 
 An identity with no identifier yields no `Actor` at all.
 
+## Where `lf` writes it
+
+`lf` writes `Actor` into each arrival's landing fields before the arrival is judged or logged, on every path an arrival comes in by: a delivery, a push to the `wake` door, a poll, a replay. A filter, a run and a wait read it as they read any field, and `lf` answers the read itself, since the module never described it.
+
+- An identity with an address or a phone costs no call.
+- An opaque identity asks the module's `getActorCandidates` when any movement text in the project says `Actor`, and takes the address of its first `originator` candidate. `Id` and `Proven` stay as the arrival named them.
+- If that call fails, `lf` writes what it has and lists `Actor` in the landing's `unknown`. A filter reading it lands as `Arrival Not Judged`, and a listen with no such filter still fires.
+- An arrival naming no actor has no `Actor`. Nor does a record reached by reading.
+
+A replay of a delivery re-reads the delivery, so it asks the module again and can get a newer answer than the run it replays. A replay of a polled page reads the answer kept with the page.
+
 ## Why `Domain` is the last `@`
 
 A filter compares `Domain == "x.com"`. Taking the part after the last `@` means `a@x.com.evil.com` has the domain `x.com.evil.com`, which does not match.

@@ -360,6 +360,14 @@ fn delivery(raw: &Js) -> Result<SuiteDelivery, String> {
 }
 
 impl Reader for SuiteReader {
+    async fn actor_candidates(&self, _external: &str, _install: Option<&Credential>, _event: &Js) -> Result<Option<Js>, String> {
+        Ok(None)
+    }
+
+    fn needs_actor_lookup(&self) -> bool {
+        false
+    }
+
     /// The suite's adapters are judged without waits.
     async fn await_keys(&self, _: &str, _: Option<&Credential>, _: &str, _: Js) -> Result<Option<Js>, String> {
         Ok(None)
