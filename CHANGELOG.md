@@ -19,6 +19,7 @@ named in [`RELEASING.md`](RELEASING.md).
 ## [Unreleased]
 
 <!-- add merged PRs here -->
+- Adapter protocol 2.9 (additive; an older host ignores it): an actor identity may carry `proven`, true when the module checked that the source system vouches for it. `engine-contracts` exports `normalisedActor` and `ACTOR_FIELDS`, the rule that turns an identity into the `Actor` fields (`Id`, `Email`, `Domain`, `Phone`, `Name`, `Proven`), held to the table in `docs/contracts/actor-field.md`. `PROTOCOL_MINOR` is 9.
 
 ## [0.15.2] - 2026-11-05
 

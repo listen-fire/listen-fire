@@ -1,7 +1,7 @@
 # The adapter protocol
 
 Version: 2
-Minor: 8
+Minor: 9
 
 A remote adapter connects a system you run to Listen-Fire. It is an HTTP
 server you host, in any language. Listen-Fire calls it to learn your data
@@ -130,7 +130,7 @@ The protocol's version is 2.N: a major, 2, and a minor, N, counted within it.
   - A method you offer never raises it, whatever minor introduced the method: a host calls only the methods it speaks, so an older host leaves a newer one alone and your module works there as before.
   - So rebuilding a module with a newer kit, or offering a newer method, never makes an older host refuse it.
   - An absent `protocolMinor` is unstated, read as 2.0. Every module published up to 0.12.5 states none.
-- **What a host refuses, by name.** `listen-fire` and the engine speak 2.0 to 2.8. They refuse a manifest that states another major (newer or older), or a minor above 8. `listen-fire` reads a core module's manifest before any other method it asks of it: as `listen-fire drain` opens, for the modules it starts then, and at the first call otherwise. The text names the module, its package and version when the host finds them, what it speaks and what the host speaks, and what to upgrade. Installing probes your server the same way: Listen-Fire calls `manifest` with the secret and refuses it outside that range.
+- **What a host refuses, by name.** `listen-fire` and the engine speak 2.0 to 2.9. They refuse a manifest that states another major (newer or older), or a minor above 9. `listen-fire` reads a core module's manifest before any other method it asks of it: as `listen-fire drain` opens, for the modules it starts then, and at the first call otherwise. The text names the module, its package and version when the host finds them, what it speaks and what the host speaks, and what to upgrade. Installing probes your server the same way: Listen-Fire calls `manifest` with the secret and refuses it outside that range.
 - **The floor stays 2.0 within the major.** A host reads every minor from 2.0 up, so a module that predates a feature still loads. A method a host needs a module to have is checked by name where it is needed, never by the stated minor, and the refusal names the minor that introduced it: `listen-fire serve` refuses a movements module that does not answer `movements.watch` (adapter protocol 2.1), and arming a polled listen fails on a store module that does not answer `work.enqueueIfAbsent` (adapter protocol 2.2).
 - **An addition that names nothing in the manifest keeps the minor.** A new optional field or declaration is learned from the manifest, never from the version: a method is called only when it is listed in `methods`, and a declaration (`credentials`, `inbound`, `poll`, `periodic`) is acted on only when it is present. An older server sends neither and is unchanged; an older host ignores both.
 - An install made before its secret is supplied stores the version the manifest file claims. The probe runs when the secret is linked.
@@ -149,6 +149,7 @@ The protocol's version is 2.N: a major, 2, and a minor, N, counted within it.
 | 2.6 | arrivals for listens ([Reporting arrivals](#reporting-arrivals)): one on a root edge names no `key`; one may carry `parents`, `about`, `notFor`, `takenApplied`, `occurredAt` and, on its landing and each parent, `unknown`; the landing and each parent state their `recordType`, and an arrival that states none runs no listen. A host fires the listens on the edge it landed on. A polled listenable edge is polled as `poll({ edge, filter?, scope?, cursor? })`, once per connection, edge, taken filter and scope ([Polled sources](#polled-sources-and-periodic-tasks)); a pushed one is subscribed for as `ensureEventSubscription({ edge, filter?, scope?, callbackUrl, current? })`, once per the same ([Subscribing for an edge's arrivals](#subscribing-for-an-edges-arrivals)). Each head `awaitKeys` is asked about names its `recordType` where the host knows it. `checkInbound` may be handed `replayed: true`, when the host runs a request it kept itself again ([A module that checks its own inbound](#a-module-that-checks-its-own-inbound)); `inbound.captureHeaders` names the headers a kept request holds and `inbound.redactFields` the body and query fields it drops ([Declared inbound signatures](#declared-inbound-signatures)). **A module that uses any of these states `protocolMinor: 6`**: an older host would refuse a root arrival, judge without `unknown` or `recordType`, or keep a request whole | listen-fire 0.13.0 |
 | 2.7 | host behaviours, additive: a poll's answer may say when the edge is next worth polling (`pollAgainAt`), and a host polls it then when that is sooner than its interval ([Polled sources](#polled-sources-and-periodic-tasks)); an arrival may say who acted (`actor`, as `extractActor` answers), and a run an arrival fires is handed its `about` and `actor` and stamped with its `occurredAt` ([Reporting arrivals](#reporting-arrivals)). An older host ignores both members (it polls on its interval and asks `extractActor`), so no module needs to state 2.7 | listen-fire 0.13.1 |
 | 2.8 | a host behaviour, additive: a runner's requests to the slots it fills carry `hostRelease`, the release of the runner that sent it ([The envelope](#the-envelope)). A module serving runners of several releases answers each by its line; a request without it did not state its sender's release (a runner before 0.15.2, or a host or module that does not set it). An older module ignores the member, so no module needs to state 2.8 | listen-fire 0.15.2 |
+| 2.9 | a host behaviour, additive: an actor identity may say the source system vouches for it (`proven`, [Who acted](#who-acted)), and a host that offers an [`Actor` field](actor-field.md) reads it as `Actor.Proven`. An older host ignores the member and reads the identity as not proven, so no module needs to state 2.9 | listen-fire 0.15.3 |
 
 A module offering one of these methods states no minor for it. Until 0.12.9 the kits stamped a module with the minor of the methods it offered; from 0.12.10 they stamp only what its author declares.
 
@@ -855,7 +856,7 @@ From adapter protocol 2.6 an arrival may say more, for the listens on its edge
   follow happened, not when the host took it.
 - **`actor`** (adapter protocol 2.7): who acted, where your provider says,
   as `extractActor` answers: `{ "identifier", "scheme", "email"?, "name"?,
-  "label"? }` ([Who acted](#who-acted)).
+  "label"?, "proven"? }` ([Who acted](#who-acted)).
 
 A run an arrival fires is handed the arrival's landing, its `parents`, its
 `about` and its `actor` (2.7), and nothing else: there is no raw event
@@ -879,6 +880,10 @@ of a mail, the owner of a meeting.
   resolves them to one of its users: `email` (the address is `email`, or
   the identifier), `phone`, or `opaque` (a provider id that resolves to no
   user). `name`, else `label`, is what `@actor_name` reads.
+- `proven` (adapter protocol 2.9) says your module checked that the source
+  system vouches for this identity: a verified address, a signed request.
+  Leave it out when you did not check; absent reads as not proven. A host
+  that offers an [`Actor` field](actor-field.md) puts it in `Actor.Proven`.
 - The run's `@actor_*` read it; your `extractActor` is asked only for an
   arrival that names none.
 - A host resolves `@user_*` from it: it asks your `getActorCandidates`
@@ -2077,6 +2082,7 @@ from `apps/cli`.
 
 ## Changes
 
+- **Adapter protocol 2.9: an actor identity may say it is proven** (within version 2; listen-fire 0.15.3; additive). `ActorIdentity` gains `proven`, true when the module checked that the source system vouches for the identity ([Who acted](#who-acted)). Why: a host that offers who acted as a field on what lands ([the `Actor` field](actor-field.md)) lets a movement compare an address, and a comparison is only worth trusting when the module says the address was checked. A host behaviour, as 2.7 and 2.8 were: an older host ignores the member and reads the identity as not proven, so a module states no minor for it.
 - **Adapter protocol 2.8: a slot request says which release sent it** (within version 2; listen-fire 0.15.2; additive). Every request `listen-fire` sends a slot module it fills (store, movements, secrets) carries `hostRelease`, its core version ([The envelope](#the-envelope)). A request without it did not state its sender's release: a runner before 0.15.2, or a host or module that does not set it (requests to the browser slot come from modules and carry none; a TypeScript host can state its own through `SlotClient`'s optional `hostRelease`). Why: a hosted product serves a team's own runners on two releases at once (0.12 and 0.15 during a move between them), whose store methods differ, and some kept their names while their meaning changed (`waits.sweep`, `inbound.keepDelivery`'s mark, [store-slot.md](store-slot.md#changes)); with only the protocol's major on a request, it could not tell the two apart. A host behaviour, as 2.7 was: an older module ignores the member, so a module states no minor for it.
 - **A webhook several runners share** (within version 2; a host behaviour; listen-fire 0.15.2; nothing for a module to do). Runners on one secrets module keep who holds each subscription in the credential's `webhook_holders`; a registration never replaces an identical webhook or narrows it, and the last holder to leave removes it ([A webhook several runners share](#a-webhook-several-runners-share)). A lone runner behaves as before. Why: people may move to `listen-fire serve` as separate processes, perhaps of several versions at once, and each removed what its own listens did not want.
 - **The loop guard slot is removed** (within version 2; listen-fire 0.14.0; breaking for a module that fills it). A core module whose manifest or `lf-external.yaml` names `slot: loopGuard` is refused by name, as is an `lf.yaml` that names `core.loopGuard`: the host's loop breaker replaces it. listen-fire stopped calling the slot's methods before 0.14.0.

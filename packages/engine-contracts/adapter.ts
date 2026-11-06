@@ -83,6 +83,10 @@ export interface ActorIdentity {
   name?: string;
   /** Fallback display label when `name` isn't available. */
   label?: string;
+  /** True when the module checked that the source system vouches for this
+   *  identity (a verified address, a signed request). Absent reads as not
+   *  proven: it is a claim only the module can make. */
+  proven?: boolean;
 }
 
 /**

@@ -11,6 +11,7 @@
 
 export type { AdapterSnapshot, CatalogSnapshot, LanguageVersion } from 'movement-lang';
 
+export * from './actor';
 export * from './adapter';
 export * from './arrivals';
 export * from './catalog';

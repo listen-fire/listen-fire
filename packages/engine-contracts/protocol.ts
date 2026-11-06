@@ -39,7 +39,7 @@ export const MANIFEST_PROTOCOL_VERSION = 2;
 
 /** The highest minor of version 2 this release speaks: a host reads 2.0 to
  *  2.`PROTOCOL_MINOR` (docs/contracts/adapter-protocol.md "Minors of version 2"). */
-export const PROTOCOL_MINOR = 8;
+export const PROTOCOL_MINOR = 9;
 
 /** The method that names a minor's feature, by name or by its ending
  *  (`<slot>.watch`). Data, so the Rust twin (module-wire
@@ -50,8 +50,9 @@ export type ProtocolMinorUse = { method: string } | { methodEndingWith: string }
  *  speaking the minor may call it; a module offering it needs nothing of an
  *  older host, which never calls it, so offering one never raises the minor
  *  a module states. A minor that names no method has no row: 2.0, 2.3
- *  (labelled poll events), 2.7 (`pollAgainAt`) and 2.8 (`hostRelease` on a
- *  slot request), each a host behaviour. */
+ *  (labelled poll events), 2.7 (`pollAgainAt`), 2.8 (`hostRelease` on a
+ *  slot request) and 2.9 (`proven` on an actor identity), each a host
+ *  behaviour. */
 export const PROTOCOL_MINORS: readonly { minor: number; feature: string; uses: ProtocolMinorUse }[] = [
   { minor: 1, feature: 'a <slot>.watch method', uses: { methodEndingWith: '.watch' } },
   { minor: 2, feature: 'work.enqueueIfAbsent', uses: { method: 'work.enqueueIfAbsent' } },
@@ -508,6 +509,7 @@ export const WireActorIdentity = z.object({
   email: z.string().optional(),
   name: z.string().optional(),
   label: z.string().optional(),
+  proven: z.boolean().optional(),
 });
 
 /** Mirror of `ActorCandidate`. */

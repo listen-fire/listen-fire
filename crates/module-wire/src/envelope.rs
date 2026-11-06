@@ -7,7 +7,7 @@ use crate::json::Js;
 pub const PROTOCOL_VERSION: &str = "2";
 /// The highest minor of version 2 this kit knows (`PROTOCOL_MINOR`): a module
 /// states the minor its manifest uses, from 0 to this.
-pub const PROTOCOL_MINOR: u64 = 8;
+pub const PROTOCOL_MINOR: u64 = 9;
 
 /// The method that names a minor's feature (`ProtocolMinorUse`), by name or by
 /// its ending.
@@ -28,8 +28,8 @@ pub struct ProtocolMinor {
 /// Each minor of version 2 whose hosts speak a method, and that method
 /// (`PROTOCOL_MINORS`, test-held equal to it in crates/lf). Offering one
 /// never raises the minor a module states: an older host never calls it. 2.3,
-/// labelled poll events, 2.7, `pollAgainAt`, and 2.8, `hostRelease` on a slot
-/// request, are host behaviours and name no method.
+/// labelled poll events, 2.7, `pollAgainAt`, 2.8, `hostRelease` on a slot
+/// request, and 2.9, `proven` on an actor identity, are host behaviours and name no method.
 pub const PROTOCOL_MINORS: &[ProtocolMinor] = &[
     ProtocolMinor { minor: 1, feature: "a <slot>.watch method", uses: MinorUse::MethodEndingWith(".watch") },
     ProtocolMinor { minor: 2, feature: "work.enqueueIfAbsent", uses: MinorUse::Method("work.enqueueIfAbsent") },

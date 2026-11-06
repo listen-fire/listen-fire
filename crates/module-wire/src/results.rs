@@ -202,6 +202,7 @@ fn actor_identity() -> S {
         opt("email", S::Str),
         opt("name", S::Str),
         opt("label", S::Str),
+        opt("proven", S::Bool),
     ])
 }
 
