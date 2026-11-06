@@ -25,6 +25,8 @@ describe('normalisedActor', () => {
   it('offers no Actor for an identity with no identifier', () => {
     expect(normalisedActor({ identifier: '', scheme: 'opaque' })).toBeNull();
     expect(normalisedActor({ identifier: '  ', scheme: 'email', email: 'a@x.com' })).toBeNull();
+    expect(normalisedActor({ identifier: '\u0085', scheme: 'opaque' })).toBeNull();
+    expect(normalisedActor({ identifier: '\ufeff', scheme: 'opaque' })).toBeNull();
   });
 
   it('only ever yields the listed fields', () => {

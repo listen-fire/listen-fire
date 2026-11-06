@@ -132,16 +132,26 @@ pub fn with_actor_descriptors(introspection: &Introspection<'_>) -> (Vec<Js>, In
     (vec![reached_entry()], offered)
 }
 
+/// The characters trimmed, named in docs/contracts/actor-field.md because
+/// `str::trim` and JavaScript's `trim` differ on U+0085 and U+FEFF.
+fn is_trimmed(c: char) -> bool {
+    matches!(c, '\u{9}'..='\u{d}' | ' ' | '\u{85}' | '\u{a0}' | '\u{1680}' | '\u{2000}'..='\u{200a}' | '\u{2028}' | '\u{2029}' | '\u{202f}' | '\u{205f}' | '\u{3000}' | '\u{feff}')
+}
+
+fn trimmed(text: &str) -> &str {
+    text.trim_matches(is_trimmed)
+}
+
 /// `normalisedActor`: an identity as the fields of `Actor`, held to the table in
 /// docs/contracts/actor-field.md, as `packages/engine-contracts/actor.ts` is.
 /// None when the identity names nobody: a field that may be absent is better
 /// than an empty one a filter could match.
 pub fn normalised(identity: &Js) -> Option<Js> {
     let text = |key: &str| identity.get(key).and_then(Js::as_str);
-    let identifier = text("identifier").filter(|id| !id.trim().is_empty())?;
+    let identifier = text("identifier").filter(|id| !trimmed(id).is_empty())?;
     let scheme = text("scheme");
     let mut fields = obj! { "Id" => Js::str(identifier) };
-    let address = text("email").or((scheme == Some("email")).then_some(identifier)).map(|address| address.trim().to_lowercase()).filter(|address| !address.is_empty());
+    let address = text("email").or((scheme == Some("email")).then_some(identifier)).map(|address| trimmed(address).to_lowercase()).filter(|address| !address.is_empty());
     if let Some(address) = address {
         fields.insert("Email".into(), Js::str(&address));
         // The last `@`, so `a@x.com.evil.com` can never read as `x.com`.
@@ -356,6 +366,8 @@ mod tests {
     #[test]
     fn an_identity_naming_nobody_has_no_actor() {
         assert_eq!(normalised(&js(r#"{"identifier":"  ","scheme":"opaque"}"#)), None);
+        assert_eq!(normalised(&js(r#"{"identifier":"\u0085","scheme":"opaque"}"#)), None);
+        assert_eq!(normalised(&js(r#"{"identifier":"\ufeff","scheme":"opaque"}"#)), None);
         assert_eq!(normalised(&js(r#"{"scheme":"opaque"}"#)), None);
     }
 

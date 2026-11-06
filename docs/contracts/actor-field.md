@@ -27,8 +27,12 @@ Identity in, fields out. Each implementation (`normalisedActor` in `packages/eng
 | `{"identifier":"nobody","scheme":"email","email":"nobody"}` | `{"Id":"nobody","Email":"nobody","Proven":false}` |
 | `{"identifier":"+44 7700 900001","scheme":"phone"}` | `{"Id":"+44 7700 900001","Phone":"447700900001","Proven":false}` |
 | `{"identifier":"U1","scheme":"opaque","proven":false}` | `{"Id":"U1","Proven":false}` |
+| `{"identifier":"U1","scheme":"email","email":"\ufeffA@X.com\ufeff"}` | `{"Id":"U1","Email":"a@x.com","Domain":"x.com","Proven":false}` |
+| `{"identifier":"U1","scheme":"email","email":"\u0085A@X.com\u0085"}` | `{"Id":"U1","Email":"a@x.com","Domain":"x.com","Proven":false}` |
 
-An identity with no identifier yields no `Actor` at all.
+An identity with no identifier yields no `Actor` at all. An identifier of nothing but trimmed characters is none.
+
+Trimming, wherever these rules trim (an address, and whether an identifier is empty), strips exactly: U+0009 to U+000D, U+0020, U+0085, U+00A0, U+1680, U+2000 to U+200A, U+2028, U+2029, U+202F, U+205F, U+3000 and U+FEFF. That is the union of what JavaScript's `trim` and Rust's `trim` each strip, named here so the two cannot differ: JavaScript alone strips U+FEFF, and Rust alone strips U+0085.
 
 ## Where `lf` writes it
 
