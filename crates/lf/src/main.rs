@@ -532,6 +532,8 @@ async fn run(argv: Vec<String>) -> Result<i32, String> {
                 return Ok(2);
             }
             let arrivals = arrivals::arrivals_of(&event).map_err(|e| format!("{}: {e}", event_file.display()))?;
+            // As a delivery's are, before they are judged: no door has seen these.
+            let arrivals = doors::LfDoors::of_session(&session, doors::EventSink::Queue, &|| {}).with_actors(&external, None, arrivals).await;
             report_fired(&session.fire_arrivals(&external, &arrivals, runs::Delivered::default()).await?, args.json, &mut out)
         }
         "resume" => {

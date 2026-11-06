@@ -36,13 +36,13 @@ Trimming, wherever these rules trim (an address, and whether an identifier is em
 
 ## Where `lf` writes it
 
-`lf` writes `Actor` into each arrival's landing fields before the arrival is judged or logged, on every path an arrival comes in by: a delivery, a push to the `wake` door, a poll, a replay. A filter, a run and a wait read it as they read any field, and `lf` answers the read itself, since the module never described it.
+`lf` writes `Actor` into each arrival's landing fields before the arrival is judged or logged, on every path an arrival comes in by: a delivery, a push to the `wake` door, a poll, a replay, an event file given to `run --event`. A filter, a run and a wait read it as they read any field, and `lf` answers the read itself, since the module never described it.
 
 - An identity with an address or a phone costs no call.
 - An opaque identity asks the module's `getActorCandidates` when any movement text in the project says `Actor`, and takes the address of its first `originator` candidate. `Id` and `Proven` stay as the arrival named them.
 - If that call fails, `lf` writes what it has and lists `Actor` in the landing's `unknown`. A filter reading it lands as `Arrival Not Judged`, and a listen with no such filter still fires.
-- An arrival naming no actor has no `Actor`. Nor does a record reached by reading.
-- A landing type whose module declares a field named `Actor` keeps it: `lf` adds and writes nothing there, and says so once, naming the module and the type. The names in a source system are its customer's, so `lf` never refuses one. A module's own type named `Actor` is likewise untouched: the record `lf` offers is a type of another name.
+- An arrival naming no actor has no `Actor`, and a record reached by reading has none. An `Actor` the body carried through is removed, unless the module declared that field itself: only what `lf` wrote can be read as who acted.
+- A landing type whose module declares a field named `Actor` keeps it: `lf` adds and writes nothing there, and says so when it describes the module, naming the module and the type. `lf` reads that from the schema it described for the connection the delivery came through. The names in a source system are its customer's, so `lf` never refuses one. A module's own type named `Actor` is likewise untouched: the record `lf` offers is a type of another name.
 
 A replay of a delivery re-reads the delivery, so it asks the module again and can get a newer answer than the run it replays. A replay of a polled page reads the answer kept with the page.
 

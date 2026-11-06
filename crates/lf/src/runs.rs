@@ -100,6 +100,11 @@ fn hold_all(running: &[Rc<RunningExternal>], keep: Keep) -> Vec<Hold> {
 }
 
 impl FileSet {
+    /// What the module `external` described, by connection.
+    pub fn schemas_of(&self, external: &str) -> Option<&ConnectionSchemas> {
+        self.schemas.get(external)
+    }
+
     /// Each file's reading, in the files' order.
     pub fn parsed(&self) -> &[Rc<Parsed>] {
         &self.parsed

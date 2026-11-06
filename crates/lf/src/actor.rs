@@ -3,12 +3,10 @@
 //! none of this, and to a filter or a run it is an ordinary record field that
 //! may be absent. A module knows nothing of it either: it reports an identity.
 
-use std::collections::BTreeSet;
-use std::sync::Mutex;
-
 use indexmap::{IndexMap, IndexSet};
 
 use crate::arrivals::ArrivalIn;
+use crate::catalog::ConnectionSchemas;
 use crate::doors::Reader;
 use crate::json::{Js, Obj};
 use crate::obj;
@@ -74,29 +72,8 @@ fn answers_to_actor(declared: &Js) -> bool {
     ["fieldId", "displayName", "name"].iter().any(|key| declared.get(key).and_then(Js::as_str) == Some(ACTOR))
 }
 
-/// The landing types whose module declared an `Actor` of its own, by module.
-/// The door writes `Actor` into an arrival's fields and holds no descriptors, so
-/// it learns here what introspection decided; a landing listed is the module's.
-static KEPT_BY_MODULE: Mutex<BTreeSet<(String, String)>> = Mutex::new(BTreeSet::new());
-
-/// Whether `adapter`'s landing type `type_id` declares `Actor` itself, so nothing
-/// is written there.
-pub fn kept_by_module(adapter: &str, type_id: &str) -> bool {
-    KEPT_BY_MODULE.lock().is_ok_and(|kept| kept.contains(&(adapter.to_string(), type_id.to_string())))
-}
-
-/// Remember that `adapter` keeps its own `Actor` on `type_id`, and say so the
-/// first time: introspection runs again for every walked position.
-fn keep_module_actor(adapter: &str, type_id: &str, name: &str) {
-    let first = KEPT_BY_MODULE.lock().is_ok_and(|mut kept| kept.insert((adapter.to_string(), type_id.to_string())));
-    if first {
-        eprintln!("listen-fire: {adapter}: '{name}' has its own '{ACTOR}', so listen-fire offers no {ACTOR} on it. What a filter reads is the source system's.");
-    }
-}
-
 /// What a module's introspection answered, for `with_actor_descriptors`.
 pub struct Introspection<'a> {
-    pub adapter: &'a str,
     pub entries: &'a [Js],
     pub descriptors: &'a IndexMap<String, Js>,
     pub methods: &'a [String],
@@ -105,22 +82,38 @@ pub struct Introspection<'a> {
 /// What the projection is handed for a module's own introspection: the `reached`
 /// entries, and `descriptors` with `Actor` on each listenable edge's landing
 /// type. Nothing changes for a module that reports nobody.
-///
+pub struct Offered {
+    pub reached: Vec<Js>,
+    pub descriptors: IndexMap<String, Js>,
+    /// The display names of the landing types that declared an `Actor` of their
+    /// own, so were offered nothing.
+    pub kept: Vec<String>,
+}
+
+impl Offered {
+    /// Said by whoever introspected the module whole: a walked position runs
+    /// the offer again for the same landing types and has nothing to add.
+    pub fn say_kept(&self, adapter: &str) {
+        for name in &self.kept {
+            eprintln!("listen-fire: {adapter}: '{name}' has its own '{ACTOR}', so listen-fire offers no {ACTOR} on it. What a filter reads is the source system's.");
+        }
+    }
+}
+
 /// A landing that already has an `Actor` of its own is left as the module
 /// described it: the name is the source system's (an Airtable column), and
 /// refusing it would stop a saved project under the same language key.
-pub fn with_actor_descriptors(introspection: &Introspection<'_>) -> (Vec<Js>, IndexMap<String, Js>) {
-    let Introspection { adapter, entries, descriptors, methods } = introspection;
-    let mut offered = (*descriptors).clone();
+pub fn with_actor_descriptors(introspection: &Introspection<'_>) -> Offered {
+    let Introspection { entries, descriptors, methods } = introspection;
+    let mut offered = Offered { reached: Vec::new(), descriptors: (*descriptors).clone(), kept: Vec::new() };
     if !reports_who_acted(methods) {
-        return (Vec::new(), offered);
+        return offered;
     }
     for type_id in landing_types(entries, descriptors) {
-        let Some(Js::Obj(landing)) = offered.get_mut(&type_id) else { continue };
+        let Some(Js::Obj(landing)) = offered.descriptors.get_mut(&type_id) else { continue };
         let own = |list: &str| landing.get(list).and_then(Js::as_array).is_some_and(|items| items.iter().any(answers_to_actor));
         if own("fields") || own("references") {
-            let name = landing.get("displayName").and_then(Js::as_str).unwrap_or(&type_id).to_string();
-            keep_module_actor(adapter, &type_id, &name);
+            offered.kept.push(landing.get("displayName").and_then(Js::as_str).unwrap_or(&type_id).to_string());
             continue;
         }
         match landing.entry("fields".to_string()).or_insert_with(|| Js::Arr(Vec::new())) {
@@ -128,8 +121,9 @@ pub fn with_actor_descriptors(introspection: &Introspection<'_>) -> (Vec<Js>, In
             other => *other = Js::Arr(vec![record_field()]),
         }
     }
-    offered.insert(ACTOR_TYPE.to_string(), descriptor());
-    (vec![reached_entry()], offered)
+    offered.descriptors.insert(ACTOR_TYPE.to_string(), descriptor());
+    offered.reached = vec![reached_entry()];
+    offered
 }
 
 /// The characters trimmed, named in docs/contracts/actor-field.md because
@@ -207,16 +201,50 @@ fn with_candidate_address(identity: &Js, candidates: &Js) -> Js {
     }
 }
 
-/// `arrival` with `Actor` written into its landing's fields. One whose lookup
-/// failed writes what it has and names `Actor` unread, so a filter reading it
-/// lands as `Arrival Not Judged` rather than as a non match, and a listen with
-/// no such filter still fires.
+/// Whether the module's landing of `record_type`, as `connection` described it,
+/// has an `Actor` of its own (`with_actor_descriptors` left it as described).
+/// The connection is the credential the delivery came through; a delivery to
+/// the module's own install names none that was described, so any of the
+/// module's connections declaring one counts.
+pub fn declares_own_actor(schemas: &ConnectionSchemas, connection: Option<&str>, record_type: &str) -> bool {
+    let declares = |described: &crate::catalog::Described| described.schema.get("positions").and_then(|positions| positions.get(record_type)).is_some_and(position_declares_actor);
+    match connection.and_then(|name| schemas.get(name)) {
+        Some(described) => declares(described),
+        None => schemas.values().any(declares),
+    }
+}
+
+/// Whether a described position holds an `Actor` that is not the one listen-fire
+/// offers: a field, an edge, or a field of another name whose id is `Actor`.
+fn position_declares_actor(position: &Js) -> bool {
+    let named = |list: &str| position.get(list).and_then(|held| held.get(ACTOR));
+    let is_offered = |property: &Js| {
+        let record = property.get("of").unwrap_or(property);
+        record.get("kind").and_then(Js::as_str) == Some("record") && record.get("position").and_then(|position| position.get("position")).and_then(Js::as_str) == Some(ACTOR_TYPE)
+    };
+    let by_id = matches!(position.get("fieldIds"), Some(Js::Obj(ids)) if ids.values().any(|id| id.as_str() == Some(ACTOR)));
+    named("properties").is_some_and(|property| !is_offered(property)) || named("edges").is_some() || by_id
+}
+
+/// `arrival` with `Actor` written into its landing's fields, and only what
+/// listen-fire wrote: a landing's own `Actor` is the module's to declare, and
+/// from a module that declared none it is just text a body passed through, which
+/// a filter must not trust as who acted. One whose lookup failed writes what it
+/// has and names `Actor` unread, so a filter reading it lands as `Arrival Not
+/// Judged` rather than as a non match, and a listen with no such filter still
+/// fires.
 async fn with_actor<R: Reader>(reader: &R, source: &ActorSource<'_>, mut arrival: ArrivalIn, needs_lookup: bool) -> ArrivalIn {
-    let Some(named) = arrival.actor.clone().filter(|_| arrival.landing.is_some()) else { return arrival };
-    let record_type = arrival.landing.as_ref().and_then(|landing| landing.get("recordType")).and_then(Js::as_str).unwrap_or_default();
-    if kept_by_module(source.external, record_type) {
+    let Some(landing) = arrival.landing.as_mut() else { return arrival };
+    let record_type = landing.get("recordType").and_then(Js::as_str).unwrap_or_default().to_string();
+    if reader.declares_own_actor(source.external, source.install, &record_type) {
         return arrival;
     }
+    if let Js::Obj(landing) = landing {
+        if let Some(Js::Obj(held)) = landing.get_mut("fields") {
+            held.shift_remove(ACTOR);
+        }
+    }
+    let Some(named) = arrival.actor.clone() else { return arrival };
     let mut identity = named.clone();
     let mut unread = false;
     if needs_lookup && is_opaque(&named) {
@@ -300,44 +328,45 @@ mod tests {
     fn a_module_reporting_who_acted_offers_actor_on_each_landing_type_and_nowhere_else() {
         let (entries, descriptors) = world();
         for listed in [&["getActorCandidates"][..], &["extractActor"][..]] {
-            let (reached, offered) = offered_to("offers", &entries, &descriptors, listed);
+            let Offered { reached, descriptors: offered, kept } = offered_to(&entries, &descriptors, listed);
             assert_eq!(reached, vec![reached_entry()]);
             assert_eq!(own_fields(&offered["m"]), ["Text", "Actor"]);
             assert_eq!(own_fields(&offered["r"]), ["Actor"]);
             assert_eq!(own_fields(&offered["o"]), Vec::<String>::new());
             assert_eq!(offered.get(ACTOR_TYPE), Some(&descriptor()));
+            assert!(kept.is_empty());
         }
     }
 
     #[test]
     fn a_module_reporting_nobody_is_left_as_it_described_itself() {
         let (entries, descriptors) = world();
-        let (reached, offered) = offered_to("reports-nobody", &entries, &descriptors, &["getFieldValue"]);
-        assert_eq!((reached, offered), (Vec::new(), descriptors));
+        let Offered { reached, descriptors: offered, kept } = offered_to(&entries, &descriptors, &["getFieldValue"]);
+        assert_eq!((reached, offered, kept), (Vec::new(), descriptors, Vec::new()));
     }
 
-    fn offered_to(adapter: &str, entries: &[Js], descriptors: &IndexMap<String, Js>, listed: &[&str]) -> (Vec<Js>, IndexMap<String, Js>) {
-        with_actor_descriptors(&Introspection { adapter, entries, descriptors, methods: &methods(listed) })
+    fn offered_to(entries: &[Js], descriptors: &IndexMap<String, Js>, listed: &[&str]) -> Offered {
+        with_actor_descriptors(&Introspection { entries, descriptors, methods: &methods(listed) })
     }
 
     #[test]
     fn a_landing_type_with_its_own_actor_keeps_it_and_is_offered_nothing() {
         let (entries, mut descriptors) = world();
         descriptors.insert("r".into(), js(r#"{"typeId":"r","displayName":"Reply","fields":[{"fieldId":"a","displayName":"Actor","kind":"string"}],"references":[]}"#));
-        let (_, offered) = offered_to("own-landing", &entries, &descriptors, &["extractActor"]);
+        let Offered { descriptors: offered, kept, .. } = offered_to(&entries, &descriptors, &["extractActor"]);
         assert_eq!(own_fields(&offered["r"]), ["Actor"], "only the module's own");
         assert_eq!(offered["r"], descriptors["r"]);
         assert_eq!(own_fields(&offered["m"]), ["Text", "Actor"], "a type that did not declare one is still offered it");
-        assert!(kept_by_module("own-landing", "r") && !kept_by_module("own-landing", "m"));
+        assert_eq!(kept, ["Reply"]);
     }
 
     #[test]
     fn a_field_named_actor_on_a_type_nothing_lands_on_does_not_stop_the_offer_elsewhere() {
         let (entries, mut descriptors) = world();
         descriptors.insert("o".into(), js(r#"{"typeId":"o","displayName":"Other","fields":[{"fieldId":"Actor","displayName":"Actor","kind":"string"}],"references":[]}"#));
-        let (_, offered) = offered_to("own-elsewhere", &entries, &descriptors, &["extractActor"]);
+        let Offered { descriptors: offered, kept, .. } = offered_to(&entries, &descriptors, &["extractActor"]);
         assert_eq!(own_fields(&offered["m"]), ["Text", "Actor"]);
-        assert!(!kept_by_module("own-elsewhere", "o"));
+        assert!(kept.is_empty());
     }
 
     #[test]
@@ -345,11 +374,36 @@ mod tests {
         let (mut entries, mut descriptors) = world();
         entries.push(js(r#"{"typeId":"Actor","displayName":"Actor","readable":true,"writable":false}"#));
         descriptors.insert("Actor".into(), js(r#"{"typeId":"Actor","displayName":"Actor","fields":[],"references":[]}"#));
-        let (reached, offered) = offered_to("own-type", &entries, &descriptors, &["extractActor"]);
+        let Offered { reached, descriptors: offered, .. } = offered_to(&entries, &descriptors, &["extractActor"]);
         assert_eq!(offered["Actor"], descriptors["Actor"], "the module's type is as it described it");
         assert_eq!(offered.get(ACTOR_TYPE), Some(&descriptor()));
         assert_ne!(ACTOR_TYPE, ACTOR);
         assert_eq!(reached, vec![reached_entry()]);
+    }
+
+    fn described(positions: &str) -> crate::catalog::Described {
+        let schema = js(&format!(r#"{{"positions":{positions}}}"#));
+        crate::catalog::Described { entries: Vec::new(), described: schema.clone(), chains: Vec::new(), schema, position_options: Default::default() }
+    }
+
+    const OFFERED: &str = r#"{"kind":"maybeAbsent","of":{"kind":"record","position":{"kind":"position","position":"ListenFireActor"}}}"#;
+
+    #[test]
+    fn a_landing_declares_its_own_actor_when_its_described_position_holds_one_that_is_not_offered() {
+        let schemas: ConnectionSchemas = [
+            ("own".to_string(), described(r#"{"Message":{"properties":{"Actor":"text"},"edges":{}},"Reply":{"properties":{"Text":"text"},"edges":{"Actor":{}}},"Note":{"properties":{"Owner":"text"},"edges":{},"fieldIds":{"Owner":"Actor"}}}"#)),
+            ("offered".to_string(), described(&format!(r#"{{"Message":{{"properties":{{"Actor":{OFFERED}}},"edges":{{}}}}}}"#))),
+        ]
+        .into_iter()
+        .collect();
+        let declares = |connection: Option<&str>, record_type: &str| declares_own_actor(&schemas, connection, record_type);
+        assert!(declares(Some("own"), "Message"), "a field");
+        assert!(declares(Some("own"), "Reply"), "an edge");
+        assert!(declares(Some("own"), "Note"), "a field of another name whose id is Actor");
+        assert!(!declares(Some("offered"), "Message"), "what listen-fire offered is not the module's");
+        assert!(!declares(Some("own"), "Unlisted"), "a landing nothing described declares none");
+        assert!(declares(None, "Message"), "a delivery to the install: any connection's counts");
+        assert!(!declares(Some("elsewhere"), "Unlisted"));
     }
 
     /// The table in docs/contracts/actor-field.md, identity in and fields out.

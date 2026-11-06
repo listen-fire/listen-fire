@@ -22,6 +22,7 @@ process.env.LF_SERVE_MODULE ??= join(REPO, 'apps/cli/node_modules/.bin/serve-mod
 interface Config {
   lists?: string[];
   ownActorField?: boolean;
+  distinctTypeIds?: boolean;
   candidates?: Array<{ identity: Record<string, unknown>; source: string }>;
   candidatesFail?: boolean;
 }
@@ -182,6 +183,45 @@ test("a module's own Actor field reads as itself at the door: nothing is written
   } finally {
     await serving.stop();
   }
+});
+
+test("a module's own Actor field is kept when its type id is not its display name, as a real module's is", async () => {
+  const dir = peopleProject(`${listening('mine', 'm.Actor == "Ann\'s column"', 'm.Actor')}`, { lists: ['getActorCandidates'], ownActorField: true, distinctTypeIds: true });
+  const serving = await served(dir);
+  try {
+    await wake(serving, [
+      { ...message('m1', { identifier: 'U1', scheme: 'email', email: 'a@x.com', proven: true }), landing: { recordId: 'm1', recordType: 'Message', fields: { Id: 'm1', Text: 'hi', Actor: "Ann's column" } } },
+    ]);
+    await ran(serving, 'mine');
+    assert.deepEqual(returnedBy(dir, 'mine'), ["Ann's column"]);
+  } finally {
+    await serving.stop();
+  }
+});
+
+test('an Actor the body passed through is not who acted: an arrival naming nobody has none, and listen-fire writes over it when it names someone', async () => {
+  const dir = peopleProject(`${listening('byBoss', 'm.Actor?.Email == "boss@x.com"', 'm.Id')}\n${listening('every', null, 'm.Actor?.Email')}`);
+  const serving = await served(dir);
+  try {
+    const passed = { Email: 'boss@x.com', Proven: true };
+    const carrying = (id: string, actor?: Record<string, unknown>) => ({ ...message(id, actor), landing: { recordId: id, recordType: 'Message', fields: { Id: id, Text: 'hi', Actor: passed } } });
+    await wake(serving, [carrying('m1'), carrying('m2', { identifier: 'U2', scheme: 'email', email: 'eve@x.com' })]);
+    await ran(serving, 'every', 2);
+    await sleep(LANDED_LONG_ENOUGH);
+    assert.equal(completed(serving, 'byBoss'), 0, serving.lines.join('\n'));
+    assert.deepEqual([...returnedBy(dir, 'every')].sort((a, b) => String(a).localeCompare(String(b))), ['eve@x.com', null]);
+  } finally {
+    await serving.stop();
+  }
+});
+
+test('an event file is given Actor as a delivery is, before it is judged', () => {
+  const dir = peopleProject(listening('byEmail', 'm.Actor?.Email == "a@x.com"', 'm.Actor?.Email'));
+  const file = join(dir, 'event.json');
+  writeFileSync(file, JSON.stringify({ external: 'people', event: { arrivals: [message('m1', { identifier: 'U1', scheme: 'email', email: 'A@X.com' }), message('m2', { identifier: 'U2', scheme: 'email', email: 'b@x.com' })] } }));
+  const fired = lf(dir, 'run', '--event', file);
+  assert.equal(fired.code, 0, fired.out);
+  assert.deepEqual(returnedBy(dir, 'byEmail'), ['a@x.com']);
 });
 
 test('a domain that only starts the same does not fire a filter on Domain', async () => {

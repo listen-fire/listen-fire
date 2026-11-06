@@ -780,7 +780,7 @@ fn project_refined<W>(input: &Refining<'_, '_, W>, refined: &Refined) -> Result<
         descriptors.insert(target.clone(), descriptor.clone());
     }
     // A walked edge's landing is described only here, so what lands on it is offered here.
-    let (reached, descriptors) = crate::actor::with_actor_descriptors(&crate::actor::Introspection { adapter: input.adapter, entries: &entries, descriptors: &descriptors, methods: input.methods });
+    let crate::actor::Offered { reached, descriptors, .. } = crate::actor::with_actor_descriptors(&crate::actor::Introspection { entries: &entries, descriptors: &descriptors, methods: input.methods });
     let projected = crate::schema::instance_schema_from_descriptors(&crate::schema::ProjectionInput {
         adapter_type: input.adapter,
         entries: &entries,

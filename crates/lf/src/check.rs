@@ -457,8 +457,9 @@ pub(crate) async fn describe_as(running: &RunningExternal, credentials: &Credent
             return Err(format!("Remote adapter \"{name}\" declares {refusal}"));
         }
     }
-    let (reached, offered) = crate::actor::with_actor_descriptors(&crate::actor::Introspection { adapter: name, entries: &entry_list, descriptors: &descriptors, methods: &running.methods });
-    let schema = describe_external_schema(name, &Introspected { entries: &entry_list, reached: &reached, descriptors: &offered });
+    let offered = crate::actor::with_actor_descriptors(&crate::actor::Introspection { entries: &entry_list, descriptors: &descriptors, methods: &running.methods });
+    offered.say_kept(name);
+    let schema = describe_external_schema(name, &Introspected { entries: &entry_list, reached: &offered.reached, descriptors: &offered.descriptors });
     Ok((entry_list, schema))
 }
 

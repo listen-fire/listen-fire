@@ -143,6 +143,12 @@ pub trait Reader {
     async fn actor_candidates(&self, external: &str, install: Option<&Credential>, event: &Js) -> Result<Option<Js>, String>;
     /// Whether a lookup of who acted could be read by anything (crate::actor::needs_lookup).
     fn needs_actor_lookup(&self) -> bool;
+    /// Whether the module's landing of `record_type`, on the connection `install`
+    /// names, declares an `Actor` of its own, so listen-fire writes none there.
+    /// A reader with no described schemas declares none.
+    fn declares_own_actor(&self, _external: &str, _install: Option<&Credential>, _record_type: &str) -> bool {
+        false
+    }
 }
 
 /// Where a verified event goes.
@@ -743,6 +749,11 @@ impl Reader for SessionReader<'_> {
 
     fn needs_actor_lookup(&self) -> bool {
         crate::actor::needs_lookup(&self.session.file_set().files)
+    }
+
+    fn declares_own_actor(&self, external: &str, install: Option<&Credential>, record_type: &str) -> bool {
+        let set = self.session.file_set();
+        set.schemas_of(external).is_some_and(|schemas| crate::actor::declares_own_actor(schemas, install.map(|install| install.name.as_str()), record_type))
     }
 
     async fn preprocess(&self, external: &str, install: &Credential, raw: &Js, checkpoint: Option<&Js>) -> Result<Extraction, String> {
