@@ -19,11 +19,11 @@ import { accepted, inboundRequest, refused, type InboundRequest } from 'module-k
 import type { Arrival } from 'engine-contracts';
 import type { InboundCheck, InboundCheckInput } from 'movement-engine/public/adapter';
 
-import { emailActorOf, normalisedBody, normaliseInboundEmailPayload } from '../adapter';
+import { emailActorOf, forwardedThrough, normalisedBody, normaliseInboundEmailPayload } from '../adapter';
 import { inboxKeyOf } from '../address';
 import { DEFAULT_API_BASE_URL } from '../resend';
 import { fetchResendEmailPayload } from '../resend_inbound';
-import { EMAILS_EDGE, EMAIL_KEY_FIELD } from '../types';
+import { EMAILS_EDGE, EMAIL_FORWARDED_THROUGH_FIELD, EMAIL_KEY_FIELD } from '../types';
 import { RESEND_RECEIVED_EVENT_TYPE, mailgunSignatureVerifies, readMailgunMessage, readResendEnvelope, withoutMailgunSigning } from './mail';
 import { verifySvixSignature } from './svix';
 
@@ -47,7 +47,7 @@ function emailArrival(payload: Record<string, unknown>, deliveryId?: string): Ar
     edge: EMAILS_EDGE,
     // Both providers redeliver on anything but a 2xx: one email, one run.
     identity: messageId ?? deliveryId ?? randomUUID(),
-    landing: { recordType: 'Email', fields: { ...payload, content: normalisedBody(payload), [EMAIL_KEY_FIELD]: inboxKeyOf(recipient) } },
+    landing: { recordType: 'Email', fields: { ...payload, content: normalisedBody(payload), [EMAIL_FORWARDED_THROUGH_FIELD]: forwardedThrough(payload), [EMAIL_KEY_FIELD]: inboxKeyOf(recipient) } },
     ...(actor !== undefined ? { actor } : {}),
   };
 }

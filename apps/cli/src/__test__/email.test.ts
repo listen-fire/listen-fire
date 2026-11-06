@@ -45,6 +45,8 @@ interface Said {
   sender: string;
   subject: string;
   body: string;
+  /** The inbox that forwarded it, as the header the forwarding mailbox adds. */
+  through?: string;
 }
 
 const HELLO: Said = { sender: 'ada@example.com', subject: 'Hello', body: 'Hi' };
@@ -54,7 +56,7 @@ function sentTo(dir: string, recipient: string, id = recipient, said: Said = HEL
   const timestamp = String(Math.floor(Date.now() / 1000));
   const token = `tok-${id}`;
   const signature = createHmac('sha256', SIGNING_KEY).update(timestamp + token).digest('hex');
-  const form = new URLSearchParams({ sender: said.sender, recipient, To: recipient, subject: said.subject, 'body-plain': said.body, 'Message-Id': `<m-${id}>`, timestamp, token, signature });
+  const form = new URLSearchParams({ sender: said.sender, recipient, To: recipient, subject: said.subject, 'body-plain': said.body, 'Message-Id': `<m-${id}>`, timestamp, token, signature, ...(said.through !== undefined ? { 'X-Forwarded-For': said.through } : {}) });
   const file = join(dir, 'mail.form');
   writeFileSync(file, form.toString());
   return lf(dir, 'run', '--webhook', 'email', '--body', file, '--header', 'content-type:application/x-www-form-urlencoded');
@@ -176,4 +178,33 @@ test("a message's record carries only the email's own fields: Mailgun's signing 
   const keptForm = new URLSearchParams(Buffer.from(kept.body, 'base64').toString('utf8'));
   assert.equal(keptForm.get('subject'), 'Hello');
   for (const signing of ['token', 'timestamp', 'signature']) assert.equal(keptForm.has(signing), false, `the kept body holds ${signing}`);
+});
+
+test("a message says which inboxes forwarded it, and who sent it, to the run it fires", async () => {
+  const listens = [
+    'import { email } from adapters',
+    '',
+    'inbox = connect email',
+    '',
+    'function seen(m: <inbox-[:Emails]->>) { return { through: m.`Forwarded Through`, sender: m.Actor?.Email } }',
+    '',
+    'listen to inbox-[e:Emails WHERE e.Key == "deals"]-> fire seen',
+    '',
+  ].join('\n');
+  const dir = await intake(listens);
+  const check = lf(dir, 'check');
+  assert.equal(check.code, 0, check.out);
+
+  const returned = (out: string): { through: string[]; sender: string } => {
+    const runId = /run ([0-9a-f-]{36})/.exec(out)?.[1];
+    assert.ok(runId, out);
+    const shown = lf(dir, 'runs', 'show', runId, '--json');
+    return (JSON.parse(shown.out) as { run: { returned: { value: { through: string[]; sender: string } } } }).run.returned.value;
+  };
+  const forwarded = sentTo(dir, 'inbox+deals@acme.test', 'forwarded', { ...HELLO, sender: 'Ada <Ada@Example.com>', through: 'dealflow@portfolio.example' });
+  assert.equal(forwarded.code, 0, forwarded.out);
+  assert.deepEqual(returned(forwarded.out), { through: ['dealflow@portfolio.example'], sender: 'ada@example.com' });
+  const direct = sentTo(dir, 'inbox+deals@acme.test', 'direct');
+  assert.equal(direct.code, 0, direct.out);
+  assert.deepEqual(returned(direct.out), { through: [], sender: 'ada@example.com' });
 });

@@ -151,6 +151,29 @@ describe('@lf/email checks its own inbound', () => {
     expect(forwarded.arrival?.actor).toEqual({ identifier: 'ada@example.com', scheme: 'email', adapterType: 'email', email: 'ada@example.com', label: 'ada@example.com' });
   });
 
+  it('a message says which inboxes forwarded it, as a list of addresses: none when no header names one', async () => {
+    const { adapter } = load({ resendApiKey: 're_1' });
+    const landed = async (input: InboundCheckInput) => {
+      const answer = await adapter.checkInbound!(input);
+      const arrival = answer.outcome === 'accepted' ? answer.arrivals?.[0] : undefined;
+      if (arrival === undefined || 'gone' in arrival) throw new Error('no email arrived');
+      return arrival.landing.fields;
+    };
+    const forwarded = await landed(request({ body: mailgunForm(MAILGUN_KEY, { 'X-Forwarded-For': 'Dealflow@Portfolio.example', 'Delivered-To': 'dealflow@portfolio.example' }), secret: MAILGUN_KEY }));
+    expect(forwarded['forwardedThrough']).toEqual(['dealflow@portfolio.example']);
+    expect(forwarded['sender']).toBe('ada@example.com');
+    const direct = await landed(request({ body: mailgunForm(), secret: MAILGUN_KEY }));
+    expect(direct['forwardedThrough']).toEqual([]);
+    const body = JSON.stringify({ type: 'email.received', data: { email_id: 'em_1', from: 'Ada <ada@example.com>', to: ['in+k@lf.test'] } });
+    expect((await landed(request({ body, headers: resendDelivery(body), secret: RESEND_SECRET })))['forwardedThrough']).toEqual([]);
+  });
+
+  it('describes Forwarded Through as a list of text', async () => {
+    const { adapter } = load();
+    const email = await adapter.describe('Email');
+    expect(email?.fields.find((field) => field.displayName === 'Forwarded Through')).toMatchObject({ fieldId: 'forwardedThrough', kind: 'string', cardinality: 'many', writable: false });
+  });
+
   it('refuses a Resend notification with a bad or missing signature', async () => {
     const { adapter, calls } = load({ resendApiKey: 're_1' });
     const body = JSON.stringify({ type: 'email.received', data: { email_id: 'em_1', from: 'ada@example.com' } });

@@ -41,6 +41,9 @@ export const EMAIL_KEY_FIELD = 'Key';
  *  nothing at all for the box itself. */
 export const EMAIL_KEY_PATTERN = "^[a-z0-9.!#$%&'*+/=?^_`{|}~-]*$";
 
+/** The landing field naming the inboxes a message was forwarded through. */
+export const EMAIL_FORWARDED_THROUGH_FIELD = 'forwardedThrough';
+
 /** Edge id on `email:message` that fans out one position per attachment. */
 export const EMAIL_ATTACHMENTS_FIELD = 'attachments';
 

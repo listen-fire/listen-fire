@@ -43,6 +43,7 @@ import {
   EMAILS_EDGE,
   EMAIL_ADAPTER_NAMES,
   EMAIL_ADAPTER_TYPE,
+  EMAIL_FORWARDED_THROUGH_FIELD,
   EMAIL_KEY_FIELD,
   EMAIL_KEY_PATTERN,
   EMAIL_ATTACHMENTS_FIELD,
@@ -204,6 +205,15 @@ export class EmailAdapter extends BaseAdapter implements Adapter {
           { fieldId: 'recipient', displayName: 'To', kind: 'string', writable: false, required: false, description: 'The primary recipient the message was routed on. Usually NOT helpful: for forwarded mail it shows the internal address the user forwarded it to (e.g. their Listen-Fire forwarding address), not the true recipient. Prefer `From` for who the message is about.' },
           { fieldId: 'bodyHtml', displayName: 'HTML Body', kind: 'string', writable: false, required: false, description: 'The HTML body, when present.' },
           { fieldId: 'bodyText', displayName: 'Plain Body', kind: 'string', writable: false, required: false, description: 'The plain-text body, when present.' },
+          {
+            fieldId: EMAIL_FORWARDED_THROUGH_FIELD,
+            displayName: 'Forwarded Through',
+            kind: 'string',
+            cardinality: 'many',
+            writable: false,
+            required: false,
+            description: 'The inboxes that forwarded the message on, from its forwarding headers (`X-Forwarded-For`, `Delivered-To` and the like), lower case. Empty when none did; the address it was finally sent to is not one.',
+          },
           // `content` is a derived field — the canonical normalised body
           // (text fallback derived from HTML when only HTML is present, or
           // when the plain part is itself markup — see `isMarkupText`).
@@ -633,6 +643,31 @@ function parseHeaderTuples(value: unknown): Array<[string, string]> {
  * stay in lock-step.
  */
 function parseIntermediateRecipients(payload: Record<string, unknown>): string[] {
+  const { out, push } = collectingAddresses();
+  pushForwardingHeaders(payload, push);
+  // The TG-side `EmailPayload` reuses `recipient` for the terminal hop;
+  // including it in the intermediate-candidate list lets explicit
+  // forwarding-inbox setups (no `Delivered-To` header preserved) still
+  // resolve via the service-account path. The lookup still requires
+  // `is_service_email = true` so the routing-only `<local>+<key>@<domain>`
+  // terminal address never authenticates.
+  push((payload as Partial<EmailPayload>).recipient);
+  return out;
+}
+
+/**
+ * The inboxes a message was forwarded through: what its forwarding headers
+ * name, in `parseIntermediateRecipients`'s order, and never the address it
+ * was finally sent to, which is every message's own inbox.
+ */
+export function forwardedThrough(payload: Record<string, unknown>): string[] {
+  const { out, push } = collectingAddresses();
+  pushForwardingHeaders(payload, push);
+  return out;
+}
+
+/** Bare addresses, deduped, in the order they are pushed. */
+function collectingAddresses(): { out: string[]; push: (raw: string | undefined | null) => void } {
   const out: string[] = [];
   const seen = new Set<string>();
   const push = (raw: string | undefined | null) => {
@@ -645,6 +680,10 @@ function parseIntermediateRecipients(payload: Record<string, unknown>): string[]
       }
     }
   };
+  return { out, push };
+}
+
+function pushForwardingHeaders(payload: Record<string, unknown>, push: (raw: string | undefined | null) => void): void {
   // Order mirrors the legacy `mailgun.adapter.ts:getSenderEmails`:
   //   X-Forwarded-For → X-BeenThere → X-Gm-Original-To →
   //   X-Google-Original-To → X-Original-To → Delivered-To.
@@ -656,13 +695,4 @@ function parseIntermediateRecipients(payload: Record<string, unknown>): string[]
   push(readHeader(payload, 'X-Google-Original-To'));
   push(readHeader(payload, 'X-Original-To'));
   push(readHeader(payload, 'Delivered-To'));
-  // The TG-side `EmailPayload` reuses `recipient` for the terminal hop;
-  // including it in the intermediate-candidate list lets explicit
-  // forwarding-inbox setups (no `Delivered-To` header preserved) still
-  // resolve via the service-account path. The lookup still requires
-  // `is_service_email = true` so the routing-only `<local>+<key>@<domain>`
-  // terminal address never authenticates.
-  const recipientField = (payload as Partial<EmailPayload>).recipient;
-  push(recipientField);
-  return out;
 }
