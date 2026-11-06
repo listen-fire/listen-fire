@@ -335,6 +335,25 @@ describe('@lf/slack', () => {
       expect(await arrived('on', { user: 'U1' })).toHaveLength(1);
     });
 
+    it('on, drops the app\'s own reaction too, so a Reactions listen whose run reacts does not fire itself', async () => {
+      const reaction = (user: string) => ({ type: 'reaction_added', user, reaction: 'eyes', item: { type: 'message', channel: 'C1', ts: '1700.1' }, event_ts: '1700000000.000200' });
+      const reacted = async (setting: string | undefined, user: string) => {
+        const api = await slackApi({ C1: 'deals' });
+        try {
+          const { adapter } = load({
+            credential: credential({ accessToken: 'xoxb-own-reaction', baseUrl: api.baseUrl }),
+            constructionArgs: setting === undefined ? {} : { drop_own_messages: setting },
+          });
+          return (await adapter.preprocessInbound?.({ raw: { type: 'event_callback', event: reaction(user) } }))?.arrivals ?? [];
+        } finally {
+          await api.close();
+        }
+      };
+      expect(await reacted('on', 'UBOT')).toEqual([]);
+      expect(await reacted('on', 'U2')).toHaveLength(1);
+      expect(await reacted(undefined, 'UBOT')).toHaveLength(1);
+    });
+
     it('unset, or anything but "on", delivers the app\'s own message as before', async () => {
       expect(await arrived(undefined, { user: 'UBOT' })).toHaveLength(1);
       expect(await arrived('off', { user: 'UBOT' })).toHaveLength(1);

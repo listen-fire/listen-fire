@@ -490,8 +490,8 @@ async function messageReactionArrival(input: { event: z.infer<typeof slackInnerE
   };
 }
 
-/** Whether the app itself posted `event`: as its bot user, or as its bot (a
- *  `bot_message` names no user). When Slack cannot say who the app is, nothing
+/** Whether the app itself posted or reacted in `event`: as its bot user, or as
+ *  its bot (a `bot_message` names no user). When Slack cannot say who the app is, nothing
  *  is dropped: a message that cannot be identified is a message. */
 async function postedByApp(event: z.infer<typeof slackInnerEventSchema>, botUserId: string | null, lookups: SlackArrivalLookups): Promise<boolean> {
   const botId = await lookups.botId();
@@ -508,7 +508,12 @@ async function postedByApp(event: z.infer<typeof slackInnerEventSchema>, botUser
  *  message that mentions the app comes twice, as a `message` and an
  *  `app_mention`, under the one identity, so the second is a repeat. */
 async function eventArrivals(event: z.infer<typeof slackInnerEventSchema>, lookups: SlackArrivalLookups): Promise<Arrival[]> {
-  if (event.type === 'reaction_added') return reactionArrival(event, lookups);
+  if (event.type === 'reaction_added') {
+    // The app's own reaction is its own act, as its post is: a listen on
+    // Reactions whose run reacts would otherwise fire itself.
+    if (lookups.dropOwnMessages && (await postedByApp(event, await lookups.botUserId(), lookups))) return [];
+    return reactionArrival(event, lookups);
+  }
   if (!isSlackMessageEventType(event.type) || event.channel === undefined) return [];
   const channel = event.channel;
   if (event.subtype === 'message_deleted') {
