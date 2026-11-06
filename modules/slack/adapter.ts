@@ -1829,9 +1829,7 @@ export class SlackAdapter extends BaseAdapter {
   // candidate: the inbound actor's email, resolved at runtime via
   // `users.info` (the Slack bot token carries the `users:read.email` scope
   // — see the connector install scopes). No persistence — no `user_slack`
-  // mapping table, no stored actors (ruling 2026-06-01). The call is
-  // failure-resilient: any API error / missing scope / missing email
-  // swallows to null and yields an empty candidate list.
+  // mapping table, no stored actors (ruling 2026-06-01).
   //
   // External-system API enrichment (the `users.info` round-trip) is
   // explicitly allowed in `getActorCandidates`; Listen-Fire DB access is NOT.
@@ -1839,8 +1837,8 @@ export class SlackAdapter extends BaseAdapter {
   // (`trigger.config.fallbackToCreatorIfActorUnregistered`), and the
   // null-on-no-match rejection all live in `resolveActingUser`.
   //
-  // A genuine miss (no actor id, no client, no email on the profile)
-  // swallows to an empty candidate list. A `users.info` call that FAILS
+  // A genuine miss (no actor id, no email on the profile) swallows to an empty
+  // candidate list. A lookup that cannot be made (no client) or that FAILS
   // (missing scope, rate limit, network/outage) is not swallowed — it
   // throws out of `resolveActorEmail` uncaught, so this method rejects too.
   // That lets `consultActorGate` tell "actor unregistered" apart from
@@ -1874,12 +1872,12 @@ export class SlackAdapter extends BaseAdapter {
    * this call at dispatch and does NOT persist the result.
    *
    * Two different kinds of "no email" get treated differently:
-   *   - GENUINE MISSES return null: no actor on the event, no working
-   *     Slack API client (missing/malformed credential — `getSlackApiClient`
-   *     never throws), or a profile with no email set. These fall through
-   *     the resolution chain the same as an unregistered sender.
-   *   - A `users.info` call that itself FAILS (missing scope, rate limit,
-   *     network error, Slack outage) is not a miss — we don't know whether
+   *   - GENUINE MISSES return null: no actor on the event, or a profile with
+   *     no email set. These fall through the resolution chain the same as an
+   *     unregistered sender.
+   *   - A lookup that cannot be made (no working Slack API client: a
+   *     missing/malformed credential) or that itself FAILS (missing scope,
+   *     rate limit, network error, Slack outage) is not a miss — we don't know whether
    *     the actor is registered, so it THROWS. `getActorCandidates` has no
    *     catch around this call and `resolveActingUser` has no catch around
    *     `getCandidates()`, so the throw propagates to `consultActorGate`'s
@@ -1893,11 +1891,15 @@ export class SlackAdapter extends BaseAdapter {
     if (!slackUserId) return null;
 
     const client = await this.getSlackApiClient();
-    if (!client) return null;
+    // Nothing was asked, so nobody is not the answer: a filter reading the
+    // address must land as undecided, which only a throw tells the host.
+    if (!client) throw new Error('slack: who acted could not be looked up, the connection has no usable Slack client');
 
-    let info: Awaited<ReturnType<typeof client.api.users.info>>;
+    // The door asks this before it keeps and acknowledges the delivery, so it is
+    // bounded (api_client.ts): a rate limited call fails at once.
+    let info: Awaited<ReturnType<typeof client.lookups.users.info>>;
     try {
-      info = await client.api.users.info({ user: slackUserId });
+      info = await client.lookups.users.info({ user: slackUserId });
     } catch (err) {
       this.sources.log.warn('[SlackAdapter] users.info actor-email lookup failed', {
         teamId: this.sources.tenant,

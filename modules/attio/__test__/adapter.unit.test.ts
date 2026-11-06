@@ -918,6 +918,7 @@ describe('AttioAdapter — a record’s Changes', () => {
       // The workspace member a change's actor names, for the run's acting user.
       fetch: async ({ route }: { route: string }) => {
         if (route === '/v2/workspace_members/m-1') return { data: { email_address: 'Ada@Fund.example' } };
+        if (route === '/v2/workspace_members/m-3') return { data: { email_address: null } };
         throw Object.assign(new Error('Not found'), { status: 404 });
       },
     } as unknown as Awaited<ReturnType<typeof import('../api_client').getAttioClient>>;
@@ -1009,6 +1010,19 @@ describe('AttioAdapter — a record’s Changes', () => {
     const token = await fired({ type: 'api-token', id: 'm-1' });
     expect(token.arrival.actor).toEqual({ identifier: 'm-1', scheme: 'opaque', adapterType: 'attio', label: 'm-1', proven: true });
     expect(await adapter.getActorCandidates({ event: token.event })).toEqual([]);
+  });
+
+  it('a workspace member whose lookup fails is not a member with no email: the lookup throws, and a member with no email gives none', async () => {
+    const adapter = makeChangesAdapter('team-changes-lookup-fails', { 'deal-1': deal });
+    const fired = async (actor: unknown) => {
+      const raw = { webhook_id: 'wh-1', events: [{ event_type: 'record.updated', id: { workspace_id: 'w', object_id: 'deals-uuid', record_id: 'deal-1', attribute_id: 'stage-attr' }, actor }] };
+      const [arrival] = (await adapter.preprocessInbound({ raw })).arrivals;
+      if (arrival === undefined) throw new Error('no change arrived');
+      return arrivalTriggerOf({ pipelineInputId: 'crm:stage', adapterType: 'attio', arrival, now: new Date() });
+    };
+    // m-2 is not found by the fake: Attio did not answer, so who they are is unknown.
+    await expect(adapter.getActorCandidates({ event: await fired({ type: 'workspace-member', id: 'm-2' }) })).rejects.toThrow('Not found');
+    expect(await adapter.getActorCandidates({ event: await fired({ type: 'workspace-member', id: 'm-3' }) })).toEqual([]);
   });
 
   it('a redelivered change names the same identity; the attribute’s next value is another change', async () => {

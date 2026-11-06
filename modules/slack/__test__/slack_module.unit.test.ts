@@ -657,6 +657,47 @@ describe('@lf/slack', () => {
     expect((await adapter.preprocessInbound?.({ raw: { type: 'event_callback', event: root } }))?.arrivals?.map((a) => a.edge)).toEqual(['Messages']);
   });
 
+  describe('who acted, looked up at the door', () => {
+    const asked = (adapter: ReturnType<typeof load>['adapter']) => {
+      const arrival = {
+        edge: 'Messages',
+        key: 'C1',
+        identity: 'C1:1.1',
+        landing: { recordId: 'C1:1.1', recordType: 'Message', fields: {} },
+        actor: { identifier: 'U1', scheme: 'opaque' as const, adapterType: 'slack', label: 'U1' },
+      };
+      return adapter.getActorCandidates?.({ event: arrivalTriggerOf({ pipelineInputId: 'chat:answer', adapterType: 'slack', arrival, now: new Date() }) });
+    };
+
+    it('a rate limited users.info fails at once, never holding the delivery for Slack\'s retry-after', async () => {
+      const api = await slackApi({}, new Map([['users.info', 'limited']]));
+      try {
+        const { adapter } = load({ credential: credential({ accessToken: 'xoxb-limited', baseUrl: api.baseUrl }) });
+        const started = Date.now();
+        await expect(asked(adapter)).rejects.toThrow();
+        expect(Date.now() - started).toBeLessThan(1000);
+        expect(api.methods).toEqual(['users.info']);
+      } finally {
+        await api.close();
+      }
+    });
+
+    it('with no client to ask, it throws: nothing was looked up, so who acted is unknown rather than nobody', async () => {
+      const { adapter } = load({ credential: credential({}) });
+      await expect(asked(adapter)).rejects.toThrow();
+    });
+
+    it('a member whose profile has no email is a genuine miss: no candidate', async () => {
+      const api = await slackApi({});
+      try {
+        const { adapter } = load({ credential: credential({ accessToken: 'xoxb-no-email', baseUrl: api.baseUrl }) });
+        await expect(asked(adapter)).resolves.toEqual([]);
+      } finally {
+        await api.close();
+      }
+    });
+  });
+
   it('the run each arrival fires reads who sent, reacted or pressed as its actor', async () => {
     const { adapter } = load({ credential: credential({}) });
     const message = { type: 'message', channel: 'C1', user: 'U2', text: 'hi', ts: '1700.1' };

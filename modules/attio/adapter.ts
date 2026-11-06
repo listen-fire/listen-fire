@@ -661,8 +661,8 @@ export class AttioAdapter extends BaseAdapter {
   // (the webhook payload carries only `actor: { type, id }`, never an
   // email). No persistence — no `user_attio` mapping table, no stored
   // actors. Only attempted for `workspace-member` actors (api-token /
-  // system actors have no email); failure-resilient — any API error
-  // swallows to null and yields an empty candidate list.
+  // system actors have no email). A lookup that fails is not a member with no
+  // email: it throws, so the host names who acted unknown.
   //
   // External-system API enrichment (the workspace-member fetch) is
   // explicitly allowed in `getActorCandidates`; Listen-Fire DB access is NOT.
@@ -701,10 +701,10 @@ export class AttioAdapter extends BaseAdapter {
    * `system` actors (and our own echoes) have no human email and return
    * null immediately.
    *
-   * Failure-resilient by contract: a missing actor, a non-member actor
-   * type, a missing credential, or any API failure returns null so the
-   * caller falls through the resolution chain rather than throwing into
-   * dispatch. No persistence of the resolved email.
+   * A missing actor, a non-member actor type, or a member with no email is a
+   * genuine miss and returns null. A missing credential or any API failure
+   * throws: a filter on the address must land as undecided, not as a
+   * non-match. No persistence of the resolved email.
    */
   private async resolveActorEmail(
     event: TriggerEvent,
@@ -732,7 +732,7 @@ export class AttioAdapter extends BaseAdapter {
         workspaceMemberId: memberId,
         error: err instanceof Error ? err.message : String(err),
       });
-      return null;
+      throw err;
     }
   }
 
