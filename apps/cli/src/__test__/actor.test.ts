@@ -5,13 +5,14 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { parse, stringify } from 'yaml';
 import { until } from './attio_fixture';
-import { lf, project, served, type Served } from './example';
+import { lf, lfCommand, project, served, type Served } from './example';
 import { HEADER as SLACK_HEADER, deliver, eventCallback, seedSlack, slackWorld } from './slack_world';
 
 const REPO = resolve(__dirname, '../../../..');
@@ -336,4 +337,11 @@ listen to chat-[:Channels]->-[:Messages]-> fire every
   } finally {
     await world.close();
   }
+});
+
+test('a manual run says who called it, and nothing vouches for them', () => {
+  const dir = peopleProject('function f(m: <manual-[:Invocations]->>) {\n  return { email: m.Actor?.Email, name: m.Actor?.Name, proven: m.Actor?.Proven, id: m.Actor?.Id, by: m.`Run by (email)` }\n}\n\nlisten to manual-[m:Invocations]-> fire f\n');
+  const run = spawnSync(...lfCommand(['run', 'f']), { cwd: dir, encoding: 'utf8', env: { ...process.env, NODE_NO_WARNINGS: '1', LF_USER: 'Ann', LF_USER_EMAIL: 'Ann@X.com' } });
+  assert.equal(run.status, 0, `${run.stdout}${run.stderr}`);
+  assert.deepEqual(returnedBy(dir, 'f'), [{ email: 'ann@x.com', name: 'Ann', proven: false, id: 'local:Ann', by: 'Ann@X.com' }]);
 });

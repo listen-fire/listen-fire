@@ -178,6 +178,19 @@ pub fn call(unit: &str, method: &str, args: &Hv) -> Result<Js, String> {
     }
 }
 
+/// Who pressed run, as an identity: nothing vouches for a local name, so it never says `proven`.
+fn caller_identity(user: &Js) -> Js {
+    let principal = user.get("principal");
+    let mut identity = obj! { "identifier" => principal.and_then(|p| p.get("id")).cloned().unwrap_or(Js::Null), "scheme" => Js::str("opaque") };
+    if let Some(email) = user.get("email").and_then(Js::as_str) {
+        identity.insert("email".into(), Js::str(email));
+    }
+    if let Some(name) = principal.and_then(|p| p.get("display")).and_then(Js::as_str) {
+        identity.insert("name".into(), Js::str(name));
+    }
+    Js::Obj(identity)
+}
+
 /// The arrival a manual run is, on `Invocations`: when it was asked for,
 /// by whom, and the text given with it. Each is its own invocation.
 pub fn invocation(fired_at: &str, user: &Js, text: Option<&str>) -> Js {
@@ -190,6 +203,9 @@ pub fn invocation(fired_at: &str, user: &Js, text: Option<&str>) -> Js {
     }
     if let Some(text) = text {
         fields.insert("Text".into(), Js::str(text));
+    }
+    if let Some(caller) = crate::actor::normalised(&caller_identity(user)) {
+        fields.insert(crate::actor::ACTOR.into(), caller);
     }
     let identity = format!("invocation:{}", uuid::Uuid::new_v4());
     Js::Obj(obj! {
