@@ -148,10 +148,10 @@ pub async fn run(project: &Project, address: &str, out: &mut impl Write) -> Resu
     // the query's to say or not. The connect line is the address's own.
     let connect_lines = written.connect.lines().count();
     let of_connect: Vec<&Diagnostic> = analysis.diagnostics.iter().filter(|d| d.span.start.line <= connect_lines).collect();
-    if !of_connect.is_empty() {
-        for diagnostic in of_connect {
-            say_diagnostic(out, diagnostic)?;
-        }
+    for diagnostic in &of_connect {
+        say_diagnostic(out, diagnostic)?;
+    }
+    if of_connect.iter().any(|d| d.is_error()) {
         return Ok(1);
     }
     let Some(walk) = &written.walk else {
@@ -177,10 +177,10 @@ pub async fn run(project: &Project, address: &str, out: &mut impl Write) -> Resu
     // Just past where the connect begins: it sees the connection, and no name further down.
     let at = Loc { line: 1, col: 2 };
     let typed = analysis.type_walk(WalkQuery { at, text: walk, describing: true, zones: &NativeZones }).map_err(|refused| refused.message)?;
-    if !typed.diagnostics.is_empty() {
-        for diagnostic in &typed.diagnostics {
-            say_diagnostic(out, diagnostic)?;
-        }
+    for diagnostic in &typed.diagnostics {
+        say_diagnostic(out, diagnostic)?;
+    }
+    if typed.diagnostics.iter().any(Diagnostic::is_error) {
         return Ok(1);
     }
     match &typed.landing {
