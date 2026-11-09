@@ -15,11 +15,11 @@ describe('standardLibraryTable', () => {
         { name: 'text', type: 'text' },
         { name: 'separator', type: 'text', optional: true },
       ],
-      returns: 'list of text',
+      returns: 'text[]',
       summary: 'text cut into its trimmed, non-empty parts',
     });
     expect(table.find((b) => b.name === 'COALESCE')?.params).toEqual([{ name: 'values', type: 'any', rest: true }]);
-    expect(table.find((b) => b.name === 'URL.HOST')?.returns).toBe('text (or absent)');
+    expect(table.find((b) => b.name === 'URL.HOST')?.returns).toBe('text | null');
   });
 
   it('gives every built-in a summary, and marks the retired ones', () => {
