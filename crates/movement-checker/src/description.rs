@@ -1,8 +1,9 @@
 //! What is at a landing, as a value: the one description every tool reads
-//! (plans/graph-description-2026-11-06/DESIGN.md). Nothing here prints. Each
-//! tool chooses how much to ask for and writes the value out its own way; what
+//! (plans/graph-description-2026-11-06/DESIGN.md). Nothing here lays text
+//! out. Each tool chooses how much to ask for and where each part goes; what
 //! a field's marks are, what an edge can do and what a write along it takes
-//! are decided here, once.
+//! are decided here, once, and so is how one field or one edge is written
+//! (`DescribedField::written`, `DescribedEdge::hop`).
 //!
 //! A landing needs no program: `connection_root` stands on a schema alone, and
 //! each edge's `landing` is where to describe next.
@@ -335,6 +336,43 @@ impl Asked<'_> {
         let cut = fields.len() - shown;
         fields.truncate(shown);
         FieldList { shown: fields, cut }
+    }
+}
+
+impl DescribedField {
+    /// Its name as a program writes it, then its marks: `` `Message Id`!* ``.
+    pub fn marked_name(&self) -> String {
+        let marks: String = self.marks.iter().map(|mark| mark.glyph()).collect();
+        format!("{}{marks}", WrittenType::name(&self.name).spell())
+    }
+
+    /// `` `Message Id`! text ``.
+    pub fn written(&self) -> String {
+        format!("{} {}", self.marked_name(), self.type_)
+    }
+}
+
+impl EdgeCan {
+    /// All an edge can do, unless all it does is read: ` [r fires]`.
+    pub fn mark(self) -> String {
+        if self == (EdgeCan { read: true, write: false, fires: false }) {
+            return String::new();
+        }
+        let can: Vec<&str> = [(self.read, "r"), (self.write, "w"), (self.fires, "fires")].into_iter().filter(|(holds, _)| *holds).map(|(_, letter)| letter).collect();
+        format!(" [{}]", can.join(" "))
+    }
+}
+
+impl DescribedEdge {
+    /// What it lands on, or that its members land apart.
+    pub fn target_name(&self) -> &str {
+        self.target.as_deref().unwrap_or("(several)")
+    }
+
+    /// The edge as a program hops it, then where it lands and what it can do:
+    /// ``-[:`Linked Users`]-> Linked User [w]``.
+    pub fn hop(&self) -> String {
+        format!("-[:{}]-> {}{}", WrittenType::name(&self.name).spell(), self.target_name(), self.can.mark())
     }
 }
 

@@ -5,7 +5,7 @@
 
 use std::rc::Rc;
 
-use movement_checker::description::{DescribedEdge, DescribedField, Description, EdgeCan, FieldList, Known, Mark, Showing, connection_root, describe_landing, described_record_types, landing_name};
+use movement_checker::description::{DescribedEdge, DescribedField, Description, FieldList, Known, Mark, Showing, connection_root, describe_landing, described_record_types, landing_name};
 use movement_checker::types::position::Position;
 use movement_parser::catalog::types::{InstanceSchema, read_catalog};
 use movement_parser::catalog::written_type::WrittenType;
@@ -49,7 +49,7 @@ impl SchemaView {
 
     /// Where a walk or a listen starts: `-[:Ticks]-> Tick [fires]`.
     pub(crate) fn starts(&self) -> Vec<String> {
-        self.edges.iter().map(hop_text).collect()
+        self.edges.iter().map(DescribedEdge::hop).collect()
     }
 
     /// Each record type in one line, its fields then its edges:
@@ -58,7 +58,7 @@ impl SchemaView {
         self.records
             .iter()
             .map(|record| {
-                let parts: Vec<String> = read_fields(&record.described.fields).map(field_text).chain(record.described.edges.iter().map(hop_text)).collect();
+                let parts: Vec<String> = read_fields(&record.described.fields).map(DescribedField::written).chain(record.described.edges.iter().map(DescribedEdge::hop)).collect();
                 format!("{}: {}", record.name, if parts.is_empty() { "(no fields)".into() } else { parts.join(", ") })
             })
             .collect()
@@ -80,7 +80,7 @@ impl SchemaView {
         for record in &self.records {
             let described = &record.described;
             out.push(format!("  {}{}", record.name, described.description.as_deref().map(|d| format!(": {}", first_sentence(d))).unwrap_or_default()));
-            let mut fields: Vec<String> = read_fields(&described.fields).map(field_text).collect();
+            let mut fields: Vec<String> = read_fields(&described.fields).map(DescribedField::written).collect();
             if described.known == Known::Open {
                 fields.push("… (others its module does not name)".into());
             }
@@ -91,7 +91,7 @@ impl SchemaView {
             if !pinned.is_empty() {
                 out.push(format!("    pinned: {}", pinned.join(", ")));
             }
-            let reads: Vec<String> = described.edges.iter().filter(|edge| !edge.can.write).map(hop_text).collect();
+            let reads: Vec<String> = described.edges.iter().filter(|edge| !edge.can.write).map(DescribedEdge::hop).collect();
             if !reads.is_empty() {
                 out.push(format!("    edges: {}", reads.join(", ")));
             }
@@ -104,7 +104,7 @@ impl SchemaView {
         let edge = |e: &DescribedEdge| {
             obj! {
                 "name" => Js::str(&e.name),
-                "target" => Js::str(target_of(e)),
+                "target" => Js::str(e.target_name()),
                 "readable" => Js::Bool(e.can.read),
                 "listenable" => Js::Bool(e.can.fires),
             }
@@ -120,7 +120,7 @@ impl SchemaView {
             let fields = e.write_fields.iter().flat_map(|list| &list.shown);
             Js::Obj(obj! {
                 "along" => Js::str(along),
-                "target" => Js::str(target_of(e)),
+                "target" => Js::str(e.target_name()),
                 "fields" => Js::Arr(fields.map(|f| Js::Obj(obj! { "name" => Js::str(&f.name), "required" => Js::Bool(f.marks.contains(&Mark::Required)) })).collect()),
             })
         };
@@ -189,7 +189,7 @@ fn fields_of(described: &Description, indent: &str, out: &mut Vec<String>) {
     out.extend(described.fields.shown.iter().map(|field| {
         let written_only = if field.write_only { " (write only)" } else { "" };
         let words = field.description.as_deref().map(|d| format!(": {d}")).unwrap_or_default();
-        format!("{indent}{}{written_only}{words}", field_text(field))
+        format!("{indent}{}{written_only}{words}", field.written())
     }));
     if described.known == Known::Open {
         out.push(format!("{indent}… (others its module does not name)"));
@@ -213,41 +213,13 @@ fn spelled_name(name: &str) -> String {
     WrittenType::name(name).spell()
 }
 
-fn marked_name(field: &DescribedField) -> String {
-    let marks: String = field.marks.iter().map(|mark| mark.glyph()).collect();
-    format!("{}{marks}", spelled_name(&field.name))
-}
-
-/// `` `Message Id`! text ``.
-fn field_text(field: &DescribedField) -> String {
-    format!("{} {}", marked_name(field), field.type_)
-}
-
-fn target_of(edge: &DescribedEdge) -> &str {
-    edge.target.as_deref().unwrap_or("(several)")
-}
-
-/// All an edge can do, unless all it does is read.
-fn can_mark(can: EdgeCan) -> String {
-    if can == (EdgeCan { read: true, write: false, fires: false }) {
-        return String::new();
-    }
-    let can: Vec<&str> = [(can.read, "r"), (can.write, "w"), (can.fires, "fires")].into_iter().filter(|(holds, _)| *holds).map(|(_, letter)| letter).collect();
-    format!(" [{}]", can.join(" "))
-}
-
-/// The edge as a program hops it, then where it lands and what it can do.
-fn hop_text(edge: &DescribedEdge) -> String {
-    format!("-[:{}]-> {}{}", spelled_name(&edge.name), target_of(edge), can_mark(edge.can))
-}
-
-/// `hop_text`, then what a write along it takes.
+/// The hop, then what a write along it takes.
 fn edge_text(edge: &DescribedEdge) -> String {
     if !edge.can.write {
-        return hop_text(edge);
+        return edge.hop();
     }
-    let fields: Vec<String> = edge.write_fields.iter().flat_map(|list| &list.shown).map(marked_name).collect();
-    format!("{}: {}", hop_text(edge), if fields.is_empty() { "(no fields)".to_string() } else { fields.join(", ") })
+    let fields: Vec<String> = edge.write_fields.iter().flat_map(|list| &list.shown).map(DescribedField::marked_name).collect();
+    format!("{}: {}", edge.hop(), if fields.is_empty() { "(no fields)".to_string() } else { fields.join(", ") })
 }
 
 /// In single quotes, as anything printed is: in double quotes a shell runs a
