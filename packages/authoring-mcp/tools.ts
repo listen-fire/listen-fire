@@ -185,7 +185,7 @@ export function registerAuthoringTools(server: McpServer, ctx: ToolContext): voi
     {
       title: 'Get started',
       description:
-        "START HERE, in one call: the automations handbook's front page and the connected systems — how to connect each, its record types with their fields (`!` required, `*` identifying), and what a listen on it may say. Enough to write a first automation: describeConnection goes deeper on one system, searchLanguage answers a lookup.",
+        "START HERE, in one call: the automations handbook's front page and the connected systems — how to connect each, each edge leaving it with the fields where it lands (`!` required, `*` identifying, `~` read only; `[w]` written along, `[fires]` a listen starts on it), and what a listen on it may say. Enough to write a first automation: describeConnection goes deeper on one system, searchLanguage answers a lookup.",
       annotations: { readOnlyHint: true },
       inputSchema: {},
     },
@@ -257,7 +257,7 @@ export function registerAuthoringTools(server: McpServer, ctx: ToolContext): voi
     {
       title: 'Describe a connected system',
       description:
-        "The live shape of one connected system, ONE PLACE AT A TIME, as compact text in getStarted's notation. Every call re-reads the system's live schema, so it's safe to call again right after adding a field in the external workspace; the field names you write must match it exactly. Omit `position` and you stand at the system's ROOT: how to construct it, the edges a listen may traverse to (`[listenable]`), what it fires on, and every record type with its fields. Pass a `position` and you get that node's fields and every edge leaving it, each with the target's fields, one level deep — enough to author a read or write with no further call. Field marks: `!` required to create, `*` identifies the record (a `unique by` candidate), `~` read-only, `(write-only)` writable but never read back; a `backticked` name keeps its backticks in code; `enum(a|b|…+N)` lists the first options and counts the rest. `detail: \"full\"` returns the full JSON instead: the system's declarations and the raw schema — needed rarely, and many times larger. Also useful BEFORE anything is connected: the root still says what the system is and what a listen fires on — ground scope and capability claims to the user in these.",
+        "The live shape of one connected system, ONE PLACE AT A TIME, as compact text in getStarted's notation. Every call re-reads the system's live schema, so it's safe to call again right after adding a field in the external workspace; the field names you write must match it exactly. Omit `position` and you stand at the system's ROOT: how to construct it, what it fires on, and every edge leaving the connection with the fields where it lands. Pass a `position` and you get that place's fields and every edge leaving it, each with the fields where it lands, one level deep — enough to author a read or write with no further call. The notation is a program's, as `listen-fire catalog` writes it: an edge as a walk hops it, then what it lands on (``-[:`Linked Users`]-> Linked User``); a plain edge only reads, any other lists what it can do (`[w]`, `[fires]` a listen can start on it, `[r w fires]`); field marks `!` required to create, `*` identifies the record (a `unique by` candidate), `~` read only, `(write only)` written but never read back; a type as a program writes it, an enum as `\"a\" | \"b\" | …+N` (the first options, then how many more); `…+N` after a field list counts the fields left out; a `backticked` name keeps its backticks in code. `detail: \"full\"` returns the full JSON instead: the system's declarations and the raw schema — needed rarely, and many times larger. Also useful BEFORE anything is connected: the root still says what the system is and what a listen fires on — ground scope and capability claims to the user in these.",
       annotations: { readOnlyHint: true },
       inputSchema: {
         system: z
@@ -267,12 +267,12 @@ export function registerAuthoringTools(server: McpServer, ctx: ToolContext): voi
         types: z
           .array(z.string())
           .optional()
-          .describe('Ask for these type names by name instead of walking to them. Rarely needed — prefer `position`, which is how the system tells you what exists.'),
+          .describe('Ask for these record types by the name a type annotation writes (`<c-[:Message]->>`) instead of walking to them. Rarely needed — prefer `position`, which is how the system tells you what exists.'),
         position: z
           .string()
           .optional()
           .describe(
-            "WHERE TO STAND in the system. Omit it and you get the system's root: what it is, and every record type. Pass a position a previous answer showed you (it shows an example to copy) to get that place's fields and its edges. Only walk edges a previous call showed you.",
+            "WHERE TO STAND in the system: a walk from the connection, as a program writes one (`-[:Company]->-[:People]->`, a WHERE allowed). Omit it and you get the system's root: what it is, and every edge leaving it. Each answer shows a position to copy; append an edge's `-[:Name]->` to go one further. A misspelt edge is answered with the edges there are.",
           ),
         detail: z
           .enum(['compact', 'full'])
