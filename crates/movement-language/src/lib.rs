@@ -5,6 +5,7 @@
 pub mod abi;
 mod builtins;
 mod complete;
+pub mod describe;
 pub mod docs;
 mod hover;
 pub mod recover;

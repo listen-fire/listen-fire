@@ -157,6 +157,37 @@ pub unsafe fn language_query_with(
     status
 }
 
+/// `describe_query(catalog snapshot JSON, request JSON)` against the host's
+/// zone database (crate::describe): writes the answer and returns 0, or
+/// writes `{error}` and returns 1. The artifact's C export is the engine's.
+///
+/// # Safety
+/// The two input ranges must be readable; the out slots writable.
+pub unsafe fn describe_query_with(
+    zones: &'static dyn ZoneLookup,
+    catalog_ptr: *const u8,
+    catalog_len: u32,
+    request_ptr: *const u8,
+    request_len: u32,
+    out_ptr_ptr: *mut usize,
+    out_len_ptr: *mut usize,
+) -> u32 {
+    install_panic_hook();
+    let read = || -> Result<(&str, &str), Value> {
+        let catalog = unsafe { utf8(catalog_ptr, catalog_len, "catalog") }?;
+        let request = unsafe { utf8(request_ptr, request_len, "request") }?;
+        Ok((catalog, request))
+    };
+    let answer = match read() {
+        Ok((catalog, request)) => crate::describe::describe_query_json(catalog, request, zones),
+        Err(error) => json!({ "error": error }),
+    };
+    let status = u32::from(answer.as_object().is_some_and(|o| o.contains_key("error")));
+    let bytes = movement_parser::util::form::external_bytes(movement_parser::to_sorted_json(&answer));
+    unsafe { write_out(bytes, out_ptr_ptr, out_len_ptr) };
+    status
+}
+
 /// The word before `at`, which an item without its own `replace` replaces.
 fn word_before(source: &str, at: Pos) -> Range {
     let text = Text::new(source);

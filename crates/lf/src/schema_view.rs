@@ -6,6 +6,7 @@
 use std::rc::Rc;
 
 use movement_checker::description::{DescribedEdge, DescribedField, Description, FieldList, Known, Mark, Showing, connection_root, describe_landing, described_record_types, landing_name};
+pub(crate) use movement_checker::description::LEGEND;
 use movement_checker::types::position::Position;
 use movement_parser::catalog::types::{InstanceSchema, read_catalog};
 use movement_parser::catalog::written_type::WrittenType;
@@ -14,9 +15,6 @@ use movement_parser::util::form::read_json_text;
 use crate::json::{Js, Obj};
 use crate::modules::first_sentence;
 use crate::obj;
-
-/// Said once, at the top of any text in this notation.
-pub(crate) const LEGEND: &str = "plain edges read; [r w fires] read, write, listen; ! required, * identifying, ~ read only";
 
 /// What a described schema offers a program: the edges a walk, a write or a
 /// listen starts from, and the record types.
@@ -187,9 +185,8 @@ fn what_it_is(described: &Description, indent: &str, out: &mut Vec<String>) {
 
 fn fields_of(described: &Description, indent: &str, out: &mut Vec<String>) {
     out.extend(described.fields.shown.iter().map(|field| {
-        let written_only = if field.write_only { " (write only)" } else { "" };
         let words = field.description.as_deref().map(|d| format!(": {d}")).unwrap_or_default();
-        format!("{indent}{}{written_only}{words}", field.written())
+        format!("{indent}{}{words}", field.written_noted())
     }));
     if described.known == Known::Open {
         out.push(format!("{indent}… (others its module does not name)"));

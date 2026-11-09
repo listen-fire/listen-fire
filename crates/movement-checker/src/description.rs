@@ -20,6 +20,9 @@ use crate::types::position::{
     position_schema_of_ref, record_field_types, with_write_typed, write_shape_of, write_typed_past,
 };
 
+/// Said once, at the top of any text in this notation.
+pub const LEGEND: &str = "plain edges read; [r w fires] read, write, listen; ! required, * identifying, ~ read only";
+
 /// How much of a landing a caller wants. The default is all of it.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Showing {
@@ -350,6 +353,12 @@ impl DescribedField {
     pub fn written(&self) -> String {
         format!("{} {}", self.marked_name(), self.type_)
     }
+
+    /// As `written`, a field only a write gives said so:
+    /// `` `Reply Markup` json (write only) ``.
+    pub fn written_noted(&self) -> String {
+        format!("{}{}", self.written(), if self.write_only { " (write only)" } else { "" })
+    }
 }
 
 impl EdgeCan {
@@ -369,10 +378,15 @@ impl DescribedEdge {
         self.target.as_deref().unwrap_or("(several)")
     }
 
-    /// The edge as a program hops it, then where it lands and what it can do:
+    /// The edge as a program hops it: ``-[:`Linked Users`]->``.
+    pub fn step(&self) -> String {
+        format!("-[:{}]->", WrittenType::name(&self.name).spell())
+    }
+
+    /// The hop, then where it lands and what it can do:
     /// ``-[:`Linked Users`]-> Linked User [w]``.
     pub fn hop(&self) -> String {
-        format!("-[:{}]-> {}{}", WrittenType::name(&self.name).spell(), self.target_name(), self.can.mark())
+        format!("{} {}{}", self.step(), self.target_name(), self.can.mark())
     }
 }
 

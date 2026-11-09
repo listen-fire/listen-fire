@@ -5,6 +5,7 @@
 //! until the parity harness (PARITY.md) finds no difference.
 
 pub mod abi;
+pub mod address;
 pub mod answer;
 mod binding_types;
 mod checker;
