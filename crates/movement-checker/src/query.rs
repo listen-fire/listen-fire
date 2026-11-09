@@ -10,7 +10,7 @@ use movement_parser::catalog::types::CatalogSnapshot;
 use crate::families::names::{read_before_binding, unknown_name};
 use crate::scope::{Resolution, ScopeId, Scopes, Symbol, SymbolId, SymbolKind};
 use crate::slots::{SlotError, collect_expression_names, expression_of_text};
-use crate::types::field::{CollectionOrder, Ty, describe_field_type, record_head_position};
+use crate::types::field::{CollectionOrder, Ty, record_head_position, written_type};
 use crate::types::infer::{TypeEnv, Typing};
 use crate::types::narrowing::{EntryRead, PresenceProof};
 use crate::types::position::{ClosureType, InstanceRef, Position, describe_position};
@@ -302,7 +302,8 @@ impl Analysis {
         self.scopes.symbol(id).types.pos.as_ref()
     }
 
-    /// The symbol's type in the author's words, where the check typed it.
+    /// The symbol's type in the author's words, where the check typed it: a
+    /// value's as a program writes it.
     pub fn type_text(&self, id: SymbolId) -> Option<String> {
         let symbol = self.scopes.symbol(id);
         if let Some(pos) = &symbol.types.pos {
@@ -311,7 +312,7 @@ impl Analysis {
         if let Some(closure) = self.function_values.get(&id) {
             return Some(describe_position(&Position::Closure(closure.clone())));
         }
-        symbol.types.field.as_ref().or(symbol.types.may_hold.as_ref()).map(describe_field_type)
+        symbol.types.field.as_ref().or(symbol.types.may_hold.as_ref()).map(|ty| written_type(ty).spell())
     }
 
     /// Where an imported name is declared in its library.
