@@ -48,6 +48,22 @@ The same service is an export of the movement artifact (`packages/movement-lang/
 - **The call.** `src` is the file's text, `catalog` the [catalog snapshot](catalog-snapshot.md) as JSON, `query` the question below. The reply is a status and a JSON body: status 0 and the answer, or status 1 and `{ "error": { "message" } }` when the snapshot does not load, the query does not read, or the text is not UTF-8.
 - **The snapshot is the project.** The snapshot's `files` are the library files an import resolves against. Nothing is read from disk.
 
+### The description
+
+A second export answers what a catalog holds, with no source: `describe_query(catalog, request)`, bound in `@listen-fire/movement-lang` as `describeCatalog` and `describeAddress`. It is the description `listen-fire catalog` prints, as JSON, every name, type, hop and mark already spelled (`crates/movement-language/src/describe.rs` has the whole shape).
+
+```ts
+interface DescribeRequest {
+  address?: string;     // as `listen-fire catalog '<address>'` takes one: '@lf/slack:team_workspace-[:Channels]->'
+  showing?: Showing;    // how much of the place
+  landings?: Showing;   // how much of where each of its edges lands, one level deep
+}
+interface Showing { fields?: number; enumOptions?: number }   // absent: all; an enum cut is `"a" | "b" | …+3`
+```
+
+- **No address:** `{ legend, connections: [{ adapter, key, place }] }`, every connection the snapshot describes, at its root.
+- **An address:** `{ legend, diagnostics, place }`. The address is read and checked as `listen-fire catalog` reads one, with the describing option, against the snapshot as given (a host narrows it first, as for any check); a misspelt edge is the checker's diagnostic and `place` is null. With no walk, `place` is the connection's root and `records` each record type it holds. A run host unit is never connected, so no address names one; its root is in the answer with no address.
+
 ### The query
 
 ```ts
