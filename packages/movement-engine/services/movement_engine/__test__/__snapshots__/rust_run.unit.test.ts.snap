@@ -338,7 +338,7 @@ exports[`a whole run in the Rust engine fails before the body, in it, and at the
   "calls": [],
   "causeClass": "MovementEngineError",
   "error": "MovementEngineError: MOVENG_CHECK: the movement program failed checking:
-  MOV_UNKNOWN_PROPERTY (line 6): inbox.message has no field 'nope' — it has: subject, text, missing, meta, a, b, c, d, e, f0, f1, f2, f3, f4, f5, f6, f7, f8, f9, f10, f11, f12, f13, f14, f15, f16, f17, f18, f19 — did you mean 'e'?",
+  MOV_UNKNOWN_PROPERTY (line 6): message has no field 'nope' — it has: subject, text, missing, meta, a, b, c, d, e, f0, f1, f2, f3, f4, f5, f6, f7, f8, f9, f10, f11, f12, f13, f14, f15, f16, f17, f18, f19 — did you mean 'e'?",
   "errorClass": "MovementEngineError",
   "resolved": [],
   "trace": [],
