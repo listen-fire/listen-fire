@@ -14,7 +14,7 @@ use crate::codes;
 use crate::meta::did_you_mean;
 use crate::scope::{Resolution, ScopeId};
 use crate::slots::{expression_of_slot, is_bare_ident, is_literal_word};
-use crate::types::field::{Ty, collection_element_of, describe_field_type};
+use crate::types::field::{Ty, collection_element_of, spell_type};
 
 /// `COLLECTION_ON_ERROR`.
 const ON_ERROR: [&str; 3] = ["ignore", "warn", "error"];
@@ -206,7 +206,7 @@ impl Checker<'_> {
         let ty = ty?;
         let element = collection_element_of(ty);
         if element.is_none() {
-            self.report_not_a_collection(spelling, &describe_field_type(ty), source.span);
+            self.report_not_a_collection(spelling, &spell_type(ty), source.span);
         }
         element
     }

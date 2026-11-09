@@ -16,7 +16,7 @@ use movement_parser::catalog::types::CatalogSnapshot;
 const CATALOG: &str = r#"{"contractVersion":3,"adapters":{"crm":{"canFire":true,"constructionArgs":[{"name":"credentials","kind":"credential","required":true}],"schemas":{"crm_cred":{"positions":{"company":{"properties":{"name":"text"},"edges":{}}},"collections":{"companies":{"target":"company"}}}}}},"credentials":{"crm_cred":{"adapters":["crm"]}},"plugins":{}}"#;
 
 const SEE: &str = " (see handbook: front#maybe-absent)";
-const MAYBE: &str = "number (or absent)";
+const MAYBE: &str = "number | null";
 
 fn absent(body: &str) -> Vec<(&'static str, String)> {
     let source = format!("import {{ crm }} from adapters\nimport {{ crm_cred }} from credentials\nc = connect crm using crm_cred\nfunction go(t: <text>, xs: <number[]>) {{\n{body}\n}}");

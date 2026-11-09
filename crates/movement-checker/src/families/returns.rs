@@ -14,7 +14,7 @@ use crate::checker::Checker;
 use crate::codes;
 use crate::scope::{Resolution, ScopeId};
 use crate::types::field::{
-    Ty, describe_field_type, field_assignable, field_type_equals, handle_within, is_maybe_absent, shows_more_handles, spell_held_steps,
+    Ty, spell_type, field_assignable, field_type_equals, handle_within, is_maybe_absent, shows_more_handles, spell_held_steps,
     strip_absent, HeldWalk,
 };
 use crate::types::position::{PlaneType, Position, ReturnShape, describe_position, positions_match};
@@ -320,9 +320,9 @@ impl Checker<'_> {
                 let steps = spell_held_steps(&hidden.steps);
                 let file = hidden.is_file();
                 let where_ = if steps.is_empty() {
-                    format!("may be {}", describe_field_type(&hidden.handle))
+                    format!("may be {}", spell_type(&hidden.handle))
                 } else {
-                    format!("may hold {} at '{steps}'", describe_field_type(&hidden.handle))
+                    format!("may hold {} at '{steps}'", spell_type(&hidden.handle))
                 };
                 let repair = if file { "return its text in its place ('READ(f)')" } else { "return a field off it ('r.`Name`')" };
                 self.report(
@@ -350,7 +350,7 @@ impl Checker<'_> {
             let misfit = match target {
                 Ty::Dict { shape: Some(keys), .. } => record_return_misfit(keys, source),
                 _ if field_assignable(source, target) => None,
-                _ => Some(format!("this returns {}", describe_field_type(source))),
+                _ => Some(format!("this returns {}", spell_type(source))),
             };
             if let Some(misfit) = misfit {
                 self.report(codes::RETURN_TYPE, format!("{expected}, but {misfit}"), span);
@@ -360,7 +360,7 @@ impl Checker<'_> {
         let Some(target) = declared.pos.as_deref() else { return };
         let Some(source) = shape.plane.pos.as_deref() else {
             if let Some(field) = &shape.plane.field {
-                self.report(codes::RETURN_TYPE, format!("{expected}, a record, but this returns {}", describe_field_type(field)), span);
+                self.report(codes::RETURN_TYPE, format!("{expected}, a record, but this returns {}", spell_type(field)), span);
             }
             return;
         };
@@ -387,7 +387,7 @@ impl Checker<'_> {
 /// record type — every required key present, each one assignable.
 fn record_return_misfit(keys: &movement_parser::catalog::types::JsMap<Option<Ty>>, source: &Ty) -> Option<String> {
     let Ty::Dict { shape: supplied, .. } = source else {
-        return Some(format!("this returns {}", describe_field_type(source)));
+        return Some(format!("this returns {}", spell_type(source)));
     };
     let required: Vec<&String> = keys.iter().filter(|(_, ty)| ty.as_ref().is_some_and(|t| !is_maybe_absent(Some(t)))).map(|(key, _)| key).collect();
     let Some(supplied) = supplied else {
@@ -395,7 +395,7 @@ fn record_return_misfit(keys: &movement_parser::catalog::types::JsMap<Option<Ty>
             return None;
         }
         let listed = required.iter().map(|k| format!("'{k}'")).collect::<Vec<_>>().join(", ");
-        return Some(format!("this returns {}, whose keys are data — nothing says it has {listed}", describe_field_type(source)));
+        return Some(format!("this returns {}, whose keys are data — nothing says it has {listed}", spell_type(source)));
     };
     let missing: Vec<&&String> = required.iter().filter(|key| !supplied.contains_key(key.as_str())).collect();
     if !missing.is_empty() {
@@ -411,8 +411,8 @@ fn record_return_misfit(keys: &movement_parser::catalog::types::JsMap<Option<Ty>
         if !field_assignable(given, key_type) {
             return Some(format!(
                 "its key '{key}' takes {}, but the value given for it is {}",
-                describe_field_type(strip_absent(key_type)),
-                describe_field_type(strip_absent(given))
+                spell_type(strip_absent(key_type)),
+                spell_type(strip_absent(given))
             ));
         }
     }

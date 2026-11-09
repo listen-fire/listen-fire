@@ -43,7 +43,7 @@ use crate::meta::did_you_mean;
 use crate::slots::{expression_of_slot, is_bare_ident, is_literal_word};
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::types::Typing;
-use crate::types::field::{BaseKind, Ty, base_kind, describe_field_type, field_assignable, field_type_compatible, maybe_absent, strip_absent, unwrap_list};
+use crate::types::field::{BaseKind, Ty, base_kind, spell_type, field_assignable, field_type_compatible, maybe_absent, strip_absent, unwrap_list};
 use crate::types::position::EXTRACT_ROOT_NAME;
 use movement_parser::ast::ExprSlot;
 use movement_parser::ast::{PathHead, PathRoot};
@@ -646,7 +646,7 @@ fn extract_content_problem(ty: &Ty, written: &str) -> Option<String> {
         Ty::Record(_) => Some(format!(
             "'extract' reads text and files, and this is a record — render it as text in the content list: `extract([TEXT.SERIALISE({written}, 'JSON')], …)`"
         )),
-        _ => Some(format!("'extract' reads a LIST of text and files, and this is {} — write it as a list: `extract([{written}], …)`", describe_field_type(ty))),
+        _ => Some(format!("'extract' reads a LIST of text and files, and this is {} — write it as a list: `extract([{written}], …)`", spell_type(ty))),
     }
 }
 
@@ -659,14 +659,14 @@ fn extract_content_item_problem(ty: &Ty, which: &str) -> Option<String> {
         )),
         Ty::Dict { .. } | Ty::HeldRecord(_) | Ty::Json => Some(format!(
             "{which} of the content is {}, and 'extract' reads text and files — render it as text first: `TEXT.SERIALISE(value, 'JSON')`",
-            describe_field_type(ty)
+            spell_type(ty)
         )),
         Ty::List { .. } | Ty::Tuple { .. } => {
             Some(format!("{which} of the content is itself a list — spread it into the content so each of its items is one item: `[a, ...items]`"))
         }
         Ty::Number | Ty::Boolean | Ty::Date | Ty::Datetime => Some(format!(
             "{which} of the content is {}, and 'extract' reads text and files — write it into text (`\"… ${{value}} …\"`) or render it with `TEXT.SERIALISE(value, 'JSON')`",
-            describe_field_type(ty)
+            spell_type(ty)
         )),
         Ty::MaybeAbsent(of) => extract_content_item_problem(of, which),
     }
@@ -709,9 +709,9 @@ pub fn read_extract_field(typing: &mut Typing, node: &ExtractNodeType, property:
                 Some(options) => format!(
                     "a field whose options are ({}) — {}",
                     options.join(" | "),
-                    if matches!(annotated, Ty::Enum { .. }) { "the option sets differ".to_string() } else { format!("{} isn't constrained to them", describe_field_type(&annotated)) }
+                    if matches!(annotated, Ty::Enum { .. }) { "the option sets differ".to_string() } else { format!("{} isn't constrained to them", spell_type(&annotated)) }
                 ),
-                None => format!("a {} field — the annotation doesn't constrain the extraction to that type", describe_field_type(target)),
+                None => format!("a {} field — the annotation doesn't constrain the extraction to that type", spell_type(target)),
             };
             let borrow = path
                 .as_ref()
@@ -719,13 +719,13 @@ pub fn read_extract_field(typing: &mut Typing, node: &ExtractNodeType, property:
                     format!(
                         "; borrow the target's {} (`{property}: <{}> \"…\"`) or align the annotation",
                         if enum_options.is_some() { "options" } else { "type" },
-                        borrowed_annotation_spelling(p)
+                        p
                     )
                 })
                 .unwrap_or_default();
             typing.diagnostics.push(Diagnostic::error(
                 codes::EXTRACT_TYPE_CONFLICT,
-                format!("'{property}' on {node_label} is annotated as {}, but it is written into{into} {mismatch}{borrow}", describe_field_type(explicit)),
+                format!("'{property}' on {node_label} is annotated as {}, but it is written into{into} {mismatch}{borrow}", spell_type(explicit)),
                 field.span,
             ));
         }
@@ -746,13 +746,13 @@ pub fn read_extract_field(typing: &mut Typing, node: &ExtractNodeType, property:
         Some(BaseKind::Record) => return Some(Ty::Text),
         _ => {}
     }
-    let primitive = describe_field_type(&unwrap_list(&target));
-    let borrow = path.as_deref().map(|p| format!(" (or borrow the field's own type: `{property}: <{}> \"…\"`)", borrowed_annotation_spelling(p))).unwrap_or_default();
+    let primitive = spell_type(&unwrap_list(&target));
+    let borrow = path.as_deref().map(|p| format!(" (or borrow the field's own type: `{property}: <{p}> \"…\"`)")).unwrap_or_default();
     typing.report(
         codes::EXTRACT_NEEDS_ANNOTATION,
         format!(
             "'{property}' on {node_label} is text — a field with no annotation asks the model for words — and it is written into a {} field{}. Annotate it so the model answers a {primitive}: `{property}: <{primitive}> \"…\"`{borrow}. An annotated {primitive} may not be found, so write it with '?:' (set-if-empty), or fall back with COALESCE.",
-            describe_field_type(&target),
+            spell_type(&target),
             path.as_deref().map(|p| format!(" ({p})")).unwrap_or_default(),
         ),
     );
@@ -770,7 +770,7 @@ pub fn reads_write_target(code: &str) -> bool {
 fn suggest_annotation(typing: &mut Typing, field: &ExtractField, property: &str, node_label: &str, target: &Ty, path: Option<&str>) {
     let annotation = match (path, target) {
         (Some(path), _) => path.to_string(),
-        (None, Ty::Text | Ty::Number | Ty::Boolean | Ty::Date | Ty::Datetime | Ty::File | Ty::Json | Ty::Absent) => describe_field_type(target),
+        (None, Ty::Text | Ty::Number | Ty::Boolean | Ty::Date | Ty::Datetime | Ty::File | Ty::Json | Ty::Absent) => spell_type(target),
         _ => return,
     };
     if !field.suggested.borrow_mut().insert(annotation.clone()) {
@@ -780,9 +780,9 @@ fn suggest_annotation(typing: &mut Typing, field: &ExtractField, property: &str,
         codes::EXTRACT_ANNOTATE,
         format!(
             "'{property}' on {node_label} flows into a {} field{} — annotate it as such (`{property}: <{}> \"…\"`) so the extraction is constrained by the target's type; only explicit annotations constrain extraction. An annotated field reads as its type OR absent, so discharge that in the same edit — write the target field with '?:' (set-if-empty), wrap the read in COALESCE, or guard on it — since a plain field is refused a value that may be absent",
-            describe_field_type(target),
+            spell_type(target),
             path.map(|p| format!(" ({p})")).unwrap_or_default(),
-            borrowed_annotation_spelling(&annotation),
+            annotation,
         ),
         field.span,
     );
@@ -798,14 +798,6 @@ fn target_constrains_extraction(target: &Ty) -> bool {
         Ty::Number | Ty::Boolean | Ty::Date | Ty::Datetime | Ty::File | Ty::Absent => true,
         Ty::Union(members) => members.iter().any(target_constrains_extraction),
         _ => false,
-    }
-}
-
-/// `borrowedAnnotationSpelling`: `<instance>.<root>.<field>` as it is written.
-fn borrowed_annotation_spelling(path: &str) -> String {
-    match path.split('.').collect::<Vec<_>>().as_slice() {
-        [graph, root, field] => format!("{graph}-[:{root}]->.`{field}`"),
-        _ => path.to_string(),
     }
 }
 
@@ -835,7 +827,7 @@ pub fn type_read_call(typing: &mut Typing, args: &[Option<Ty>]) -> Option<Ty> {
             codes::READ_NOT_FILE,
             format!(
                 "READ(file) reads a file's text, and this is {} — name the file itself (an attachment's file field), or drop the READ if you already have the text.",
-                describe_field_type(strip_absent(arg))
+                spell_type(strip_absent(arg))
             ),
         );
     }
@@ -852,7 +844,7 @@ pub fn type_chunks_call(typing: &mut Typing, args: &[Option<Ty>]) -> Ty {
             codes::CHUNKS_NOT_TEXT,
             format!(
                 "CHUNKS(text, {{ size | entities, overlap }}) cuts a text into pieces, and this is {} — read the text out of it first (a file's text is READ(file)).",
-                describe_field_type(strip_absent(arg))
+                spell_type(strip_absent(arg))
             ),
         );
     }
@@ -1116,8 +1108,8 @@ pub fn type_options_map(typing: &mut Typing, arg: &Expression, contract: &Option
                     "{}: '{key}' is {}, so it is a {} — and this is {}.",
                     contract.signature,
                     option.summary,
-                    describe_field_type(&want),
-                    describe_field_type(strip_absent(&got))
+                    spell_type(&want),
+                    spell_type(strip_absent(&got))
                 ),
             );
         } else if matches!(got, Ty::MaybeAbsent(_)) {

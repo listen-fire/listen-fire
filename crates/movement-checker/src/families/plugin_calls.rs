@@ -15,7 +15,7 @@ use movement_parser::catalog::types::{FieldType as SchemaFieldType, PluginOutput
 use crate::checker::Checker;
 use crate::codes;
 use crate::scope::SymbolId;
-use crate::types::field::{CollectionOrder, HandleKinds, HeldHandle, HeldStep, Ty, describe_field_type, field_assignable, holds_records, list_of, spell_held_steps, strip_absent};
+use crate::types::field::{CollectionOrder, HandleKinds, HeldHandle, HeldStep, Ty, spell_type, field_assignable, holds_records, list_of, spell_held_steps, strip_absent};
 use crate::types::position::{LocalNode, PlaneType, Position, ReturnShape, describe_position};
 
 /// What a plugin call's arguments are held to: the types it declares, by name.
@@ -245,7 +245,7 @@ impl Checker<'_> {
                 codes::CALL_ARG_TYPE,
                 format!(
                     "'{callee}' takes {} for '{name}', and this is a record — pass one of its fields ('{name}: r.website')",
-                    describe_field_type(&Ty::from_schema(declared))
+                    spell_type(&Ty::from_schema(declared))
                 ),
                 span,
             );
@@ -283,7 +283,7 @@ impl Checker<'_> {
         if let Some(value) = value
             && !field_assignable(value, &declared_ty)
         {
-            let message = format!("'{callee}' takes {} for '{name}', and this is {}", describe_field_type(&declared_ty), describe_field_type(strip_absent(value)));
+            let message = format!("'{callee}' takes {} for '{name}', and this is {}", spell_type(&declared_ty), spell_type(strip_absent(value)));
             let mut warning = crate::diagnostic::Diagnostic::error(codes::CALL_ARG_TYPE, message, span);
             warning.severity = Some(crate::diagnostic::Severity::Warning);
             self.push(warning);
@@ -297,7 +297,7 @@ impl Checker<'_> {
         let message = format!(
             "'{callee}' takes text for '{name}', and this {} {} — a record, not text, as in TypeScript. Pass the text it should read: one of its fields ('{name}: r.name'), or the text built from them",
             if may { "may be" } else { "is" },
-            describe_field_type(dict)
+            spell_type(dict)
         );
         self.report(codes::CALL_ARG_MAYBE_RECORD, message, span);
     }
@@ -321,7 +321,7 @@ impl Checker<'_> {
         let takes = match declared {
             None => "a value".to_string(),
             Some(d) if is_json(d) => "structured data".to_string(),
-            Some(d) => describe_field_type(&Ty::from_schema(d)),
+            Some(d) => spell_type(&Ty::from_schema(d)),
         };
         let is_write = matches!(arg, CallArg::Write { .. });
         let what = if is_write { "a write" } else { "a 'node { … }' literal" };
@@ -384,7 +384,7 @@ fn handle_in_plugin_arg_message(callee: &str, name: &str, held: &HeldHandle) -> 
         "'{callee}' takes structured data for '{name}', and '{name}{}' {} {}",
         spell_held_steps(&held.steps),
         if held.may { "may be" } else { "is" },
-        describe_field_type(&held.handle)
+        spell_type(&held.handle)
     );
     if held.is_file() {
         let at = if held.steps.is_empty() { repair_at(Some(name), None, "READ(f)") } else { repair_at(None, Some(held), "READ(f)") };
@@ -401,7 +401,7 @@ fn handle_in_plugin_arg_message(callee: &str, name: &str, held: &HeldHandle) -> 
 fn handle_in_typed_plugin_arg_message(callee: &str, name: &str, declared: &Ty, held: &HeldHandle) -> String {
     let direct = held.steps.is_empty();
     let where_ = if direct { "this".to_string() } else { format!("'{name}{}'", spell_held_steps(&held.steps)) };
-    let said = format!("'{callee}' takes {} for '{name}', and {where_} {} {}", describe_field_type(declared), if held.may { "may be" } else { "is" }, describe_field_type(&held.handle));
+    let said = format!("'{callee}' takes {} for '{name}', and {where_} {} {}", spell_type(declared), if held.may { "may be" } else { "is" }, spell_type(&held.handle));
     let at = |repair: &str| if direct { repair_at(Some(name), None, repair) } else { repair_at(None, Some(held), repair) };
     if held.is_file() {
         let as_whole = if matches!(strip_absent(declared), Ty::File) { format!("hand it over as the whole argument ('{name}: f'), or ") } else { String::new() };

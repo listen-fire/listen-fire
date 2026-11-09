@@ -87,7 +87,7 @@ test('listen-fire check types the triage against GitHub: a field GitHub lacks, a
 
     // A reason GitHub never sends is one the listen can never hear: said, by name.
     const wrongReason = await checkWith(dir, '"review_requested", "mention"', '"review_request", "mention"');
-    assert.match(wrongReason.out, /warning MOV_ENUM_UNKNOWN_VALUE "review_request" isn't a value of enum .*Did you mean "review_requested"\?/);
+    assert.match(wrongReason.out, /warning MOV_ENUM_UNKNOWN_VALUE "review_request" isn't a value of "agent_session_finished" \| .*Did you mean "review_requested"\?/);
 
     const wrongEdge = await checkWith(dir, 'n-[:`Pull Request`]->', 'n-[:Subject]->');
     assert.equal(wrongEdge.code, 1, wrongEdge.out);

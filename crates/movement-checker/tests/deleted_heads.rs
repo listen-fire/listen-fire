@@ -95,10 +95,10 @@ fn a_race_slot_keeps_its_record_type() {
     let race = "  r = race(() => { return await msg-[:Interactions]-> }, () => { await sleep(1d) })\n  if (r[0] != null) { t = r[0].Nope }\n";
     assert_eq!(
         check(race),
-        ["MOV_UNKNOWN_PROPERTY error 3:27-3:36 chat.Interaction has no field 'Nope' — it has: Id, Value".to_string()]
+        ["MOV_UNKNOWN_PROPERTY error 3:27-3:36 Interaction has no field 'Nope' — it has: Id, Value".to_string()]
     );
     let notes = "  r = race(() => { return await d-[:Notes]-> }, () => { await sleep(1d) })\n  if (r[0] != null) { t = r[0].Nope }\n";
-    assert_eq!(check(notes), ["MOV_UNKNOWN_PROPERTY error 3:27-3:36 crm.Note has no field 'Nope' — it has: Id, Title".to_string()]);
+    assert_eq!(check(notes), ["MOV_UNKNOWN_PROPERTY error 3:27-3:36 Note has no field 'Nope' — it has: Id, Title".to_string()]);
 }
 
 #[test]

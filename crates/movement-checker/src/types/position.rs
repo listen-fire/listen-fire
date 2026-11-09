@@ -10,6 +10,7 @@ use indexmap::IndexMap;
 use movement_parser::catalog::types::{EdgeSchema, InstanceSchema, JsMap, PositionSchema, WritableRootSchema};
 
 use super::field::{Ty, field_type_equals, maybe_absent, strip_absent, is_maybe_absent};
+use crate::families::names::spell_name;
 
 /// `InstanceRef`: one constructed instance. Two refs are the same instance
 /// when they are the same `Rc`, or when both are constructions of one system
@@ -507,56 +508,22 @@ pub fn display_name_of(instance: &Instance, position: &str) -> String {
 
 pub const EXTRACT_ROOT_NAME: &str = "extract result";
 
-fn describe_closure_return(shape: &ReturnShape) -> String {
-    if !shape.returns {
-        return "nothing".to_string();
-    }
-    if let Some(held) = shape.may_hold.as_ref().or(shape.plane.field.as_ref()) {
-        return super::field::describe_field_type(held);
-    }
-    shape.plane.pos.as_deref().map_or("something nobody can type".to_string(), describe_position)
-}
-
-/// `describePosition`: a position in the author's words.
+/// A position in a message: its type as a program writes it
+/// (`written_position`), save where the program's own words say more. A
+/// write's handle stays told apart from a record of its type: a check held
+/// to each member of a union says what only one refuses by these words.
 pub fn describe_position(position: &Position) -> String {
+    let names_a_type = |position: &Position| matches!(position, Position::Position(_) | Position::Union(_));
     match position {
-        Position::Meta { instance } => format!("'{}' (the instance itself)", instance.name),
-        Position::Position(p) => format!("{}.{}", p.instance.name, display_name_of(&p.instance, &p.position)),
-        Position::Union(u) => {
-            if u.variants.is_empty() {
-                return "a record kind the branches above already cover".to_string();
-            }
-            let shown = u
-                .instance
-                .schema
-                .union_display_names
-                .as_ref()
-                .and_then(|names| names.get(&u.union).cloned())
-                .or_else(|| u.display.clone())
-                .unwrap_or_else(|| u.union.clone());
-            format!("{}.{shown}", u.instance.name)
+        Position::Union(u) if u.variants.is_empty() => "a record kind the branches above already cover".to_string(),
+        Position::Closure(closure) if closure.label != "a closure" => closure.label.clone(),
+        Position::Handle(h) => {
+            let type_name = spell_name(&display_name_of(&h.instance, h.position.as_deref().unwrap_or(&h.written_type)));
+            if h.position.is_some() { format!("a {type_name} handle") } else { format!("a {type_name} write handle") }
         }
-        Position::Handle(h) => match &h.position {
-            Some(position) => format!("a {}.{} handle", h.instance.name, display_name_of(&h.instance, position)),
-            None => format!("a {} write handle", h.instance.name),
-        },
-        Position::Extract { node, .. } => {
-            if node.name == EXTRACT_ROOT_NAME {
-                "the extract result".to_string()
-            } else {
-                format!("the extracted node '{}'", node.name)
-            }
-        }
-        Position::Closure(closure) => {
-            if closure.label == "a closure" {
-                format!("a closure returning {}", describe_closure_return(&closure.returns))
-            } else {
-                closure.label.clone()
-            }
-        }
-        Position::Local(local) => local.label.clone(),
-        Position::MaybeEmpty(of) => format!("{} (which may be empty)", describe_position(of)),
-        Position::OneOf(members) => members.iter().map(describe_position).collect::<Vec<_>>().join(" or "),
+        Position::MaybeEmpty(of) if !names_a_type(of) => format!("{} (which may be empty)", describe_position(of)),
+        Position::OneOf(members) if !members.iter().all(names_a_type) => members.iter().map(describe_position).collect::<Vec<_>>().join(" or "),
+        _ => super::field::written_position(position).spell(),
     }
 }
 
@@ -565,7 +532,7 @@ pub fn describe_return_shape(shape: &PlaneType) -> String {
     if let Some(pos) = &shape.pos {
         return describe_position(pos);
     }
-    shape.field.as_ref().map_or("nothing".to_string(), super::field::describe_field_type)
+    shape.field.as_ref().map_or("nothing".to_string(), super::field::spell_type)
 }
 
 fn accepts_any_narrowing(param_name: &str, param_narrows: &Option<String>, arg_narrows: &Option<String>) -> bool {

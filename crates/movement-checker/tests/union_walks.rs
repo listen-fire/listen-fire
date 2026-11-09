@@ -93,7 +93,7 @@ fn a_field_only_one_landing_has_is_refused_in_every_walk_form() {
         };
         assert_eq!(
             found[0],
-            format!("MOV_UNION_MEMBER_ONLY 'Mood' can't be read here: since 0.14, what '-[:Notes]->' off crm.Subject lands is crm.Memo or crm.Remark (0.13 checked nothing there), and it reads only what every one of them has — crm.Remark refuses it (crm.Remark has no field 'Mood' — it has: Text, Tone; and edges, walked (`-[:…]->`) rather than read: Author). {narrowing}, or read what every one of them has"),
+            format!("MOV_UNION_MEMBER_ONLY 'Mood' can't be read here: since 0.14, what '-[:Notes]->' off Subject lands is Memo | Remark (0.13 checked nothing there), and it reads only what every one of them has — Remark refuses it (Remark has no field 'Mood' — it has: Text, Tone; and edges, walked (`-[:…]->`) rather than read: Author). {narrowing}, or read what every one of them has"),
             "{}",
             form.name
         );
@@ -121,7 +121,7 @@ fn a_walk_on_along_an_edge_every_landing_has_is_typed() {
     assert_eq!(errors("  x = only(crm-[:Subjects]->-[:Notes]->-[:Author]->)?.Name"), Vec::<String>::new());
     let typo = errors("  x = only(crm-[:Subjects]->-[:Notes]->-[:Author]->)?.Nmae");
     assert_eq!(codes(&typo), ["MOV_UNKNOWN_PROPERTY"], "{typo:#?}");
-    assert!(typo[0].contains("crm.Person has no field 'Nmae'"), "{typo:#?}");
+    assert!(typo[0].contains("Person has no field 'Nmae'"), "{typo:#?}");
 }
 
 #[test]
@@ -141,7 +141,7 @@ fn a_write_is_held_to_every_landing_until_narrowed() {
     assert_eq!(errors("  crm-[:Subjects]->-[n:Notes]-> { write n { Text: \"x\" } }"), Vec::<String>::new());
     let found = errors("  crm-[:Subjects]->-[n:Notes]-> { write n { Mood: \"x\" } }");
     assert_eq!(codes(&found), ["MOV_UNION_MEMBER_ONLY"], "{found:#?}");
-    assert!(found[0].contains("crm.Remark has no field 'Mood'") && found[0].contains("since 0.14, what '-[:Notes]->' off crm.Subject lands is crm.Memo or crm.Remark"), "{found:#?}");
+    assert!(found[0].contains("Remark has no field 'Mood'") && found[0].contains("since 0.14, what '-[:Notes]->' off Subject lands is Memo | Remark"), "{found:#?}");
     assert!(found[0].ends_with("Narrow it first (`if (n is <crm-[:Memo]->>) { … write n { … } … }`))"), "{found:#?}");
     assert_eq!(errors(&format!("{NARROW}      s-[n:Notes]-> {{ write n {{ Mood: \"x\" }} }}{CLOSE}")), Vec::<String>::new());
 }

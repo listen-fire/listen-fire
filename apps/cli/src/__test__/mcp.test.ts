@@ -113,7 +113,7 @@ test('listen-fire check refuses a wrong argument type, a value the tool does not
   try {
     const wrongType = await checkWith(dir, 'team: "ENG" }', 'team: "ENG", priority: "high" }');
     assert.equal(wrongType.code, 1, wrongType.out);
-    assert.match(wrongType.out, /MOV_WRITE_FIELD_TYPE 'priority' on tracker\.create_issue is number, but this expression produces text/);
+    assert.match(wrongType.out, /MOV_WRITE_FIELD_TYPE 'priority' on create_issue is number, but this expression produces text/);
 
     const wrongPin = await checkWith(dir, 'r.query == company.Name', 'r.query == 5');
     assert.equal(wrongPin.code, 1, wrongPin.out);
@@ -121,7 +121,7 @@ test('listen-fire check refuses a wrong argument type, a value the tool does not
 
     const wrongValue = await checkWith(dir, 'team: "ENG" }', 'team: "QA" }');
     assert.equal(wrongValue.code, 1, wrongValue.out);
-    assert.match(wrongValue.out, /MOV_ENUM_UNKNOWN_VALUE "QA" isn't a value of enum \(ENG \| OPS\)/);
+    assert.match(wrongValue.out, /MOV_ENUM_UNKNOWN_VALUE "QA" isn't a value of "ENG" \| "OPS"/);
 
     const otherServers = await checkWith(dir, 'write customers-[:add_note]->', 'write customers-[:create_issue]->');
     assert.equal(otherServers.code, 1, otherServers.out);

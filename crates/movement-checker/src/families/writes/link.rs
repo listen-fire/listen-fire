@@ -6,8 +6,9 @@ use movement_parser::ast::{LinkExpression, LinkTarget, Span};
 use super::{RecordOf, record_of};
 use crate::checker::Checker;
 use crate::codes;
+use crate::families::names::spell_name;
 use crate::scope::{Resolution, ScopeId};
-use crate::types::field::{Ty, describe_field_type, strip_absent, union_members};
+use crate::types::field::{Ty, spell_type, strip_absent, union_members};
 use crate::types::position::{InstanceRef, Position, describe_position, display_name_of, instance_of_ref, position_schema_of_ref};
 
 #[derive(Clone, Copy)]
@@ -120,7 +121,7 @@ impl Checker<'_> {
                     {
                         self.report(
                             codes::DELETE_NOT_RECORD,
-                            not_record(format!("{}, which may hold something other than one record", describe_field_type(field))),
+                            not_record(format!("{}, which may hold something other than one record", spell_type(field))),
                             span,
                         );
                     }
@@ -180,7 +181,7 @@ impl Checker<'_> {
             }
             Position::Union(u) => {
                 for variant in &u.variants {
-                    collect_undeclared_delete(&u.instance, variant, format!("{}.{}", u.instance.name, display_name_of(&u.instance, variant)), undeclared);
+                    collect_undeclared_delete(&u.instance, variant, spell_name(&display_name_of(&u.instance, variant)), undeclared);
                 }
                 true
             }

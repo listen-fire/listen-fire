@@ -23,7 +23,7 @@ const RUN_BUILT_CURRENT: &str = "node Company {\n  name: <text>\n  thesis: <text
 fn a_record_this_run_built_updates_in_place_by_its_landing_type() {
     assert_eq!(
         codes_at(&RUN_BUILT_CURRENT.replace("BODY", "write e { nope: \"x\" }")),
-        vec![("MOV_WRITE_UNKNOWN_FIELD".into(), "'e' (Company.Company this run built) has no field 'nope' — it has: name, thesis".into())]
+        vec![("MOV_WRITE_UNKNOWN_FIELD".into(), "'e' (Company this run built) has no field 'nope' — it has: name, thesis".into())]
     );
 }
 

@@ -70,7 +70,7 @@ fn the_answer_is_typed_by_the_literals_written() {
     let src = format!("{BUTTONS}  if (only(i-[:Actions]->)?.Value == \"pursu\") {{ return 1 }}\n");
     assert_eq!(
         check(CHAT, &src),
-        ["MOV_ENUM_UNKNOWN_VALUE 4:7-4:45 \"pursu\" isn't a value of enum (pursue | pass) — expected one of: pursue | pass. Did you mean \"pursue\"?"]
+        ["MOV_ENUM_UNKNOWN_VALUE 4:7-4:45 \"pursu\" isn't a value of \"pursue\" | \"pass\" — expected one of: pursue | pass. Did you mean \"pursue\"?"]
     );
     let src = format!("{BUTTONS}  if (only(i-[:Actions]->)?.Value == \"pursue\") {{ return 1 }}\n");
     assert_eq!(check(CHAT, &src), Vec::<String>::new());
@@ -81,7 +81,7 @@ fn a_second_shape_narrows_a_field_on_the_landing_itself() {
     let src = format!("{OPTIONS}  if (v.Choice == \"nope\") {{ return 1 }}\n");
     assert_eq!(
         check(POLL, &src),
-        ["MOV_ENUM_UNKNOWN_VALUE 4:7-4:25 \"nope\" isn't a value of enum (yes | no) — expected one of: yes | no. Did you mean \"no\"?"]
+        ["MOV_ENUM_UNKNOWN_VALUE 4:7-4:25 \"nope\" isn't a value of \"yes\" | \"no\" — expected one of: yes | no. Did you mean \"no\"?"]
     );
     let src = format!("{OPTIONS}  if (v.Choice == \"no\") {{ return 1 }}\n");
     assert_eq!(check(POLL, &src), Vec::<String>::new());
@@ -100,12 +100,12 @@ fn a_built_value_gives_the_base_type_with_a_warning() {
     let chat = "  msg = write ch-[:Messages]-> { Message: \"Pursue?\", Buttons: [{ Text: \"Pursue\", Value: name }, { Text: \"Pass\", Value: \"pass\" }] }\n  i = await msg-[:Interactions]->\n  if (only(i-[:Actions]->)?.Value == \"anything\") { return 1 }\n";
     assert_eq!(
         check(CHAT, chat),
-        ["MOV_WRITE_GENERIC_UNTYPED 2:63-2:129 'Buttons[].Value' is not all text literals here, so the 'Actions.Value' of what '-[:Interactions]->' delivers on chat.Message keeps its declared type instead of the values offered. Write each 'Buttons[].Value' as a text literal to have the answer checked against them"]
+        ["MOV_WRITE_GENERIC_UNTYPED 2:63-2:129 'Buttons[].Value' is not all text literals here, so the 'Actions.Value' of what '-[:Interactions]->' delivers on Message keeps its declared type instead of the values offered. Write each 'Buttons[].Value' as a text literal to have the answer checked against them"]
     );
     let poll = "  poll = write board-[:Polls]-> { Question: \"Lunch?\", Options: [{ Key: name }] }\n  v = await poll-[:Votes]->\n  if (v.Choice == \"anything\") { return 1 }\n";
     assert_eq!(
         check(POLL, poll),
-        ["MOV_WRITE_GENERIC_UNTYPED 2:64-2:79 'Options[].Key' is not all text literals here, so the 'Choice' of what '-[:Votes]->' delivers on polls.Poll keeps its declared type instead of the values offered. Write each 'Options[].Key' as a text literal to have the answer checked against them"]
+        ["MOV_WRITE_GENERIC_UNTYPED 2:64-2:79 'Options[].Key' is not all text literals here, so the 'Choice' of what '-[:Votes]->' delivers on Poll keeps its declared type instead of the values offered. Write each 'Options[].Key' as a text literal to have the answer checked against them"]
     );
 }
 
@@ -122,9 +122,9 @@ fn a_built_value_is_told_as_a_warning() {
 #[test]
 fn a_list_held_by_a_name_is_not_literal() {
     let chat = "  buttons = [{ Text: \"Pursue\", Value: \"pursue\" }]\n  msg = write ch-[:Messages]-> { Message: \"Pursue?\", Buttons: buttons }\n  i = await msg-[:Interactions]->\n  if (only(i-[:Actions]->)?.Value == \"anything\") { return 1 }\n";
-    assert_eq!(check(CHAT, chat), ["MOV_WRITE_GENERIC_UNTYPED 3:63-3:70 'Buttons[].Value' is not all text literals here, so the 'Actions.Value' of what '-[:Interactions]->' delivers on chat.Message keeps its declared type instead of the values offered. Write each 'Buttons[].Value' as a text literal to have the answer checked against them"]);
+    assert_eq!(check(CHAT, chat), ["MOV_WRITE_GENERIC_UNTYPED 3:63-3:70 'Buttons[].Value' is not all text literals here, so the 'Actions.Value' of what '-[:Interactions]->' delivers on Message keeps its declared type instead of the values offered. Write each 'Buttons[].Value' as a text literal to have the answer checked against them"]);
     let poll = "  options = [{ Key: \"yes\" }]\n  poll = write board-[:Polls]-> { Question: \"Lunch?\", Options: options }\n  v = await poll-[:Votes]->\n  if (v.Choice == \"anything\") { return 1 }\n";
-    assert_eq!(check(POLL, poll), ["MOV_WRITE_GENERIC_UNTYPED 3:64-3:71 'Options[].Key' is not all text literals here, so the 'Choice' of what '-[:Votes]->' delivers on polls.Poll keeps its declared type instead of the values offered. Write each 'Options[].Key' as a text literal to have the answer checked against them"]);
+    assert_eq!(check(POLL, poll), ["MOV_WRITE_GENERIC_UNTYPED 3:64-3:71 'Options[].Key' is not all text literals here, so the 'Choice' of what '-[:Votes]->' delivers on Poll keeps its declared type instead of the values offered. Write each 'Options[].Key' as a text literal to have the answer checked against them"]);
 }
 
 #[test]
@@ -138,9 +138,9 @@ fn a_write_without_the_path_is_not_narrowed_and_not_told() {
 #[test]
 fn one_of_two_answers_takes_the_values_of_either() {
     let chat = "  a = write ch-[:Messages]-> { Message: \"A?\", Buttons: [{ Text: \"Yes\", Value: \"yes\" }] }\n  b = write ch-[:Messages]-> { Message: \"B?\", Buttons: [{ Text: \"No\", Value: \"no\" }] }\n  i = await a-[:Interactions]->\n  j = await b-[:Interactions]->\n  k = only([i, j])\n  if (k != null) {\n    if (only(k-[:Actions]->)?.Value == \"no\") { return 1 }\n    if (only(k-[:Actions]->)?.Value == \"maybe\") { return 2 }\n  }\n";
-    assert_eq!(check(CHAT, chat), ["MOV_ENUM_UNKNOWN_VALUE 9:9-9:47 \"maybe\" isn't a value of enum (yes | no) — expected one of: yes | no."]);
+    assert_eq!(check(CHAT, chat), ["MOV_ENUM_UNKNOWN_VALUE 9:9-9:47 \"maybe\" isn't a value of \"yes\" | \"no\" — expected one of: yes | no."]);
     let poll = "  p = write board-[:Polls]-> { Question: \"P?\", Options: [{ Key: \"yes\" }] }\n  q = write board-[:Polls]-> { Question: \"Q?\", Options: [{ Key: \"no\" }] }\n  v = await p-[:Votes]->\n  w = await q-[:Votes]->\n  x = only([v, w])\n  if (x?.Choice == \"no\") { return 1 }\n  if (x?.Choice == \"maybe\") { return 2 }\n";
-    assert_eq!(check(POLL, poll), ["MOV_ENUM_UNKNOWN_VALUE 8:7-8:27 \"maybe\" isn't a value of enum (yes | no) — expected one of: yes | no."]);
+    assert_eq!(check(POLL, poll), ["MOV_ENUM_UNKNOWN_VALUE 8:7-8:27 \"maybe\" isn't a value of \"yes\" | \"no\" — expected one of: yes | no."]);
 }
 
 #[test]
@@ -174,12 +174,12 @@ fn an_empty_list_at_the_path_is_told_and_keeps_the_declared_type() {
     let chat = "  msg = write ch-[:Messages]-> { Message: \"Pursue?\", Buttons: [] }\n  i = await msg-[:Interactions]->\n  if (only(i-[:Actions]->)?.Value == \"anything\") { return 1 }\n";
     assert_eq!(
         check(CHAT, chat),
-        ["MOV_WRITE_LITERALS_EMPTY 2:63-2:65 this write sets no 'Buttons[].Value', so no answer on '-[:Interactions]->' from chat.Message can take its 'Actions.Value' from it; the field keeps its declared type. Add the entries the answer may choose from, or leave 'Buttons' out of the write"]
+        ["MOV_WRITE_LITERALS_EMPTY 2:63-2:65 this write sets no 'Buttons[].Value', so no answer on '-[:Interactions]->' from Message can take its 'Actions.Value' from it; the field keeps its declared type. Add the entries the answer may choose from, or leave 'Buttons' out of the write"]
     );
     let poll = "  poll = write board-[:Polls]-> { Question: \"Lunch?\", Options: [{ Label: \"Yes\" }] }\n  v = await poll-[:Votes]->\n  if (v.Choice == \"anything\") { return 1 }\n";
     assert_eq!(
         check(POLL, poll),
-        ["MOV_WRITE_LITERALS_EMPTY 2:64-2:82 this write sets no 'Options[].Key', so no answer on '-[:Votes]->' from polls.Poll can take its 'Choice' from it; the field keeps its declared type. Add the entries the answer may choose from, or leave 'Options' out of the write"]
+        ["MOV_WRITE_LITERALS_EMPTY 2:64-2:82 this write sets no 'Options[].Key', so no answer on '-[:Votes]->' from Poll can take its 'Choice' from it; the field keeps its declared type. Add the entries the answer may choose from, or leave 'Options' out of the write"]
     );
     assert!(diagnostics(CHAT, chat).iter().chain(&diagnostics(POLL, poll)).all(|d| !d.is_error()));
 }

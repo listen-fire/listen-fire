@@ -22,7 +22,7 @@ fn check(body: &str) -> Vec<(String, String)> {
     diagnostics.into_iter().filter(|d| d.severity.is_none()).map(|d| (d.code, d.message)).collect()
 }
 
-const UNKNOWN: &str = "no variable in scope is called that, and crm.company has no such field (a bare name inside a walk's brackets is a variable from outside the walk; a field is read through the hop's alias)";
+const UNKNOWN: &str = "no variable in scope is called that, and company has no such field (a bare name inside a walk's brackets is a variable from outside the walk; a field is read through the hop's alias)";
 
 #[test]
 fn a_misspelled_variable_is_one_unknown_name_suggesting_the_variable() {

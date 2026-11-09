@@ -430,7 +430,7 @@ fn a_union_parameter_hovers_as_one_of_its_records() {
     let service = Service::new(CatalogSnapshot::load(UNION_CATALOG).unwrap());
     let text = "import { crm as m } from adapters\ncrm = connect m\nfunction noted(n: <crm-[:Memo]-> | crm-[:Remark]->>) {\n  return n.Text\n}\n";
     let hover = service.hover(text, after(text, "return n", 0)).unwrap();
-    assert!(hover.contents.contains("n: crm.Memo or crm.Remark"), "{}", hover.contents);
+    assert!(hover.contents.contains("n: Memo | Remark"), "{}", hover.contents);
     assert!(hover.contents.contains("Fields: Text text"), "{}", hover.contents);
     let hover = service.hover(text, after(text, "function no", 0)).unwrap();
     assert!(hover.contents.contains("function noted(n: <crm-[:Memo]-> | crm-[:Remark]->>)"), "{}", hover.contents);

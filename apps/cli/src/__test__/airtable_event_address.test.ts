@@ -83,7 +83,7 @@ test('an Airtable listen must name a table its base has, and a kind of change th
 
     const noKind = check(dir, { base: 'Ops', table: 'Vendors', kind: 'renamed' });
     assert.equal(noKind.code, 1, noKind.out);
-    assert.match(noKind.out, /error MOV_ENUM_UNKNOWN_VALUE "renamed" isn't a value of enum \(created \| updated \| deleted\)/);
+    assert.match(noKind.out, /error MOV_ENUM_UNKNOWN_VALUE "renamed" isn't a value of "created" \| "updated" \| "deleted"/);
 
     const right = check(dir, { base: 'Ops', table: 'Vendors', kind: 'created' });
     assert.equal(right.code, 0, right.out);

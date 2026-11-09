@@ -138,16 +138,16 @@ fn describing_follows_a_write_only_edge_off_a_record() {
     let walks = Walks::connected();
     let typed = walks.described("c-[:Channels]->-[:Posts]->");
     assert_eq!(codes(&typed), Vec::<String>::new());
-    assert_eq!(lands(&typed).as_deref(), Some("c.Post"));
+    assert_eq!(lands(&typed).as_deref(), Some("Post"));
     assert_eq!(codes(&walks.described("c-[:Channels]->-[:Posts]->-[:Presses]->")), Vec::<String>::new());
-    assert_eq!(lands(&walks.described("c-[:Channels]->-[:Posts]->-[:Presses]->")).as_deref(), Some("c.Press"));
+    assert_eq!(lands(&walks.described("c-[:Channels]->-[:Posts]->-[:Presses]->")).as_deref(), Some("Press"));
 }
 
 #[test]
 fn describing_follows_a_write_only_edge_off_a_connection_to_a_readable_type() {
     let typed = Walks::connected().described("c-[:Archive]->");
     assert_eq!(codes(&typed), Vec::<String>::new());
-    assert_eq!(lands(&typed).as_deref(), Some("c.Archived"));
+    assert_eq!(lands(&typed).as_deref(), Some("Archived"));
 }
 
 #[test]
@@ -156,14 +156,14 @@ fn a_type_known_only_by_what_is_written_to_it_lands_where_a_write_lands() {
     let typed = walks.described("c-[:approve]->");
     assert_eq!(codes(&typed), Vec::<String>::new());
     assert!(matches!(typed.landing, Some(Position::Handle(_))), "{:?}", lands(&typed));
-    assert_eq!(lands(&walks.described("c-[:approve]->-[:Presses]->")).as_deref(), Some("c.Press"));
+    assert_eq!(lands(&walks.described("c-[:approve]->-[:Presses]->")).as_deref(), Some("Press"));
 }
 
 #[test]
 fn describing_follows_a_listen_only_edge() {
     let typed = Walks::connected().described("c-[:Channels]->-[:Pings]->");
     assert_eq!(codes(&typed), Vec::<String>::new());
-    assert_eq!(lands(&typed).as_deref(), Some("c.Ping"));
+    assert_eq!(lands(&typed).as_deref(), Some("Ping"));
 }
 
 #[test]
@@ -219,7 +219,7 @@ fn program_errors(walk: &str) -> Vec<String> {
 /// The table in the design's "What a walk does at a write only edge", pinned.
 #[test]
 fn a_programs_check_of_a_write_only_walk_is_what_it_was() {
-    const OFF_RECORD: &str = "MOV_WRITE_ONLY_EDGE '-[:Posts]->' on c.Channel is write-only — it writes (write …-[:Posts]-> { … }); the system offers nothing to read back along it";
+    const OFF_RECORD: &str = "MOV_WRITE_ONLY_EDGE '-[:Posts]->' on Channel is write-only — it writes (write …-[:Posts]-> { … }); the system offers nothing to read back along it";
     assert_eq!(program_errors("c-[:Channels]->-[:Posts]->"), [OFF_RECORD]);
     // Off a record, a further hop gets no diagnostic of its own.
     assert_eq!(program_errors("c-[:Channels]->-[:Posts]->-[:Nope]->"), [OFF_RECORD]);
@@ -227,7 +227,7 @@ fn a_programs_check_of_a_write_only_walk_is_what_it_was() {
     const READABLE_TYPE: &str = "MOV_COLLECTION_NOT_READABLE '-[:Archive]->' off c can't be read: the wa module lists nothing along it";
     assert_eq!(program_errors("c-[:Archive]->"), [READABLE_TYPE]);
     // The walk goes on, so a misspelt further hop is reported.
-    assert_eq!(program_errors("c-[:Archive]->-[:Nope]->"), [READABLE_TYPE.to_string(), "MOV_TRAVERSE_UNKNOWN_EDGE c.Archived has no edge 'Nope'".to_string()]);
+    assert_eq!(program_errors("c-[:Archive]->-[:Nope]->"), [READABLE_TYPE.to_string(), "MOV_TRAVERSE_UNKNOWN_EDGE Archived has no edge 'Nope'".to_string()]);
 
     const WRITTEN_TYPE: &str = "MOV_COLLECTION_NOT_READABLE '-[:approve]->' off c can be written to but not read: the wa module lists nothing along it";
     assert_eq!(program_errors("c-[:approve]->"), [WRITTEN_TYPE]);
@@ -248,7 +248,7 @@ fn a_bare_name_lands_on_what_it_holds() {
 fn the_type_of_a_field_read_comes_back_beside_the_landing() {
     let typed = Walks::connected().described("c-[:Channels]->.Topic");
     assert_eq!(typed.ty.as_ref().map(spell_type).as_deref(), Some("text | null"));
-    assert_eq!(lands(&typed).as_deref(), Some("c.Channel"));
+    assert_eq!(lands(&typed).as_deref(), Some("Channel"));
 }
 
 #[test]
@@ -269,7 +269,7 @@ fn a_name_bound_below_the_place_is_not_seen() {
 
     let below_then_above = at(3, "y-[:Channels]->");
     assert_eq!(codes(&below_then_above), Vec::<String>::new());
-    assert_eq!(lands(&below_then_above).as_deref(), Some("y.Channel"));
+    assert_eq!(lands(&below_then_above).as_deref(), Some("Channel"));
 }
 
 #[test]

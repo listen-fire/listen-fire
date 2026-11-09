@@ -52,7 +52,7 @@ use crate::codes;
 use crate::families::values::quote_name;
 use crate::diagnostic::{AbsentRead, Diagnostic, Severity};
 use crate::scope::{Resolution, ScopeId};
-use crate::types::field::{CollectionOrder, HeldRecord, Ty, describe_field_type, holds_records, record_head_position};
+use crate::types::field::{CollectionOrder, HeldRecord, Ty, spell_type, holds_records, record_head_position};
 use crate::types::scope_env::SymbolTypes;
 use crate::types::event_address::conjuncts;
 use crate::types::infer::Typing;
@@ -558,7 +558,7 @@ pub fn report_walk_off_held(typing: &mut Typing, read: &HeldRead, steps: &[Trave
         format!(
             "{} is {}, not the record, and a value has no edges to walk: {}",
             read.spelled,
-            describe_field_type(&Ty::HeldRecord(std::rc::Rc::new(read.held.clone()))),
+            spell_type(&Ty::HeldRecord(std::rc::Rc::new(read.held.clone()))),
             read.live_walk(&hop)
         ),
     );
@@ -577,7 +577,7 @@ pub fn report_walk_off_value(typing: &mut Typing, spelled: &str, ty: &Ty, steps:
         codes::WALK_ROOT_NOT_RECORD,
         format!(
             "{spelled} is {}, and a walk starts at a record — a value has no edges to step along. Walk from the record the value was read off, or read the value with the value functions instead.",
-            describe_field_type(ty)
+            spell_type(ty)
         ),
     );
 }
@@ -589,7 +589,7 @@ pub fn report_walk_off_value(typing: &mut Typing, spelled: &str, ty: &Ty, steps:
 /// known; `next`, the name read past it when that is a name.
 pub fn report_read_through_field(typing: &mut Typing, read: &FieldRead, field: Option<&Ty>, next: Option<&str>) {
     let label = read.label();
-    let is = field.map_or("a field".to_string(), |ty| format!("a field of {}", describe_field_type(ty)));
+    let is = field.map_or("a field".to_string(), |ty| format!("a field of {}", spell_type(ty)));
     let remedy = match (read.root, next) {
         (Some(_), Some(next)) => {
             let bound = bound_name_for(read.property);
@@ -1491,7 +1491,7 @@ impl crate::checker::Checker<'_> {
             let read = HeldRead { spelled: format!("'{spelled}'"), subject: spelled.clone(), holder: None, held: fields };
             let message = format!(
                 "'{spelled}' is {}, not the record, and a value has no edges to walk: {}",
-                describe_field_type(&Ty::HeldRecord(fields.clone())),
+                spell_type(&Ty::HeldRecord(fields.clone())),
                 read.live_walk(head.hops_raw.trim())
             );
             self.report(codes::WALK_OFF_HELD_RECORD, message, head.span);
@@ -1501,7 +1501,7 @@ impl crate::checker::Checker<'_> {
             codes::HEAD_NOT_A_POSITION,
             format!(
                 "'{spelled}' is {}, and a hop walks from a POSITION — there is nothing here to hop from. A head starts at a record, an extraction's result, or a list of them ('found = MAP(pieces, (p) => {{ return extract … }})'); read a value with the value functions instead.",
-                describe_field_type(&value)
+                spell_type(&value)
             ),
             head.span,
         );

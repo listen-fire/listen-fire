@@ -106,11 +106,11 @@ fn a_test_naming_a_type_the_value_can_never_be_is_warned() {
     for (how, functions) in each_value("if (n is <crm-[:Person]->>) {\n  x = 1\n}") {
         let found = all(&functions);
         assert_eq!(codes(&found), ["MOV_IS_NO_OVERLAP"], "{how}: {found:?}");
-        assert!(found[0].ends_with("'n' is crm.Memo or crm.Remark, never crm.Person: the types have no overlap, so this test is always false. Test for one of what it may be"), "{how}: {}", found[0]);
+        assert!(found[0].ends_with("'n' is Memo | Remark, never Person: the types have no overlap, so this test is always false. Test for one of what it may be"), "{how}: {}", found[0]);
     }
     let union = all("function go() {\n  crm-[s:Subjects]-> {\n    if (s is <crm-[:Memo]->>) {\n      x = 1\n    }\n  }\n}");
     assert_eq!(codes(&union), ["MOV_IS_NO_OVERLAP"], "{union:?}");
-    assert!(union[0].contains("never crm.Memo: the types have no overlap"), "{}", union[0]);
+    assert!(union[0].contains("never Memo: the types have no overlap"), "{}", union[0]);
     for fine in ["if (n is <crm-[:Memo]->>) {\n  x = 1\n}", "if (n is <crm-[:Remark]->>) {\n  x = 1\n}"] {
         for (how, functions) in each_value(fine) {
             assert_eq!(all(&functions), Vec::<String>::new(), "{how}");

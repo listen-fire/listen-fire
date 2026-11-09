@@ -84,22 +84,9 @@ pub enum Returns {
 }
 
 impl Returns {
-    /// `describeFieldType` of the type, or `derived`.
-    pub fn describe(self) -> &'static str {
-        match self {
-            Returns::Text => "text",
-            Returns::Number => "number",
-            Returns::Boolean => "boolean",
-            Returns::Date => "date",
-            Returns::Datetime => "datetime",
-            Returns::File => "file",
-            Returns::ListOfText => "list of text",
-            Returns::MaybeAbsentText => "text (or absent)",
-            Returns::MaybeAbsentNumber => "number (or absent)",
-            Returns::MaybeAbsentDate => "date (or absent)",
-            Returns::Never => "never",
-            Returns::Derived => "derived",
-        }
+    /// The type as a program writes it, or `derived`.
+    pub fn describe(self) -> String {
+        self.ty().map_or_else(|| "derived".to_string(), |ty| super::field::spell_type(&ty))
     }
 
     pub fn ty(self) -> Option<Ty> {
@@ -294,7 +281,7 @@ pub fn builtin_under(name: &str) -> Option<&'static Builtin> {
 
 /// The library as JSON, in table order: `[{name, params: [{name, type,
 /// optional?, rest?}], returns, summary}]`, `returns` a type as
-/// `describeFieldType` writes it or `derived`. What the engine's wasm
+/// a program writes it or `derived`. What the engine's wasm
 /// `standard_library` export answers.
 pub fn standard_library_json() -> serde_json::Value {
     let entry = |b: &Builtin| {

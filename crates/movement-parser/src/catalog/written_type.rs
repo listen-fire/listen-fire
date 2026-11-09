@@ -23,6 +23,7 @@
 //! - A dict with no keys known: `dict(text)`, in the form enum has.
 //! - A tuple: `[text, number]`, a run in it `...text[]`, as TypeScript writes one.
 
+use crate::catalog::helpers::splice_start;
 use crate::catalog::types::{Composite, FieldType, PositionRef, Scalar};
 use crate::stmt::spell_name;
 
@@ -194,7 +195,7 @@ impl From<&FieldType> for WrittenType {
             Composite::List { of, .. } => WrittenType::List(Box::new(written(of))),
             Composite::Tuple { of, rest } => WrittenType::Tuple {
                 slots: of.iter().map(|slot| slot.as_ref().map_or(WrittenType::Unknown, written)).collect(),
-                rest: rest.as_ref().map(|rest| WrittenRest { at: rest.at.0 as usize, of: Box::new(rest.of.as_deref().map_or(WrittenType::Unknown, written)) }),
+                rest: rest.as_ref().map(|rest| WrittenRest { at: splice_start(rest.at.0, of.len()), of: Box::new(rest.of.as_deref().map_or(WrittenType::Unknown, written)) }),
             },
             Composite::Dict { shape: Some(shape), .. } => WrittenType::keys(shape.iter().map(|(key, slot)| (key.clone(), slot.as_ref().map_or(WrittenType::Unknown, written)))),
             Composite::Dict { of, shape: None } => WrittenType::Dict(Box::new(written(of))),

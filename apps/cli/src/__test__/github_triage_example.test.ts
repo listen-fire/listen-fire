@@ -50,8 +50,8 @@ test('the github-triage example: checks clean, refuses the wrong field, posts on
     cpSync(join(dir, 'mistakes/triage_wrong_field.mvt'), join(dir, 'movements/triage.mvt'));
     const wrong = await lf(dir, ['check']);
     assert.equal(wrong.code, 1, wrong.out);
-    assert.match(wrong.out, /error MOV_UNKNOWN_PROPERTY gh\.Pull Request has no field 'html_url' — it has: .*HTML URL/);
-    assert.match(wrong.out, /error MOV_UNKNOWN_PROPERTY gh\.Issue has no field 'html_url' — it has: .*HTML URL/);
+    assert.match(wrong.out, /error MOV_UNKNOWN_PROPERTY `Pull Request` has no field 'html_url' — it has: .*HTML URL/);
+    assert.match(wrong.out, /error MOV_UNKNOWN_PROPERTY Issue has no field 'html_url' — it has: .*HTML URL/);
     assert.deepEqual(fakes.github.requests, [], 'checking calls GitHub for nothing');
     cpSync(join(EXAMPLE, 'movements/triage.mvt'), join(dir, 'movements/triage.mvt'));
 

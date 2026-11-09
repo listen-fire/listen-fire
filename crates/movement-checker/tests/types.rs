@@ -24,18 +24,18 @@ fn tuple(of: Vec<Ty>) -> Ty {
 #[test]
 fn a_union_is_canonical() {
     let union = value_union(&[Ty::Number, Ty::Text, en(&["a", "b"]), Ty::Absent]).unwrap();
-    assert_eq!(describe_field_type(&union), "(number | text) (or absent)");
+    assert_eq!(spell_type(&union), "number | text | null");
     let absorbed = value_union(&[Ty::Json, Ty::Number, Ty::list(Ty::Text)]).unwrap();
-    assert_eq!(describe_field_type(&absorbed), "json");
+    assert_eq!(spell_type(&absorbed), "json");
     assert!(value_union(&[Ty::Record(None), Ty::Text]).is_none(), "records and values have no union");
-    assert_eq!(describe_field_type(&value_union(&[Ty::Absent]).unwrap()), "null");
+    assert_eq!(spell_type(&value_union(&[Ty::Absent]).unwrap()), "null");
 }
 
 #[test]
 fn a_tuple_widens_to_the_union_of_its_members() {
     let pair = tuple(vec![Ty::Text, Ty::Number]);
-    assert_eq!(describe_field_type(&widen_tuples(Some(pair)).unwrap()), "list of (number | text)");
-    assert_eq!(describe_field_type(&collection_element_of(&tuple(vec![Ty::Text, Ty::Text])).unwrap()), "text");
+    assert_eq!(spell_type(&widen_tuples(Some(pair)).unwrap()), "(number | text)[]");
+    assert_eq!(spell_type(&collection_element_of(&tuple(vec![Ty::Text, Ty::Text])).unwrap()), "text");
 }
 
 #[test]
@@ -44,11 +44,11 @@ fn spelling() {
         of: Rc::new(vec![Some(Ty::Text), Some(Ty::Number)]),
         rest: Some(TupleRest { at: 1, of: Some(Rc::new(Ty::Union(Rc::new(vec![Ty::Date, Ty::Number])))) }),
     };
-    assert_eq!(describe_field_type(&run), "[text, ...list of (date | number), number]");
+    assert_eq!(spell_type(&run), "[text, ...(date | number)[], number]");
     let dict = Ty::Dict { of: Rc::new(Ty::Json), shape: Some(Rc::new([("a".to_string(), Some(Ty::Text)), ("b".to_string(), None)].into_iter().collect())) };
-    assert_eq!(describe_field_type(&dict), "{ a: text, b: ? }");
-    assert_eq!(describe_field_type(&en(&[])), "enum (no available values)");
-    assert_eq!(describe_field_type(&maybe_absent(Ty::list(Ty::Text))), "list of text (or absent)");
+    assert_eq!(spell_type(&dict), "{ a: text, b: ? }");
+    assert_eq!(spell_type(&en(&[])), "never");
+    assert_eq!(spell_type(&maybe_absent(Ty::list(Ty::Text))), "text[] | null");
 }
 
 #[test]
@@ -69,7 +69,7 @@ fn fit() {
 #[test]
 fn a_mixed_tuple_is_named() {
     let message = mixed_tuple_message(Some(&tuple(vec![Ty::Record(None), Ty::Text]))).unwrap();
-    assert!(message.starts_with("a list holds one kind of thing, and this one holds both: a record is a record, and another member is text."));
+    assert!(message.starts_with("a list holds one kind of thing, and this one holds both: record is a record, and another member is text."));
 }
 
 /// Pins coalesceType as read from typing.ts, and from 0.15 as TypeScript
@@ -77,8 +77,8 @@ fn a_mixed_tuple_is_named() {
 #[test]
 fn coalesce_discharges_absence_by_its_present_argument() {
     let maybe_text = maybe_absent(Ty::Text);
-    assert_eq!(describe_field_type(&coalesce_type(&[Some(maybe_text.clone()), Some(Ty::Text)]).unwrap()), "text");
-    assert_eq!(describe_field_type(&coalesce_type(&[Some(maybe_text.clone()), Some(Ty::Absent)]).unwrap()), "text (or absent)");
+    assert_eq!(spell_type(&coalesce_type(&[Some(maybe_text.clone()), Some(Ty::Text)]).unwrap()), "text");
+    assert_eq!(spell_type(&coalesce_type(&[Some(maybe_text.clone()), Some(Ty::Absent)]).unwrap()), "text | null");
     assert!(coalesce_type(&[Some(maybe_text.clone()), None]).is_none(), "an untyped argument leaves the result unknown");
     assert!(matches!(coalesce_type(&[Some(Ty::Absent)]), Some(Ty::Absent)));
 }
@@ -86,9 +86,9 @@ fn coalesce_discharges_absence_by_its_present_argument() {
 #[test]
 fn coalesce_is_the_union_of_the_arguments_it_reaches() {
     let maybe = |t: Ty| Some(maybe_absent(t));
-    let spelled = |args: &[Option<Ty>]| coalesce_type(args).map(|t| describe_field_type(&t));
+    let spelled = |args: &[Option<Ty>]| coalesce_type(args).map(|t| spell_type(&t));
     assert_eq!(spelled(&[maybe(Ty::Number), Some(Ty::Text)]).as_deref(), Some("number | text"));
-    assert_eq!(spelled(&[maybe(Ty::Text), maybe(Ty::Number)]).as_deref(), Some("(number | text) (or absent)"));
+    assert_eq!(spelled(&[maybe(Ty::Text), maybe(Ty::Number)]).as_deref(), Some("number | text | null"));
     assert_eq!(spelled(&[maybe(Ty::Text), maybe(Ty::Number), Some(Ty::Number)]).as_deref(), Some("number | text"));
     // An argument that is always there is the last one reached: TypeScript
     // types `a ?? b` as `a` where `a` is never null.
@@ -97,7 +97,7 @@ fn coalesce_is_the_union_of_the_arguments_it_reaches() {
     // `[]` is one of a list's values (`string[] | []` is `string[]`), and
     // beside anything else a member of its own.
     let empty = Ty::Tuple { of: Rc::new(Vec::new()), rest: None };
-    assert_eq!(spelled(&[maybe(Ty::list(Ty::Text)), Some(empty.clone())]).as_deref(), Some("list of text"));
+    assert_eq!(spelled(&[maybe(Ty::list(Ty::Text)), Some(empty.clone())]).as_deref(), Some("text[]"));
     assert_eq!(spelled(&[maybe(Ty::Text), Some(empty)]).as_deref(), Some("[] | text"));
 }
 
@@ -125,12 +125,12 @@ fn positions_and_their_reads() {
     let crm = crm();
     let meta = Position::Meta { instance: crm.clone() };
     let EdgeLanding::Landed { landing: company, .. } = edge_landing(&meta, "companies") else { panic!("a collection lands") };
-    assert_eq!(describe_position(&company), "crm.company");
+    assert_eq!(describe_position(&company), "company");
     assert!(matches!(edge_landing(&meta, "nope"), EdgeLanding::Unknown { available } if available == vec!["companies".to_string()]));
     assert!(matches!(edge_landing(&company, "notes"), EdgeLanding::Untyped { .. }), "a write-only edge reads nothing");
     let party = position_ref_in(&crm, "Party").unwrap();
     assert!(matches!(edge_landing(&party, "people"), EdgeLanding::Landed { .. }), "every variant carries it, to one target");
-    assert_eq!(describe_field_type(&lookup_property_type(Some(&party), "Name").unwrap()), "text");
+    assert_eq!(spell_type(&lookup_property_type(Some(&party), "Name").unwrap()), "text");
     assert!(lookup_property_type(Some(&party), "Size").is_none(), "not every variant has it");
     let size = lookup_property_type(Some(&company), "Size").unwrap();
     assert!(is_maybe_absent(Some(&size)));
@@ -183,7 +183,7 @@ fn closures_fit_contravariantly() {
     let nothing = closure(vec![field(Ty::Text)], None);
     assert!(field_assignable(&takes_text, &nothing), "a target that returns nothing takes any return");
     assert!(!field_assignable(&nothing, &takes_text));
-    assert_eq!(describe_field_type(&takes_text), "a closure returning number");
+    assert_eq!(spell_type(&takes_text), "(p0: <text>) => <number>");
     assert!(field_assignable(&Ty::list(takes_text.clone()), &Ty::list(takes_enum)));
 }
 
@@ -207,7 +207,7 @@ fn infer<'e>(source: &str, env: &'e dyn TypeEnv) -> (Option<Ty>, Typing<'e>, mov
 }
 
 fn spelled(source: &str, env: &dyn TypeEnv) -> String {
-    infer(source, env).0.as_ref().map_or("?".to_string(), describe_field_type)
+    infer(source, env).0.as_ref().map_or("?".to_string(), spell_type)
 }
 
 #[test]
@@ -218,10 +218,10 @@ fn literals_and_operators() {
     assert_eq!(spelled("COALESCE(NULL, \"x\")", &EmptyEnv), "text");
     assert_eq!(spelled("IF TRUE THEN 1 ELSE 2 END", &EmptyEnv), "number");
     assert_eq!(spelled("IF TRUE THEN 1 ELSE \"x\" END", &EmptyEnv), "number | text");
-    assert_eq!(spelled("[1, \"a\"]", &EmptyEnv), "list of (number | text)");
+    assert_eq!(spelled("[1, \"a\"]", &EmptyEnv), "(number | text)[]");
     assert_eq!(spelled("{ a: 1, b: 2 }", &EmptyEnv), "{ a: number, b: number }");
-    assert_eq!(spelled("SPLIT(\"a,b\")", &EmptyEnv), "list of text");
-    assert_eq!(spelled("DATE.PARSE(\"x\")", &EmptyEnv), "date (or absent)");
+    assert_eq!(spelled("SPLIT(\"a,b\")", &EmptyEnv), "text[]");
+    assert_eq!(spelled("DATE.PARSE(\"x\")", &EmptyEnv), "date | null");
     assert_eq!(spelled("AT([1, \"a\"], 0)", &EmptyEnv), "number");
     assert_eq!(spelled("AT({ a: 1 }, \"a\")", &EmptyEnv), "number");
 }
@@ -249,13 +249,13 @@ fn names_walks_and_narrowing() {
     env.roots.insert("co".to_string(), position_ref_in(&crm, "Company").unwrap());
     env.scalars.insert("n".to_string(), maybe_absent(Ty::Number));
     assert_eq!(spelled("co.Name", &env), "text");
-    assert_eq!(spelled("co.Size", &env), "number (or absent)");
-    assert_eq!(spelled("crm-[:companies]->", &env), "list of crm.company");
+    assert_eq!(spelled("co.Size", &env), "number | null");
+    assert_eq!(spelled("crm-[:companies]->", &env), "company[]");
     assert_eq!(spelled("COUNT(co-[:people]->)", &env), "number");
-    assert_eq!(spelled("FIRST(co-[:people]->)", &env), "crm.Person (or absent)");
+    assert_eq!(spelled("FIRST(co-[:people]->)", &env), "Person | null");
     assert_eq!(spelled("IF n != NULL THEN n ELSE 0 END", &env), "number", "the guard narrows the then arm");
     assert_eq!(spelled("IF co.Size != NULL THEN co.Size ELSE 0 END", &env), "number");
-    assert_eq!(spelled("co", &env), "crm.company");
+    assert_eq!(spelled("co", &env), "company");
 }
 
 #[test]
@@ -267,7 +267,7 @@ fn a_choice_may_hold_a_record() {
     assert!(ty.is_none(), "a record and a value share no kind");
     let held = typing.may_hold_type(&expr).unwrap();
     assert!(mixes_record_with_value(Some(&held)));
-    assert_eq!(describe_field_type(&values_beside_record(Some(&held))[0]), "text");
+    assert_eq!(spell_type(&values_beside_record(Some(&held))[0]), "text");
 }
 
 #[test]

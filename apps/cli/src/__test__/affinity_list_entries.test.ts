@@ -65,7 +65,7 @@ test('a List Entries hop with no list pinned still reads only what every list ha
   try {
     const checked = lf(project(fake, 'le.`listName` != run.Text'), 'check');
     assert.equal(checked.code, 1, checked.out);
-    assert.match(checked.out, /MOV_UNKNOWN_PROPERTY crm\.Organization List Entry has no field 'Deal Created'/);
+    assert.match(checked.out, /MOV_UNKNOWN_PROPERTY `Organization List Entry` has no field 'Deal Created'/);
 
     const deals = lf(project(fake, 'le.`listName` != "Portfolio"'), 'check');
     assert.equal(deals.code, 0, deals.out);

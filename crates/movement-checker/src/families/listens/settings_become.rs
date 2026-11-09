@@ -18,7 +18,7 @@ use crate::diagnostic::Diagnostic;
 use crate::families::filter_split::{EdgeView, spell, split_where};
 use crate::families::names::spell_name;
 use crate::families::values::owned_value_error;
-use crate::types::field::{OwnedScalar, Ty, describe_field_type, strip_absent};
+use crate::types::field::{OwnedScalar, Ty, spell_type, strip_absent};
 use crate::scope::{Resolution, ScopeId, SymbolKind};
 use crate::slots::expression_of_slot;
 
@@ -406,7 +406,7 @@ fn rewrite_of(statement: &ListenDeclaration, become_: &SettingsBecome, from: &Na
             false => NoRewrite::Unnarrowed { reason: format!("{reason}, and its table is not narrowed to one whose rows hold it"), path: path.clone() },
         })?;
         if !compared_by_value(declared) {
-            uncompared = Some(uncompared_note(field, &describe_field_type(&Ty::from_schema(declared))));
+            uncompared = Some(uncompared_note(field, &spell_type(&Ty::from_schema(declared))));
         }
     }
     let narrowed = walked.filter(|(_, narrowed)| *narrowed).map(|(landing, _)| landing);

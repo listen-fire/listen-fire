@@ -591,11 +591,11 @@ fn the_parameter_accepts_what_lands_under_every_member() {
     assert_eq!(listen("function h(w: <crm-[:Writings]->>) { return w.Text }"), (1, Vec::<String>::new()));
     assert_eq!(
         listen("function h(w: <crm-[:Memo]->>) { return w.Text }"),
-        (0, vec!["MOV_LISTEN_PARAM_MISMATCH 'h' takes 'w: <crm-[:Memo]->>', but a listen over a union fires with what lands under every member, and 'crm-[:Subjects]-><Company>-[:Jots]->' lands crm.Remark — the parameter's type must accept it".to_string()])
+        (0, vec!["MOV_LISTEN_PARAM_MISMATCH 'h' takes 'w: <crm-[:Memo]->>', but a listen over a union fires with what lands under every member, and 'crm-[:Subjects]-><Company>-[:Jots]->' lands Remark — the parameter's type must accept it".to_string()])
     );
     assert_eq!(
         listen("function h(w: <crm-[:Note]->>) { return w.Text }"),
-        (0, vec!["MOV_LISTEN_PARAM_MISMATCH 'h' takes 'w: <crm-[:Note]->>', but a listen over a union fires with what lands under every member, and 'crm-[:Subjects]-><Person>-[:Jots]->' lands crm.Memo and 'crm-[:Subjects]-><Company>-[:Jots]->' lands crm.Remark — the parameter's type must accept each".to_string()])
+        (0, vec!["MOV_LISTEN_PARAM_MISMATCH 'h' takes 'w: <crm-[:Note]->>', but a listen over a union fires with what lands under every member, and 'crm-[:Subjects]-><Person>-[:Jots]->' lands Memo and 'crm-[:Subjects]-><Company>-[:Jots]->' lands Remark — the parameter's type must accept each".to_string()])
     );
     // Members that land on one record type are held to it.
     assert_eq!(check_unions("listen to crm-[:Subjects]->-[:Notes]-> fire p\n").1, ["MOV_LISTEN_PARAM_MISMATCH 'p' takes 'n: <crm-[:Person]->>', but this listen fires with what lands on '-[:Notes]->' ('<crm-[:Subjects]->-[:Notes]->>') — the parameter's type must accept it"]);
@@ -612,5 +612,5 @@ fn a_union_s_announce_only_edge_is_held_to_one_record_type_s_rule() {
     assert_eq!(ran("return await s-[:Pings]->"), Vec::<String>::new());
     // Where one member's edge is write-only, a read off the union reads nothing.
     assert_eq!(ran("return s-[:Logs]->").iter().map(|e| e.split(' ').next().unwrap()).collect::<Vec<_>>(), ["MOV_WRITE_ONLY_EDGE"]);
-    assert_eq!(ran("return s-[:Pings]->"), ["MOV_AWAIT_REQUIRED '-[:Pings]->' on crm.Subject can't be listed — its module only announces what arrives on it. Wait for one: `await s-[:Pings]->`"]);
+    assert_eq!(ran("return s-[:Pings]->"), ["MOV_AWAIT_REQUIRED '-[:Pings]->' on Subject can't be listed — its module only announces what arrives on it. Wait for one: `await s-[:Pings]->`"]);
 }

@@ -135,7 +135,7 @@ fn a_record_is_not_a_relationships_value() {
         [(
             "MOV_WRITE_LINK_FIELD".to_string(),
             9,
-            "'deals' is a relationship of crm.company, and a record is not written into it as a value — connect 'd' structurally: write off it ('write d-[:…]-> { … }'), or link the two after the write ('link … -[:deals]-> d')".to_string()
+            "'deals' is a relationship of company, and a record is not written into it as a value — connect 'd' structurally: write off it ('write d-[:…]-> { … }'), or link the two after the write ('link … -[:deals]-> d')".to_string()
         )]
     );
 }

@@ -360,7 +360,7 @@ impl Checker<'_> {
                 continue;
             };
             if !crate::types::field::field_assignable(&crate::types::field::Ty::from_schema(source), &crate::types::field::Ty::from_schema(declared)) {
-                let describe = |t: &movement_parser::catalog::types::FieldType| movement_parser::catalog::helpers::describe_field_type(t).unwrap_or_default();
+                let describe = movement_parser::catalog::written_type::spell_field_type;
                 let message = format!(
                     "'{instance}'{}`{field}` ({}) doesn't fit declared field `{field}` ({})",
                     if path.is_empty() { ".".to_string() } else { format!(" {path}") },
