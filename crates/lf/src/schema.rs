@@ -1628,7 +1628,7 @@ mod tests {
         ];
         let described = |id: &str| js(&format!(r#"{{"typeId":"{id}","displayName":"{id}","description":"What a {id} is.","fields":[{{"fieldId":"Title","displayName":"Title","kind":"string","writable":true,"required":true,"description":"Its title."}}],"references":[]}}"#));
         let descriptors: IndexMap<String, Js> = ["Ask", "Deals"].map(|id| (id.to_string(), described(id))).into_iter().collect();
-        let schema = describe_external_schema("asks", &entries, &descriptors);
+        let schema = describe_external_schema("asks", &Introspected { entries: &entries, reached: &[], descriptors: &descriptors });
         let collection = |name: &str| schema.get("collections").and_then(|c| c.get(name));
         assert_eq!(collection("Asks").and_then(|c| c.get("description")).and_then(Js::as_str), Some("What a Ask is."));
         assert_eq!(collection("Deals").and_then(|c| c.get("description")), None);
