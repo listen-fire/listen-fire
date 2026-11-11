@@ -6,6 +6,7 @@
 use serde_json::{Value, json};
 
 use super::helpers::*;
+use super::written_type::spell_field_type;
 use super::query::query_json;
 use super::snapshot::{Args, instance_schema_key};
 use super::types::{CatalogSnapshot, FieldType, InstanceSchema};
@@ -286,42 +287,32 @@ fn json_is_a_surface_type_name_that_describes_as_itself() {
     assert_eq!(parse_field_type_name(Some("json")), Some(ty(json!("json"))));
     assert_eq!(parse_field_type_name(Some("absent")), None);
     assert_eq!(parse_field_type_name(None), None);
-    assert_eq!(describe_field_type(&ty(json!("json"))).unwrap(), "json");
-    assert_eq!(describe_field_type(&ty(json!({ "kind": "list", "of": "json" }))).unwrap(), "list of json");
+    assert_eq!(spell_field_type(&ty(json!("json"))), "json");
+    assert_eq!(spell_field_type(&ty(json!({ "kind": "list", "of": "json" }))), "json[]");
 }
 
 #[test]
 fn a_union_inside_another_type_is_parenthesised() {
     let text_or_number = json!({ "kind": "union", "of": ["number", "text"] });
-    assert_eq!(describe_field_type(&ty(text_or_number.clone())).unwrap(), "number | text");
-    assert_eq!(describe_field_type(&ty(json!({ "kind": "list", "of": text_or_number }))).unwrap(), "list of (number | text)");
-    assert_eq!(
-        describe_field_type(&ty(json!({ "kind": "maybeAbsent", "of": text_or_number }))).unwrap(),
-        "(number | text) (or absent)"
-    );
+    assert_eq!(spell_field_type(&ty(text_or_number.clone())), "number | text");
+    assert_eq!(spell_field_type(&ty(json!({ "kind": "list", "of": text_or_number }))), "(number | text)[]");
+    assert_eq!(spell_field_type(&ty(json!({ "kind": "maybeAbsent", "of": text_or_number }))), "number | text | null");
 }
 
 #[test]
-fn every_type_describes_as_the_typescript_describes_it() {
-    // The TypeScript's answers for the same types (2026-10-07).
+fn a_tuples_run_starts_where_splice_would_put_it() {
     let cases = [
-        (json!("absent"), "null"),
-        (json!({ "kind": "tuple", "of": ["text", null, { "kind": "list", "of": "number" }], "rest": { "at": 1, "of": { "kind": "union", "of": ["text", "number"] } } }), "[text, ...list of (text | number), ?, list of number]"),
-        (json!({ "kind": "tuple", "of": ["text"], "rest": { "at": -5, "of": null } }), "[...list of ?, text]"),
-        (json!({ "kind": "dict", "of": "json", "shape": {} }), "{  }"),
-        (json!({ "kind": "dict", "of": "text" }), "dict of text"),
-        (json!({ "kind": "enum", "options": [] }), "enum (no available values)"),
-        (json!({ "kind": "enum", "options": ["Seed", "Series A"] }), "enum (Seed | Series A)"),
-        (json!({ "kind": "record" }), "a record"),
+        (json!({ "kind": "tuple", "of": ["text", null, { "kind": "list", "of": "number" }], "rest": { "at": 1, "of": { "kind": "union", "of": ["text", "number"] } } }), "[text, ...(text | number)[], ?, number[]]"),
+        (json!({ "kind": "tuple", "of": ["text"], "rest": { "at": -5, "of": null } }), "[...?[], text]"),
+        (json!({ "kind": "tuple", "of": ["text", "number"], "rest": { "at": -1, "of": "date" } }), "[text, ...date[], number]"),
     ];
-    for (type_, described) in cases {
-        assert_eq!(describe_field_type(&ty(type_.clone())).unwrap(), described, "{type_}");
+    for (type_, spelled) in cases {
+        assert_eq!(spell_field_type(&ty(type_.clone())), spelled, "{type_}");
     }
     // Written as text: `json!` would sort the shape's keys.
     let shaped = r#"{"kind":"dict","of":"json","shape":{"b":"text","2":null,"a":{"kind":"enum","options":["x","y"],"open":{}}}}"#;
     let shaped: FieldType = serde_json::from_str(shaped).unwrap();
-    assert_eq!(describe_field_type(&shaped).unwrap(), "{ 2: ?, b: text, a: known values (x | y, …) }");
-    assert!(describe_field_type(&ty(json!({ "kind": "record", "position": { "kind": "meta" } }))).is_err());
+    assert_eq!(spell_field_type(&shaped), r#"{ `2`: ?, b: text, a: "x" | "y" | … }"#);
 }
 
 #[test]

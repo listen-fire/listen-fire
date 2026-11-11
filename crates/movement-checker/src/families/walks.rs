@@ -52,7 +52,7 @@ use crate::codes;
 use crate::families::values::quote_name;
 use crate::diagnostic::{AbsentRead, Diagnostic, Severity};
 use crate::scope::{Resolution, ScopeId};
-use crate::types::field::{CollectionOrder, HeldRecord, Ty, describe_field_type, holds_records, record_head_position};
+use crate::types::field::{CollectionOrder, HeldRecord, Ty, spell_type, holds_records, record_head_position};
 use crate::types::scope_env::SymbolTypes;
 use crate::types::event_address::conjuncts;
 use crate::types::infer::Typing;
@@ -125,7 +125,7 @@ fn report_step(typing: &mut Typing, from: &Position, edge: &str, filter: Option<
                 typing.report(codes::TRAVERSE_UNKNOWN_EDGE, format!("{} has no edge '{edge}'{}", describe_position(from), it_has(&available)));
                 return;
             };
-            if edge_schema.listenable == Some(true) {
+            if edge_schema.listenable == Some(true) && !typing.describing {
                 report_listenable_step(typing, &describe_edge_owner(from), edge, edge_is_readable(edge_schema), filter);
             }
             // A write-only edge is the writes family's (MOV_WRITE_ONLY_EDGE).
@@ -146,7 +146,7 @@ fn report_step(typing: &mut Typing, from: &Position, edge: &str, filter: Option<
             }
             if carrying.len() == u.variants.len() {
                 // Held to the rule one record type's edge is.
-                if carried.iter().all(|e| e.listenable == Some(true)) {
+                if carried.iter().all(|e| e.listenable == Some(true)) && !typing.describing {
                     report_listenable_step(typing, &describe_position(from), edge, carried.iter().all(|e| edge_is_readable(e)), filter);
                 }
                 return;
@@ -558,7 +558,7 @@ pub fn report_walk_off_held(typing: &mut Typing, read: &HeldRead, steps: &[Trave
         format!(
             "{} is {}, not the record, and a value has no edges to walk: {}",
             read.spelled,
-            describe_field_type(&Ty::HeldRecord(std::rc::Rc::new(read.held.clone()))),
+            spell_type(&Ty::HeldRecord(std::rc::Rc::new(read.held.clone()))),
             read.live_walk(&hop)
         ),
     );
@@ -577,7 +577,7 @@ pub fn report_walk_off_value(typing: &mut Typing, spelled: &str, ty: &Ty, steps:
         codes::WALK_ROOT_NOT_RECORD,
         format!(
             "{spelled} is {}, and a walk starts at a record — a value has no edges to step along. Walk from the record the value was read off, or read the value with the value functions instead.",
-            describe_field_type(ty)
+            spell_type(ty)
         ),
     );
 }
@@ -589,7 +589,7 @@ pub fn report_walk_off_value(typing: &mut Typing, spelled: &str, ty: &Ty, steps:
 /// known; `next`, the name read past it when that is a name.
 pub fn report_read_through_field(typing: &mut Typing, read: &FieldRead, field: Option<&Ty>, next: Option<&str>) {
     let label = read.label();
-    let is = field.map_or("a field".to_string(), |ty| format!("a field of {}", describe_field_type(ty)));
+    let is = field.map_or("a field".to_string(), |ty| format!("a field of {}", spell_type(ty)));
     let remedy = match (read.root, next) {
         (Some(_), Some(next)) => {
             let bound = bound_name_for(read.property);
@@ -899,6 +899,9 @@ fn report_read(typing: &mut Typing, position: &Position, property: &str) {
 /// Called by the type core once a hop's ordering is known, before its WHERE
 /// is typed (`checkHopLimitOrder`).
 pub fn observe_hop_order(typing: &mut Typing, step: &EdgeStep, ordering: CollectionOrder) {
+    if typing.describing {
+        return;
+    }
     let Some(cardinality) = &step.cardinality else { return };
     let Some(limit) = &cardinality.limit else { return };
     if cardinality.order_by.is_some() || ordering != CollectionOrder::Unordered {
@@ -920,6 +923,9 @@ pub fn observe_hop_order(typing: &mut Typing, step: &EdgeStep, ordering: Collect
 /// landed. A hop nothing `fetched` (a listen's hop judged on each arrival)
 /// costs no fetch, so what its source can filter is not said of it.
 pub fn observe_hop(typing: &mut Typing, from: Option<&Position>, step: &EdgeStep, target: Option<&Position>, fetched: bool) {
+    if typing.describing {
+        return;
+    }
     let Some(from) = from else { return };
     check_pins(typing, step, target);
     let edge = step.edge_type_id.as_str();
@@ -1485,7 +1491,7 @@ impl crate::checker::Checker<'_> {
             let read = HeldRead { spelled: format!("'{spelled}'"), subject: spelled.clone(), holder: None, held: fields };
             let message = format!(
                 "'{spelled}' is {}, not the record, and a value has no edges to walk: {}",
-                describe_field_type(&Ty::HeldRecord(fields.clone())),
+                spell_type(&Ty::HeldRecord(fields.clone())),
                 read.live_walk(head.hops_raw.trim())
             );
             self.report(codes::WALK_OFF_HELD_RECORD, message, head.span);
@@ -1495,7 +1501,7 @@ impl crate::checker::Checker<'_> {
             codes::HEAD_NOT_A_POSITION,
             format!(
                 "'{spelled}' is {}, and a hop walks from a POSITION — there is nothing here to hop from. A head starts at a record, an extraction's result, or a list of them ('found = MAP(pieces, (p) => {{ return extract … }})'); read a value with the value functions instead.",
-                describe_field_type(&value)
+                spell_type(&value)
             ),
             head.span,
         );

@@ -66,6 +66,19 @@ Read `modules show` before writing a program against a module. It lists the reco
 
 `listen-fire catalog` prints the same notation for each connection the project holds (every credential bound to an installed module), whether a movement connects it yet or not, its live types included (an MCP server's tools, a CRM's fields), with the `connect` line that makes it. `--json` prints the catalog snapshot `listen-fire check` reads. A bare `listen-fire connect` prints the same list as `listen-fire modules`.
 
+The notation is a program's own. An edge is written as a program hops it, then where it lands: ``-[:`Linked Users`]-> Linked User``. An edge that only reads has no mark; any other lists all it can do, such as `[w]`, `[fires]` or `[r w fires]`, with what a write along it takes after a colon. A field is written `Name! text`, its type as a program writes one (`text[]`, `text | null`, `"open" | "paid"`), with `!` when a write must give it, `*` when it identifies the record, and `~` when a write cannot give it.
+
+`listen-fire catalog` also takes one address, spelled as a program spells it:
+
+```
+listen-fire catalog '@lf/slack:team_workspace'                              # one connection
+listen-fire catalog '@lf/slack:team_workspace-[:Channels]->-[:Messages]->'  # one place: its fields, and each edge leaving it with the fields where it lands
+listen-fire catalog '#acme_crm:acme-[:Company]->'                           # a module of the project's own
+listen-fire catalog '@lf/airtable:acme { base: "Ops" }-[:Tasks]->'          # a connection in a position, as `connect` writes it
+```
+
+A connection with no credential has no `:name`. An address is read by the parser and the checker as a program is, so a walk follows any edge, a hop can have a `WHERE`, and a misspelt edge is refused with the edges there are. A refused address prints what refused it and exits 1. A `WHERE` compares with literals: the address has no other names. Use single quotes, because in double quotes a shell runs a backticked edge name as a command.
+
 `listen-fire connect <module> --yes` asks nothing, so it works without a terminal. Each answer comes from a flag (`--setting <name>=<value>`, `--client-id`, `--client-secret`, `--redirect-port`, `--server-secret`, `--webhook-secret`) or from its default (a webhook secret is generated). When an answer has neither, the command names the flag it needs and writes nothing; `modules show` lists them under `set up`.
 
 `ai(…)` and `extract(…)` call models: `listen-fire connect @lf/anthropic` stores your API key.

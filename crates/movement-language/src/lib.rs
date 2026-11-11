@@ -5,6 +5,7 @@
 pub mod abi;
 mod builtins;
 mod complete;
+pub mod describe;
 pub mod docs;
 mod hover;
 pub mod recover;
@@ -105,9 +106,10 @@ pub struct Action {
     pub preferred: bool,
 }
 
-/// One check of a file.
+/// One check of a file, and the zone database a walk typed in it reads.
 pub(crate) struct Analyzed {
     pub analysis: Analysis,
+    pub zones: &'static dyn ZoneLookup,
 }
 
 impl Service {
@@ -129,7 +131,7 @@ impl Service {
     pub(crate) fn analyze(&self, source: &str, cursor: Option<u32>) -> Option<Analyzed> {
         let parsed = recover::parse_recovering(source, cursor)?;
         let analysis = analyze(&parsed.program, &self.catalog, self.options());
-        Some(Analyzed { analysis })
+        Some(Analyzed { analysis, zones: self.zones })
     }
 
     /// Every diagnostic the file has: its parse refusal alone when it does

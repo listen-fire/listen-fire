@@ -181,6 +181,7 @@ interface CollectionSchema extends EdgeListening {
   cursor?: boolean;
   identity?: string;
   version?: string;
+  description?: string;                           // the module's words for what lands here, where the type has no position to hold them (one known only by what is written to it); shown, never checked
 }
 
 interface EdgeListening {                         // what an edge or a root collection says about being listened to; every number is a default lf.yaml overrides
@@ -242,6 +243,7 @@ interface FieldCapability {
 
 ## Changes
 
+- **Version 3, with the shared description of the graph:** a `CollectionSchema` gains `description?`, as an `EdgeSchema` already has. A type known only by what is written to it has no position, so its module's description had nowhere to go. Both builders now carry it here, for such a type only; a type with a position keeps its description there. It is optional and additive, so the version stays 3. A Rust reader built before it refuses a snapshot that carries it, so a host's cached catalog stays keyed by the release that built it.
 - **Version 3, after 0.13.0:** an `AdapterSpec` gains `package?`, the package the module is installed from, compared whole against what a `connect` names (``connect `@lf/github` ``). It is optional and additive, so the version stays 3. A Rust reader built before it refuses a snapshot that carries it, so a builder writes it only for a reader of this release or later.
 - **Version 3, with 0.13's listen:** the settings listen (`listen to x { … }`) is retired, and with it what said what it could hear.
   - An `AdapterSpec` loses `triggerConfig?`, `triggerConfigOptions?`, `defaultEvents?`, `triggerConfigRequired?`, `triggerConfigRequiredWhy?` and `triggerConfigFormats?`.

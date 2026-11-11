@@ -64,3 +64,36 @@ fn stages_calls_and_annotations_say_what_the_typescript_says() {
     assert_eq!(found[3].message, "'nubmer' is not a type — annotate with a primitive (text, number, boolean, date, datetime, file, json), a type you declare (`type nubmer = <\"A\" | \"B\">`), or another field's type by path (<crm-[:companies]->.`funding_stage`>) — did you mean 'number'?");
     assert_eq!(found[5].message, "'extract': 'claude-opus-6' is not a model this deployment reaches — did you mean 'claude-opus-5'? — it reaches 'claude-opus-5'");
 }
+
+/// A field written from an extraction is said where it lands, and its type is
+/// borrowed, as a program addresses that field: by a linked write and by an
+/// update of a record in hand alike.
+#[test]
+fn the_field_a_type_is_borrowed_from_is_said_as_a_program_addresses_it() {
+    const WRITABLE: &str = r#"{"adapters":{"registry":{"canFire":true,"constructionArgs":[],"schemas":{"":{"supportsInPlaceUpdate":true,"positions":{"entity":{"properties":{"Name":"text","Founded":"date","Stage":{"kind":"enum","options":["Seed","Growth"]}},"edges":{}}},"collections":{"entities":{"target":"entity"}},"writableRoots":{"entities":{"fields":{"Name":"text","Founded":"date","Stage":{"kind":"enum","options":["Seed","Growth"]}},"resultShape":{"Name":"text"}},"entity":{"fields":{"Founded":"date","Stage":{"kind":"enum","options":["Seed","Growth"]}},"resultShape":{}}}}}}},"credentials":{},"plugins":{},"models":["claude-opus-5"]}"#;
+    let source = r#"import { registry } from adapters
+reg = connect registry
+function main(e: <reg-[:entities]->>) {
+  found = extract from [e.`Stage`] {
+    stage: "its stage"
+    founded: "when it was founded"
+  }
+  write reg-[:entities]-> { Stage: found.stage, Founded: found.founded }
+  write e { Stage: found.stage, Founded: found.founded }
+}
+"#;
+    let catalog = CatalogSnapshot::load(WRITABLE).unwrap();
+    let options = CheckOptions { upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
+    let said: Vec<(String, String)> = check_source(source, &catalog, options)
+        .unwrap()
+        .into_iter()
+        .filter(|d| d.code.starts_with("MOV_EXTRACT_") && d.code != "MOV_EXTRACT_KEYWORD_RETIRED")
+        .map(|d| (d.code, d.message))
+        .collect();
+    let codes: Vec<&str> = said.iter().map(|(code, _)| code.as_str()).collect();
+    assert_eq!(codes, ["MOV_EXTRACT_ANNOTATE", "MOV_EXTRACT_NEEDS_ANNOTATION", "MOV_EXTRACT_NEEDS_ANNOTATION"]);
+    assert!(said[0].1.contains("flows into a \"Seed\" | \"Growth\" field (reg-[:entity]->.Stage) — annotate it as such (`stage: <reg-[:entity]->.Stage> \"…\"`)"), "{}", said[0].1);
+    for (_, message) in &said[1..] {
+        assert!(message.contains("written into a date field (reg-[:entity]->.Founded)") && message.contains("`founded: <reg-[:entity]->.Founded> \"…\"`"), "{message}");
+    }
+}

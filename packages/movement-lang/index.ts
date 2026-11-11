@@ -32,4 +32,5 @@ export * from './checker/standard_library';
 export type { MExpr } from './parser/expression/tree';
 export * from './service/snapshot';
 export * from './service/language_service';
+export * from './service/description';
 export * from './language_version';

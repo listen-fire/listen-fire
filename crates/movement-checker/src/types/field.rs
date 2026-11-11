@@ -9,9 +9,10 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use movement_parser::catalog::types::{Composite, FieldType as SchemaFieldType, JsMap, OwnedFormat, Scalar};
+use movement_parser::catalog::written_type::{WrittenRest, WrittenType};
 
 use super::unions::{joined_under, one_record_of};
-use super::position::{ClosureType, PlaneType, Position, describe_position, positions_match, record_field_types, same_starting_point};
+use super::position::{ClosureType, EXTRACT_ROOT_NAME, PlaneType, Position, display_name_of, positions_match, record_field_types, same_starting_point};
 
 #[derive(Debug, Clone)]
 pub enum Ty {
@@ -601,7 +602,7 @@ pub fn value_union(types: &[Ty]) -> Option<Ty> {
     if kept.len() == 1 {
         return Some(with_absence(kept.into_iter().next().unwrap_or(Ty::Absent)));
     }
-    let mut keyed: Vec<(String, Ty)> = kept.into_iter().map(|m| (describe_field_type(&m), m)).collect();
+    let mut keyed: Vec<(String, Ty)> = kept.into_iter().map(|m| (spell_type(&m), m)).collect();
     keyed.sort_by(|a, b| a.0.cmp(&b.0));
     Some(with_absence(Ty::Union(Rc::new(keyed.into_iter().map(|(_, m)| m).collect()))))
 }
@@ -690,8 +691,8 @@ pub fn mixed_tuple_message(ty: Option<&Ty>) -> Option<String> {
         let shown = widen_tuples_by(Some(value.clone()), Widening::Shared).unwrap_or_else(|| value.clone());
         return Some(format!(
             "a list holds one kind of thing, and this one holds both: {} is a record, and another member is {}. A tuple may hold both — read one slot with '{}' — but read as a list it may not. Build a list of records and walk it ('both = [one, two]' … 'both-[c:company]-> {{ … }}'), or read the records' fields first and build a list of the values.",
-            describe_field_type(strip_absent(record)),
-            describe_field_type(&shown),
+            spell_type(strip_absent(record)),
+            spell_type(&shown),
             movement_parser::surface::phrase::spell_code("AT(t, 0)")
         ));
     }
@@ -1529,53 +1530,78 @@ pub fn closure_assignable(source: &ClosureType, target: &ClosureType) -> bool {
 
 // ── Spelling ──
 
-/// `describeFieldType`: a type in the author's words.
-pub fn describe_field_type(ty: &Ty) -> String {
+/// `ty` as a program writes it, in the parser's forms (`WrittenType`), which
+/// hold every format this has: what only typing holds is said by those forms too.
+pub fn written_type(ty: &Ty) -> WrittenType {
     match ty {
-        Ty::Absent => "null".to_string(),
-        Ty::Never => "never".to_string(),
-        Ty::Text => "text".to_string(),
-        Ty::Owned(owned) => owned.name.clone(),
-        Ty::Number => "number".to_string(),
-        Ty::Boolean => "boolean".to_string(),
-        Ty::Date => "date".to_string(),
-        Ty::Datetime => "datetime".to_string(),
-        Ty::File => "file".to_string(),
-        Ty::Json => "json".to_string(),
-        Ty::MaybeAbsent(of) => format!("{} (or absent)", describe_member(of)),
-        Ty::List { of, .. } => format!("list of {}", describe_member(of)),
-        Ty::Union(members) => members.iter().map(describe_field_type).collect::<Vec<_>>().join(" | "),
-        Ty::Tuple { of, rest } => {
-            let mut slots: Vec<String> = of.iter().map(|slot| slot.as_ref().map_or("?".to_string(), describe_field_type)).collect();
-            if let Some(rest) = rest {
-                let run = rest.of.as_deref().map_or("?".to_string(), describe_member);
-                slots.insert(rest.at.min(slots.len()), format!("...list of {run}"));
-            }
-            format!("[{}]", slots.join(", "))
-        }
-        Ty::Dict { of, shape } => match shape {
-            Some(shape) => {
-                let keys: Vec<String> =
-                    shape.iter().map(|(key, slot)| format!("{key}: {}", slot.as_ref().map_or("?".to_string(), describe_field_type))).collect();
-                format!("{{ {} }}", keys.join(", "))
-            }
-            None => format!("dict of {}", describe_member(of)),
+        Ty::Text => WrittenType::name("text"),
+        Ty::Number => WrittenType::name("number"),
+        Ty::Boolean => WrittenType::name("boolean"),
+        Ty::Date => WrittenType::name("date"),
+        Ty::Datetime => WrittenType::name("datetime"),
+        Ty::File => WrittenType::name("file"),
+        Ty::Json => WrittenType::name("json"),
+        Ty::Absent => WrittenType::Null,
+        Ty::Never => WrittenType::name("never"),
+        Ty::List { of, .. } => WrittenType::List(Box::new(written_type(of))),
+        Ty::Tuple { of, rest } => WrittenType::Tuple {
+            slots: of.iter().map(|slot| slot.as_ref().map_or(WrittenType::Unknown, written_type)).collect(),
+            rest: rest.as_ref().map(|rest| WrittenRest { at: rest.at, of: Box::new(rest.of.as_deref().map_or(WrittenType::Unknown, written_type)) }),
         },
-        Ty::Record(position) => position.as_deref().map_or("a record".to_string(), describe_position),
-        Ty::HeldRecord(held) => format!("a value holding the fields of {}", describe_position(&held.position)),
-        Ty::Enum { options, open } => {
-            if open.is_some() {
-                format!("known values ({}, …)", options.join(" | "))
-            } else if options.is_empty() {
-                "enum (no available values)".to_string()
-            } else {
-                format!("enum ({})", options.join(" | "))
-            }
-        }
+        Ty::Dict { shape: Some(shape), .. } => WrittenType::keys(shape.iter().map(|(key, slot)| (key.clone(), slot.as_ref().map_or(WrittenType::Unknown, written_type)))),
+        Ty::Dict { of, shape: None } => WrittenType::Dict(Box::new(written_type(of))),
+        Ty::Enum { options, open } => WrittenType::Enum { options: options.clone(), open: open.is_some() },
+        Ty::Owned(owned) => WrittenType::name(&owned.name),
+        Ty::MaybeAbsent(of) => WrittenType::or_null(written_type(of)),
+        Ty::Union(members) => WrittenType::union(members.iter().map(written_type)),
+        Ty::Record(None) => WrittenType::name("record"),
+        Ty::Record(Some(position)) => written_position(position),
+        Ty::HeldRecord(held) => written_position(&held.position),
     }
 }
 
-fn describe_member(ty: &Ty) -> String {
-    let described = describe_field_type(ty);
-    if matches!(ty, Ty::Union(_)) { format!("({described})") } else { described }
+/// `ty` spelled whole.
+pub fn spell_type(ty: &Ty) -> String {
+    written_type(ty).spell()
+}
+
+/// A record as a value's type: its type's name, one of several as a union of them.
+pub fn written_position(position: &Position) -> WrittenType {
+    match position {
+        Position::Position(record) => WrittenType::name(display_name_of(&record.instance, &record.position)),
+        Position::Union(union) => match union.instance.schema.union_display_names.as_ref().and_then(|names| names.get(&union.union)) {
+            Some(shown) => WrittenType::Words(shown.clone()),
+            // A union its module names keeps that name; one a narrowing made has none.
+            None if union.instance.schema.unions.as_ref().is_some_and(|unions| unions.contains_key(&union.union)) => WrittenType::name(&union.union),
+            None => WrittenType::union(union.variants.iter().map(|variant| WrittenType::name(display_name_of(&union.instance, variant)))),
+        },
+        Position::Handle(handle) => WrittenType::name(handle.position.as_deref().map_or(handle.written_type.clone(), |name| display_name_of(&handle.instance, name))),
+        Position::MaybeEmpty(of) => WrittenType::or_null(written_position(of)),
+        Position::OneOf(members) => WrittenType::union(members.iter().map(written_position)),
+        Position::Closure(closure) => WrittenType::Closure {
+            params: closure.params.iter().map(|param| (param.name.clone(), written_plane(&param.plane))).collect(),
+            returns: Box::new(written_return(&closure.returns)),
+        },
+        // The program's own words for what no schema names.
+        Position::Meta { instance } => WrittenType::Words(format!("'{}' (the instance itself)", instance.name)),
+        Position::Extract { node, .. } if node.name == EXTRACT_ROOT_NAME => WrittenType::Words("the extract result".to_string()),
+        Position::Extract { node, .. } => WrittenType::Words(format!("the extracted node '{}'", node.name)),
+        Position::Local(local) => WrittenType::Words(local.label.clone()),
+    }
+}
+
+fn written_plane(plane: &PlaneType) -> WrittenType {
+    match (&plane.pos, &plane.field) {
+        (Some(position), _) => written_position(position),
+        (None, Some(field)) => written_type(field),
+        (None, None) => WrittenType::Unknown,
+    }
+}
+
+fn written_return(shape: &super::position::ReturnShape) -> WrittenType {
+    match (shape.returns, &shape.may_hold) {
+        (false, _) => WrittenType::Words("nothing".to_string()),
+        (true, Some(held)) => written_type(held),
+        (true, None) => written_plane(&shape.plane),
+    }
 }

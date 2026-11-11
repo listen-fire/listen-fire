@@ -671,6 +671,10 @@ pub struct CollectionSchema {
     /// (a base's tables; never every message in a workspace).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub members_change: Option<MembersChange>,
+    /// What the module says of what lands here, where the type has no
+    /// position to say it on (one known only by what is written to it).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

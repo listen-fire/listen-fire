@@ -365,6 +365,7 @@ pub fn instance_schema_from_descriptors(input: &ProjectionInput) -> Projection {
 
         let readable = truthy(entry.get("readable"));
         let listenable = Js::is_true(entry.get("listenable"));
+        let positioned = readable || listenable || Js::is_true(entry.get("fires")) || edge_target_names.contains(&name);
         if meta_edge_type_ids.contains(&type_id) && (readable || truthy(entry.get("writable")) || listenable) {
             let collection_name = nullish_or(entry.get("collectionName"), None).map(|c| key(Some(c))).unwrap_or_else(|| name.clone());
             if !leave_out_artificial_edge(adapter_type, &collection_name, &mut notes) {
@@ -382,11 +383,14 @@ pub fn instance_schema_from_descriptors(input: &ProjectionInput) -> Projection {
                     collection.insert("listenable".into(), Js::Bool(true));
                 }
                 pass_listening(entry, &mut collection);
+                // A type with no position has nowhere else to say what it is.
+                if !positioned && let Some(description) = input.descriptors.get(&type_id).and_then(described).or_else(|| described(entry)) {
+                    collection.insert("description".into(), Js::str(description));
+                }
                 collections.insert(collection_name, Js::from(collection));
             }
         }
 
-        let positioned = readable || listenable || Js::is_true(entry.get("fires")) || edge_target_names.contains(&name);
         let Some(descriptor) = input.descriptors.get(&type_id) else {
             if positioned {
                 positions.insert(name, undescribed());
@@ -1614,6 +1618,22 @@ mod tests {
             field_type_from_descriptor(&field, &Projecting { owner: "airtable", position_of: &position_of }).unwrap().to_json(),
             r#"{"kind":"maybeAbsent","of":{"kind":"record","position":{"kind":"position","position":"Candidates"}}}"#
         );
+    }
+
+    #[test]
+    fn a_type_with_no_position_says_what_it_is_on_its_root_edge() {
+        let entries = [
+            js(r#"{"typeId":"Ask","displayName":"Ask","writable":true,"readable":false,"collectionName":"Asks"}"#),
+            js(r#"{"typeId":"Deals","displayName":"Deals","writable":true,"readable":true}"#),
+        ];
+        let described = |id: &str| js(&format!(r#"{{"typeId":"{id}","displayName":"{id}","description":"What a {id} is.","fields":[{{"fieldId":"Title","displayName":"Title","kind":"string","writable":true,"required":true,"description":"Its title."}}],"references":[]}}"#));
+        let descriptors: IndexMap<String, Js> = ["Ask", "Deals"].map(|id| (id.to_string(), described(id))).into_iter().collect();
+        let schema = describe_external_schema("asks", &entries, &descriptors);
+        let collection = |name: &str| schema.get("collections").and_then(|c| c.get(name));
+        assert_eq!(collection("Asks").and_then(|c| c.get("description")).and_then(Js::as_str), Some("What a Ask is."));
+        assert_eq!(collection("Deals").and_then(|c| c.get("description")), None);
+        assert_eq!(schema.get("positions").and_then(|p| p.get("Deals")).and_then(|d| d.get("description")).and_then(Js::as_str), Some("What a Deals is."));
+        assert_eq!(schema.get("writableRoots").and_then(|w| w.get("Ask")).and_then(|f| f.get("fieldDocs")).and_then(|d| d.get("Title")).and_then(Js::as_str), Some("Its title."));
     }
 
     #[test]

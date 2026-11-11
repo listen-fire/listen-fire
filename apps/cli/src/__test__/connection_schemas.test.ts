@@ -93,5 +93,5 @@ test('catalog describes the credential no file imports; one the module refuses i
   const held = lf(dir, 'catalog');
   assert.equal(held.code, 0, held.out);
   for (const name of ['acme', 'alpha_notes', 'beta_notes', 'gone_notes']) assert.match(held.out, new RegExp(`^connection ${name}: `, 'm'));
-  assert.match(held.out, /^connection gone_notes: .*\n(.*\n)+?.*a Note along the connection's Note: Heading$/m, 'a connection no file names is typed by its own describe');
+  assert.match(held.out, /^connection gone_notes: .*\n(.*\n)+?.*-\[:Note\]-> Note \[w\]: Heading$/m, 'a connection no file names is typed by its own describe');
 });

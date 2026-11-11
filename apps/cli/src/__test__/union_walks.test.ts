@@ -92,7 +92,7 @@ test('a field only one landing of a walk off a union has is refused where it is 
   assert.notEqual(checked.code, 0, checked.out);
   assert.match(
     checked.out,
-    /MOV_UNION_MEMBER_ONLY 'Mood' can't be read here: since 0\.14, what '-\[:Notes\]->' off c\.Company \| Person lands is c\.Remark or c\.Memo \(0\.13 checked nothing there\).* Narrow it first \(`if \(n is <c-\[:Memo\]->>\) \{ … n\.Mood … \}`\)/,
+    /MOV_UNION_MEMBER_ONLY 'Mood' can't be read here: since 0\.14, what '-\[:Notes\]->' off Company \| Person lands is Remark \| Memo \(0\.13 checked nothing there\).* Narrow it first \(`if \(n is <c-\[:Memo\]->>\) \{ … n\.Mood … \}`\)/,
     checked.out,
   );
   assert.match(checked.out, /1 file\(s\), 1 error\(s\)/, checked.out);
@@ -173,7 +173,7 @@ test('a note narrowed with is reads its own fields: a landing, a union parameter
   assert.equal(misread.code, 1, misread.out);
   assert.match(misread.out, /error MOV_UNKNOWN_PROPERTY .*'Tone'/, misread.out);
   // Below the arm that returns, the note is a Remark.
-  assert.match(misread.out, /error MOV_UNKNOWN_PROPERTY c\.Remark has no field 'Mood'/, misread.out);
+  assert.match(misread.out, /error MOV_UNKNOWN_PROPERTY Remark has no field 'Mood'/, misread.out);
 });
 
 test('an is test naming a type the note can never be is warned: the types have no overlap', () => {
@@ -184,7 +184,7 @@ test('an is test naming a type the note can never be is warned: the types have n
   assert.equal(checked.code, 0, checked.out);
   assert.match(
     checked.out,
-    /warning MOV_IS_NO_OVERLAP 'n' is c\.Remark or c\.Memo, never c\.Person: the types have no overlap, so this test is always false/,
+    /warning MOV_IS_NO_OVERLAP 'n' is Remark \| Memo, never Person: the types have no overlap, so this test is always false/,
     checked.out,
   );
 });

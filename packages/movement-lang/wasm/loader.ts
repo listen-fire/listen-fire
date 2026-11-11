@@ -73,6 +73,7 @@ type CheckerFunction =
   | 'language_version'
   | 'language_standing'
   | 'language_query'
+  | 'describe_query'
   | 'story_analysis'
   | 'judge_arrival'
   | 'listen_identity'
@@ -279,6 +280,19 @@ export function callLanguageStanding(pin: string): { ok: boolean; json: unknown 
  */
 export function callLanguageQuery(source: string, snapshotJson: string, queryJson: string): { ok: boolean; json: unknown } {
   return callChecker('language_query', [source, snapshotJson, queryJson], []);
+}
+
+/**
+ * The describing query (crates/movement-language/src/describe.rs
+ * `describe_query`): the snapshot and the request as JSON, and the reply —
+ * what the snapshot holds, or the one connection or place an address names,
+ * as the description value — or `{error}` for a snapshot or a request that
+ * does not read.
+ *
+ * @internal Used by the description's wrapper (service/description.ts).
+ */
+export function callDescribeQuery(snapshotJson: string, requestJson: string): { ok: boolean; json: unknown } {
+  return callChecker('describe_query', [snapshotJson, requestJson], []);
 }
 
 /**
@@ -636,6 +650,7 @@ function readExports(raw: Record<string, unknown>): ParserExports {
     'language_version',
     'language_standing',
     'language_query',
+    'describe_query',
     'story_analysis',
     'judge_arrival',
     'listen_identity',

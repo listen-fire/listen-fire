@@ -6,12 +6,14 @@
 //! word error messages, so they stay as they are and are used here only where
 //! nothing plainer exists.
 
+use movement_checker::description::{DescribedEdge, DescribedField, Description, Showing, describe_landing};
 use movement_checker::query::Analysis;
 use movement_checker::scope::{Symbol, SymbolKind};
-use movement_checker::types::field::{Ty, describe_field_type, is_maybe_absent};
-use movement_checker::types::position::{Position, describe_position, display_name_of, position_schema_of_ref};
+use movement_checker::types::field::{Ty, is_maybe_absent, written_type};
+use movement_checker::types::position::{Position, describe_position, display_name_of};
 use movement_parser::ast::Loc;
-use movement_parser::catalog::types::{AdapterSnapshot, InstanceSchema, PluginOutput, PluginSpec, PositionSchema};
+use movement_parser::catalog::types::{AdapterSnapshot, InstanceSchema, PluginOutput, PluginSpec};
+use movement_parser::catalog::written_type::WrittenType;
 
 use crate::docs::{FIELD, WALK, builtin_page, page_of};
 use crate::text::{Pos, Range, Text, in_comment, inside_backticks, is_word_char, loc_of, trailing_word, utf16_len, written_name};
@@ -143,58 +145,48 @@ pub fn builtin_card(name: &str) -> Option<String> {
 /// Long lists stop here, then say how many more there are.
 const LISTED: usize = 8;
 
-fn listed(names: impl IntoIterator<Item = String>) -> Option<String> {
-    let names: Vec<String> = names.into_iter().collect();
-    if names.is_empty() {
+/// `names`, then that `more` were left out.
+fn listed(names: impl IntoIterator<Item = String>, more: usize) -> Option<String> {
+    let shown = names.into_iter().collect::<Vec<_>>().join(", ");
+    if shown.is_empty() {
         return None;
     }
-    let shown = names[..names.len().min(LISTED)].join(", ");
-    Some(match names.len().saturating_sub(LISTED) {
+    Some(match more {
         0 => shown,
         more => format!("{shown} and {more} more"),
     })
 }
 
-/// "Fields: Name, Description (all text)", or each with its type when they differ.
-fn fields_line(position: &Position) -> Option<String> {
-    let fields = walk::fields(position);
-    let first = fields.first()?.1.clone();
-    if fields.iter().all(|(_, ty)| *ty == first) {
-        let names = listed(fields.iter().map(|(name, _)| written_name(name)))?;
-        return Some(match (&first, fields.len()) {
-            (Some(ty), 1) => format!("Fields: {names} ({ty})"),
-            (Some(ty), _) => format!("Fields: {names} (all {ty})"),
-            (None, _) => format!("Fields: {names}"),
-        });
-    }
-    let typed = fields.iter().map(|(name, ty)| match ty {
-        Some(ty) => format!("{}: {ty}", written_name(name)),
-        None => written_name(name),
-    });
-    Some(format!("Fields: {}", listed(typed)?))
+/// The first of `names` a list shows.
+fn listed_first(names: impl IntoIterator<Item = String>) -> Option<String> {
+    let names: Vec<String> = names.into_iter().collect();
+    let more = names.len().saturating_sub(LISTED);
+    listed(names.into_iter().take(LISTED), more)
 }
 
-/// What a landing is called in a hover: its record type's name, or the checker's words for it.
-fn landing_name(position: &Position) -> String {
-    match walk::strip(position) {
-        Position::Position(p) => display_name_of(&p.instance, &p.position),
-        Position::Handle(h) => h.position.as_ref().map_or_else(|| describe_position(position), |name| display_name_of(&h.instance, name)),
-        other => describe_position(other),
-    }
+/// What a hover shows of a landing: as many fields as a list does.
+fn described(position: &Position) -> Description {
+    describe_landing(position, Showing { fields: Some(LISTED), ..Showing::default() })
 }
 
-/// "Walk on: Comments → Comment".
-fn walk_on_line(position: &Position) -> Option<String> {
-    let edges = walk::edge_schemas(position).into_iter().map(|edge| match &edge.landing {
-        Some(landing) => format!("{} → {}", written_name(&edge.name), landing_name(landing)),
-        None => written_name(&edge.name),
-    });
-    Some(format!("Walk on: {}", listed(edges)?))
+/// A field as the one notation writes it; one only a write gives says so,
+/// as the catalog's place does.
+fn field_words(field: &DescribedField) -> String {
+    if field.write_only { format!("{} (write only)", field.written()) } else { field.written() }
 }
 
-/// The adapter's description of the record type a position holds.
-fn record_description(position: &Position) -> Option<String> {
-    position_schema_of_ref(walk::strip(position))?.description.clone()
+/// "Fields: Text! text, `Sent At`~ date and 3 more".
+fn fields_line(described: &Description) -> Option<String> {
+    Some(format!("Fields: {}", listed(described.fields.shown.iter().map(field_words), described.fields.cut)?))
+}
+
+/// "Walk on: -[:Comments]-> Comment, -[:Reactions]-> Reaction [fires]".
+fn walk_on_line(described: &Description) -> Option<String> {
+    Some(format!("Walk on: {}", listed_first(described.edges.iter().map(DescribedEdge::hop))?))
+}
+
+fn record_lines(described: &Description) -> Vec<String> {
+    [fields_line(described), walk_on_line(described)].into_iter().flatten().collect()
 }
 
 fn article(noun: &str) -> &'static str {
@@ -203,7 +195,7 @@ fn article(noun: &str) -> &'static str {
 
 /// The record type and the connection a position is a record of: (`Company`, `crm`).
 fn record_of(position: &Position) -> Option<(String, String)> {
-    match walk::strip(position) {
+    match strip(position) {
         Position::Position(p) => Some((display_name_of(&p.instance, &p.position), p.instance.name.clone())),
         Position::Handle(h) => Some((display_name_of(&h.instance, h.position.as_ref()?), h.instance.name.clone())),
         _ => None,
@@ -226,7 +218,7 @@ fn contains(outer: &movement_parser::ast::Span, at: Loc) -> bool {
 /// "Holds: Company, Comment": the record types an instance schema names.
 fn holds_line(schema: &InstanceSchema) -> Option<String> {
     let names = schema.positions.iter().map(|(key, p)| written_name(p.display_name.as_deref().unwrap_or(key)));
-    Some(format!("Holds: {}", listed(names)?))
+    Some(format!("Holds: {}", listed_first(names)?))
 }
 
 /// "Listen to: Messages, Reactions": the edges a listen may end on, off the
@@ -241,7 +233,7 @@ fn listen_to_line(schema: &InstanceSchema) -> Option<String> {
             named.push(name);
         }
     }
-    Some(format!("Listen to: {}", listed(named.into_iter().map(written_name))?))
+    Some(format!("Listen to: {}", listed_first(named.into_iter().map(written_name))?))
 }
 
 /// Any one schema an adapter's catalog entry holds (they share their record types).
@@ -258,13 +250,13 @@ fn plugin_signature(written: &str, spec: &PluginSpec) -> String {
         .map(|arg| {
             let optional = if required.contains(arg) || spec.required_args.is_none() { "" } else { "?" };
             match spec.arg_types.as_ref().and_then(|t| t.get(arg)) {
-                Some(ty) => format!("{arg}{optional}: {}", describe_field_type(&Ty::from_schema(ty))),
+                Some(ty) => format!("{arg}{optional}: {}", written_type(&Ty::from_schema(ty)).spell()),
                 None => format!("{arg}{optional}"),
             }
         })
         .collect();
     let gives = match &spec.output {
-        Some(PluginOutput::Value { type_ }) => format!(" → {}", describe_field_type(&Ty::from_schema(type_))),
+        Some(PluginOutput::Value { type_ }) => format!(" → {}", written_type(&Ty::from_schema(type_)).spell()),
         Some(PluginOutput::Record { .. }) => " → a record".to_string(),
         Some(PluginOutput::Records { .. }) => " → records".to_string(),
         None => String::new(),
@@ -342,10 +334,8 @@ fn symbol_card(service: &Service, analysis: &Analysis, text: &Text<'_>, id: move
         Some(ty) => format!("{name}: {ty}"),
         None => name.clone(),
     };
-    let record_lines = |position: Option<&Position>| -> Vec<String> {
-        let Some(position) = position else { return Vec::new() };
-        [fields_line(position), walk_on_line(position)].into_iter().flatten().collect()
-    };
+    let landing = position.map(described);
+    let landing_lines = || landing.as_ref().map(record_lines).unwrap_or_default();
     let docs = page_of(symbol.kind);
     match symbol.kind {
         SymbolKind::Movement | SymbolKind::Shape | SymbolKind::Type if !symbol.unit => {
@@ -369,7 +359,7 @@ fn symbol_card(service: &Service, analysis: &Analysis, text: &Text<'_>, id: move
                 });
             } else {
                 lines.push(format!("Declared on line {}.", symbol.span.start.line));
-                lines.extend(record_lines(position));
+                lines.extend(landing_lines());
             }
             card(&header, &lines, docs)
         }
@@ -406,20 +396,20 @@ fn symbol_card(service: &Service, analysis: &Analysis, text: &Text<'_>, id: move
             None => card(name, &["A plugin the catalog does not describe.".to_string()], docs),
         },
         SymbolKind::Param => {
-            let mut lines: Vec<String> = position.and_then(record_description).into_iter().collect();
+            let mut lines: Vec<String> = landing.as_ref().and_then(|landing| landing.description.clone()).into_iter().collect();
             lines.push(match parameter_of(analysis, symbol) {
                 Some((owner, true)) => format!("Parameter of {}.", owner.name),
                 Some((owner, false)) => format!("Parameter of a function written inside {}.", owner.name),
                 None => "A parameter.".to_string(),
             });
-            lines.extend(record_lines(position));
+            lines.extend(landing_lines());
             card(&named_type(type_words(position, ty)), &lines, docs)
         }
         SymbolKind::Binding => {
             let may_be_empty = matches!(position, Some(Position::MaybeEmpty(_))) || is_maybe_absent(symbol.types.field.as_ref());
             let set = format!("Set on line {}.", symbol.span.start.line);
             let mut lines = vec![if may_be_empty { format!("{set} It may be empty, so check it before use.") } else { set }];
-            lines.extend(record_lines(position));
+            lines.extend(landing_lines());
             card(&named_type(type_words(position, ty)), &lines, docs)
         }
         SymbolKind::Alias => {
@@ -430,7 +420,7 @@ fn symbol_card(service: &Service, analysis: &Analysis, text: &Text<'_>, id: move
                 None => format!("Each record the walk on line {} reaches.", symbol.span.start.line),
             };
             let mut lines = vec![reached];
-            lines.extend(record_lines(position));
+            lines.extend(landing_lines());
             card(&named_type(type_words(position, ty)), &lines, docs)
         }
         SymbolKind::FileImport => {
@@ -460,8 +450,9 @@ pub fn hover(service: &Service, source: &str, pos: Pos) -> Option<Hover> {
         if !resolves && builtins::namespaces().contains(&receiver_name.as_str()) {
             return finish(builtin_card(&format!("{receiver_name}.{}", word.name))?);
         }
-        let analysis = &analyzed?.analysis;
-        if let Some(position) = walk::receiver(analysis, &word.receiver, at) {
+        let analyzed = analyzed?;
+        let analysis = &analyzed.analysis;
+        if let Some(position) = walk::receiver(&analyzed, &word.receiver, at) {
             return finish(field_card(&position, &word.name, &receiver_name));
         }
         // A package's member, bound as `web.fetchUrl`.
@@ -474,8 +465,7 @@ pub fn hover(service: &Service, source: &str, pos: Pos) -> Option<Hover> {
     }
     let analyzed = service.analyze(source, Some(pos.line));
     if word.in_hop {
-        let analysis = &analyzed?.analysis;
-        let position = walk::receiver(analysis, &word.receiver, at)?;
+        let position = walk::receiver(analyzed.as_ref()?, &word.receiver, at)?;
         let receiver_name = walk::trailing_name(word.receiver.trim_end()).unwrap_or_default();
         return finish(edge_card(&position, &word.name, &receiver_name)?);
     }
@@ -493,33 +483,46 @@ pub fn hover(service: &Service, source: &str, pos: Pos) -> Option<Hover> {
 
 /// `company.Name`: the field's type, the adapter's words for it, and the record it is read off.
 fn field_card(position: &Position, field: &str, receiver_name: &str) -> String {
-    let ty = walk::field_type(position, field).unwrap_or_else(|| "not a field it has".into());
-    let schema: Option<std::borrow::Cow<'_, PositionSchema>> = position_schema_of_ref(walk::strip(position));
-    let mut lines: Vec<String> = schema.as_ref().and_then(|s| s.field_docs.as_ref()?.get(field).cloned()).into_iter().collect();
+    let described = describe_landing(position, Showing::default());
+    let found = described.fields.shown.iter().find(|f| f.name == field);
+    // Named, then typed, as a hover's header writes any name; the marks are the one notation's.
+    let header = match found {
+        Some(found) => format!("{}: {}{}", found.marked_name(), found.type_, if found.write_only { " (write only)" } else { "" }),
+        None => format!("{}: not a field it has", WrittenType::name(field).spell()),
+    };
+    let mut lines: Vec<String> = found.and_then(|f| f.description.clone()).into_iter().collect();
     lines.push(match record_of(position) {
         Some((record, connection)) => format!("On {} {record} record from {connection}.", article(&record)),
-        None => format!("On {}.", describe_position(walk::strip(position))),
+        None => format!("On {}.", describe_position(strip(position))),
     });
     if matches!(position, Position::MaybeEmpty(_)) && !receiver_name.is_empty() {
         lines.push(format!("Absent when `{receiver_name}` holds nothing."));
     }
-    card(&format!("{}: {ty}", written_name(field)), &lines, FIELD)
+    card(&header, &lines, FIELD)
 }
 
 /// `crm-[:Company]->`: where the edge lands, the adapter's words for it, and what is there.
 fn edge_card(position: &Position, edge: &str, receiver_name: &str) -> Option<String> {
-    let found = walk::edge_schemas(position).into_iter().find(|e| e.name == edge)?;
-    let hop = format!("{receiver_name}-[:{}]->", written_name(edge));
+    let found = describe_landing(position, Showing { fields: Some(0), ..Showing::default() }).edges.into_iter().find(|e| e.name == edge)?;
+    let hop = format!("{receiver_name}{}", found.hop());
     let Some(landing) = &found.landing else {
         return Some(card(&hop, &["Where it lands is not described, so what is read there is not checked.".to_string()], WALK));
     };
-    let mut lines: Vec<String> = found.schema.description.clone().or_else(|| record_description(landing)).into_iter().collect();
-    let writable = if found.schema.writable == Some(true) { " You can write new ones here." } else { "" };
+    let there = described(landing);
+    let mut lines: Vec<String> = found.description.clone().or_else(|| there.description.clone()).into_iter().collect();
+    let writable = if found.can.write { " You can write new ones here." } else { "" };
     lines.push(match record_of(landing) {
         Some((record, connection)) => format!("{record} records in {connection}.{writable}"),
         None => format!("Lands on {}.{writable}", describe_position(landing)),
     });
-    lines.extend(fields_line(landing));
-    lines.extend(walk_on_line(landing));
-    Some(card(&format!("{hop} {}", landing_name(landing)), &lines, WALK))
+    lines.extend(record_lines(&there));
+    Some(card(&hop, &lines, WALK))
+}
+
+/// The record itself, whether or not it may be missing.
+fn strip(position: &Position) -> &Position {
+    match position {
+        Position::MaybeEmpty(of) => strip(of),
+        other => other,
+    }
 }

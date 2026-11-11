@@ -10,7 +10,7 @@ Not a versioned contract: an editor speaks LSP, and LSP is the contract. This pa
   - every scope a body opens (a function, a closure, an `if` arm, a traversal block), with the text it covers;
   - every symbol ever bound in each scope, with its span and the type the check gave it;
   - each imported name, with the library declaration it resolved to.
-- **No second type checker.** The service never re-derives a type. Where it needs one the check did not keep, it calls the checker's own type functions: a field read off a record, or where an edge lands.
+- **No second type checker.** The service never re-derives a type. The text before a `.` or a `-[`, from where its expression starts, is typed by the checker's own query (`Analysis::type_walk`), as a program's check would type it there, a hop's `WHERE` included. What is at the landing comes from the checker's description value (`movement_checker::description`), written in the catalog's notation: a field as its name, its marks and its type (`` `Sent At`~ date ``), an edge as its hop with all it can do (`-[:Reactions]-> Reaction [w fires]`).
 - **Half-typed code still answers.** When the file does not parse, the service blanks the line the cursor is on and parses again. If that still fails, it keeps the text above the cursor and closes the open braces. The parse error is still reported, as `MOV_PARSE`, on the original text.
 
 ## What a position answers
@@ -18,10 +18,10 @@ Not a versioned contract: an editor speaks LSP, and LSP is the contract. This pa
 | question | answer | source |
 |---|---|---|
 | what is in scope | each binding, parameter, function, node, type, import and host unit (`cron`, `manual`) visible here, innermost first, with its type | the check's scopes, cut off at the cursor (a hoisted declaration is seen from anywhere in its list) |
-| what follows `x.` or `` x.` `` | the record's fields with their types | the symbol's record type, through the catalog schema |
-| what follows `-[`, `-[a:` | the edges the walk can take next, and where each lands | the record's (or instance's) edges in the catalog |
-| what follows `-[`, `-[a:` in a `listen to` | the edges a listen can take next: those its module announces arrivals on first (a listen can end there), then those it lists (a listen can pass through); each says which | the record's (or instance's) edges in the catalog, their `listenable` and `readable` |
-| what follows `a.` for a hop alias `a` | the fields where that hop lands | the walk's root type, stepped edge by edge with the checker's `edge_landing` |
+| what follows `x.` or `` x.` `` | the record's fields a read can name, each in the catalog's notation | `x` typed by the checker, then the description of what it holds |
+| what follows `-[`, `-[a:` | the edges the walk can take next, each as its hop: where it lands and what it can do | the walk typed by the checker, then the description of its landing |
+| what follows `-[`, `-[a:` in a `listen to` | the edges a listen can take next: those that fire first (a listen can end there), then those a walk reads (a listen can pass through); each hop's marks say which | the description's edges, by what each can do |
+| what follows `a.` for a hop alias `a` | the fields where that hop lands | the walk typed by the checker; when the cursor's line does not parse, the hop that binds `a` is closed in front of it |
 | what follows `<x-[:` in a type | the record types of instance `x` | the instance's schema |
 | a built-in | its current spelling and signature | the spelling table (crates/movement-parser/src/surface/table.rs) and the standard library's signatures |
 | after `connect` | adapter names | the catalog's adapters (host units left out) |
@@ -47,6 +47,22 @@ The same service is an export of the movement artifact (`packages/movement-lang/
 
 - **The call.** `src` is the file's text, `catalog` the [catalog snapshot](catalog-snapshot.md) as JSON, `query` the question below. The reply is a status and a JSON body: status 0 and the answer, or status 1 and `{ "error": { "message" } }` when the snapshot does not load, the query does not read, or the text is not UTF-8.
 - **The snapshot is the project.** The snapshot's `files` are the library files an import resolves against. Nothing is read from disk.
+
+### The description
+
+A second export answers what a catalog holds, with no source: `describe_query(catalog, request)`, bound in `@listen-fire/movement-lang` as `describeCatalog` and `describeAddress`. It is the description `listen-fire catalog` prints, as JSON, every name, type, hop and mark already spelled (`crates/movement-language/src/describe.rs` has the whole shape).
+
+```ts
+interface DescribeRequest {
+  address?: string;     // as `listen-fire catalog '<address>'` takes one: '@lf/slack:team_workspace-[:Channels]->'
+  showing?: Showing;    // how much of the place
+  landings?: Showing;   // how much of where each of its edges lands, one level deep
+}
+interface Showing { fields?: number; enumOptions?: number }   // absent: all; an enum cut is `"a" | "b" | …+3`
+```
+
+- **No address:** `{ legend, connections: [{ adapter, key, place }] }`, every connection the snapshot describes, at its root.
+- **An address:** `{ legend, diagnostics, place }`. The address is read and checked as `listen-fire catalog` reads one, with the describing option, against the snapshot as given (a host narrows it first, as for any check); a misspelt edge is the checker's diagnostic and `place` is null. With no walk, `place` is the connection's root and `records` each record type it holds. A run host unit is never connected, so no address names one; its root is in the answer with no address.
 
 ### The query
 

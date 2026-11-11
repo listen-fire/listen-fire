@@ -468,7 +468,7 @@ impl Checker<'_> {
                 codes::MEMBERS_NOT_CLOSED,
                 format!(
                     "'MEMBERS' lists the values of a closed set, and '{t}' is {} — there is nothing to list. Declare the set ('type {t} = <\"A\" | \"B\">'), or name a field whose options the system holds.",
-                    crate::types::field::describe_field_type(&named),
+                    crate::types::field::spell_type(&named),
                     t = expr.type_
                 ),
                 expr.type_span,
@@ -625,7 +625,7 @@ use movement_parser::lowering::expression::Expression;
 
 use crate::types::Position;
 use crate::types::declared::{MisfitOptions, describe_shape_node, run_built_landing, supplied_surface, surface_misfit};
-use crate::types::field::{Ty, describe_field_type, field_type_equals};
+use crate::types::field::{Ty, spell_type, field_type_equals};
 use crate::types::position::{LocalEdge, LocalNode, describe_position, position_ref_in, positions_match};
 
 /// A run-local edge's promise: readable, and nothing else; sequenced when its
@@ -878,8 +878,8 @@ impl Checker<'_> {
                     codes::NODE_LANDING_MISMATCH,
                     format!(
                         "the landings of '{name}' disagree about `{read}` ({} and {}) — a traversal lands on one type, so they must agree",
-                        describe_field_type(known[0]),
-                        describe_field_type(clash)
+                        spell_type(known[0]),
+                        spell_type(clash)
                     ),
                     span,
                 );
@@ -1175,7 +1175,7 @@ impl Checker<'_> {
                 format!(
                     "{} needs `{name}` ({}) and this graph doesn't write it — only a field declared '<T | null>' may be left out",
                     describe_shape_node(&required.position),
-                    describe_field_type(&want)
+                    spell_type(&want)
                 ),
                 span,
             );
@@ -1196,8 +1196,8 @@ impl Checker<'_> {
                 codes::GRAPH_FIELD_TYPE,
                 format!(
                     "{shape} declares `{name}` as {}, and this is {}{}",
-                    describe_field_type(&want),
-                    describe_field_type(have),
+                    spell_type(&want),
+                    spell_type(have),
                     crate::types::declared::text_repair(have, &want)
                 ),
                 span,
@@ -1210,9 +1210,9 @@ impl Checker<'_> {
                 codes::ABSENT_REQUIRED,
                 format!(
                     "{shape} needs `{name}` ({}), and {supplier} may be absent ({}) — fall back to a value that is always there ('{name}: COALESCE(…, \"…\")'), or declare the field '<{} | null>' if it may be left empty",
-                    describe_field_type(&want),
-                    describe_field_type(have),
-                    describe_field_type(strip_absent(&want))
+                    spell_type(&want),
+                    spell_type(have),
+                    spell_type(strip_absent(&want))
                 ),
                 span,
             );
@@ -1583,7 +1583,7 @@ impl Checker<'_> {
                     "'...{}' copies a map's keys or a record's fields into the graph, and '{}' is {} — spread a map (plugin output, JSON, '{{ … }}') or one record, or write the fields one by one",
                     spread.source,
                     spread.source,
-                    describe_field_type(&map)
+                    spell_type(&map)
                 ),
                 spread.span,
             );
@@ -1624,7 +1624,7 @@ impl Checker<'_> {
         let walk = HeldWalk::files_only();
         let Some(held) = handle_within(Some(value), &walk).or_else(|| handle_within(may_hold, &walk)) else { return };
         let written = if spread.path.is_some() { spread.source.clone() } else { crate::families::names::spell_name(&spread.source) };
-        let place = place_in_input(&written, &held, &describe_field_type(&held.handle));
+        let place = place_in_input(&written, &held, &spell_type(&held.handle));
         // The entry the record would be written as: the key it sits under —
         // in a list, the list's key, holding the records as a list.
         let last_key = held.steps.iter().rposition(|step| matches!(step, HeldStep::Key(_)));
@@ -1668,7 +1668,7 @@ impl Checker<'_> {
             );
             return;
         }
-        let place = place_in_input(written, &held, &describe_field_type(&held.handle));
+        let place = place_in_input(written, &held, &spell_type(&held.handle));
         // The entry made the record alone holds it as a reference: the value
         // itself when it is the record, or a slot of it.
         let only = match held.steps.as_slice() {
@@ -1810,7 +1810,7 @@ impl Checker<'_> {
                     let shape = describe_shape_node(required.map_or("", |r| r.position.as_str()));
                     self.report(
                         codes::GRAPH_ENTRY_KIND,
-                        format!("'{}.{key}' is {}, and `{key}` is a child node of {shape} — it needs a map, or a list of maps", spread.source, describe_field_type(ty)),
+                        format!("'{}.{key}' is {}, and `{key}` is a child node of {shape} — it needs a map, or a list of maps", spread.source, spell_type(ty)),
                         spread.span,
                     );
                 }

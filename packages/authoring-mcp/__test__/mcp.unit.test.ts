@@ -103,7 +103,7 @@ describe('the authoring tools over MCP', () => {
     const client = await connect('acme-key');
 
     const started = await call(client, 'getStarted');
-    expect(started.value).toContain('- Company [rw listenable]: Name text!, Stage enum(Lead|Customer)');
+    expect(started.value).toContain('- -[:Company]-> Company [r w fires]: Name! text, Stage "Lead" | "Customer"');
     expect(started.value).toContain('it is TypeScript, except');
 
     // The save is the check: nothing is saved while it has errors.
@@ -171,7 +171,7 @@ describe('the authoring tools over MCP', () => {
       connections: [{ name: 'workspace', system: 'crm' }],
       systems: expect.arrayContaining([expect.objectContaining({ system: 'mail', connected: false })]),
     });
-    expect((await call(client, 'describeConnection', { system: 'crm', position: '-[:Company]->' })).value).toContain('Company [rw listenable]');
+    expect((await call(client, 'describeConnection', { system: 'crm', position: '-[:Company]->' })).value).toContain('Company: Name! text');
     expect((await call(client, 'describeConnection', { system: ['crm', 'manual'] })).value).toMatch(/### crm[\s\S]*### manual/);
     expect((await call(client, 'describeConnection', { system: 'crm', detail: 'full' })).value).toMatchObject({ system: 'crm', schema: { collections: { Company: {} } } });
   });

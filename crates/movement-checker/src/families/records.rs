@@ -17,7 +17,7 @@ use movement_parser::lowering::expression::Expression;
 
 use crate::codes;
 use crate::families::walks::OLD_EDGE;
-use crate::types::field::{Ty, describe_field_type, is_dict, is_record, record_in, strip_absent, union_members};
+use crate::types::field::{Ty, spell_type, is_dict, is_record, record_in, strip_absent, union_members};
 use crate::types::infer::{Typing, holds_fields_in_hand};
 use crate::types::narrowing::bare_name;
 use crate::types::position::{InstanceRef, Position};
@@ -93,7 +93,7 @@ pub fn check_stdlib_record_arg(typing: &mut Typing, function: &Builtin, args: &[
     if !is_record(Some(&stripped)) && !is_dict(&stripped) {
         typing.report(
             codes::STDLIB_ARG_NOT_RECORD,
-            format!("{} takes a record or a dict, and this is {}.", function.describe(), describe_field_type(&stripped)),
+            format!("{} takes a record or a dict, and this is {}.", function.describe(), spell_type(&stripped)),
         );
         return;
     }

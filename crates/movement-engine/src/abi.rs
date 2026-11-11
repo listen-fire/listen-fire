@@ -245,6 +245,18 @@ pub unsafe extern "C" fn language_query(
     }
 }
 
+/// The describing query (`movement_language::abi::describe_query_with`):
+/// what a catalog snapshot holds, or the one connection or place an address
+/// names, as the description value; its zone database this engine's
+/// environment services.
+///
+/// # Safety
+/// The two input ranges must be readable; the out slots writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn describe_query(catalog_ptr: *const u8, catalog_len: u32, request_ptr: *const u8, request_len: u32, out_ptr_ptr: *mut usize, out_len_ptr: *mut usize) -> u32 {
+    unsafe { movement_language::abi::describe_query_with(&crate::env_services::EnvZones, catalog_ptr, catalog_len, request_ptr, request_len, out_ptr_ptr, out_len_ptr) }
+}
+
 /// `language_version()`: the language this artifact reads, which is its
 /// release's version (`movement_parser::version::LANGUAGE_VERSION`), as a
 /// JSON string, and 0.
@@ -533,7 +545,7 @@ mod tests {
             json!({
                 "name": "SPLIT",
                 "params": [{ "name": "text", "type": "text" }, { "name": "separator", "type": "text", "optional": true }],
-                "returns": "list of text",
+                "returns": "text[]",
                 "summary": "text cut into its trimmed, non-empty parts",
             })
         );
@@ -667,7 +679,7 @@ mod tests {
         let labels: Vec<&str> = answer["items"].as_array().unwrap().iter().map(|i| i["label"].as_str().unwrap()).collect();
         let native: Vec<String> = service.complete(source, completed).into_iter().map(|i| i.label).collect();
         assert_eq!(labels, native);
-        assert_eq!(answer["items"][0], json!({ "label": "Name", "kind": "field", "detail": "text" }));
+        assert_eq!(answer["items"][0], json!({ "label": "Name", "kind": "field", "detail": "Name text" }));
         assert_eq!(answer["word"], json!({ "start": pos(completed), "end": pos(completed) }));
 
         let hovered = at(4, 4);
@@ -696,6 +708,25 @@ mod tests {
         let (status, answer) = ask(json!({ "kind": "rename", "position": pos(hovered) }));
         assert_eq!(status, ERROR);
         assert!(answer["error"]["message"].as_str().unwrap().starts_with("the language query does not read"), "{answer}");
+    }
+
+    #[test]
+    fn the_describing_query_answers_the_description_of_an_address() {
+        let catalog = r#"{"adapters":{"slack":{"constructionArgs":[],"canFire":true,"schemas":{"":{"positions":{"channel":{"properties":{"Name":"text"},"edges":{}}},"collections":{"Channels":{"target":"channel"}},"writableRoots":{}}}}},"credentials":{},"plugins":{}}"#;
+        let ask = |request: Json| {
+            let (cat, cat_len) = input(catalog);
+            let request = request.to_string();
+            let (r, r_len) = input(&request);
+            let (mut out_ptr, mut out_len) = (0usize, 0usize);
+            let status = unsafe { describe_query(cat, cat_len, r, r_len, &mut out_ptr, &mut out_len) };
+            unsafe { (dealloc(cat, cat_len), dealloc(r, r_len)) };
+            (status, output(out_ptr, out_len))
+        };
+        let (status, answer) = ask(json!({ "address": "#slack-[:Channels]->" }));
+        assert_eq!(status, OK, "{answer}");
+        assert_eq!(answer["place"]["fields"]["shown"][0]["written"], "Name text");
+        let (status, answer) = ask(json!({ "address": 1 }));
+        assert_eq!(status, ERROR, "{answer}");
     }
 
     #[test]

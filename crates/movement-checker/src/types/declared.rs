@@ -11,7 +11,7 @@ use movement_parser::ast::{ShapeDeclaration, ShapeNode};
 use movement_parser::catalog::helpers::parse_field_type_name;
 use movement_parser::catalog::types::{Composite, EdgeSchema, FieldType, InstanceSchema, JsMap, PositionSchema, Scalar, SchemaFieldType};
 
-use super::field::{Ty, describe_field_type, field_assignable, strip_absent};
+use super::field::{Ty, spell_type, field_assignable, strip_absent};
 use super::position::{ExtractNode, Instance, InstanceRef, LocalNode, Position};
 
 /// `T | absent` as a schema spells it.
@@ -269,7 +269,7 @@ fn misfit_at(supplied: Option<&Surface>, schema: &InstanceSchema, position: &str
         let Some(have) = have else { continue };
         let want = Ty::from_schema(want);
         if !field_assignable(have, &want) {
-            return Some(format!("its {path}`{name}` is {}, not {}{}", describe_field_type(have), describe_field_type(&want), text_repair(have, &want)));
+            return Some(format!("its {path}`{name}` is {}, not {}{}", spell_type(have), spell_type(&want), text_repair(have, &want)));
         }
     }
     for (name, edge) in required.edges.iter() {

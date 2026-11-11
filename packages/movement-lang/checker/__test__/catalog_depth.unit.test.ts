@@ -19,7 +19,7 @@ const describe_ = (n: number) =>
 describe('catalog JSON depth, through the WASM', () => {
   it('answers at the limit', () => {
     expect(instantiate(LIMIT - 8)).toMatchObject({ ok: true, json: { value: { collections: {} } } });
-    expect(describe_(LIMIT)).toMatchObject({ ok: true, json: { value: expect.stringMatching(/^list of list of /) } });
+    expect(describe_(LIMIT)).toMatchObject({ ok: true, json: { value: expect.stringMatching(/\[\]\[\]$/) } });
   });
 
   it('refuses past it, naming the limit, and stays usable', () => {
@@ -35,6 +35,6 @@ describe('catalog JSON depth, through the WASM', () => {
         json: { error: { message: `the type does not read: it nests deeper than ${LIMIT} levels` } },
       });
     }
-    expect(describe_(1)).toEqual({ ok: true, json: { value: 'list of text' } });
+    expect(describe_(1)).toEqual({ ok: true, json: { value: 'text[]' } });
   });
 });

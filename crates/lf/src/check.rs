@@ -142,10 +142,30 @@ pub async fn open_checking(project: &Project) -> Result<Opened, String> {
 }
 
 pub async fn open_checking_in(project: &Project, scope: Scope) -> Result<Opened, String> {
+    open_reading(project, scope, None).await
+}
+
+/// What one program alone needs, whatever the project's files name: the
+/// connection it makes, described and narrowed by the hops it walks, by the
+/// step every check uses. A module not installed is refused by naming the
+/// ones that are, so then each of those is read too.
+pub async fn open_checking_of(project: &Project, program: &MovementFile) -> Result<Opened, String> {
+    let parsed = Parsed::of(program);
+    let externals = scan_externals(project)?;
+    let installed = |module: &str| externals.iter().any(|e| e.manifest.kind != "plugin" && (e.manifest.name == module || e.manifest.module.as_deref() == Some(module)));
+    let all_installed = parsed.program.as_ref().is_ok_and(|program| crate::secrets::Named::of(program).adapters().all(|module| installed(&module)));
+    open_reading(project, if all_installed { Scope::Used } else { Scope::Held }, Some(program)).await
+}
+
+async fn open_reading(project: &Project, scope: Scope, program: Option<&MovementFile>) -> Result<Opened, String> {
     let env: Vec<(String, String)> = std::env::vars().collect();
     let secrets = Secrets::open(project, &env)?;
     let credentials = secrets.credentials();
-    let files = scan_movements(project)?;
+    let read_files = || match program {
+        Some(program) => Ok(vec![program.clone()]),
+        None => scan_movements(project),
+    };
+    let files = read_files()?;
     let parsed = Parsed::each(&files, &[]);
     let missing = missing_credentials(&parsed, &secrets);
     if !missing.is_empty() {
@@ -171,7 +191,7 @@ pub async fn open_checking_in(project: &Project, scope: Scope) -> Result<Opened,
         schemas.insert(r.external.manifest.name.clone(), described);
     }
     // Scanned again after the externals start: one may have written a movement file.
-    let files = scan_movements(project)?;
+    let files = read_files()?;
     let catalog = catalog_of(&running, &schemas, credentials, &files);
     Ok(Opened::Ready(Checking { files, catalog, _running: running, secrets, schemas, scope, undescribed }))
 }

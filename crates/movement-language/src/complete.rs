@@ -1,7 +1,9 @@
 //! Completion: what the text just before the cursor is decides what is
 //! offered (docs/contracts/language-service.md, "What a position answers").
 
+use movement_checker::description::{Showing, describe_landing};
 use movement_checker::scope::SymbolKind;
+use movement_checker::types::Position;
 use movement_parser::stmt::AWAIT_ARRIVALS_WORD;
 use movement_parser::surface::table::plugin_name;
 use movement_parser::version::RUN_HOST_UNITS;
@@ -188,12 +190,16 @@ fn items_for(service: &Service, source: &str, pos: Pos, context: Context) -> Vec
         Context::Field { receiver, backtick } => {
             let Some(analyzed) = service.analyze(source, Some(pos.line)) else { return Vec::new() };
             let analysis = &analyzed.analysis;
-            let mut items: Vec<Item> = match walk::receiver(analysis, &receiver, at) {
-                Some(position) => walk::fields(&position)
+            let mut items: Vec<Item> = match walk::receiver(&analyzed, &receiver, at) {
+                // A field only a write gives is not one a read can name.
+                Some(position) => describe_landing(&position, Showing::default())
+                    .fields
+                    .shown
                     .into_iter()
-                    .map(|(name, ty)| {
-                        let insert = if backtick { None } else { Some(written_name(&name)).filter(|w| *w != name) };
-                        Item { insert, ..Item::new(name, ItemKind::Field, ty) }
+                    .filter(|field| !field.write_only)
+                    .map(|field| {
+                        let insert = if backtick { None } else { Some(written_name(&field.name)).filter(|w| *w != field.name) };
+                        Item { insert, ..Item::new(&field.name, ItemKind::Field, Some(field.written())) }
                     })
                     .collect(),
                 None => {
@@ -211,17 +217,8 @@ fn items_for(service: &Service, source: &str, pos: Pos, context: Context) -> Vec
         }
         Context::Edge { receiver, backtick, listen } => {
             let Some(analyzed) = service.analyze(source, Some(pos.line)) else { return Vec::new() };
-            let Some(position) = walk::receiver(&analyzed.analysis, &receiver, at) else { return Vec::new() };
-            if listen {
-                return listen_edge_items(&position, backtick);
-            }
-            walk::edges(&position)
-                .into_iter()
-                .map(|(name, landing)| {
-                    let insert = if backtick { None } else { Some(written_name(&name)).filter(|w| *w != name) };
-                    Item { insert, ..Item::new(name, ItemKind::Edge, Some(format!("→ {landing}"))) }
-                })
-                .collect()
+            let Some(position) = walk::receiver(&analyzed, &receiver, at) else { return Vec::new() };
+            edge_items(&position, backtick, listen)
         }
         Context::TypeOf { instance } => {
             let Some(analyzed) = service.analyze(source, Some(pos.line)) else { return Vec::new() };
@@ -325,25 +322,21 @@ fn items_for(service: &Service, source: &str, pos: Pos, context: Context) -> Vec
     }
 }
 
-/// A listen's next hop: an edge it can pass through (one its module lists)
-/// or end on (one its module announces arrivals on), those it can end on
-/// first, each saying which it is.
-fn listen_edge_items(position: &movement_checker::types::Position, backtick: bool) -> Vec<Item> {
-    let mut items: Vec<(bool, Item)> = walk::listen_edges(position)
+/// The edges a hop off `position` can take, each with its hop as the one
+/// notation writes it. A listen's (`listen`) are those it can pass through (a
+/// walk reads them) or end on (they fire), those it can end on first.
+fn edge_items(position: &Position, backtick: bool, listen: bool) -> Vec<Item> {
+    let mut edges: Vec<_> = describe_landing(position, Showing::default()).edges.into_iter().filter(|edge| !listen || edge.can.read || edge.can.fires).collect();
+    if listen {
+        edges.sort_by_key(|edge| !edge.can.fires);
+    }
+    edges
         .into_iter()
-        .filter(|e| e.readable || e.listenable)
-        .map(|e| {
-            let detail = match (e.readable, e.listenable) {
-                (true, true) => format!("→ {} · a listen can end here, or walk on", e.landing),
-                (false, true) => format!("→ {} · only announced: a listen ends here", e.landing),
-                _ => format!("→ {}", e.landing),
-            };
-            let insert = if backtick { None } else { Some(written_name(&e.name)).filter(|w| *w != e.name) };
-            (e.listenable, Item { insert, ..Item::new(e.name, ItemKind::Edge, Some(detail)) })
+        .map(|edge| {
+            let insert = if backtick { None } else { Some(written_name(&edge.name)).filter(|w| *w != edge.name) };
+            Item { insert, ..Item::new(&edge.name, ItemKind::Edge, Some(edge.hop())) }
         })
-        .collect();
-    items.sort_by_key(|(listenable, _)| !listenable);
-    items.into_iter().map(|(_, item)| item).collect()
+        .collect()
 }
 
 /// The connect actions of the instance `receiver` names, when it is one

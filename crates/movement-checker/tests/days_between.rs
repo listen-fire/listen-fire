@@ -42,7 +42,7 @@ fn only_a_date_a_datetime_or_text_is_a_day() {
 fn a_day_count_from_a_missing_date_or_from_text_may_be_missing() {
     let found = check("  event = Date.parse(i.Text)\n  days = Date.daysBetween(Date.today(\"UTC\"), event)\n  return days < 14");
     assert_eq!(codes(&found), ["MOV_ABSENT_REQUIRED"], "{found:?}");
-    assert!(found[0].message.contains("number (or absent)"), "{}", found[0].message);
+    assert!(found[0].message.contains("number | null"), "{}", found[0].message);
     for arg in ["null", "i.Text", "\"2026-03-12\""] {
         let found = check(&format!("  return Date.daysBetween({arg}, i.At) + 1"));
         assert_eq!(codes(&found), ["MOV_ABSENT_REQUIRED"], "{arg}: {found:?}");

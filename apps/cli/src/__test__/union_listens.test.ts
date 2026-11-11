@@ -175,7 +175,7 @@ const statePipelines = (dir: string) => stateRows<{ pipeline: string; state: str
 test("the fired function's parameter is held to what lands under every member", () => {
   const check = lf(crmProject('<c-[:Memo]->>'), 'check');
   assert.notEqual(check.code, 0, check.out);
-  assert.match(check.out, /MOV_LISTEN_PARAM_MISMATCH 'noted' takes 'n: <c-\[:Memo\]->>', .* 'c-\[:Spaces\]->-\[:Subjects\]-><Company>-\[:Notes\]->' lands c\.Remark/, check.out);
+  assert.match(check.out, /MOV_LISTEN_PARAM_MISMATCH 'noted' takes 'n: <c-\[:Memo\]->>', .* 'c-\[:Spaces\]->-\[:Subjects\]-><Company>-\[:Notes\]->' lands Remark/, check.out);
   assert.equal(check.out.match(/ error /g)?.length, 1, `an announced edge off a union is not write-only: ${check.out}`);
 });
 

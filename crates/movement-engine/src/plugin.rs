@@ -304,7 +304,7 @@ fn text_as(value: &Js, declared: &FieldType) -> Option<Js> {
 /// What the run notes of a plugin whose value is not of the type it
 /// declares, naming the plugin.
 fn misfit(written: &str, declared: &FieldType, value: &Js) -> String {
-    let declared = movement_parser::catalog::helpers::describe_field_type(declared).unwrap_or_else(|_| "another type".into());
+    let declared = movement_parser::catalog::written_type::spell_field_type(declared);
     let printed: String = crate::js::json_stringify(value, 0).chars().take(80).collect();
     format!("'{written}' declares it hands back {declared}, and it handed back {} ({printed}); the value is bound as the 0.12 releases bind it", value.type_of())
 }

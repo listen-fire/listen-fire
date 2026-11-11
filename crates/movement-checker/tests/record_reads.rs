@@ -57,7 +57,7 @@ fn a_name_past_a_record_that_it_does_not_have_names_its_fields_and_its_edges() {
     assert_eq!(code, "MOV_UNKNOWN_PROPERTY");
     assert_eq!(
         message,
-        "h.Notification has no field 'subject' — it has: Count, Meta, Reason, Title; and edges, walked (`-[:…]->`) rather than read: Pull Request, Repository"
+        "Notification has no field 'subject' — it has: Count, Meta, Reason, Title; and edges, walked (`-[:…]->`) rather than read: Pull Request, Repository"
     );
 }
 
@@ -72,11 +72,11 @@ fn a_field_a_record_does_not_have_names_its_edges_too() {
 fn an_edge_read_as_a_field_says_so_and_shows_the_walk() {
     let (code, message) = one(in_block("n.Repository"));
     assert_eq!(code, "MOV_UNKNOWN_PROPERTY");
-    assert_eq!(message, "'Repository' is an edge of h.Notification, not a field — walk it: `n-[:Repository]->`");
+    assert_eq!(message, "'Repository' is an edge of Notification, not a field — walk it: `n-[:Repository]->`");
     let (_, message) = one(in_block("n.Repository.Name"));
-    assert_eq!(message, "'Repository' is an edge of h.Notification, not a field — walk it: `n-[:Repository]->.Name`");
+    assert_eq!(message, "'Repository' is an edge of Notification, not a field — walk it: `n-[:Repository]->.Name`");
     let (_, message) = one(in_block("n.`Pull Request`"));
-    assert_eq!(message, "'Pull Request' is an edge of h.Notification, not a field — walk it: `n-[:`Pull Request`]->`");
+    assert_eq!(message, "'Pull Request' is an edge of Notification, not a field — walk it: `n-[:`Pull Request`]->`");
 }
 
 #[test]

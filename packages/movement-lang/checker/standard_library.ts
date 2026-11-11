@@ -41,8 +41,8 @@ export interface StandardBuiltin {
    *  table (`surfaceTable`) gives the name an author writes. */
   name: string;
   params: readonly StandardBuiltinParam[];
-  /** What a call gives back, as the checker describes a type (`list of
-   *  text`, `text (or absent)`), or `derived`: it follows from the arguments. */
+  /** What a call gives back, as a program writes a type (`text[]`,
+   *  `text | null`), or `derived`: it follows from the arguments. */
   returns: string;
   /** One line for listings. `RETIRED — …` for a built-in kept only so old
    *  automations still read. */

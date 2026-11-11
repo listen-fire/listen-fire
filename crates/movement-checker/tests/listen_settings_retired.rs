@@ -380,7 +380,7 @@ fn a_field_compared_by_identity_is_rewritten_unsafely_and_says_why() {
     let told = retired(&d);
     let fix = told.fix.as_ref().unwrap_or_else(|| panic!("{told:?}"));
     assert_eq!(fix.get("safe"), None, "{told:?}");
-    assert!(told.message.contains("`Files` holds list of file, which a listen compares by identity"), "{}", told.message);
+    assert!(told.message.contains("`Files` holds file[], which a listen compares by identity"), "{}", told.message);
     let text = fixed(&source, &d);
     assert!(text.contains("c.Current.Files != c.Previous.Files"), "{text}");
     assert_rechecks_clean(&text);

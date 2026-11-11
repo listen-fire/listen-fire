@@ -18,7 +18,7 @@ use crate::scope::{Resolution, ScopeId, SymbolId};
 use crate::slots::is_bare_ident;
 use crate::types::scope_env::SymbolTypes;
 use crate::types::field::{
-    HeldWalk, Ty, describe_field_type, field_assignable, handle_within, holds_records, is_maybe_absent, mixes_record_with_value, spell_held_steps, strip_absent,
+    HeldWalk, Ty, spell_type, field_assignable, handle_within, holds_records, is_maybe_absent, mixes_record_with_value, spell_held_steps, strip_absent,
     values_beside_record,
 };
 use crate::types::position::{ClosureParam, Position, ReturnShape, describe_position, positions_match, system_difference};
@@ -414,7 +414,7 @@ impl Checker<'_> {
                 fit.callee,
                 describe_position(position),
                 describe_arg_place(fit),
-                describe_field_type(value)
+                spell_type(value)
             ),
             span,
         );
@@ -427,7 +427,7 @@ impl Checker<'_> {
         let Some(mixed) = types.iter().copied().find(|t| mixes_record_with_value(*t)).flatten() else { return };
         let mut others: Vec<String> = Vec::new();
         for member in values_beside_record(Some(mixed)) {
-            let described = describe_field_type(&member);
+            let described = spell_type(&member);
             if !others.contains(&described) {
                 others.push(described);
             }
@@ -439,7 +439,7 @@ impl Checker<'_> {
                 fit.callee,
                 describe_position(position),
                 describe_arg_place(fit),
-                describe_field_type(mixed),
+                spell_type(mixed),
                 others.join(" or "),
                 spell_word("IS")
             ),
@@ -463,7 +463,7 @@ impl Checker<'_> {
         }
         let steps = spell_held_steps(&hidden.steps);
         let file = matches!(hidden.handle, Ty::File);
-        let held = describe_field_type(&hidden.handle);
+        let held = spell_type(&hidden.handle);
         let where_ = if steps.is_empty() { format!("may be {held}") } else { format!("may hold {held} at '{steps}'") };
         let repair = if file {
             "Pass its text ('READ(f)')".to_string()
@@ -471,7 +471,7 @@ impl Checker<'_> {
             format!("Narrow it to the record with {} and pass a field off it ('r.`Name`')", spell_word("IS"))
         };
         let argument = fit.caller.as_ref().map_or_else(|| format!("'{written}'"), |caller| caller.argument.clone());
-        let param_words = describe_field_type(param);
+        let param_words = spell_type(param);
         let message = format!(
             "{} expects {param_words}{}, but {argument} {where_} — {}, not a value, and such a union is no {param_words}, as in TypeScript. {repair}, or fill every arm with a value",
             callee_words(fit),
@@ -495,7 +495,7 @@ impl Checker<'_> {
     fn check_value_arg_fit(&mut self, fit: &ArgFit, param_ty: &Ty, arg_ty: Option<&Ty>, options: ValueArg) {
         let Some(arg_ty) = arg_ty else { return };
         let span = options.span;
-        let expected = format!("{} expects {}{}", callee_words(fit), describe_field_type(param_ty), describe_arg_place(fit));
+        let expected = format!("{} expects {}{}", callee_words(fit), spell_type(param_ty), describe_arg_place(fit));
         let argument = fit.caller.as_ref().map_or("this argument", |caller| caller.argument.as_str());
         if let Some(literal) = string_literal_of(options.parsed)
             && self.report_enum_literal(literal, strip_absent(param_ty), span)
@@ -524,8 +524,8 @@ impl Checker<'_> {
             _ => None,
         };
         let message = match &as_list {
-            Some((_, text)) => format!("{expected}, but {argument} is {} — pass it as a list: '{text}'", describe_field_type(arg)),
-            None => format!("{expected}, but {argument} is {}", describe_field_type(arg)),
+            Some((_, text)) => format!("{expected}, but {argument} is {} — pass it as a list: '{text}'", spell_type(arg)),
+            None => format!("{expected}, but {argument} is {}", spell_type(arg)),
         };
         let mut diagnostic = crate::diagnostic::Diagnostic::error(codes::CALL_ARG_TYPE, message, span);
         if let Some((at, text)) = as_list {
@@ -538,7 +538,7 @@ impl Checker<'_> {
     fn check_record_arg_fit(&mut self, expected: &str, keys: &movement_parser::catalog::types::JsMap<Option<Ty>>, arg: &Ty, options: ValueArg) {
         let span = options.span;
         let Ty::Dict { shape: supplied, .. } = arg else {
-            self.report(codes::CALL_ARG_TYPE, format!("{expected}, but this argument is {}", describe_field_type(arg)), span);
+            self.report(codes::CALL_ARG_TYPE, format!("{expected}, but this argument is {}", spell_type(arg)), span);
             return;
         };
         let required: Vec<&String> = keys.0.iter().filter(|(_, t)| t.as_ref().is_some_and(|t| !is_maybe_absent(Some(t)))).map(|(k, _)| k).collect();
@@ -547,7 +547,7 @@ impl Checker<'_> {
             if !required.is_empty() {
                 self.report(
                     codes::CALL_ARG_TYPE,
-                    format!("{expected}, but this argument is {}, whose keys are data — nothing says it has {}", describe_field_type(arg), quoted(&required)),
+                    format!("{expected}, but this argument is {}, whose keys are data — nothing says it has {}", spell_type(arg), quoted(&required)),
                     span,
                 );
             }
@@ -590,8 +590,8 @@ impl Checker<'_> {
                     codes::CALL_ARG_TYPE,
                     format!(
                         "{expected}, and its key '{key}' takes {}, but the value given for it is {}",
-                        describe_field_type(strip_absent(key_ty)),
-                        describe_field_type(strip_absent(given))
+                        spell_type(strip_absent(key_ty)),
+                        spell_type(strip_absent(given))
                     ),
                     span,
                 );

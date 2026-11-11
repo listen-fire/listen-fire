@@ -98,67 +98,9 @@ pub enum Variant<'a> {
     Composite(&'a FieldType),
 }
 
-/// `describeFieldType(type)`: the type in author-facing words. A record's
-/// position is described by the typing layer, which this crate does not
-/// hold yet; describing one is refused rather than guessed.
-pub fn describe_field_type(type_: &FieldType) -> Result<String, String> {
-    let c = match type_ {
-        FieldType::Scalar(Scalar::Absent) => return Ok("null".into()),
-        FieldType::Scalar(s) => return Ok(s.name().into()),
-        FieldType::Composite(c) => c,
-    };
-    Ok(match c {
-        Composite::MaybeAbsent { of } => format!("{} (or absent)", describe_member(of)?),
-        Composite::List { of, .. } => format!("list of {}", describe_member(of)?),
-        Composite::Union { of } => of.iter().map(describe_field_type).collect::<Result<Vec<_>, _>>()?.join(" | "),
-        Composite::Tuple { of, rest } => {
-            let mut slots = of.iter().map(slot).collect::<Result<Vec<_>, _>>()?;
-            if let Some(rest) = rest {
-                let run = match &rest.of {
-                    None => "?".to_string(),
-                    Some(of) => describe_member(of)?,
-                };
-                let at = splice_start(rest.at.0, slots.len());
-                slots.insert(at, format!("...list of {run}"));
-            }
-            format!("[{}]", slots.join(", "))
-        }
-        Composite::Dict { shape: Some(shape), .. } => {
-            let keys = shape.iter().map(|(k, v)| Ok(format!("{k}: {}", slot(v)?))).collect::<Result<Vec<_>, String>>()?;
-            format!("{{ {} }}", keys.join(", "))
-        }
-        Composite::Dict { of, shape: None } => format!("dict of {}", describe_member(of)?),
-        Composite::Record { position: None } => "a record".into(),
-        Composite::Record { position: Some(position) } => match position.name() {
-            Some(name) => format!("a {name} record"),
-            None => return Err("describing the record of an instance itself is the typing layer's, which is not ported".into()),
-        },
-        Composite::Owned { name, .. } => name.clone(),
-        Composite::Enum { options, open: Some(_) } => format!("known values ({}, …)", options.join(" | ")),
-        Composite::Enum { options, open: None } if options.is_empty() => "enum (no available values)".into(),
-        Composite::Enum { options, open: None } => format!("enum ({})", options.join(" | ")),
-    })
-}
-
-fn slot(type_: &Option<FieldType>) -> Result<String, String> {
-    match type_ {
-        None => Ok("?".into()),
-        Some(t) => describe_field_type(t),
-    }
-}
-
-/// A type inside another, parenthesised when it is a union.
-fn describe_member(type_: &FieldType) -> Result<String, String> {
-    let described = describe_field_type(type_)?;
-    Ok(match type_ {
-        FieldType::Composite(Composite::Union { .. }) => format!("({described})"),
-        _ => described,
-    })
-}
-
 /// `Array.prototype.splice`'s start: truncated, counted from the end when
 /// negative, clamped to the length.
-fn splice_start(at: f64, len: usize) -> usize {
+pub(crate) fn splice_start(at: f64, len: usize) -> usize {
     let at = if at.is_nan() { 0.0 } else { at.trunc() };
     if at < 0.0 { (len as f64 + at).max(0.0) as usize } else { at.min(len as f64) as usize }
 }

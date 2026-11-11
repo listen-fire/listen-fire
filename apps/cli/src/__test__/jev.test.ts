@@ -93,7 +93,7 @@ test('listen-fire check warns of a plain argument of the wrong type: a number fo
     assert.match(questionAsNumber.out, /warning MOV_CALL_ARG_TYPE 'jev\.score' takes text for 'question', and this is number/);
     const labelsAsText = await checkWith(dir, '["software", "robotics", "other"]', '"robotics"');
     assert.equal(labelsAsText.code, 0, labelsAsText.out);
-    assert.match(labelsAsText.out, /warning MOV_CALL_ARG_TYPE 'jev\.classify' takes list of text for 'labels', and this is text/);
+    assert.match(labelsAsText.out, /warning MOV_CALL_ARG_TYPE 'jev\.classify' takes text\[\] for 'labels', and this is text/);
     console.log([questionAsNumber, labelsAsText].map((c) => c.out.trim()).join('\n'));
   } finally {
     await fake.close();

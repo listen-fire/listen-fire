@@ -8,5 +8,5 @@ export { createAuthoringHandler, authoringServer, type AuthoringHandler, type Au
 export { AUTHORING_TOOL_NAMES, RUN_TOOL_NAMES, authoringInstructions, type AuthoringToolName } from './tools';
 export { checkProgram, authoringDiagnostics, type AuthoringDiagnostic, type Validation } from './check';
 export { revisionOf, applyContentEdit, readWindow, grepPrograms, GREP_MAX_MATCHES, type ContentEdit, type GrepMatch, type LineWindow } from './text';
-export { renderConnectionsDigest, describeFromSnapshot, compactType, DIGEST_LEGEND } from './digest';
+export { renderConnectionsDigest, describeFromSnapshot } from './digest';
 export { readHandbook, searchHandbook, HANDBOOK_ID } from './handbook';

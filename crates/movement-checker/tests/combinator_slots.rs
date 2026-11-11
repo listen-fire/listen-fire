@@ -61,7 +61,7 @@ const SHAPES: [Shape; 2] = [
         collection: "mail-[:Messages]->",
         needs: "To",
         read: "From",
-        named: "mail.Message",
+        named: "Message",
         awaits: "await",
     },
     Shape {
@@ -70,7 +70,7 @@ const SHAPES: [Shape; 2] = [
         collection: "chat-[:Posts]->",
         needs: "Text",
         read: "Author",
-        named: "chat.Post",
+        named: "Post",
         awaits: "await new",
     },
 ];
@@ -116,7 +116,7 @@ fn an_all_that_lets_a_failed_arm_through_leaves_its_slot_maybe_absent() {
         let col = 14 + shape.collection.len() + needs.len();
         let end = col + "r[0]".len();
         let absent = format!(
-            "MOV_ABSENT_REQUIRED 8:{col}-8:{end} '{needs}' on {named} needs a value, but 'r[0]' may be absent (text (or absent)) — write '{needs}: coalesce(r[0], \"unknown\")' to fall back to a value that is always there, or '{needs} ?: r[0]' to leave it unset when absent (see handbook: front#maybe-absent)"
+            "MOV_ABSENT_REQUIRED 8:{col}-8:{end} '{needs}' on {named} needs a value, but 'r[0]' may be absent (text | null) — write '{needs}: coalesce(r[0], \"unknown\")' to fall back to a value that is always there, or '{needs} ?: r[0]' to leave it unset when absent (see handbook: front#maybe-absent)"
         );
         assert_eq!(found(shape, program), [absent], "{named}");
     }

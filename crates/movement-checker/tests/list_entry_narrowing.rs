@@ -150,7 +150,7 @@ fn a_value_whose_member_nobody_described_narrows_nothing() {
     assert_eq!(errors_under(&admitting, &source("le.`listName` == \"Pipeline\"", "le.`listName`")), Vec::<String>::new());
 }
 
-const UNNARROWED: &str = "MOV_UNKNOWN_PROPERTY crm.Organization List Entry has no field 'Deal Created' — it has: listName";
+const UNNARROWED: &str = "MOV_UNKNOWN_PROPERTY `Organization List Entry` has no field 'Deal Created' — it has: listName";
 
 #[test]
 fn without_a_pin_the_hop_reads_only_what_every_list_has() {
@@ -183,5 +183,5 @@ fn a_hosts_refinement_answers_before_the_literal() {
     assert_eq!(errors_under(&refined, &source(hop_where, "le.`Only Refined`")), Vec::<String>::new());
     let found = errors_under(&refined, &source(hop_where, "le.`Deal Created`"));
     assert_eq!(found.len(), 1, "{found:?}");
-    assert!(found[0].contains("Refined Deals has no field 'Deal Created'"), "{found:?}");
+    assert!(found[0].contains("`Refined Deals` has no field 'Deal Created'"), "{found:?}");
 }

@@ -52,7 +52,7 @@ fn what_every_member_has_is_read_and_walked() {
 fn what_one_member_lacks_is_refused_by_the_union_rule() {
     let field = reads("return n.Mood");
     assert_eq!(codes(&field), ["MOV_UNKNOWN_PROPERTY"], "{field:#?}");
-    assert!(field[0].contains("crm.Memo or crm.Remark") && field[0].contains("crm.Remark refuses it"), "{field:#?}");
+    assert!(field[0].contains("Memo | Remark") && field[0].contains("Remark refuses it"), "{field:#?}");
     let edge = reads("return n-[:Pinned]->");
     assert_eq!(codes(&edge), ["MOV_TRAVERSE_UNKNOWN_EDGE"], "{edge:#?}");
 }
@@ -73,9 +73,9 @@ fn a_member_fits_the_union_and_the_union_fits_only_a_wider_one() {
     assert_eq!(call("<crm-[:Remark]-> | crm-[:Memo]->>", WRITING), Vec::<String>::new());
     assert_eq!(call("<crm-[:Memo]-> | crm-[:Remark]-> | crm-[:Note]->>", WRITING), Vec::<String>::new());
     let narrower = call("<crm-[:Memo]->>", WRITING);
-    assert_eq!(narrower, ["MOV_CALL_ARG_TYPE 'g' expects crm.Memo for 'x' (argument 1), but this argument is crm.Memo or crm.Remark"], "{narrower:#?}");
+    assert_eq!(narrower, ["MOV_CALL_ARG_TYPE 'g' expects Memo for 'x' (argument 1), but this argument is Memo | Remark"], "{narrower:#?}");
     let other = call(WRITING, "<crm-[:Note]->>");
-    assert_eq!(other, ["MOV_CALL_ARG_TYPE 'g' expects crm.Memo or crm.Remark for 'x' (argument 1), but this argument is crm.Note"], "{other:#?}");
+    assert_eq!(other, ["MOV_CALL_ARG_TYPE 'g' expects Memo | Remark for 'x' (argument 1), but this argument is Note"], "{other:#?}");
 }
 
 #[test]
@@ -105,7 +105,7 @@ fn a_listen_through_a_union_fires_a_function_typed_by_the_union_of_its_landings(
     assert_eq!(listen("<crm-[:Remark]-> | crm-[:Memo]-> | crm-[:Note]->>"), Vec::<String>::new());
     let narrow = listen("<crm-[:Memo]-> | crm-[:Note]->>");
     assert_eq!(codes(&narrow), ["MOV_LISTEN_PARAM_MISMATCH"], "{narrow:#?}");
-    assert!(narrow[0].contains("'noted' takes 'n: <crm-[:Memo]-> | crm-[:Note]->>'") && narrow[0].contains("lands crm.Remark"), "{narrow:#?}");
+    assert!(narrow[0].contains("'noted' takes 'n: <crm-[:Memo]-> | crm-[:Note]->>'") && narrow[0].contains("lands Remark"), "{narrow:#?}");
     // What lands is the listen's connection's: a member of another is refused.
     let other = errors(&format!("other = connect m\nfunction noted(n: <crm-[:Memo]-> | other-[:Remark]->>) {{\n  return n.Text\n}}\nlisten to crm-[:Subjects]->-[:Jots]-> fire noted\n"));
     assert_eq!(codes(&other), ["MOV_LISTEN_PARAM_MISMATCH"], "{other:#?}");

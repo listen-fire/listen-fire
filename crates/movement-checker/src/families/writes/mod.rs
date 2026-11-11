@@ -35,10 +35,10 @@ use crate::families::names::spell_name;
 use crate::scope::{Resolution, ScopeId, SymbolKind};
 use crate::slots::{expression_of_slot, is_bare_ident};
 use crate::types::field::{
-    HeldHandle, HeldWalk, Ty, closure_not_data_message, describe_field_type, field_assignable, field_type_compatible, handle_within,
+    HeldHandle, HeldWalk, Ty, closure_not_data_message, spell_type, field_assignable, field_type_compatible, handle_within,
     holds_records, is_list, is_maybe_absent, may_be_closure, spell_held_steps, strip_absent,
 };
-use crate::types::position::{HandlePosition, InstanceRef, Position, describe_position, position_schema_of_ref};
+use crate::types::position::{HandlePosition, InstanceRef, Position, describe_position, display_name_of, position_schema_of_ref};
 use crate::types::scope_env::SymbolTypes;
 use crate::types::Typing;
 
@@ -88,11 +88,19 @@ pub struct Landing {
     pub root: Option<WritableRootSchema>,
     pub handle: Option<Position>,
     pub description: Option<String>,
+    /// The written type's address as a program writes one (`crm-[:company]->`),
+    /// where a field's type can be borrowed from it.
+    pub address: Option<String>,
     /// The record lands on an edge of a node this run built.
     pub local: bool,
     /// …whose landings are a node declaration's records.
     pub declared: bool,
     pub resolved: Option<Resolved>,
+}
+
+/// A record type's address, as a program writes one: `crm-[:company]->`.
+fn type_address(graph: &str, type_name: &str) -> String {
+    format!("{}-[:{}]->", spell_name(graph), spell_name(type_name))
 }
 
 /// What a name holds, for a rule that needs a record (`recordOfName`).
@@ -169,6 +177,7 @@ impl Checker<'_> {
         }
         let mut root: Option<WritableRootSchema>;
         let mut root_description = "the write target".to_string();
+        let root_address: Option<String>;
         let mut handle: Option<Position>;
         let mut local = false;
         let mut declared_target = false;
@@ -185,6 +194,7 @@ impl Checker<'_> {
                 if let Some(description) = linked.description {
                     root_description = description;
                 }
+                root_address = linked.address;
                 if let Some(resolved) = linked.resolved {
                     if explicit_type.is_none() && resolved.parent_chosen_by_where() {
                         self.stamp(*span, crate::answer::StampKind::WrittenType(resolved.written.clone()));
@@ -199,12 +209,14 @@ impl Checker<'_> {
                 if let Some(description) = tuple.description {
                     root_description = description;
                 }
+                root_address = tuple.address;
             }
             WriteTarget::Position { root: target_root, span } => {
                 let position = self.position_target(target_root, *span, scope);
                 root = position.root;
                 handle = position.handle;
                 root_description = position.description.unwrap_or_default();
+                root_address = position.address;
                 local = position.local;
                 declared_target = position.declared;
                 position_write = true;
@@ -284,7 +296,7 @@ impl Checker<'_> {
                     format!(
                         "'{}' on {root_description} is {}, not a list — '{op}' (append) applies only to multi-valued fields. Use ':' to set it, or '?:' to set it only when empty",
                         field.name,
-                        describe_field_type(target)
+                        spell_type(target)
                     ),
                     field.span,
                 );
@@ -321,7 +333,7 @@ impl Checker<'_> {
             if field.spread.is_none() {
                 self.check_expr_slot_in(&field.value, scope, true);
             }
-            let path = root_description.contains('.').then(|| format!("{root_description}.{}", field.name));
+            let path = root_address.as_ref().map(|address| format!("{address}.{}", spell_name(&field.name)));
             let (value_type, held) = self.write_field_value(&field.value, scope, target_type.as_ref(), path);
             // Against a target the walk typed, or a linked one it refused
             // (a maybe-empty parent): the TypeScript holds every field to it.
@@ -720,7 +732,7 @@ impl Checker<'_> {
             {
                 self.report(
                     codes::LINKED_TYPE_MISMATCH,
-                    format!("'{edge_name}' targets {}.{} — the explicit type '{explicit}' contradicts it", instance.name, edge.target),
+                    format!("'{edge_name}' targets {} — the explicit type '{explicit}' contradicts it", spell_name(&display_name_of(&instance, &edge.target))),
                     span,
                 );
                 return Landing::default();
@@ -749,34 +761,13 @@ impl Checker<'_> {
             self.push_typed(diagnostics);
         }
 
-        let root = instance
-            .schema
-            .writable_roots
-            .get(&written)
+        let root = crate::types::position::write_shape_of(&instance.schema, &written)
             .cloned()
-            .or_else(|| instance.schema.create_shapes.as_ref().and_then(|c| c.get(&written).cloned()))
             .or_else(|| if purpose == Purpose::Match { readable_match_root(instance.schema.positions.get(&written)) } else { None });
-        let result_shape: Vec<(String, Ty)> = match &root {
-            Some(root) => root.result_shape.iter().map(|(k, v)| (k.clone(), Ty::from_schema(v))).collect(),
-            None => instance
-                .schema
-                .positions
-                .get(&written)
-                .map(|p| p.properties.iter().map(|(k, v)| (k.clone(), Ty::from_schema(v))).collect())
-                .unwrap_or_default(),
-        };
-        let handle = Position::Handle(HandlePosition {
-            instance: instance.clone(),
-            position: instance.schema.positions.contains_key(&written).then(|| written.clone()),
-            written_type: written.clone(),
-            result_shape: result_shape.into_iter().collect(),
-            edges: root.as_ref().and_then(|r| r.edges.clone()),
-            generic_landings: None,
-            answer_fields: None,
-            written: purpose == Purpose::Write,
-            set_fields: None,
-            identity: Default::default(),
-        });
+        let handle = Position::Handle(HandlePosition::of_shape(
+            &instance,
+            crate::types::position::WriteLanding { written_type: &written, root: root.as_ref(), written: purpose == Purpose::Write },
+        ));
         let parent_type = match &parent {
             Position::Position(p) => Some(p.position.clone()),
             Position::Handle(h) => h.position.clone(),
@@ -785,7 +776,8 @@ impl Checker<'_> {
         Landing {
             root,
             handle: Some(handle),
-            description: Some(format!("{}.{written}", instance.name)),
+            description: Some(spell_name(&display_name_of(&instance, &written))),
+            address: Some(type_address(&instance.name, &written)),
             local: false,
             declared: false,
             resolved: Some(Resolved { instance, written, parent_type, edge_name }),
@@ -924,6 +916,7 @@ impl Checker<'_> {
             return Landing {
                 root: Some(root),
                 description: Some(format!("'{alias}' ({} this run built)", describe_position(&position))),
+                address: None,
                 handle: Some(position),
                 local: true,
                 declared: run_built.declared,
@@ -964,8 +957,9 @@ impl Checker<'_> {
             Position::Handle(h) => h.position.clone(),
             _ => None,
         };
+        let address = record_type.as_deref().map(|t| type_address(&instance.name, t));
         let root = record_type.and_then(|t| instance.schema.writable_roots.get(&t).cloned());
-        Landing { root, description: Some(describe_position(&position)), handle: Some(position), ..Landing::default() }
+        Landing { root, description: Some(describe_position(&position)), address, handle: Some(position), ..Landing::default() }
     }
 
     // ── shape of the write ──
@@ -1310,7 +1304,7 @@ impl Checker<'_> {
             }
             self.report(
                 codes::WRITE_FIELD_TYPE,
-                format!("'{field_name}' on {subject} is {}, and this is {}{}", describe_field_type(target), describe_field_type(value), crate::types::declared::text_repair(value, target)),
+                format!("'{field_name}' on {subject} is {}, and this is {}{}", spell_type(target), spell_type(value), crate::types::declared::text_repair(value, target)),
                 span,
             );
             return;
@@ -1325,7 +1319,7 @@ impl Checker<'_> {
         }
         self.report(
             codes::WRITE_FIELD_TYPE,
-            format!("'{field_name}' on {subject} is {}, but this expression produces {}", describe_field_type(target), describe_field_type(value)),
+            format!("'{field_name}' on {subject} is {}, but this expression produces {}", spell_type(target), spell_type(value)),
             span,
         );
     }
@@ -1498,7 +1492,7 @@ pub fn record_of(types: &SymbolTypes, kind: SymbolKind) -> RecordOf {
             let position = (**position).clone();
             return RecordOf::Record(if is_maybe_absent(Some(field)) { Position::MaybeEmpty(Box::new(position)) } else { position });
         }
-        return if holds_records(Some(field)) { RecordOf::Unknown } else { RecordOf::Value(describe_field_type(field)) };
+        return if holds_records(Some(field)) { RecordOf::Unknown } else { RecordOf::Value(spell_type(field)) };
     }
     if kind == SymbolKind::Binding
         && types.plural.is_none()
@@ -1854,7 +1848,7 @@ fn handle_in_field_said(field_name: &str, subject: &str, target: &Ty, value: Opt
         _ => &held.handle,
     };
     let place = if direct { "this".to_string() } else { format!("'{field_name}{}'", spell_held_steps(&held.steps)) };
-    format!("'{field_name}' on {subject} is {}, and {place} {verb} {}", describe_field_type(target), describe_field_type(what))
+    format!("'{field_name}' on {subject} is {}, and {place} {verb} {}", spell_type(target), spell_type(what))
 }
 
 /// `repairAt`.
@@ -1916,6 +1910,9 @@ fn handle_in_field_message(field_name: &str, subject: &str, target: &Ty, value: 
 
 /// A hop along an edge its system offers nothing to read along.
 pub fn report_write_only_edge(typing: &mut Typing, from: Option<&Position>, step: &movement_parser::lowering::expression::EdgeStep, landing: Option<&crate::types::position::EdgeLanding>) {
+    if typing.describing {
+        return;
+    }
     let (Some(from), Some(crate::types::position::EdgeLanding::Untyped { edge: Some(schema) })) = (from, landing) else { return };
     let from = match from {
         Position::MaybeEmpty(of) => &**of,

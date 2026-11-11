@@ -89,10 +89,10 @@ fn a_graph_holds_no_record_as_a_field_value() {
     assert_eq!(
         check_with(source, BOX),
         [
-            "MOV_GRAPH_SPREAD_RECORD 8:16-8:20 '...v' copies a map's values and maps into the graph, and 'v.who' is a b.Doc handle — a record, not a value. Write a field off it ('who: r.`Name`'), or write the record into the graph as an entry of its own ('who: r')",
-            "MOV_GRAPH_SPREAD_RECORD 9:16-9:20 '...w' copies a map's values and maps into the graph, and 'w.all[0]' is a b.Doc handle — a record, not a value. Write a field off it ('all: [r.`Name`, …]'), or write the record into the graph as an entry of its own ('all: [r, …]')",
-            "MOV_GRAPH_ENTRY_RECORD 10:37-10:58 'b' is a field, and 'n == \"x\" ? h : \"y\"' may be a b.Doc handle — a record, not a value a field holds. Write a field off the record ('b: r.`Name`'), or make the entry the record alone ('b: r'), which holds it as a reference",
-            "MOV_LIST_MIXED 10:86-10:90 a list holds one kind of thing, and this one holds both: a b.Doc handle is a record, and another member is text. A tuple may hold both — read one slot with 't[0]' — but read as a list it may not. Build a list of records and walk it ('both = [one, two]' … 'both-[c:company]-> { … }'), or read the records' fields first and build a list of the values.",
+            "MOV_GRAPH_SPREAD_RECORD 8:16-8:20 '...v' copies a map's values and maps into the graph, and 'v.who' is Doc — a record, not a value. Write a field off it ('who: r.`Name`'), or write the record into the graph as an entry of its own ('who: r')",
+            "MOV_GRAPH_SPREAD_RECORD 9:16-9:20 '...w' copies a map's values and maps into the graph, and 'w.all[0]' is Doc — a record, not a value. Write a field off it ('all: [r.`Name`, …]'), or write the record into the graph as an entry of its own ('all: [r, …]')",
+            "MOV_GRAPH_ENTRY_RECORD 10:37-10:58 'b' is a field, and 'n == \"x\" ? h : \"y\"' may be Doc — a record, not a value a field holds. Write a field off the record ('b: r.`Name`'), or make the entry the record alone ('b: r'), which holds it as a reference",
+            "MOV_LIST_MIXED 10:86-10:90 a list holds one kind of thing, and this one holds both: Doc is a record, and another member is text. A tuple may hold both — read one slot with 't[0]' — but read as a list it may not. Build a list of records and walk it ('both = [one, two]' … 'both-[c:company]-> { … }'), or read the records' fields first and build a list of the values.",
             "MOV_GRAPH_ENTRY_RECORD 10:92-10:96 'k' is a field, and 'b' is 'b' (the instance itself) — a connection, not a value a field holds. Write a record read through it, or the fields you want ('k: r.`Name`')",
         ]
     );

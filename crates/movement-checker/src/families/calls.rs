@@ -40,7 +40,7 @@ use crate::families::flow::EffectRow;
 use crate::codes;
 use crate::scope::{Resolution, ScopeId, Symbol, SymbolId, SymbolKind};
 use crate::slots::SlotError;
-use crate::types::field::{describe_field_type, strip_absent};
+use crate::types::field::{spell_type, strip_absent};
 use crate::types::stdlib::{Builtin, ParamType, STANDARD_LIBRARY, describe_param_type, lookup_builtin, param_accepts, reads_as_value, stdlib_function_by_id};
 
 /// `describeBuiltin`: the built-in's signature as the author reads it.
@@ -164,7 +164,7 @@ fn check_builtin_args(typing: &mut Typing, builtin: &Builtin, args: &[Option<Ty>
                 builtin.name,
                 param.name,
                 describe_param_type(param.ty),
-                describe_field_type(strip_absent(ty)),
+                spell_type(strip_absent(ty)),
                 builtin.describe()
             ),
         );
@@ -190,7 +190,7 @@ fn refuse_maybe_record_for_builtin(typing: &mut Typing, builtin: &Builtin, param
         builtin.name,
         param.name,
         describe_param_type(param.ty),
-        describe_field_type(&hidden),
+        spell_type(&hidden),
         if file { "a file" } else { "a record" },
         describe_param_type(param.ty),
         if file {
@@ -1420,7 +1420,7 @@ impl Checker<'_> {
             None => format!("'{written}' is called, and nothing says it is a function — its type is unknown here. Call a closure whose type the program shows: one bound to a name ('g = label', then 'g()'), or a parameter typed as one ('f: <() => <text>>')"),
             Some(ty) => {
                 let tail = if crate::types::field::may_be_closure(Some(ty)) { " — it may not be a closure" } else { ", not a function" };
-                format!("'{written}' is called, and it is {}{tail}. Only a closure is called: narrow it to one, or call one whose type the program shows", crate::types::field::describe_field_type(ty))
+                format!("'{written}' is called, and it is {}{tail}. Only a closure is called: narrow it to one, or call one whose type the program shows", crate::types::field::spell_type(ty))
             }
         })
     }
@@ -1653,7 +1653,7 @@ impl Checker<'_> {
         let held = params_of_candidates(&candidates, |index, first, second| disagreements.push((index, first.clone(), second.clone())));
         for (index, first, second) in disagreements {
             let describe = |param: Option<&ClosureParam>| match param {
-                Some(ClosureParam { plane: PlaneType { field: Some(field), .. }, .. }) => describe_field_type(field),
+                Some(ClosureParam { plane: PlaneType { field: Some(field), .. }, .. }) => spell_type(field),
                 Some(ClosureParam { plane: PlaneType { pos: Some(pos), .. }, .. }) => describe_position(pos),
                 _ => "anything".to_string(),
             };

@@ -73,21 +73,21 @@ test('listen-fire modules show @lf/stripe says what it reads, that it is read-on
   console.log(shown.out);
   assert.match(shown.out, /^access: read-only \(it writes nothing\)$/m);
   assert.match(shown.out, /^schema: the module's own; no account is needed/m);
-  assert.match(shown.out, /^ {2}Customers -> Customer$/m);
-  assert.match(shown.out, /^ {2}Invoices -> Invoice$/m);
-  assert.match(shown.out, /^ {2}Subscriptions -> Subscription$/m);
-  assert.match(shown.out, /^ {2}Invoice: .*\n {4}fields: .*\bStatus enum\(draft\|open\|paid\|uncollectible\|void\).*\bAmount Due number\b/m);
-  assert.match(shown.out, /^ {2}Charges -> Charge$/m);
+  assert.match(shown.out, /^ {2}-\[:Customers\]-> Customer$/m);
+  assert.match(shown.out, /^ {2}-\[:Invoices\]-> Invoice$/m);
+  assert.match(shown.out, /^ {2}-\[:Subscriptions\]-> Subscription$/m);
+  assert.match(shown.out, /^ {2}Invoice: .*\n {4}fields: .*\bStatus "draft" \| "open" \| "paid" \| "uncollectible" \| "void", .*`Amount Due` number\b/m);
+  assert.match(shown.out, /^ {2}-\[:Charges\]-> Charge$/m);
   // An invoice's Changes are listened to, never read: shown, and marked so.
-  assert.match(shown.out, /^ {4}edges: Changes -> InvoiceChange \(listen only\), Customer -> Customer, Subscription -> Subscription\b/m);
+  assert.match(shown.out, /^ {4}edges: -\[:Changes\]-> InvoiceChange \[fires\], -\[:Customer\]-> Customer, -\[:Subscription\]-> Subscription\b/m);
   assert.match(shown.out, /^listens: webhook$/m);
   // A listen names a change by its `Kind`: an event's type without its object's prefix.
-  assert.match(shown.out, /^ {2}InvoiceChange: .*\n {4}fields: .*\bKind enum\([^)]*\bpayment_failed\b/m);
-  assert.doesNotMatch(shown.out, /^writes/m);
+  assert.match(shown.out, /^ {2}InvoiceChange: .*\n {4}fields: .*\bKind "[^,]*"payment_failed"/m);
+  assert.doesNotMatch(shown.out, /^ *-\[.*\[(r )?w( fires)?\]/m, 'no edge a write goes along');
   assert.match(shown.out, /^credential: stripe \(fields\): apiKey, webhookSecret\?$/m);
   assert.match(shown.out, /^set up: listen-fire connect @lf\/stripe --yes$/m);
   // A charge is where Stripe says why a payment failed: its record carries the failure fields.
-  assert.match(shown.out, /^ {2}Charge: .*\n {4}fields: .*\bStatus enum\(succeeded\|pending\|failed\).*\bFailure Code text\b.*\bFailure Message text\b/m);
+  assert.match(shown.out, /^ {2}Charge: .*\n {4}fields: .*\bStatus "succeeded" \| "pending" \| "failed", .*`Failure Code` text\b.*`Failure Message` text\b/m);
 
   assert.deepEqual(installed(dir), [], 'showing a module installs nothing');
   assert.deepEqual(existsSync(join(dir, '.lf/externals/stripe')), false, 'and leaves no state behind');
@@ -109,9 +109,9 @@ test('listen-fire modules show says what a module writes, and that a module with
   const slack = lfSync(dir, 'modules', 'show', '@lf/slack');
   assert.equal(slack.code, 0, slack.out);
   assert.match(slack.out, /^access: reads and writes$/m);
-  assert.match(slack.out, /^ {2}a Message along Channel\.Messages: Message, File, Blocks, Buttons, Topic$/m);
-  assert.match(slack.out, /^ {2}a Reaction along Message\.Reactions, write only: Emoji\*$/m);
-  assert.match(slack.out, /^ {4}edges: Messages -> Message \(listenable\), Members -> User$/m);
+  assert.match(slack.out, /^ {4}-\[:Messages\]-> Message \[r w fires\]: Message, File, Blocks, Buttons, Topic$/m);
+  assert.match(slack.out, /^ {4}-\[:Reactions\]-> Reaction \[w fires\]: Emoji!$/m);
+  assert.match(slack.out, /^ {4}edges: -\[:Members\]-> User$/m);
 
   const airtable = lfSync(dir, 'modules', 'show', '@lf/airtable');
   assert.equal(airtable.code, 0, airtable.out);

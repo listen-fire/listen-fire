@@ -6,7 +6,8 @@
 //! and `maybe_record_write_target.unit.test.ts`, case for case, under 5: each
 //! expectation is the TypeScript checker's own answer on the same
 //! program (every diagnostic, in order, with its span and severity), read off
-//! it on 2026-10-16 into `record_unions.fixtures.json`. From 0.15 a COALESCE
+//! it on 2026-10-16 into `record_unions.fixtures.json`, its types and places
+//! since spelled as a program writes them. From 0.15 a COALESCE
 //! whose first argument is always there answers that argument, as TypeScript
 //! types `a ?? b`, so the cases that built a union from two write handles with
 //! one build it with a choice (`1 > 0 ? lead : co`) instead.

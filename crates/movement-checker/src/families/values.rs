@@ -38,7 +38,7 @@ use crate::codes;
 use crate::families::calls::is_nested_call_name;
 use crate::diagnostic::Severity;
 use crate::types::field::{
-    BaseKind, CollectionOrder, Ty, base_kinds, collection_element_of, collection_order_of, comparison_category, describe_field_type,
+    BaseKind, CollectionOrder, Ty, base_kinds, collection_element_of, collection_order_of, comparison_category, spell_type,
     field_type_equals, is_maybe_absent, is_record, may_be_closure, closure_not_data_message, members_comparable, strip_absent,
     union_members, unwrap_list, ComparisonCategory,
 };
@@ -231,12 +231,12 @@ pub fn json_opaque_message(ty: Option<&Ty>, operation: &str) -> Option<String> {
     if let Ty::HeldRecord(_) = strip_absent(ty) {
         return Some(format!(
             "{} is a record held as a value, and it can't be {operation} as a whole — read the fields you mean off it (`c.Current.Stage`)",
-            describe_field_type(strip_absent(ty))
+            spell_type(strip_absent(ty))
         ));
     }
     Some(format!(
         "{} is a structured value and nothing describes its shape, so it can't be {operation} — pass it through unchanged into a json field instead",
-        describe_field_type(strip_absent(ty))
+        spell_type(strip_absent(ty))
     ))
 }
 
@@ -248,7 +248,7 @@ pub fn record_as_value_message(ty: Option<&Ty>, operation: &str) -> Option<Strin
     }
     Some(format!(
         "{} is a record, not a value, so it can't be {operation} — read a field off it ('c.`Name`'), or walk it in a block ('c-[x:edge]-> {{ … }}')",
-        describe_field_type(strip_absent(ty))
+        spell_type(strip_absent(ty))
     ))
 }
 
@@ -296,7 +296,7 @@ fn arithmetic_operands_message(op: ArithmeticOp, left: &Expression, right: &Expr
     if offenders.is_empty() {
         return None;
     }
-    let described: Vec<String> = offenders.iter().map(|(_, t)| describe_field_type(strip_absent(t))).collect();
+    let described: Vec<String> = offenders.iter().map(|(_, t)| spell_type(strip_absent(t))).collect();
     let symbol = arith_symbol(op);
     let subject = if offenders.len() == 1 {
         format!("the {} side of '{symbol}' is {}", offenders[0].0, described[0])
@@ -392,7 +392,7 @@ pub enum NumberReader<'a> {
 /// meant, silently. The remedy is written from the author's own operand when
 /// it is printable.
 fn absent_number_message(ty: &Ty, source: Option<&str>, reader: &NumberReader) -> String {
-    let shown = describe_field_type(ty);
+    let shown = spell_type(ty);
     let subject = match source {
         Some(s) => format!("'{s}' may be absent"),
         None => "This value may be absent".to_string(),
@@ -420,7 +420,7 @@ fn absent_members_message(element: &Ty, source: Option<&str>, builtin: &str) -> 
     let xs = source.unwrap_or("…");
     format!(
         "{subject} ({}), and {builtin} reads an absent member as 0. Drop the absent members first ('{builtin}(MULTI({xs}))' or '{builtin}(filter({xs}, (x) => x != null))'), or fill them ('{builtin}(map({xs}, (x) => coalesce(x, 0)))').",
-        describe_field_type(element)
+        spell_type(element)
     )
 }
 
@@ -469,7 +469,7 @@ fn negate_operand_message(ty: Option<&Ty>) -> Option<String> {
     };
     Some(format!(
         "An arithmetic operation requires numeric operands — the operand of unary '-' is {}.{hint}",
-        describe_field_type(strip_absent(ty))
+        spell_type(strip_absent(ty))
     ))
 }
 
@@ -640,8 +640,8 @@ fn report_compare_mismatch(typing: &mut Typing, left: &Ty, right: &Ty) {
         codes::COMPARE_TYPE_MISMATCH,
         format!(
             "Can't compare a {} to a {} — wrap one side in DATE(…), DATETIME(…), or NUMBER(…) to coerce it.",
-            describe_field_type(left),
-            describe_field_type(right)
+            spell_type(left),
+            spell_type(right)
         ),
     );
 }
@@ -651,7 +651,7 @@ fn report_absent_in_comparison(typing: &mut Typing, ty: &Ty) {
         codes::ABSENT_REQUIRED,
         format!(
             "this side of the ordered comparison may be absent ({}) — it comes from a branch that might not have run, or an answer that might not be there. Ordering needs a value on both sides: fall back to something that always answers ('COALESCE(…, 0)'), gate on it first ('r-[x:…]-> {{ … }}'), or test it with '==' and order inside that branch. (Equality itself is fine on a maybe-absent value — absent is simply never equal.)",
-            describe_field_type(ty)
+            spell_type(ty)
         ),
     );
 }
@@ -912,7 +912,7 @@ pub fn check_enum_literal(literal: &str, enum_ty: &Ty) -> Option<EnumDiagnostic>
         code: codes::ENUM_UNKNOWN_VALUE,
         message: format!(
             "\"{literal}\" isn't a value of {} — expected one of: {}.{}",
-            describe_field_type(enum_ty),
+            spell_type(enum_ty),
             options.join(" | "),
             did_you_mean(closest)
         ),
@@ -1001,7 +1001,7 @@ pub fn require_dict_key(typing: &mut Typing, ty: Option<&Ty>, where_: &str) {
     } else {
         "write it into text — `\"${…}\"`"
     };
-    let described = describe_field_type(key);
+    let described = spell_type(key);
     typing.report(
         codes::DICT_KEY_NOT_TEXT,
         format!("a dict is keyed by text, and this key is {described} ({where_}). There is no one way to spell {described} as text, so {repair}."),
@@ -1018,7 +1018,7 @@ pub fn list_spread(typing: &mut Typing, spread: &Ty) {
             codes::ABSENT_REQUIRED,
             format!(
                 "'...' splices a list's members into this list, and what it spreads may be absent ({}, or nothing) — guard it, or spread a list that is always there ('...COALESCE(xs, [])').",
-                describe_field_type(strip_absent(spread))
+                spell_type(strip_absent(spread))
             ),
         );
     }
@@ -1031,7 +1031,7 @@ pub fn list_spread(typing: &mut Typing, spread: &Ty) {
                     codes::LIST_SPREAD_NOT_A_LIST,
                     format!(
                         "'...' splices a list's members into this list, and this is {} — which may be one thing, not several. Spread a list ('[a, ...xs]').",
-                        describe_field_type(present)
+                        spell_type(present)
                     ),
                 );
             }
@@ -1040,7 +1040,7 @@ pub fn list_spread(typing: &mut Typing, spread: &Ty) {
             codes::LIST_SPREAD_NOT_A_LIST,
             format!(
                 "'...' splices a list's members into this list, and this is {} — one thing, not several. Write it as a member ('[a, x]') rather than spreading it, or spread a list ('[a, ...xs]').",
-                describe_field_type(present)
+                spell_type(present)
             ),
         ),
     }
@@ -1053,7 +1053,7 @@ pub fn map_spread_not_keyed(typing: &mut Typing, present: &Ty) {
     } else {
         format!(
             "'...' copies a map's keys (or a record's fields) into this map, and this is {} — it has no keys. Write it under a key ('{{ k: x }}'), or spread a map or a record",
-            describe_field_type(present)
+            spell_type(present)
         )
     };
     typing.report(codes::MAP_SPREAD_NOT_KEYED, message);
@@ -1638,7 +1638,7 @@ pub fn write_field_absence(input: WriteFieldAbsence) -> Option<crate::diagnostic
     }
     let field = input.field;
     let span = field.value.span;
-    let described = describe_field_type(value_type);
+    let described = spell_type(value_type);
     if let Some(spread) = input.spread {
         return Some(crate::diagnostic::Diagnostic::error(
             codes::ABSENT_REQUIRED,

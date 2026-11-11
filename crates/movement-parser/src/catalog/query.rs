@@ -137,7 +137,7 @@ fn helper(query: &Query) -> Answer {
     let text = |i: usize| decode::<Option<String>>(arg(i), "a text argument");
     match name {
         "parseFieldTypeName" => some(helpers::parse_field_type_name(text(0)?.as_deref())),
-        "describeFieldType" => Ok(Some(value(helpers::describe_field_type(&decode::<FieldType>(arg(0), "the type")?)?))),
+        "describeFieldType" => Ok(Some(value(super::written_type::spell_field_type(&decode::<FieldType>(arg(0), "the type")?)))),
         "variantOf" => Ok(Some(value(helpers::variant_of(&decode::<FieldType>(arg(0), "the type")?)))),
         "refinementKey" => {
             let input: Refinement =

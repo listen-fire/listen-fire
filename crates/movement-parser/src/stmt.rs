@@ -147,7 +147,7 @@ fn closer_of(open: u16) -> u16 {
 
 /// A name re-spelled as source text: bare when it scans as an identifier,
 /// backtick-quoted otherwise (ast.ts `spellName`).
-fn spell_name(name: &str) -> String {
+pub(crate) fn spell_name(name: &str) -> String {
     let units: Vec<u16> = crate::util::form::units_vec(name);
     if ident_end(&units, 0) == Some(units.len()) { name.to_string() } else { format!("`{name}`") }
 }

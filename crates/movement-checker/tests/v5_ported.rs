@@ -132,7 +132,7 @@ fn a_shaped_graph_built_from_a_spread_walks_its_declared_children() {
 #[test]
 fn a_node_literal_argument_is_judged_by_structure() {
     let source = "node Doc {\n  title: <text>\n}\nfunction takes(d: <Doc>) {\n}\nfunction main() {\n  takes(node { nope: \"x\" })\n}\n";
-    assert_eq!(run(source, EMPTY), [("MOV_NODE_ARG_SHAPE".to_string(), "'takes' expects Doc.Doc for 'd' (argument 1), and it has no `title`".to_string())]);
+    assert_eq!(run(source, EMPTY), [("MOV_NODE_ARG_SHAPE".to_string(), "'takes' expects Doc for 'd' (argument 1), and it has no `title`".to_string())]);
 }
 
 #[test]
@@ -175,14 +175,14 @@ fn walk(body: &str) -> Vec<(String, String)> {
 
 #[test]
 fn an_unknown_edge_names_the_edges_there_are() {
-    assert_eq!(walk("  e-[h:Holding]-> { x = h.Amount }"), [("MOV_TRAVERSE_UNKNOWN_EDGE".to_string(), "reg.entity has no edge 'Holding' — it has: Holdings".to_string())]);
+    assert_eq!(walk("  e-[h:Holding]-> { x = h.Amount }"), [("MOV_TRAVERSE_UNKNOWN_EDGE".to_string(), "entity has no edge 'Holding' — it has: Holdings".to_string())]);
 }
 
 #[test]
 fn a_hop_alias_reads_the_position_it_landed_on() {
     assert_eq!(
         walk("  e-[h:Holdings]-> { x = h.Amont }"),
-        [("MOV_UNKNOWN_PROPERTY".to_string(), "reg.holding has no field 'Amont' — it has: Amount — did you mean 'Amount'?".to_string())]
+        [("MOV_UNKNOWN_PROPERTY".to_string(), "holding has no field 'Amont' — it has: Amount — did you mean 'Amount'?".to_string())]
     );
 }
 
@@ -265,7 +265,7 @@ fn a_maybe_absent_value_in_a_plain_field_falls_back_or_stays_unset() {
     assert_eq!(found.code, "MOV_ABSENT_REQUIRED");
     assert_eq!(
         found.message,
-        "'Title' on board.Lane needs a value, but 'n' may be absent (text (or absent)) — write 'Title: coalesce(n, \"unknown\")' to fall back to a value that is always there, or 'Title ?: n' to leave it unset when absent"
+        "'Title' on board.Lane needs a value, but 'n' may be absent (text | null) — write 'Title: coalesce(n, \"unknown\")' to fall back to a value that is always there, or 'Title ?: n' to leave it unset when absent"
     );
     assert_eq!(found.fix.unwrap()["edits"][0]["text"], "coalesce(n, \"unknown\")");
 }

@@ -82,7 +82,7 @@ fn fields_follow_a_dot_and_a_backtick() {
     let items = service().complete(&text, pos);
     assert_eq!(labels(&items), ["Text", "Run by (name)"]);
     assert_eq!(items[1].insert.as_deref(), Some("`Run by (name)`"));
-    assert_eq!(items[0].detail.as_deref(), Some("text"));
+    assert_eq!(items[0].detail.as_deref(), Some("Text text"));
     let (text, pos) = typed(PROGRAM, "  greeting = Text.upper(run.`Text`)\n", "  y = run.`Ru");
     let items = service().complete(&text, pos);
     assert!(labels(&items).contains(&"Run by (name)"));
@@ -231,12 +231,12 @@ fn hover_leads_with_the_adapter_s_own_words() {
     let service = service();
     let hover = service.hover(HOVERED, after(HOVERED, "c-[m:Mess", 0)).unwrap();
     assert!(hover.contents.starts_with("```movement\nc-[:Messages]-> message\n```\nWhat was said in the channel, oldest first.\n\nmessage records in chat."), "{}", hover.contents);
-    assert!(hover.contents.contains("Fields: Body: text, Score: number"), "{}", hover.contents);
+    assert!(hover.contents.contains("Fields: Body text, Score number"), "{}", hover.contents);
     let hover = service.hover(HOVERED, after(HOVERED, "c.Na", 0)).unwrap();
     assert!(hover.contents.contains("Name: text\n```\nThe channel's name, without its #.\n\nOn a channel record from chat."), "{}", hover.contents);
     let hover = service.hover(HOVERED, after(HOVERED, "function scan(", 0)).unwrap();
     assert!(hover.contents.contains("c: channel (from chat)\n```\nA place the team talks.\n\nParameter of scan."), "{}", hover.contents);
-    assert!(hover.contents.contains("Walk on: Messages → message"), "{}", hover.contents);
+    assert!(hover.contents.contains("Walk on: -[:Messages]-> message"), "{}", hover.contents);
     let hover = service.hover(HOVERED, after(HOVERED, "\ncha", 0)).unwrap();
     assert!(hover.contents.contains("chat = connect slack\n```\nThe team's chat.\n\nA connection to slack.\n\nHolds: channel, message"), "{}", hover.contents);
 }
@@ -395,14 +395,16 @@ fn a_listen_is_offered_the_edges_it_can_take_those_it_can_end_on_first() {
     let text = format!("{head}listen to chat-[:Channels]->-[:");
     let items = listen.complete(&text, at_end(&text));
     assert_eq!(labels(&items), ["Messages"], "a written-only edge is no hop of a listen");
-    assert!(items[0].detail.as_deref().unwrap().contains("a listen can end here"), "{:?}", items[0].detail);
+    assert_eq!(items[0].detail.as_deref(), Some("-[:Messages]-> Message [r fires]"));
     let text = format!("{head}listen as \"Presses\" to chat-[:Channels]->-[:Messages]->-[i:");
     let items = listen.complete(&text, at_end(&text));
     assert_eq!(labels(&items), ["Interactions"]);
-    assert!(items[0].detail.as_deref().unwrap().contains("only announced: a listen ends here"), "{:?}", items[0].detail);
+    assert_eq!(items[0].detail.as_deref(), Some("-[:Interactions]-> Interaction [fires]"));
     // Outside a listen, a walk is offered every edge, as before.
     let (text, pos) = typed(&format!("{head}function f(c: <chat-[:Channel]->>) {{\n  return 1\n}}\n"), ">>) {\n", "  x = c-[:");
-    assert_eq!(labels(&listen.complete(&text, pos)), ["Drafts", "Messages"]);
+    let items = listen.complete(&text, pos);
+    assert_eq!(labels(&items), ["Drafts", "Messages"]);
+    assert_eq!(items[0].detail.as_deref(), Some("-[:Drafts]-> Message [w]"));
 }
 
 /// A connection's hover names every edge a listen may end on, off the
@@ -428,8 +430,74 @@ fn a_union_parameter_hovers_as_one_of_its_records() {
     let service = Service::new(CatalogSnapshot::load(UNION_CATALOG).unwrap());
     let text = "import { crm as m } from adapters\ncrm = connect m\nfunction noted(n: <crm-[:Memo]-> | crm-[:Remark]->>) {\n  return n.Text\n}\n";
     let hover = service.hover(text, after(text, "return n", 0)).unwrap();
-    assert!(hover.contents.contains("n: crm.Memo or crm.Remark"), "{}", hover.contents);
-    assert!(hover.contents.contains("Fields: Text (text)"), "{}", hover.contents);
+    assert!(hover.contents.contains("n: Memo | Remark"), "{}", hover.contents);
+    assert!(hover.contents.contains("Fields: Text text"), "{}", hover.contents);
     let hover = service.hover(text, after(text, "function no", 0)).unwrap();
     assert!(hover.contents.contains("function noted(n: <crm-[:Memo]-> | crm-[:Remark]->>)"), "{}", hover.contents);
+}
+
+/// A message its module writes: `Text` a write must give, `Id` identifying it
+/// and only read, `Reply Markup` only written; `Replies` written only.
+const MARKED_CATALOG: &str = r#"{"adapters":{"wa":{"canFire":true,"constructionArgs":[],"schemas":{"":{"positions":{
+  "Message":{"properties":{"Id":"text","Text":"text","Sent At":"date"},"edges":{"Replies":{"target":"Message","readable":false,"writable":true}}}},
+  "collections":{"Messages":{"target":"Message","readable":false,"listenable":true}},
+  "writableRoots":{"Message":{"fields":{"Text":"text","Reply Markup":"json"},"requiredFields":["Text"],"nativeUniqueness":[["Id"]],"resultShape":{}}}}}}},"credentials":{},"plugins":{}}"#;
+
+/// Fields and edges are written as the catalog writes them: a field's marks
+/// on its name, an edge as a program hops it with all it can do.
+#[test]
+fn fields_and_edges_carry_the_catalog_s_marks() {
+    let marked = Service::new(CatalogSnapshot::load(MARKED_CATALOG).unwrap());
+    let text = "c = connect #wa\nfunction f(m: <c-[:Message]->>) {\n  x = m.Id\n  return 1\n}\n";
+    let (cut, pos) = typed(text, "  x = m.", "");
+    let items = marked.complete(&cut.replace("m.Id", "m."), pos);
+    assert_eq!(labels(&items), ["Text", "Id", "Sent At"], "a field only a write gives is not read");
+    let details: Vec<&str> = items.iter().filter_map(|i| i.detail.as_deref()).collect();
+    assert_eq!(details, ["Text! text", "Id*~ text", "`Sent At`~ date"]);
+    let (hop, pos) = typed(text, "  x = m", "-[:");
+    let items = marked.complete(&hop.replace("-[:.Id", "-[:"), pos);
+    assert_eq!(items.iter().map(|i| (i.label.as_str(), i.detail.as_deref())).collect::<Vec<_>>(), [("Replies", Some("-[:Replies]-> Message [w]"))]);
+    let hover = marked.hover(text, after(text, "m.I", 0)).unwrap();
+    assert!(hover.contents.starts_with("```movement\nId*~: text\n```"), "{}", hover.contents);
+    let hover = marked.hover(text, after(text, "function f(", 0)).unwrap();
+    assert!(hover.contents.contains("Fields: Text! text, Id*~ text, `Sent At`~ date, `Reply Markup` json (write only)"), "{}", hover.contents);
+    assert!(hover.contents.contains("Walk on: -[:Replies]-> Message [w]"), "{}", hover.contents);
+    let write = "c = connect #wa\nfunction f(m: <c-[:Message]->>) {\n  write m-[:Replies]-> { Text: \"hi\" }\n  return 1\n}\n";
+    let hover = marked.hover(write, after(write, "m-[:Rep", 0)).unwrap();
+    assert!(hover.contents.starts_with("```movement\nm-[:Replies]-> Message [w]\n```\nMessage records in c. You can write new ones here."), "{}", hover.contents);
+    let root = "c = connect #wa\nx = c-[:Messages]->\n";
+    let hover = marked.hover(root, after(root, "c-[:Mess", 0)).unwrap();
+    assert!(hover.contents.starts_with("```movement\nc-[:Messages]-> Message [w fires]\n```"), "{}", hover.contents);
+}
+
+/// Affinity's list entries: one type, told apart by `listName`, a list's own
+/// fields on its member.
+const LISTS_CATALOG: &str = r#"{"adapters":{"wa":{"canFire":true,"constructionArgs":[],"schemas":{"":{"positions":{
+  "Organization":{"properties":{"Name":"text"},"edges":{"List Entries":{"target":"Organization List Entry","writable":true,"linkable":false}}},
+  "Organization List Entry":{"properties":{"listName":{"kind":"enum","options":["Master Deals List","Portfolio"]}},"edges":{}},
+  "List Entry — Master Deals List":{"properties":{"listName":{"kind":"enum","options":["Master Deals List"]},"Deal Created":"date","Status":"text"},"edges":{}},
+  "List Entry — Portfolio":{"properties":{"listName":{"kind":"enum","options":["Portfolio"]},"Ownership %":"number","Added On":"date"},"edges":{}}},
+  "collections":{"Organization":{"target":"Organization"}},"writableRoots":{},
+  "createShapes":{"Organization List Entry":{"fields":{"listName":{"kind":"enum","options":["Master Deals List","Portfolio"]}},"resultShape":{"externalId":"text"},
+    "discriminated":{"discriminant":"listName","variants":{
+      "Master Deals List":{"fields":{"listName":"text","Deal Created":"date","Status":"text"},"resultShape":{"externalId":"text"},"position":"List Entry — Master Deals List"},
+      "Portfolio":{"fields":{"listName":"text","Ownership %":"number","Added On":"date"},"resultShape":{"externalId":"text"},"position":"List Entry — Portfolio"}}}}}}}}},
+  "credentials":{},"plugins":{}}"#;
+
+#[test]
+fn a_hop_s_where_narrows_what_is_offered_after_it() {
+    let lists = Service::new(CatalogSnapshot::load(LISTS_CATALOG).unwrap());
+    let offered = |line: &str| {
+        let text = format!("c = connect #wa\nfunction f(o: <c-[:Organization]->>) {{\n{line}\n  return 1\n}}\n");
+        let pos = Pos { line: 2, character: line.encode_utf16().count() as u32 };
+        labels(&lists.complete(&text, pos)).into_iter().map(String::from).collect::<Vec<_>>()
+    };
+    assert_eq!(offered("  x = o-[e:`List Entries` WHERE listName == \"Portfolio\"]->."), ["listName", "Ownership %", "Added On"]);
+    assert_eq!(offered("  x = o-[:`List Entries`]->."), ["listName"]);
+}
+
+#[test]
+fn a_hop_whose_where_is_half_written_lands_where_it_would_without_it() {
+    let (text, pos) = typed(PROGRAM, "  return count(ms)\n", "  ns = c-[n:Messages WHERE n.Score >]->.");
+    assert_eq!(labels(&service().complete(&text, pos)), ["Body", "Score"]);
 }

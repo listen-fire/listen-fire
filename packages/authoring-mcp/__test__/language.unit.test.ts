@@ -89,13 +89,14 @@ describe('the digest of connected systems', () => {
     const digest = renderConnectionsDigest(CATALOG);
     expect(digest).toContain('### crm — `connect #crm using workspace`');
     expect(digest).not.toContain('listen {');
-    expect(digest).toContain('- Company [rw listenable]: Name text!, Stage enum(Lead|Customer)');
+    expect(digest.split('\n')[0]).toBe('plain edges read; [r w fires] read, write, listen; ! required, * identifying, ~ read only');
+    expect(digest).toContain('- -[:Company]-> Company [r w fires]: Name! text, Stage "Lead" | "Customer"');
     expect(digest).toContain('### manual — `listen to manual-[:…]->` (in scope with no import or connect)');
-    expect(digest).toContain('- Invocations [listenable]: `Fired at` date, Text text');
+    expect(digest).toContain('- -[:Invocations]-> Invocation [fires]: `Fired at` date, Text text');
     expect(digest).toContain('Not connected yet: mail.');
   });
 
-  it('marks a root readable only when it can be listed: a write-only root and a listen-only root are not', () => {
+  it('marks an edge readable only when it can be listed: a write-only edge and a listen-only edge are not', () => {
     const only: TenantCatalog = {
       ...CATALOG,
       snapshot: {
@@ -110,7 +111,7 @@ describe('the digest of connected systems', () => {
               '': {
                 positions: { Draft: { properties: { Body: 'text' }, edges: {} }, Tick: { properties: { Schedule: 'text' }, edges: {} } },
                 collections: { Drafts: { target: 'Draft', readable: false }, Ticks: { target: 'Tick', readable: false, listenable: true } },
-                writableRoots: { Drafts: { fields: { Body: 'text' }, resultShape: { externalId: 'text' }, requiredFields: [] } },
+                writableRoots: { Draft: { fields: { Body: 'text' }, resultShape: { externalId: 'text' }, requiredFields: [] } },
               },
             },
           },
@@ -118,18 +119,61 @@ describe('the digest of connected systems', () => {
       },
     };
     const digest = renderConnectionsDigest(only);
-    expect(digest).toContain('- Drafts [w]:');
-    expect(digest).not.toMatch(/- Ticks \[r/);
+    expect(digest).toContain('- -[:Drafts]-> Draft [w]: Body text');
+    expect(digest).toContain('- -[:Ticks]-> Tick [fires]: Schedule text');
   });
 
   it('describes a system at its root, and at a position its root handed out', () => {
     const root = describeFromSnapshot(CATALOG, { system: 'crm' });
     expect(root).toMatchObject({ ok: true, text: expect.stringContaining("The product's own CRM.") });
+    expect(root.ok && root.text).toContain('- -[:Company]-> Company [r w fires]: Name! text, Stage "Lead" | "Customer"');
     expect(root.ok && root.text).toContain('position: "-[:Company]->"');
     const at = describeFromSnapshot(CATALOG, { system: 'crm', position: '-[:Company]->' });
-    expect(at).toEqual({ ok: true, text: '### crm at -[:Company]->\nCompany [rw listenable]: Name text!, Stage enum(Lead|Customer)\nNo edges leave this node.' });
-    expect(describeFromSnapshot(CATALOG, { system: 'crm', position: '-[:Nowhere]->' })).toMatchObject({ ok: true, text: expect.stringContaining('No such place') });
+    expect(at).toEqual({ ok: true, text: '### crm at -[:Company]->\nCompany: Name! text, Stage "Lead" | "Customer"\nedges: none' });
     expect(describeFromSnapshot(CATALOG, { system: 'nope' })).toMatchObject({ ok: false });
+  });
+
+  it('walks a position through the checker, so a misspelt edge is its diagnostic, and goes on past one hop', () => {
+    const nowhere = describeFromSnapshot(CATALOG, { system: 'crm', position: '-[:Nowhere]->' });
+    expect(nowhere).toMatchObject({ ok: true, text: expect.stringMatching(/^error MOV_TRAVERSE_UNKNOWN_EDGE .*'Nowhere' — it has: Company$/m) });
+    const note: PositionSchema = { properties: { Text: 'text' }, edges: {} };
+    const company: PositionSchema = { properties: { Name: 'text' }, edges: { Notes: { target: 'Note', writable: true } } };
+    const deeper: TenantCatalog = {
+      ...CATALOG,
+      snapshot: {
+        ...CATALOG.snapshot,
+        adapters: {
+          ...CATALOG.snapshot.adapters,
+          crm: {
+            ...CATALOG.snapshot.adapters.crm,
+            schemas: {
+              workspace: {
+                positions: { Company: company, Note: note },
+                collections: { Company: { target: 'Company' } },
+                writableRoots: {},
+                createShapes: { Note: { fields: { Text: 'text', Pinned: 'boolean' }, resultShape: {}, requiredFields: ['Text'] } },
+              },
+            },
+          },
+        },
+      },
+    };
+    const at = describeFromSnapshot(deeper, { system: 'crm', position: '-[:Company]->' });
+    expect(at.ok && at.text).toContain('- -[:Notes]-> Note [r w]: Text! text, Pinned boolean (write only)');
+    expect(at.ok && at.text).toContain('position: "-[:Company]->-[:Notes]->"');
+    const further = describeFromSnapshot(deeper, { system: 'crm', position: '-[:Company]->-[:Notes]->' });
+    expect(further).toEqual({ ok: true, text: '### crm at -[:Company]->-[:Notes]->\nNote: Text! text, Pinned boolean (write only)\nedges: none' });
+    const typed = describeFromSnapshot(deeper, { system: 'crm', types: ['Note', 'Nope'] });
+    expect(typed.ok && typed.text).toContain('### crm type Note\nNote: Text! text');
+    expect(typed.ok && typed.text).toContain('### crm type Nope\nNo such type. Types: Company, Note.');
+  });
+
+  it('describes a run host unit, which no address connects, from its root', () => {
+    expect(describeFromSnapshot(CATALOG, { system: 'manual', position: '-[:Invocations]->' })).toEqual({
+      ok: true,
+      text: '### manual at -[:Invocations]->\nInvocation: `Fired at` date, Text text\nedges: none',
+    });
+    expect(describeFromSnapshot(CATALOG, { system: 'manual', position: '-[:Nope]->' })).toMatchObject({ ok: true, text: expect.stringContaining('No such place. Positions: -[:Invocations]->.') });
   });
 });
 

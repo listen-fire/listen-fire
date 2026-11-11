@@ -519,6 +519,9 @@ export function instanceSchemaFromDescriptors(input: {
     }
     typeIdByName.set(name, entry.typeId);
 
+    const descriptor = input.descriptors.get(entry.typeId);
+    const typeDescription = (descriptor !== undefined ? describedBy(descriptor) : undefined) ?? describedBy(entry);
+
     // Every entry point IS a meta edge off the adapter's meta position — the
     // node the cursor starts at. A READABLE entry's edge is a traversable
     // collection (`root-[c:Companies]-> …`); a WRITABLE entry's edge is how you
@@ -542,17 +545,19 @@ export function instanceSchemaFromDescriptors(input: {
         // The root descriptor's word on the collection, else the entry's
         // own: a host that asks no root descriptor (listen-fire) reads it there.
         const capability = rootCapabilities.get(collectionName) ?? entry.capability;
+        const positioned = entry.readable || entry.listenable === true || edgeTargetNames.has(name);
         collections[collectionName] = {
           target: name,
           ...(capability !== undefined ? { capability } : {}),
           ...(entry.readable ? {} : { readable: false as const }),
           ...(entry.listenable === true ? { listenable: true as const } : {}),
           ...listeningOf(entry),
+          // A type with no position has nowhere else to say what it is.
+          ...(!positioned && typeDescription !== undefined ? { description: typeDescription } : {}),
         };
       }
     }
 
-    const descriptor = input.descriptors.get(entry.typeId);
     if (!descriptor) {
       // No descriptor came back for this entry — describe() answered null, or a
       // demand-scoped introspection never asked. The position exists; NOBODY HAS
@@ -796,7 +801,6 @@ export function instanceSchemaFromDescriptors(input: {
       //
       // `listenable` is not gated on `readable`, and that is the point: nobody
       // can enumerate an inbox, so its entry says `readable: false` honestly.
-      const typeDescription = describedBy(descriptor) ?? describedBy(entry);
       positions[name] = {
         properties,
         edges,

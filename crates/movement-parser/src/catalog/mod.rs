@@ -9,6 +9,7 @@ pub mod plugin_args;
 pub mod query;
 pub mod snapshot;
 pub mod types;
+pub mod written_type;
 
 #[cfg(test)]
 mod tests;

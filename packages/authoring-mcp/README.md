@@ -6,6 +6,7 @@ The tools an agent uses to write, check, save and run movements, served over MCP
 - Your `host.tenant(request)` runs first on every request. It returns that tenant's functions, or a refusal (a refused request sees no tools).
 - A tenant's functions: its catalog snapshot and connections, its store of saved movements (with an atomic revision check), and optionally its runs, a checker of its own and a deeper describe. The types and their rules are in `host.ts`.
 - The language half is this package's: the handbook and its search, the checker, the digest of connected systems, and the save rules (check first; refuse what would not go live unless the agent has the user's consent; refuse a stale revision).
+- The digest and describeConnection's answers are in the language's one notation, the one `listen-fire catalog` writes, from the engine's describing query (`describeCatalog`, `describeAddress` in `@listen-fire/movement-lang`). An edge is written as a program hops it, then where it lands, what it can do and the fields there: ``- -[:Replies]-> Message [w]: Text! text, `Reply Markup` json``. A plain edge only reads; field marks are `!` required, `*` identifying, `~` read only. This package only chooses how much to show (10 fields on an edge's landing, 40 at a place, 4 options per enum) and where each line goes. A `position` is a walk the checker reads.
 - `@listen-fire/authoring-mcp/testing` is an in-memory host for tests.
 
 docs/embedding.md ("Serving the authoring tools") shows the embed example serving it.

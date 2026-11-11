@@ -5,12 +5,14 @@
 //! until the parity harness (PARITY.md) finds no difference.
 
 pub mod abi;
+pub mod address;
 pub mod answer;
 mod binding_types;
 mod checker;
 pub mod codes;
 pub mod compatible;
 mod cron;
+pub mod description;
 mod diagnostic;
 pub mod families;
 pub mod host;

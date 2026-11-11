@@ -23,7 +23,7 @@ fn write(value: &str) -> String {
 }
 
 fn refused(shown: &str) -> String {
-    format!("'employees' on c.company needs a value, but '{shown}' may be absent (number (or absent)) — write 'employees: coalesce({shown}, 0)' to fall back to a value that is always there, or 'employees ?: {shown}' to leave it unset when absent (see handbook: front#maybe-absent)")
+    format!("'employees' on company needs a value, but '{shown}' may be absent (number | null) — write 'employees: coalesce({shown}, 0)' to fall back to a value that is always there, or 'employees ?: {shown}' to leave it unset when absent (see handbook: front#maybe-absent)")
 }
 
 #[test]

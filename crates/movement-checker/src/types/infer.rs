@@ -28,7 +28,7 @@ use super::narrowing::{PresenceProof, exists_subject, is_position_terminal, nega
 use super::unions::{join_field_types, join_positions, joined_under, one_record_of};
 use super::pinned_member::pinned_member;
 use super::union_walk::{MemberOnly, Subject, member_only};
-use super::position::{EdgeLanding, Position, describe_position, edge_landing, position_ref_in, refine_selected, unselected_members, instance_of_ref, lookup_property_type, narrow_present, narrow_present_node};
+use super::position::{EdgeLanding, Position, describe_position, edge_landing, edge_landing_describing, position_ref_in, refine_selected, unselected_members, instance_of_ref, lookup_property_type, narrow_present, narrow_present_node};
 use super::stdlib::{answer_may_be_absent, bare_coercer_returns, movement_meta_key_type, stdlib_function_by_id};
 
 /// What the typing asks of the scope it types in (the TypeScript's
@@ -178,6 +178,10 @@ pub struct Typing<'a> {
     /// edge's `<crm-[:Company]->>`): nothing is traversed, so what a
     /// traversal must not do is not asked of it.
     pub address: bool,
+    /// The walk is being described, not read (`Analysis::type_walk`): it
+    /// follows any edge, and what a read must not do is not asked of it. Never
+    /// set by a program's check.
+    pub(crate) describing: bool,
     /// The name a walk starts at, while its first edge is stepped (`msg` in
     /// `msg-[:Interactions]->`): set by whoever knows it, before `walk_steps`.
     /// Likewise the name a read is taken off (`msg` in `msg.Subject`).
@@ -270,6 +274,7 @@ impl<'a> Typing<'a> {
             locals: IndexMap::new(),
             awaited: false,
             address: false,
+            describing: false,
             step_root: None,
             last_edge_schema: None,
             last_landings: Vec::new(),
@@ -340,7 +345,7 @@ impl<'a> Typing<'a> {
 
     /// `stepEdge`: one edge step off `from`, reported.
     fn step_edge(&mut self, from: Option<&Position>, edge: &EdgeStep) -> (Option<Position>, Option<EdgeSchema>) {
-        let landing = from.map(|f| edge_landing(f, &edge.edge_type_id));
+        let landing = from.map(|f| if self.describing { edge_landing_describing(f, &edge.edge_type_id) } else { edge_landing(f, &edge.edge_type_id) });
         let unselected = match (&landing, edge.expression_filter.as_deref()) {
             (Some(EdgeLanding::Landed { landing, .. }), Some(filter)) if refine_selected(landing, filter).is_none() => unselected_members(landing, filter),
             _ => None,

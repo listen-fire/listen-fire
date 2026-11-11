@@ -1,26 +1,30 @@
 // A tenant's connected systems in compact text, read off its catalog
-// snapshot: how to construct each, what a listen on it may say, and its
-// record types with their fields. Two readers share one notation:
+// snapshot through the language's describing query (movement-lang
+// `describeCatalog`, `describeAddress`): how to construct each, and what a
+// program reads, writes and listens to along each edge. Two readers share one
+// notation, the one `listen-fire catalog` writes:
 //
 //   - getStarted's digest: every system at its root, under a fixed budget.
 //   - describeConnection's compact answer: one place in one system, with the
 //     edges leaving it and what each lands on, one level deep.
 //
-// The snapshot holds what an introspection already read, so this needs no
-// adapter call. A host that walks schemas live (`TenantHost.describe`)
-// answers describeConnection itself; this is the answer without it, and it is
-// complete for a flat schema.
+// Every field, edge and mark arrives spelled; here is only how much to ask
+// for and where each line goes. The snapshot holds what an introspection
+// already read, so this needs no adapter call. A host that walks schemas live
+// (`TenantHost.describe`) answers describeConnection itself; this is the
+// answer without it.
 
 import {
   RUN_HOST_UNITS,
-  spellName,
+  describeAddress,
+  describeCatalog,
   type AdapterSnapshot,
   type CatalogSnapshot,
-  type EdgeSchema,
-  type InstanceSchema,
-  type PositionSchema,
-  type SchemaFieldType,
-  type WritableRootSchema,
+  type DescribedDiagnostic,
+  type DescribedEdge,
+  type DescribedFields,
+  type DescribedPlace,
+  type Showing,
 } from 'movement-lang';
 
 import type { TenantCatalog } from './host';
@@ -31,121 +35,45 @@ export const SYSTEM_DIGEST_CHAR_CAP = 1_600;
 /** Every block together. Past it, the remaining systems keep a header line. */
 export const CONNECTIONS_DIGEST_CHAR_CAP = 8_000;
 
-/** Fields shown per type in getStarted, and on an edge's landing in a describe. */
-const FIELDS_PER_TYPE = 10;
-/** Fields shown for the place a describe stands on. */
-const FIELDS_AT_POSITION = 40;
 const ENUM_OPTIONS_SHOWN = 4;
-/** How deep a describe's positions are offered. */
-const POSITION_DEPTH = 4;
-
-export const DIGEST_LEGEND =
-  'Marks: `!` required to create · `*` identifies the record (a `unique by` candidate) · `~` read-only · [r] readable, [w] writable, [listenable] a listen can start on it (`listen to x-[:Name]->`) · a `backticked` name is written with its backticks in code.';
+/** Fields shown per type in getStarted, and on an edge's landing in a describe. */
+const AT_LANDINGS: Showing = { fields: 10, enumOptions: ENUM_OPTIONS_SHOWN };
+/** Fields shown for the place a describe stands on. */
+const AT_PLACE: Showing = { fields: 40, enumOptions: ENUM_OPTIONS_SHOWN };
 
 const moreHint = (system: string) => `describeConnection("${system}") for more`;
 
-/** A type in as few characters as stay unambiguous. */
-export function compactType(type: SchemaFieldType): string {
-  if (typeof type === 'string') return type === 'absent' ? 'null' : type;
-  switch (type.kind) {
-    case 'list':
-      return `${compactType(type.of)}[]`;
-    case 'maybeAbsent':
-      return `${compactType(type.of)}?`;
-    case 'enum': {
-      const shown = type.options.slice(0, ENUM_OPTIONS_SHOWN);
-      const hidden = type.options.length - shown.length;
-      // `…+N` counts the options cut; a bare `…` says other values are legal too.
-      const more = hidden > 0 ? [`…+${hidden}`] : type.open !== undefined ? ['…'] : [];
-      return `enum(${[...shown, ...more].join('|')})`;
-    }
-    case 'tuple':
-      return 'tuple';
-    case 'dict':
-      return 'dict';
-    case 'owned':
-      return type.name;
-    case 'record':
-      return 'record';
-    default:
-      return unreachable(type);
-  }
+// ── Lines from the description ──────────────────────────────────────────────
+
+/** A field list, the count of those cut after it as an enum counts its options. */
+function fieldList(fields: DescribedFields, place: Pick<DescribedPlace, 'known'>): string {
+  if (place.known === 'undescribed') return '(fields not described)';
+  const parts = fields.shown.map((field) => field.written);
+  if (fields.cut > 0) parts.push(`…+${fields.cut}`);
+  if (place.known === 'open') parts.push('… (others its module does not name)');
+  return parts.length === 0 ? '(no fields)' : parts.join(', ');
 }
 
-function unreachable(value: never): never {
-  throw new Error(`unexpected field type ${JSON.stringify(value)}`);
+/** An edge, then what a program has of it: a write's fields where it is
+ *  only written along, else the fields where it lands. */
+function edgeLine(edge: DescribedEdge): string {
+  const fields = fieldsOf(edge);
+  return fields === undefined ? `- ${edge.hop}` : `- ${edge.hop}: ${fieldList(fields.list, fields.place)}`;
 }
 
-// ── What a system's schema says, as record types ────────────────────────────
-
-interface RecordField {
-  name: string;
-  type: SchemaFieldType;
-  required: boolean;
-  identifies: boolean;
-  readOnly: boolean;
-  writeOnly: boolean;
+/** An edge with how many fields it has, for a block short of room. */
+function shortEdgeLine(edge: DescribedEdge): string {
+  const fields = fieldsOf(edge);
+  return fields === undefined ? `- ${edge.hop}` : `- ${edge.hop}: ${fields.list.shown.length + fields.list.cut} fields`;
 }
 
-/** A record type: a root of the system (a collection or a writable root),
- *  or a place an edge lands on. */
-interface RecordType {
-  name: string;
-  readable: boolean;
-  writable: boolean;
-  /** Its module announces what lands on it: a listen can start on it. */
-  listenable: boolean;
-  fields: RecordField[];
+function fieldsOf(edge: DescribedEdge): { list: DescribedFields; place: Pick<DescribedPlace, 'known'> } | undefined {
+  if (edge.writes !== undefined && (!edge.read || edge.lands === undefined)) return { list: edge.writes, place: { known: 'whole' } };
+  return edge.lands === undefined ? undefined : { list: edge.lands.fields, place: edge.lands };
 }
 
-function fieldsOf(position: PositionSchema | undefined, write: WritableRootSchema | undefined): RecordField[] {
-  const required = new Set(write?.requiredFields ?? []);
-  const identity = new Set((write?.nativeUniqueness ?? []).flat());
-  const read = position?.properties ?? {};
-  const written = write?.fields ?? {};
-  const names = [...new Set([...Object.keys(read), ...Object.keys(written)])];
-  return names.map((name) => ({
-    name,
-    type: read[name] ?? written[name],
-    required: required.has(name),
-    identifies: identity.has(name),
-    readOnly: write !== undefined && !(name in written),
-    writeOnly: position !== undefined && !(name in read),
-  }));
-}
-
-/** The system's roots: its collections and writable roots by name. */
-function rootsOf(schema: InstanceSchema): RecordType[] {
-  const names = [...new Set([...Object.keys(schema.collections), ...Object.keys(schema.writableRoots)])];
-  return names.map((name): RecordType => {
-    const target = schema.collections[name]?.target ?? schema.writableRoots[name]?.position ?? name;
-    return {
-      name,
-      readable: schema.collections[name] !== undefined && schema.collections[name].readable !== false,
-      writable: name in schema.writableRoots,
-      listenable: schema.collections[name]?.listenable === true,
-      fields: fieldsOf(schema.positions[target], schema.writableRoots[name] ?? schema.createShapes?.[target]),
-    };
-  });
-}
-
-function access(type: Pick<RecordType, 'readable' | 'writable' | 'listenable'>): string {
-  const flags = [`${type.readable ? 'r' : ''}${type.writable ? 'w' : ''}`, type.listenable ? 'listenable' : ''].filter(Boolean);
-  return flags.length > 0 ? ` [${flags.join(' ')}]` : '';
-}
-
-function fieldSpelling(field: RecordField): string {
-  const marks = `${field.required ? '!' : ''}${field.identifies ? '*' : ''}${field.readOnly ? '~' : ''}`;
-  return `${spellName(field.name)} ${compactType(field.type)}${marks}${field.writeOnly ? ' (write-only)' : ''}`;
-}
-
-/** Required and identifying fields first: a first write needs them. */
-function fieldList(fields: RecordField[], limit: number): string {
-  const rank = (f: RecordField) => (f.required ? 0 : f.identifies ? 1 : 2);
-  const ordered = fields.map((field, index) => ({ field, index })).sort((a, b) => rank(a.field) - rank(b.field) || a.index - b.index);
-  const shown = ordered.slice(0, limit).map(({ field }) => fieldSpelling(field));
-  const hidden = ordered.length - shown.length;
-  return shown.length === 0 ? 'no fields' : `${shown.join(', ')}${hidden > 0 ? `, +${hidden} more` : ''}`;
+function diagnosticLines(diagnostics: DescribedDiagnostic[]): string[] {
+  return diagnostics.map((d) => `${d.severity} ${d.code} ${d.message}`);
 }
 
 // ── The system's header lines ───────────────────────────────────────────────
@@ -178,8 +106,10 @@ interface SystemView {
   system: string;
   spec: AdapterSnapshot;
   connections: string[];
-  /** The schema of its first connection (or its credential-free one). */
-  schema?: InstanceSchema;
+  /** What its first connection (or its credential-free one) is filed under. */
+  key: string;
+  /** Its schema's root, described; absent with `note` saying why. */
+  root?: DescribedPlace;
   note?: string;
 }
 
@@ -187,40 +117,58 @@ function needsConnection(spec: AdapterSnapshot): boolean {
   return spec.constructionArgs.some((arg) => arg.kind === 'credential' && arg.required);
 }
 
-function systemView(snapshot: CatalogSnapshot, connections: TenantCatalog['connections'], system: string, connection?: string): SystemView | null {
-  const spec = snapshot.adapters[system];
+/** Every connection's root, by system and the key its schema is filed under,
+ *  and the notation's legend. */
+interface Roots {
+  legend: string;
+  of(system: string, key: string): DescribedPlace | undefined;
+}
+
+function rootsOf(snapshot: CatalogSnapshot): Roots {
+  const described = describeCatalog(snapshot, { landings: AT_LANDINGS });
+  return { legend: described.legend, of: (system, key) => described.connections.find((c) => c.adapter === system && c.key === key)?.place };
+}
+
+function systemView(catalog: TenantCatalog, roots: Roots, system: string, connection?: string): SystemView | null {
+  const spec = catalog.snapshot.adapters[system];
   if (spec === undefined) return null;
-  const named = connections.filter((c) => c.system === system).map((c) => c.name);
+  const named = catalog.connections.filter((c) => c.system === system).map((c) => c.name);
   const ordered = connection !== undefined ? [connection, ...named.filter((n) => n !== connection)] : named;
   const key = ordered[0] ?? '';
-  const schema = spec.schemas[key];
-  const note = schema === undefined ? (spec.schemaNotes?.[key]?.[0] ?? 'its records could not be read') : undefined;
-  return { system, spec, connections: ordered, ...(schema !== undefined ? { schema } : {}), ...(note !== undefined ? { note } : {}) };
+  const root = roots.of(system, key);
+  const note = root === undefined ? (spec.schemaNotes?.[key]?.[0] ?? 'its records could not be read') : undefined;
+  return { system, spec, connections: ordered, key, ...(root !== undefined ? { root } : {}), ...(note !== undefined ? { note } : {}) };
+}
+
+/** Where a describe stands, as `listen-fire catalog` takes it: the module as
+ *  `connect` names it, the connection, then the walk. */
+function addressOf(view: SystemView, walk: string): string {
+  const module = view.spec.package !== undefined ? view.spec.package : `#${view.system}`;
+  const credential = view.spec.constructionArgs.some((arg) => arg.kind === 'credential') && view.key !== '' ? `:${view.key}` : '';
+  return `${module}${credential}${walk}`;
 }
 
 // ── getStarted's digest ─────────────────────────────────────────────────────
 
 /** One system's block, never longer than {@link SYSTEM_DIGEST_CHAR_CAP}. */
-export function renderSystemDigest(view: SystemView): string {
+function renderSystemDigest(view: SystemView): string {
   const lines = [`### ${view.system} — ${constructionSpelling(view.system, view.spec, view.connections)}`];
-  if (view.schema === undefined) {
+  if (view.root === undefined) {
     lines.push(`- ${view.note ?? 'not described'} — ${moreHint(view.system)}`);
     return fitLines(lines, view.system);
   }
-  const roots = rootsOf(view.schema);
-  const full = roots.map((root) => `- ${spellName(root.name)}${access(root)}: ${fieldList(root.fields, FIELDS_PER_TYPE)}`);
-  const short = roots.map((root) => `- ${spellName(root.name)}${access(root)}: ${root.fields.length} fields`);
-  const chosen = [...full];
+  const edges = view.root.edges;
+  const chosen = edges.map(edgeLine);
   const size = () => [...lines, ...chosen].reduce((sum, line) => sum + line.length + 1, 0);
-  // Read-only types give up their fields first, then what a listen is
-  // handed, and writable types last: a wrong field name in a write costs a
-  // failed run.
-  const rank = (root: RecordType) => (root.writable ? 2 : root.listenable ? 1 : 0);
-  const order = roots.map((root, index) => ({ root, index })).sort((a, b) => rank(a.root) - rank(b.root) || b.index - a.index);
+  // Edges that only read give up their fields first, then those a listen
+  // starts on, and those written along last: a wrong field name in a write
+  // costs a failed run.
+  const rank = (edge: DescribedEdge) => (edge.write ? 2 : edge.fires ? 1 : 0);
+  const order = edges.map((edge, index) => ({ edge, index })).sort((a, b) => rank(a.edge) - rank(b.edge) || b.index - a.index);
   let cut = false;
-  for (const { index } of order) {
+  for (const { edge, index } of order) {
     if (size() + CUT_LINE_ROOM <= SYSTEM_DIGEST_CHAR_CAP) break;
-    chosen[index] = short[index];
+    chosen[index] = shortEdgeLine(edge);
     cut = true;
   }
   const cutHint = cut ? [`- fields cut for space — describeConnection({ system: "${view.system}" }) shows each type's`] : [];
@@ -230,43 +178,43 @@ export function renderSystemDigest(view: SystemView): string {
 /** Room kept for the line that says what was cut. */
 const CUT_LINE_ROOM = 120;
 
-/** Keep whole lines while they fit, then say how many were cut and where. */
+/** Keep whole lines while they fit, then say how many were left out and where. */
 function fitLines(lines: string[], system: string): string {
-  const longest = SYSTEM_DIGEST_CHAR_CAP - CUT_LINE_ROOM;
   const kept: string[] = [];
   let used = 0;
   for (const [index, line] of lines.entries()) {
-    const clipped = line.length > longest / 2 ? `${line.slice(0, longest / 2 - 1)}…` : line;
-    const room = index === lines.length - 1 ? SYSTEM_DIGEST_CHAR_CAP : longest;
-    if (used + clipped.length + 1 > room) {
+    const room = index === lines.length - 1 ? SYSTEM_DIGEST_CHAR_CAP : SYSTEM_DIGEST_CHAR_CAP - CUT_LINE_ROOM;
+    if (used + line.length + 1 > room) {
       kept.push(`- … ${lines.length - index} more — ${moreHint(system)}`);
       break;
     }
-    kept.push(clipped);
-    used += clipped.length + 1;
+    kept.push(line);
+    used += line.length + 1;
   }
   return kept.join('\n');
 }
 
 /**
  * Every system's block, together never longer than
- * {@link CONNECTIONS_DIGEST_CHAR_CAP}: the systems the tenant connected first,
- * then those that need no connection. A system that needs a connection the
- * tenant lacks is only named.
+ * {@link CONNECTIONS_DIGEST_CHAR_CAP}, under the notation's one legend line:
+ * the systems the tenant connected first, then those that need no
+ * connection. A system that needs a connection the tenant lacks is only named.
  */
 export function renderConnectionsDigest(catalog: TenantCatalog): string {
+  const roots = rootsOf(catalog.snapshot);
+  const legend = roots.legend;
   const connected: SystemView[] = [];
   const builtIn: SystemView[] = [];
   const notConnected: string[] = [];
   for (const system of Object.keys(catalog.snapshot.adapters)) {
-    const view = systemView(catalog.snapshot, catalog.connections, system);
+    const view = systemView(catalog, roots, system);
     if (view === null) continue;
     if (needsConnection(view.spec) && view.connections.length === 0) notConnected.push(system);
     else (view.connections.length > 0 ? connected : builtIn).push(view);
   }
   const footer = notConnected.length > 0 ? `Not connected yet: ${notConnected.join(', ')}.` : '';
   const systems = [...connected, ...builtIn];
-  const budget = CONNECTIONS_DIGEST_CHAR_CAP - DIGEST_LEGEND.length - footer.length - 4;
+  const budget = CONNECTIONS_DIGEST_CHAR_CAP - legend.length - footer.length - 4;
   const blocks: string[] = [];
   let used = 0;
   for (const [index, view] of systems.entries()) {
@@ -279,102 +227,45 @@ export function renderConnectionsDigest(catalog: TenantCatalog): string {
     blocks.push(block);
     used += block.length + 2;
   }
-  return [DIGEST_LEGEND, ...blocks, ...(footer ? [footer] : [])].join('\n\n');
+  return [legend, ...blocks, ...(footer ? [footer] : [])].join('\n\n');
 }
 
 // ── describeConnection's compact answer ─────────────────────────────────────
 
-/** A place in the system: where a path of hops from its root lands. */
-interface Place {
-  /** The hops that reach it, as an author writes them (`-[:Company]->`). */
-  position: string;
-  /** The position type it lands on. */
-  target: string;
-  /** The root or edge that reached it. */
-  via: RecordType;
-}
-
-const hop = (name: string) => `-[:${spellName(name)}]->`;
-
-/**
- * Every place reachable from the root within {@link POSITION_DEPTH} hops, by
- * the position string that reaches it. A requested position is looked up
- * here by comparison, so only a position this answer could have handed out
- * is ever honoured.
- */
-function placesOf(schema: InstanceSchema): Map<string, Place> {
-  const places = new Map<string, Place>();
-  const roots = rootsOf(schema);
-  let frontier: Place[] = roots.map((root) => ({
-    position: hop(root.name),
-    target: schema.collections[root.name]?.target ?? schema.writableRoots[root.name]?.position ?? root.name,
-    via: root,
-  }));
-  for (let depth = 0; depth < POSITION_DEPTH && frontier.length > 0; depth++) {
-    const next: Place[] = [];
-    for (const place of frontier) {
-      if (places.has(place.position)) continue;
-      places.set(place.position, place);
-      for (const [edge, schemaEdge] of Object.entries(schema.positions[place.target]?.edges ?? {})) {
-        next.push({ position: place.position + hop(edge), target: schemaEdge.target, via: edgeType(schema, edge, schemaEdge) });
-      }
-    }
-    frontier = next;
-  }
-  return places;
-}
-
-function edgeType(schema: InstanceSchema, name: string, edge: EdgeSchema): RecordType {
-  const writable = edge.writable === true;
-  return {
-    name,
-    readable: edge.readable !== false,
-    writable,
-    listenable: edge.listenable === true,
-    fields: fieldsOf(schema.positions[edge.target], writable ? schema.createShapes?.[edge.target] : undefined),
-  };
-}
-
-function edgeLines(schema: InstanceSchema, place: { target: string; position: string }): string[] {
-  return Object.entries(schema.positions[place.target]?.edges ?? {}).map(([name, edge]) => {
-    const landing = edgeType(schema, name, edge);
-    return `- -[:${spellName(name)}]-> ${spellName(edge.target)}${access(landing)}: ${fieldList(landing.fields, FIELDS_PER_TYPE)} — position ${JSON.stringify(place.position + hop(name))}`;
-  });
+/** A place: its fields, then each edge leaving it with the fields where it lands. */
+function placeLines(place: DescribedPlace): string[] {
+  const members = place.members.length > 0 ? [`may be: ${place.members.join(', ')}`] : [];
+  const pinned = place.fields.shown.filter((field) => field.pinned).map((field) => field.markedName);
+  return [
+    `${place.name}: ${fieldList(place.fields, place)}`,
+    ...members,
+    ...(pinned.length > 0 ? [`pinned (a read's WHERE must set each with ==): ${pinned.join(', ')}`] : []),
+    ...(place.edges.length > 0 ? ['edges:', ...place.edges.map(edgeLine)] : ['edges: none']),
+  ];
 }
 
 export type ConnectionDescription = { ok: true; text: string } | { ok: false; error: string };
 
 /**
  * One place in one system, in the digest's notation. At the root: how to
- * construct and listen, what the system is, and each record type with its
- * fields. At a position (one an earlier answer handed out) or a named type:
- * its fields, then every edge leaving it with what it lands on.
+ * construct and listen, what the system is, and each edge leaving the
+ * connection with what lands there. At a position (a walk, as a program
+ * writes one from the connection) or a named type: its fields, then every
+ * edge leaving it with what it lands on.
  */
 export function describeFromSnapshot(
   catalog: TenantCatalog,
   request: { system: string; connection?: string; position?: string; types?: string[] },
 ): ConnectionDescription {
-  const view = systemView(catalog.snapshot, catalog.connections, request.system, request.connection);
+  const view = systemView(catalog, rootsOf(catalog.snapshot), request.system, request.connection);
   if (view === null) {
     return { ok: false, error: `No system "${request.system}". Systems: ${Object.keys(catalog.snapshot.adapters).join(', ') || 'none'}.` };
   }
-  const { system, spec, schema } = view;
+  const { system, spec, root } = view;
   if (request.position !== undefined || request.types !== undefined) {
-    if (schema === undefined) return { ok: false, error: `${system}: ${view.note ?? 'not described'}.` };
-    const places = placesOf(schema);
-    const wanted = request.position !== undefined ? [request.position] : (request.types ?? []).map(hop);
-    const blocks = wanted.map((position) => {
-      const place = places.get(position) ?? [...places.values()].find((p) => p.target === position || hop(p.target) === position);
-      if (place === undefined) {
-        return `### ${system} at ${position}\nNo such place. Positions: ${[...places.keys()].slice(0, 20).join(', ')}.`;
-      }
-      const edges = edgeLines(schema, place);
-      return [
-        `### ${system} at ${place.position}`,
-        `${spellName(place.via.name)}${access(place.via)}: ${fieldList(place.via.fields, FIELDS_AT_POSITION)}`,
-        ...(edges.length > 0 ? ['Edges:', ...edges] : ['No edges leave this node.']),
-      ].join('\n');
-    });
+    if (root === undefined) return { ok: false, error: `${system}: ${view.note ?? 'not described'}.` };
+    const blocks =
+      request.position !== undefined ? [positionBlock(catalog.snapshot, view, root, request.position)] : (request.types ?? []).map((type) => typeBlock(catalog.snapshot, view, type));
     return { ok: true, text: blocks.join('\n\n') };
   }
 
@@ -382,43 +273,71 @@ export function describeFromSnapshot(
   if (spec.description) lines.push(spec.description);
   if (spec.triggerExpectation) lines.push(`- What a listen fires on: ${spec.triggerExpectation}`);
   if (needsConnection(spec) && view.connections.length === 0) lines.push('- Not connected yet: a program cannot construct it until the user connects it.');
-  if (schema === undefined) {
+  if (root === undefined) {
     lines.push(`Note: ${view.note ?? 'not described'}`);
     return { ok: true, text: lines.join('\n') };
   }
-  if (schema.supportsInPlaceUpdate !== true) lines.push('- Records here cannot be updated in place: a write creates.');
-  const roots = rootsOf(schema);
-  if (roots.length > 0) {
-    lines.push('Record types:');
-    for (const root of roots) {
-      lines.push(`- ${hop(root.name)}${access(root)}: ${fieldList(root.fields, FIELDS_PER_TYPE)}`);
-    }
-  } else {
-    lines.push('No record types.');
-  }
-  const deeper = [...placesOf(schema).keys()][0];
+  if (spec.schemas[view.key]?.supportsInPlaceUpdate !== true) lines.push('- Records here cannot be updated in place: a write creates.');
+  lines.push(...(root.edges.length > 0 ? ['From the connection:', ...root.edges.map(edgeLine)] : ['No edges leave the connection.']));
+  const first = root.edges[0];
   lines.push(
-    [
-      deeper !== undefined ? `Stand on a record type with its position, e.g. position: ${JSON.stringify(deeper)}.` : '',
-      'detail: "full" returns the JSON (the system and its schema).',
-    ]
+    [first !== undefined ? `Stand on a place with its position, e.g. position: ${JSON.stringify(first.step)}.` : '', 'detail: "full" returns the JSON (the system and its schema).']
       .filter(Boolean)
       .join(' '),
   );
   return { ok: true, text: lines.join('\n') };
 }
 
+/** Where `position` lands, through the checker: a misspelt edge is its diagnostic. */
+function positionBlock(snapshot: CatalogSnapshot, view: SystemView, root: DescribedPlace, position: string): string {
+  const header = `### ${view.system} at ${position}`;
+  // A run host unit is no connection an address connects: its places are the
+  // edges its root lists.
+  if (RUN_HOST_UNITS.includes(view.system)) {
+    const lands = root.edges.find((edge) => edge.step === position)?.lands;
+    if (lands === undefined) return [header, `No such place. Positions: ${root.edges.map((edge) => edge.step).join(', ')}.`].join('\n');
+    return [header, ...placeLines(lands)].join('\n');
+  }
+  const described = describeAddress(snapshot, addressOf(view, position), { showing: AT_PLACE, landings: AT_LANDINGS });
+  if (described.place === null) return [header, ...diagnosticLines(described.diagnostics)].join('\n');
+  const further = described.place.edges[0];
+  return [
+    header,
+    ...diagnosticLines(described.diagnostics),
+    ...placeLines(described.place),
+    ...(further !== undefined ? [`Go further with this position and an edge's hop, e.g. position: ${JSON.stringify(position + further.step)}.`] : []),
+  ].join('\n');
+}
+
+/** A record type by the name a program's type writes (`<c-[:Message]->>`). */
+function typeBlock(snapshot: CatalogSnapshot, view: SystemView, type: string): string {
+  const header = `### ${view.system} type ${type}`;
+  if (RUN_HOST_UNITS.includes(view.system)) return [header, 'A run host unit has no types of its own: its root lists what lands on each edge.'].join('\n');
+  const described = describeAddress(snapshot, addressOf(view, ''), { showing: AT_PLACE, landings: AT_LANDINGS });
+  const records = described.records ?? [];
+  const record = records.find((r) => r.name === type);
+  if (record === undefined) {
+    const diagnostics = diagnosticLines(described.diagnostics);
+    return [header, ...(diagnostics.length > 0 ? diagnostics : [`No such type. Types: ${records.map((r) => r.name).join(', ') || 'none'}.`])].join('\n');
+  }
+  return [header, ...placeLines(record.place)].join('\n');
+}
+
 /** describeConnection's `detail: "full"`: the system as the catalog holds it,
  *  with the one connection's schema. */
 export function describeFull(catalog: TenantCatalog, request: { system: string; connection?: string }) {
-  const view = systemView(catalog.snapshot, catalog.connections, request.system, request.connection);
-  if (view === null) return { error: `No system "${request.system}".` };
-  const { schemas: _schemas, schemaNotes: _notes, ...spec } = view.spec;
+  const spec = catalog.snapshot.adapters[request.system];
+  if (spec === undefined) return { error: `No system "${request.system}".` };
+  const named = catalog.connections.filter((c) => c.system === request.system).map((c) => c.name);
+  const connections = request.connection !== undefined ? [request.connection, ...named.filter((n) => n !== request.connection)] : named;
+  const key = connections[0] ?? '';
+  const { schemas, schemaNotes, ...declared } = spec;
+  const schema = schemas[key];
   return {
-    system: view.system,
-    connections: view.connections,
-    spec,
-    ...(view.schema !== undefined ? { schema: view.schema } : { note: view.note ?? 'not described' }),
+    system: request.system,
+    connections,
+    spec: declared,
+    ...(schema !== undefined ? { schema } : { note: schemaNotes?.[key]?.[0] ?? 'its records could not be read' }),
   };
 }
 
