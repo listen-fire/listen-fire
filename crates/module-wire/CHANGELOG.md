@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.12.10 - 2026-11-11
+
 - `PROTOCOL_MINOR` is 9: adapter protocol 2.9, an actor identity may carry `proven`. The results check takes it (a boolean). 2.9 is a host behaviour and names no method, so `PROTOCOL_MINORS` gains no row.
 - `PROTOCOL_MINOR` is 8: adapter protocol 2.8, every request a runner sends to the slots it fills carries `hostRelease`, its release. 2.8 is a host behaviour and names no method, so `PROTOCOL_MINORS` gains no row.
 

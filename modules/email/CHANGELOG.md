@@ -1,5 +1,11 @@
 # @listen-fire/email
 
+## 0.13.2
+
+### Patch Changes
+
+- 74127fc: An email lands with `Forwarded Through`, a list of text: the inboxes its forwarding headers name (`X-Forwarded-For`, `Delivered-To` and the like), lower case, empty when none. The address it was finally sent to is not one, even when a `Delivered-To` header repeats it.
+
 ## 0.13.1
 
 ### Patch Changes

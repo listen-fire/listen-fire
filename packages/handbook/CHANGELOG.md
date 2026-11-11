@@ -1,5 +1,11 @@
 # @listen-fire/handbook
 
+## 0.15.2
+
+### Patch Changes
+
+- 182e8eb: The listeners chapter says who acted: the `Actor` a module's arrival carries, and how a filter reads it.
+
 ## 0.15.1
 
 ### Patch Changes

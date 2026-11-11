@@ -1,5 +1,13 @@
 # @listen-fire/slack
 
+## 0.13.5
+
+### Patch Changes
+
+- 32db044: `getActorCandidates` throws when it could not look the member up (no Slack client, a failed `users.info`, a failed Attio member fetch), so the host names who acted unknown instead of answering that nobody did. A member with no email is still no candidate. Slack asks `users.info` through its bounded delivery client, so a rate limited call fails at once.
+- 74127fc: The actor each module names now says `proven: true`: the host admits a delivery only when the source system signed it (Slack, Telegram, Attio, WhatsApp), or the address is the source system's own answer to the connection's credential (Granola). Email states nothing, since nothing vouches for a `From` line.
+- 74127fc: Slack declares a setting, `drop_own_messages`, off unless it is `on`: a message or reaction the app itself made, by its bot user or its bot id, is then no arrival. An app Slack cannot identify drops nothing and says so. `module-kit` lets an adapter module declare `settings` in its manifest.
+
 ## 0.13.4
 
 ### Patch Changes

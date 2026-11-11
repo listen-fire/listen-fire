@@ -19,6 +19,11 @@ named in [`RELEASING.md`](RELEASING.md).
 ## [Unreleased]
 
 <!-- add merged PRs here -->
+
+## [0.15.3] - 2026-11-11
+
+A patch of 0.15; it reads the same pins (`0.15.x`). What lands can say who acted (`Actor`), Slack can drop the app's own messages, and the catalog, the editor and the checker's messages spell types and places one way. No program's meaning or check result changes.
+
 - `listen-fire` gives what lands an `Actor` when its module reports who acted (`getActorCandidates` or `extractActor`): `Id`, `Email`, `Domain`, `Phone`, `Name` and `Proven`, absent when nobody is named, read by a filter and a run like any field (`docs/contracts/actor-field.md`). A manual run's `Actor` is its caller. It is written before an arrival is judged; an opaque identity asks the module's `getActorCandidates` only when a movement in the project says `Actor`, and a lookup that fails leaves a filter reading it `Arrival Not Judged`. The language names none of it. A module with a field called `Actor` of its own keeps it: `listen-fire` adds nothing there and says so once, and a saved project is never refused for the name.
 - Slack, Telegram, Attio, WhatsApp and Granola say `proven` for the actor they name, and email does not (nothing vouches for a `From` line). Slack has a setting, `drop_own_messages` (off unless `on`), that drops the messages and reactions the app itself makes. Email's `Emails` have `Forwarded Through`, the inboxes a message's forwarding headers name, as a list of text. `module-kit` lets an adapter module declare `settings` in its manifest.
 - Adapter protocol 2.9 (additive; an older host ignores it): an actor identity may carry `proven`, true when the module checked that the source system vouches for it. `engine-contracts` exports `normalisedActor` and `ACTOR_FIELDS`, the rule that turns an identity into the `Actor` fields (`Id`, `Email`, `Domain`, `Phone`, `Name`, `Proven`), held to the table in `docs/contracts/actor-field.md`. `PROTOCOL_MINOR` is 9.
@@ -3127,7 +3132,7 @@ Releases before v0.11 are kept one file per minor line, newest first:
 - [v0.2.x](docs/changelog/v0.2.md) (v0.2.0)
 - [v0.1.x](docs/changelog/v0.1.md) (v0.1.0 to v0.1.2)
 
-[Unreleased]: https://github.com/listen-fire/listen-fire/compare/v0.14.2...HEAD
+[Unreleased]: https://github.com/listen-fire/listen-fire/compare/v0.15.3...HEAD
 [0.14.2]: https://github.com/listen-fire/listen-fire/compare/v0.14.1...v0.14.2
 [0.14.1]: https://github.com/listen-fire/listen-fire/compare/v0.14.0...v0.14.1
 [0.14.0]: https://github.com/listen-fire/listen-fire/compare/v0.13.1...v0.14.0

@@ -1,5 +1,12 @@
 # @listen-fire/engine-contracts
 
+## 0.15.3
+
+### Patch Changes
+
+- 27fcf14: Adapter protocol 2.9: an actor identity may carry `proven`, true when the module checked that the source system vouches for it. `normalisedActor` and `ACTOR_FIELDS` turn an identity into the `Actor` fields a host offers (`docs/contracts/actor-field.md`). `PROTOCOL_MINOR` is 9.
+- 6882160: `normalisedActor` trims one named set of characters, the same one `lf` trims, so an address with a byte order mark or a next line character reads the same in both. JavaScript's `trim` alone stripped U+FEFF, and Rust's alone stripped U+0085.
+
 ## 0.15.2
 
 ### Patch Changes
