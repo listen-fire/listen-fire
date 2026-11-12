@@ -3,7 +3,7 @@ import { sub } from 'date-fns';
 
 import type { ParentAssociation } from 'movement-engine/public/adapter';
 
-import { AffinityAPIClient, fieldsValidator, locationFieldValue, valueType } from './api_client';
+import { AffinityAPIClient, fieldsValidator, isDomainRefusal, locationFieldValue, valueType } from './api_client';
 import {
   findMatchingOrganisation as findMatchingOrganisationCommon,
   normalizeEmail,
@@ -354,17 +354,35 @@ Expect the user to provide a name. If for any reason the name cannot be split in
       // writing its fields and list entries is what adopts it.
       if (!existingOrg.domain && searchQuery.domain && !existingOrg.global) {
         tracer.add('orgSubAction', 'updateDomain');
-        await this.client.updateOrganisation({
-          id: existingOrgId,
-          domain: searchQuery.domain,
-        });
+        try {
+          await this.client.updateOrganisation({
+            id: existingOrgId,
+            domain: searchQuery.domain,
+          });
+        } catch (e) {
+          if (!isDomainRefusal(e)) throw e;
+          await reportAffinityWriteFailure({
+            kind: 'domain',
+            detail: `organisation: ${existingOrgId}, domain: ${searchQuery.domain}`,
+          });
+        }
       }
     } else {
       tracer.add('orgAction', 'create');
-      const newOrg = await this.client.createOrganisation({
-        name: searchQuery.name,
-        domain: searchQuery.domain,
-      });
+      let newOrg;
+      try {
+        newOrg = await this.client.createOrganisation({
+          name: searchQuery.name,
+          domain: searchQuery.domain,
+        });
+      } catch (e) {
+        if (!isDomainRefusal(e)) throw e;
+        newOrg = await this.client.createOrganisation({ name: searchQuery.name });
+        await reportAffinityWriteFailure({
+          kind: 'domain',
+          detail: `new organisation: ${searchQuery.name}, domain: ${searchQuery.domain}`,
+        });
+      }
       if (!newOrg) {
         throw new Error('Failed to create organization');
       }

@@ -134,6 +134,24 @@ class AffinityMergedEntityError extends Error {
   }
 }
 
+/** Any refusal Affinity answers with, carrying the status and body so callers
+ *  match on structure rather than on the message text. */
+class AffinityRequestError extends Error {
+  constructor(
+    public readonly status: number,
+    public readonly body: string | undefined,
+    statusText: string,
+  ) {
+    super(`Affinity Error: ${status} (${statusText}): ${body}`);
+    this.name = 'AffinityRequestError';
+  }
+}
+
+/** Affinity refusing an organisation's domain as badly formatted. */
+function isDomainRefusal(e: unknown): boolean {
+  return e instanceof AffinityRequestError && e.status === 422 && (e.body ?? '').includes('Field domain');
+}
+
 const affinityCredsParser = z.object({
   apiKey: z.string(),
   baseUrl: z.string().url().optional(),
@@ -680,7 +698,7 @@ class AffinityAPIClient {
               }
             }
 
-            throw new Error(`Affinity Error: ${response.status} (${response.statusText}): ${text}`);
+            throw new AffinityRequestError(response.status, text, response.statusText);
           }
 
           if (responseValidator) {
@@ -706,6 +724,9 @@ class AffinityAPIClient {
             // to stop.
             return false;
           } else if (e instanceof AffinityMergedEntityError) {
+            return false;
+          } else if (isDomainRefusal(e)) {
+            // The same domain is refused the same way every time.
             return false;
           } else if (e instanceof Error && e.message.includes('401')) {
             // invalid api key
@@ -1703,6 +1724,8 @@ export {
   AFFINITY_LIMITS,
   AffinityAPIClient,
   AffinityMergedEntityError,
+  AffinityRequestError,
+  isDomainRefusal,
   forgetAffinityWorkspace,
   getAffinityClient,
   affinityCredsParser,

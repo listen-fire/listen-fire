@@ -6,7 +6,7 @@ import { logger } from 'movement-engine/public/log';
 
 export interface AffinityWriteFailure {
   /** What was being written. */
-  kind: 'note' | 'field value';
+  kind: 'note' | 'field value' | 'domain';
   /** The ids involved, as one line (`field: 3, entity: 9601, …`). */
   detail: string;
 }
