@@ -4229,9 +4229,10 @@ impl Parser {
             self.pos = end;
             self.skip_inline_ws();
             let is_list = self.is('[') && trim_start(self.src.slice(self.pos + 1, self.src.len())).first() == Some(&unit(']'));
+            let is_branded = self.at_brand();
             self.pos = start + 1;
             self.skip_inline_ws();
-            if !is_list {
+            if !is_list && !is_branded {
                 self.pos = start;
                 return Ok(None);
             }
@@ -4247,6 +4248,7 @@ impl Parser {
             ValueType::List { of, .. } => Ok(Some(ValueType::List { of, span })),
             ValueType::Record { keys, .. } => Ok(Some(ValueType::Record { keys, span })),
             ValueType::Closure { params, returns, .. } => Ok(Some(ValueType::Closure { params, returns, span })),
+            ValueType::Branded { of, brands, .. } => Ok(Some(ValueType::Branded { of, brands, span })),
         }
     }
 
@@ -4349,7 +4351,42 @@ impl Parser {
             self.expect("]", "to close '[]' — a list type is written 'text[]'")?;
             member = ValueType::List { of: Box::new(member), span: self.span_from(start) };
         }
+        let brands = self.read_brands(param_name)?;
+        if !brands.is_empty() {
+            member = ValueType::Branded { of: Box::new(member), brands, span: self.span_from(start) };
+        }
         Ok(member)
+    }
+
+    /// At `&` (and not `&&`) — a brand on the member before it?
+    fn at_brand(&self) -> bool {
+        self.is('&') && !self.is_at(1, '&')
+    }
+
+    /// ` & Brand<"a"> & Brand<"b">` after a member: each brand's name, as
+    /// written. None when no `&` follows.
+    fn read_brands(&mut self, param_name: &str) -> SResult<Vec<String>> {
+        let mut brands = Vec::new();
+        loop {
+            let save = self.pos;
+            self.skip_inline_ws();
+            if !self.at_brand() {
+                self.pos = save;
+                return Ok(brands);
+            }
+            self.pos += 1;
+            self.skip_inline_ws();
+            self.expect_word(
+                "Brand",
+                &format!("after '&' in the type of '{param_name}' — a type is narrowed by a brand: 'text & Brand<\"claim:email/address\">'"),
+            )?;
+            self.skip_inline_ws();
+            self.expect("<", "to open the brand's name (e.g. 'Brand<\"claim:email/address\">')")?;
+            self.skip_inline_ws();
+            brands.push(self.read_quoted_string("as the brand's name (e.g. 'Brand<\"claim:email/address\">')")?.0);
+            self.skip_inline_ws();
+            self.expect(">", "to close the brand's name (e.g. 'Brand<\"claim:email/address\">')")?;
+        }
     }
 
     /// `{ mode: text, owner?: text }` — keys separated by ',', ';' or newlines.

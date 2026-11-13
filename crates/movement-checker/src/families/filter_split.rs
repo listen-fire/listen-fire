@@ -350,7 +350,7 @@ fn owned_name(target: &PositionSchema, field: &str) -> Option<String> {
         use movement_parser::catalog::types::Composite;
         match ty {
             FieldType::Composite(Composite::Owned { name, .. }) => Some(name),
-            FieldType::Composite(Composite::MaybeAbsent { of: inner } | Composite::List { of: inner, .. }) => of(inner),
+            FieldType::Composite(Composite::MaybeAbsent { of: inner } | Composite::List { of: inner, .. } | Composite::Branded { of: inner, .. }) => of(inner),
             _ => None,
         }
     }

@@ -463,6 +463,9 @@ pub fn spell_value_type(type_: &ValueType) -> String {
             ValueType::Closure { .. } => format!("<{}>[]", spell_value_type(of)),
             _ => format!("{}[]", spell_value_type(of)),
         },
+        ValueType::Branded { of, brands, .. } => {
+            movement_parser::catalog::written_type::WrittenType::branded(movement_parser::catalog::written_type::WrittenType::Words(spell_value_type(of)), brands.iter().cloned()).spell()
+        }
         ValueType::Record { keys, .. } => {
             let keys: Vec<String> = keys
                 .iter()

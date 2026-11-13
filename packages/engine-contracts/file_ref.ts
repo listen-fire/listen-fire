@@ -224,6 +224,7 @@ export function filesAtType(type: SchemaFieldType | undefined, value: unknown): 
         ? Object.fromEntries(Object.entries(value).map(([key, member]) => [key, filesAtType(type.of, member)]))
         : value;
     case 'maybeAbsent':
+    case 'branded':
       return filesAtType(type.of, value);
     case 'enum':
     case 'owned':

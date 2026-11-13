@@ -989,8 +989,8 @@ pub fn unknown_dict_key(typing: &mut Typing, key: &str, keys: &[String]) {
 
 /// `requireDictKey`: a dict is keyed by text.
 pub fn require_dict_key(typing: &mut Typing, ty: Option<&Ty>, where_: &str) {
-    let Some(ty) = ty else { return };
-    let key = strip_absent(ty);
+    let Some(ty) = ty.map(crate::types::field::unbranded) else { return };
+    let key = strip_absent(&ty);
     match key {
         Ty::Text | Ty::Owned(_) | Ty::Enum { .. } => return,
         Ty::Union(members) if members.iter().all(|m| matches!(m, Ty::Text | Ty::Owned(_) | Ty::Enum { .. })) => return,
@@ -1291,6 +1291,7 @@ pub fn is_keyed_value(ty: &Ty) -> bool {
 /// `isPlainValue`: no fields to key on, an order of its own.
 pub fn is_plain_value(ty: &Ty) -> bool {
     match strip_absent(ty) {
+        Ty::Branded { of, .. } => is_plain_value(of),
         Ty::Text | Ty::Owned(_) | Ty::Number | Ty::Boolean | Ty::Date | Ty::Datetime | Ty::Enum { .. } => true,
         Ty::Union(members) => members.iter().all(is_plain_value),
         _ => false,

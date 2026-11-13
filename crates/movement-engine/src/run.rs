@@ -2651,6 +2651,9 @@ fn spell_value_type(value: &ast::ValueType) -> String {
             ast::ValueType::Closure { .. } => format!("<{}>[]", spell_value_type(of)),
             _ => format!("{}[]", spell_value_type(of)),
         },
+        ast::ValueType::Branded { of, brands, .. } => {
+            movement_parser::catalog::written_type::WrittenType::branded(movement_parser::catalog::written_type::WrittenType::Words(spell_value_type(of)), brands.iter().cloned()).spell()
+        }
         ast::ValueType::Record { keys, .. } => format!(
             "{{ {} }}",
             keys.iter().map(|k| format!("{}{}: {}", k.name, if k.optional == Some(true) { "?" } else { "" }, spell_value_type(&k.type_))).collect::<Vec<_>>().join(", ")

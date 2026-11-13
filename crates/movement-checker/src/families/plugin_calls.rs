@@ -15,7 +15,10 @@ use movement_parser::catalog::types::{FieldType as SchemaFieldType, PluginOutput
 use crate::checker::Checker;
 use crate::codes;
 use crate::scope::SymbolId;
-use crate::types::field::{CollectionOrder, HandleKinds, HeldHandle, HeldStep, Ty, spell_type, field_assignable, holds_records, list_of, spell_held_steps, strip_absent};
+use crate::types::field::{
+    CollectionOrder, HandleKinds, HeldHandle, HeldStep, Ty, brand_required_message, field_assignable, holds_records, lacks_a_brand, list_of, spell_held_steps, spell_type, strip_absent,
+    unbranded,
+};
 use crate::types::position::{LocalNode, PlaneType, Position, ReturnShape, describe_position};
 
 /// What a plugin call's arguments are held to: the types it declares, by name.
@@ -256,14 +259,15 @@ impl Checker<'_> {
         // any arm; a file argument a file as the whole value, never one
         // inside a map or a list.
         let declared_ty = Ty::from_schema(declared);
-        if matches!(strip_absent(&declared_ty), Ty::Text)
+        let declared_base = unbranded(&declared_ty);
+        if matches!(strip_absent(&declared_base), Ty::Text)
             && held.is_none()
             && let Some((dict, may)) = value.and_then(|v| record_value_in(v).map(|d| (d, false))).or_else(|| may_hold.and_then(record_value_in).map(|d| (d, true)))
         {
             self.refuse_record_value_for_text(callee, name, dict, may, span);
             return;
         }
-        let misplaced = held.or_else(|| if matches!(strip_absent(&declared_ty), Ty::File) { file_below_whole(may_hold.or(value)) } else { None });
+        let misplaced = held.or_else(|| if matches!(strip_absent(&declared_base), Ty::File) { file_below_whole(may_hold.or(value)) } else { None });
         if let Some(misplaced) = misplaced {
             self.report(codes::CALL_ARG_TYPE, handle_in_typed_plugin_arg_message(callee, name, &declared_ty, &misplaced), span);
             return;
@@ -276,6 +280,13 @@ impl Checker<'_> {
         {
             return;
         }
+        let expected = format!("'{callee}' takes {} for '{name}'", spell_type(&declared_ty));
+        if let Some(value) = value
+            && lacks_a_brand(value, &declared_ty)
+        {
+            self.report(codes::BRAND_REQUIRED, brand_required_message(&expected, "this", value), span);
+            return;
+        }
         // A warning while the 0.12 pins read: those releases admitted the
         // value, and a plugin may have coerced it, so a saved movement still
         // runs as written. Refusing it is a tightened rule, for a release of
@@ -283,7 +294,7 @@ impl Checker<'_> {
         if let Some(value) = value
             && !field_assignable(value, &declared_ty)
         {
-            let message = format!("'{callee}' takes {} for '{name}', and this is {}", spell_type(&declared_ty), spell_type(strip_absent(value)));
+            let message = format!("{expected}, and this is {}", spell_type(strip_absent(value)));
             let mut warning = crate::diagnostic::Diagnostic::error(codes::CALL_ARG_TYPE, message, span);
             warning.severity = Some(crate::diagnostic::Severity::Warning);
             self.push(warning);

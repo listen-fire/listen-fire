@@ -929,7 +929,7 @@ impl<'a> Typing<'a> {
             Expression::Traverse { alias_root: Some(next), .. } if past_steps.is_empty() => Some(next.as_str()),
             _ => None,
         };
-        let scalar = field.as_ref().and_then(|ty| match strip_absent(ty) {
+        let scalar = field.as_ref().map(unbranded).and_then(|ty| match strip_absent(&ty) {
             Ty::Text | Ty::Owned(_) | Ty::Enum { .. } => Some(FieldlessScalar::Text),
             Ty::Number => Some(FieldlessScalar::Number),
             Ty::Boolean => Some(FieldlessScalar::Boolean),
@@ -992,7 +992,7 @@ impl<'a> Typing<'a> {
         if !steps.is_empty() || self.root_type(root).is_some() {
             return None;
         }
-        let held = self.scalar_type(root)?;
+        let held = unbranded(&self.scalar_type(root)?);
         let scalar = match strip_absent(&held) {
             Ty::Text | Ty::Owned(_) | Ty::Enum { .. } => FieldlessScalar::Text,
             Ty::Number => FieldlessScalar::Number,
@@ -1086,6 +1086,10 @@ impl<'a> Typing<'a> {
 
     fn type_exact_at(&mut self, expr: &Expression, position: Option<&Position>) -> Option<Ty> {
         let (ty, operands) = self.type_node(expr, position);
+        // An operation reads its operands' bases: only an argument check
+        // judges a brand, and nothing an operator or a function makes of a
+        // value keeps one.
+        let operands: Vec<Option<Ty>> = operands.iter().map(|operand| operand.as_ref().map(unbranded)).collect();
         crate::families::values::observe(self, expr, position, &operands, ty.as_ref());
         crate::families::calls::observe(self, expr, position, &operands, ty.as_ref());
         ty
@@ -1255,6 +1259,9 @@ impl<'a> Typing<'a> {
                     negative_presence_proofs(condition, &mut type_of)
                 };
                 let else_ty = self.with_presence(&else_proofs, position, |t, narrowed| t.infer_at(else_, narrowed));
+                // Choosing is an operation: `c ? e : f` is unbranded, as a
+                // function's answer is.
+                let (then_ty, else_ty) = (then_ty.as_ref().map(unbranded), else_ty.as_ref().map(unbranded));
                 // A closure is not data: IF chooses
                 // between values, never between closures.
                 if self.refuse_closure_operands(&[(then, then_ty.as_ref()), (else_, else_ty.as_ref())], expr, &format!("chosen by {}", spell_word("IF … THEN … ELSE … END"))) {
@@ -1287,7 +1294,7 @@ impl<'a> Typing<'a> {
                 (ty, vec![condition_ty, then_ty, else_ty])
             }
             Expression::At { expression, index } => {
-                let inner = self.infer_exact_at(expression, position);
+                let inner = self.infer_exact_at(expression, position).as_ref().map(unbranded);
                 let index_ty = self.infer_at(index, position);
                 if crate::families::values::refuse_record_key(self, expression, index, index_ty.as_ref()) {
                     return (None, vec![inner, index_ty]);
@@ -1298,7 +1305,7 @@ impl<'a> Typing<'a> {
                 if *fn_ == AggregationFunction::Llm {
                     self.observe_builtin("LLM_AGG");
                 }
-                let inner = self.infer_at(expression, position);
+                let inner = self.infer_at(expression, position).as_ref().map(unbranded);
                 (self.aggregate_type(*fn_, inner.as_ref(), expression), vec![inner])
             }
             Expression::Llm { prompt_expression, .. } => {
@@ -1315,6 +1322,7 @@ impl<'a> Typing<'a> {
                         Some(contract) if contract.index == i => crate::families::extraction::type_options_map(self, a, contract, position),
                         _ => self.infer_at(a, position),
                     })
+                    .map(|ty| ty.as_ref().map(unbranded))
                     .collect();
                 self.observe_builtin(fn_);
                 crate::families::values::observe_call(self, fn_, args);

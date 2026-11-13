@@ -890,6 +890,9 @@ pub enum ValueType {
     /// `<(c: <Company>) => <text>>` — a closure type,
     /// TypeScript's function type. Every parameter is typed.
     Closure { params: Vec<MovementParam>, returns: Box<ParamTypeRef>, span: Span },
+    /// `text & Brand<"claim:email/address">` — `of` narrowed by each brand,
+    /// TypeScript's intersection. A brand is a name, compared and never parsed.
+    Branded { of: Box<ValueType>, brands: Vec<String>, span: Span },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]

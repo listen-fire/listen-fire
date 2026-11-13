@@ -156,6 +156,14 @@ pub enum Composite {
     Union {
         of: Vec<FieldType>,
     },
+    /// `text & Brand<"claim:email/address">`: `of`, narrowed by each brand,
+    /// as TypeScript's intersection narrows. A brand is a name compared
+    /// whole, never parsed. Only a schema or a plugin's signature declares
+    /// one, so a value carries it only as read from where one was declared.
+    Branded {
+        of: Box<FieldType>,
+        brands: Vec<String>,
+    },
     /// A named scalar its owner (the module that declared it) parses: a
     /// cron schedule, a mailbox key. `allow_pattern` is the least an owner
     /// says of its values; `format`, a format the checker knows that its
@@ -236,7 +244,7 @@ impl FieldType {
         match self {
             FieldType::Scalar(_) => true,
             FieldType::Composite(c) => match c {
-                Composite::List { of, .. } | Composite::MaybeAbsent { of } => of.is_schema(),
+                Composite::List { of, .. } | Composite::MaybeAbsent { of } | Composite::Branded { of, .. } => of.is_schema(),
                 Composite::Dict { of, shape } => shape.is_none() && of.is_schema(),
                 Composite::Tuple { of, rest } => rest.is_none() && of.iter().flatten().all(FieldType::is_schema),
                 Composite::Enum { .. } | Composite::Owned { .. } => true,

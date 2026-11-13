@@ -20,6 +20,8 @@ named in [`RELEASING.md`](RELEASING.md).
 
 <!-- add merged PRs here -->
 
+- A type can carry brands, as TypeScript's intersection narrows one: `text & Brand<"claim:email/address">`, several as `text & Brand<"a"> & Brand<"b">`. A module's field or a plugin's argument or answer declares one in the catalog (`{ kind: "branded", of, brands }`; the catalog snapshot stays version 3), and a program's parameter type may ask for one. A branded value fits wherever its base type is asked for, and one with several brands fits where any of them is. Plain text where a brand is asked for is an error, `MOV_BRAND_REQUIRED`. Any operation on a value (a function, an operator, a conditional) drops its brand; binding it to a name or passing it on keeps it. A brand's name is compared whole, never parsed.
+
 ## [0.15.3] - 2026-11-11
 
 A patch of 0.15; it reads the same pins (`0.15.x`). What lands can say who acted (`Actor`), Slack can drop the app's own messages, and the catalog, the editor and the checker's messages spell types and places one way. No program's meaning or check result changes.

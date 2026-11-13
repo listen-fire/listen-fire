@@ -1494,6 +1494,11 @@ export type SchemaFieldType =
    *  its values; `format`, a format the checker validates a literal by. */
   | { kind: 'owned'; name: string; owner: string; allowPattern?: string; format?: 'cron' | 'timeZone' }
   | { kind: 'maybeAbsent'; of: SchemaFieldType }
+  /** `text & Brand<"claim:email/address">`: `of`, narrowed by each brand, as
+   *  TypeScript's intersection narrows. A brand is a name compared whole,
+   *  never parsed. A branded value fits where `of` is asked for; a value
+   *  without the brand never fits where it is. */
+  | { kind: 'branded'; of: SchemaFieldType; brands: string[] }
   /** A record's fields held as the field's value (`c.Current`): typed as a
    *  plain object of that position's fields, never as the record. It has no
    *  edges and no identity, so a checker refuses a walk, a write or a record

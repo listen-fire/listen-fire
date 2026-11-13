@@ -273,6 +273,11 @@ pub const EXTRACT_ANNOTATE: &str = "MOV_EXTRACT_ANNOTATE";
 pub const EXTRACT_NEEDS_ANNOTATION: &str = "MOV_EXTRACT_NEEDS_ANNOTATION";
 pub const NARROWING: &str = "MOV_NARROWING";
 pub const CALL_ARG_TYPE: &str = "MOV_CALL_ARG_TYPE";
+/// Since 0.16: a value without a brand where a branded type is asked for
+/// (`text` handed to `text & Brand<"claim:email/address">`), as a plugin's
+/// or a function's argument. Only a module's schema or a plugin's
+/// signature makes a branded value, so the remedy is to pass one read from there.
+pub const BRAND_REQUIRED: &str = "MOV_BRAND_REQUIRED";
 pub const COMPARE_TYPE_MISMATCH: &str = "MOV_COMPARE_TYPE_MISMATCH";
 pub const JSON_OPAQUE: &str = "MOV_JSON_OPAQUE";
 pub const RECORD_NOT_A_VALUE: &str = "MOV_RECORD_NOT_A_VALUE";

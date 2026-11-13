@@ -277,6 +277,7 @@ fn fits(value: &Js, declared: &FieldType) -> bool {
             },
             Composite::Enum { options, open } => matches!(value, Js::String(text) if open.is_some() || options.iter().any(|o| o.as_str() == text.as_str())),
             Composite::MaybeAbsent { of } => value.is_nullish() || fits(value, of),
+            Composite::Branded { of, .. } => fits(value, of),
             Composite::Union { of } => of.iter().any(|arm| fits(value, arm)),
             Composite::Record { .. } => matches!(value, Js::Object(_) | Js::Record(_)),
             Composite::Owned { .. } => matches!(value, Js::String(_)),

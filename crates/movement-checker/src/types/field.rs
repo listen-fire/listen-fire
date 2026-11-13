@@ -5,7 +5,7 @@
 //! The TypeScript spells a scalar as a bare string and a composite as a
 //! tagged object; here both are one enum, so every `match` is exhaustive.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::rc::Rc;
 
 use movement_parser::catalog::types::{Composite, FieldType as SchemaFieldType, JsMap, OwnedFormat, Scalar};
@@ -41,6 +41,13 @@ pub enum Ty {
     Owned(Rc<OwnedScalar>),
     /// `T | absent`. Build with `maybe_absent`, which never nests.
     MaybeAbsent(Rc<Ty>),
+    /// `of & Brand<"a">`: `of`, narrowed by each brand, as TypeScript's
+    /// intersection narrows. It fits wherever `of` is asked for, and where a
+    /// brand is asked for only if it carries that brand. Only a schema and a
+    /// plugin's signature declare one, and every operation drops it, so a
+    /// program cannot make one. Build with `branded`, which never wraps an
+    /// absence, a union or another brand.
+    Branded { of: Rc<Ty>, brands: BTreeSet<String> },
     /// Build only with `value_union`, which keeps the member set canonical.
     Union(Rc<Vec<Ty>>),
     /// A record held as a value; `None` is a record nobody can name.
@@ -140,6 +147,7 @@ impl Ty {
                 Composite::Owned { name, owner, allow_pattern, format } => {
                     Ty::Owned(Rc::new(OwnedScalar { name: name.clone(), owner: owner.clone(), allow_pattern: allow_pattern.clone(), format: *format }))
                 }
+                Composite::Branded { of, brands } => branded(from_schema(of), brands.iter().cloned()),
             },
         }
     }
@@ -178,6 +186,7 @@ impl Ty {
                 Composite::Owned { name: owned.name.clone(), owner: owned.owner.clone(), allow_pattern: owned.allow_pattern.clone(), format: owned.format }
             }
             Ty::MaybeAbsent(of) => Composite::MaybeAbsent { of: Box::new(of.to_schema()) },
+            Ty::Branded { of, brands } => Composite::Branded { of: Box::new(of.to_schema()), brands: brands.iter().cloned().collect() },
             Ty::Union(of) => Composite::Union { of: of.iter().map(Ty::to_schema).collect() },
             Ty::Record(_) => Composite::Record { position: None },
             Ty::HeldRecord(held) => Composite::Record {
@@ -237,7 +246,7 @@ impl Ty {
     /// The types nested directly inside this one.
     pub fn children(&self) -> Vec<&Ty> {
         match self {
-            Ty::List { of, .. } | Ty::MaybeAbsent(of) => vec![&**of],
+            Ty::List { of, .. } | Ty::MaybeAbsent(of) | Ty::Branded { of, .. } => vec![&**of],
             Ty::Tuple { of, rest } => of.iter().flatten().chain(rest.as_ref().and_then(|r| r.of.as_deref())).collect(),
             Ty::Dict { of, shape } => shape.iter().flat_map(|s| s.values().flatten()).chain(std::iter::once(&**of)).collect(),
             Ty::Union(members) => members.iter().collect(),
@@ -346,6 +355,7 @@ impl Parts {
                 format!("union({})", ids.iter().map(usize::to_string).collect::<Vec<_>>().join(","))
             }
             Ty::MaybeAbsent(of) => format!("maybe({})", self.part_of(of)?),
+            Ty::Branded { of, brands } => format!("branded({};{})", self.part_of(of)?, serde_json::to_string(brands).unwrap_or_default()),
             Ty::Enum { options, open } => format!(
                 "enum({}{})",
                 serde_json::to_string(options).unwrap_or_default(),
@@ -397,6 +407,82 @@ pub fn strip_absent(ty: &Ty) -> &Ty {
 
 pub fn is_maybe_absent(ty: Option<&Ty>) -> bool {
     matches!(ty, Some(Ty::MaybeAbsent(_)))
+}
+
+// ── Brands ──
+
+/// `of & Brand<"a"> & …`, canonical: a brand on `T | null` or on a union is
+/// on each member (TypeScript's `(A | B) & C` is `A & C | B & C`), brands on
+/// a brand are one set, and nothing is brand of `null` or `never`.
+pub fn branded(of: Ty, brands: impl IntoIterator<Item = String>) -> Ty {
+    let brands: BTreeSet<String> = brands.into_iter().collect();
+    if brands.is_empty() {
+        return of;
+    }
+    match of {
+        Ty::Absent | Ty::Never => of,
+        Ty::MaybeAbsent(of) => maybe_absent(branded(Rc::unwrap_or_clone(of), brands)),
+        Ty::Union(members) => value_union(&members.iter().map(|m| branded(m.clone(), brands.iter().cloned())).collect::<Vec<_>>()).unwrap_or(Ty::Json),
+        Ty::Branded { of, brands: had } => Ty::Branded { of, brands: had.into_iter().chain(brands).collect() },
+        of => Ty::Branded { of: Rc::new(of), brands },
+    }
+}
+
+/// The type with every brand dropped, at any depth: what an operation on
+/// a value of it reads (`Text.lower(e)`, `"${e}"`, `c ? e : f`), whose
+/// answer is never branded.
+pub fn unbranded(ty: &Ty) -> Ty {
+    if !has_brand(ty, &mut std::collections::HashSet::new()) {
+        return ty.clone();
+    }
+    let unbrand = |of: &Rc<Ty>| Rc::new(unbranded(of));
+    match ty {
+        Ty::Branded { of, .. } => unbranded(of),
+        Ty::List { of, unordered } => Ty::List { of: unbrand(of), unordered: *unordered },
+        Ty::Tuple { of, rest } => Ty::Tuple {
+            of: Rc::new(of.iter().map(|slot| slot.as_ref().map(unbranded)).collect()),
+            rest: rest.as_ref().map(|rest| TupleRest { at: rest.at, of: rest.of.as_ref().map(unbrand) }),
+        },
+        Ty::Dict { of, shape } => Ty::Dict {
+            of: unbrand(of),
+            shape: shape.as_ref().map(|shape| Rc::new(shape.iter().map(|(key, slot)| (key.clone(), slot.as_ref().map(unbranded))).collect())),
+        },
+        Ty::MaybeAbsent(of) => maybe_absent(unbranded(of)),
+        Ty::Union(members) => value_union(&members.iter().map(unbranded).collect::<Vec<_>>()).unwrap_or(Ty::Json),
+        other => other.clone(),
+    }
+}
+
+/// A value that does not fit `target` only for a brand it lacks: its base
+/// fits, but `target` (or every member of it the base fits) asks for a
+/// brand the value does not carry (MOV_BRAND_REQUIRED).
+pub fn lacks_a_brand(source: &Ty, target: &Ty) -> bool {
+    !field_assignable(source, target) && field_assignable(&unbranded(source), &unbranded(target))
+}
+
+/// MOV_BRAND_REQUIRED's words: `expected` says what asks for the brand
+/// (`'t.isMember' takes … for 'e'`), `argument` names what was handed it.
+pub fn brand_required_message(expected: &str, argument: &str, given: &Ty) -> String {
+    format!(
+        "{expected}, but {argument} is {} — only a value read from a module's field or a plugin's answer carries a brand, and any operation on it (a function, an operator, a conditional) drops the brand. Pass the value as it was read",
+        spell_type(strip_absent(given))
+    )
+}
+
+/// Does a brand sit anywhere in `ty`? Each shared node is looked inside once.
+fn has_brand(ty: &Ty, clean: &mut std::collections::HashSet<NodeKey>) -> bool {
+    if matches!(ty, Ty::Branded { .. }) {
+        return true;
+    }
+    let key = ty.node_key();
+    if key.is_some_and(|k| clean.contains(&k)) {
+        return false;
+    }
+    let found = ty.children().into_iter().any(|child| has_brand(child, clean));
+    if !found && let Some(key) = key {
+        clean.insert(key);
+    }
+    found
 }
 
 // ── Shape predicates ──
@@ -610,6 +696,14 @@ pub fn value_union(types: &[Ty]) -> Option<Ty> {
 fn member_absorbs(wide: &Ty, narrow: &Ty) -> bool {
     if field_type_equals(wide, narrow) {
         return true;
+    }
+    // A brand narrows: `text | text & Brand<"a">` is `text`, and a value
+    // with more brands is one of the values with fewer.
+    match (wide, narrow) {
+        (Ty::Branded { of: wide, brands: asked }, Ty::Branded { of: narrow, brands: has }) => return asked.is_subset(has) && member_absorbs(wide, narrow),
+        (Ty::Branded { .. }, _) => return false,
+        (_, Ty::Branded { of: narrow, .. }) => return member_absorbs(wide, narrow),
+        _ => {}
     }
     match wide {
         Ty::Json => is_data_shaped(narrow),
@@ -893,6 +987,7 @@ pub fn base_kind(ty: &Ty) -> Option<BaseKind> {
 
 fn member_base_kind(ty: &Ty) -> BaseKind {
     match unwrap_list(ty) {
+        Ty::Branded { of, .. } => member_base_kind(&of),
         Ty::Record(_) => BaseKind::Record,
         Ty::Tuple { .. } | Ty::Dict { .. } | Ty::HeldRecord(_) | Ty::Union(_) => BaseKind::Json,
         Ty::Enum { .. } | Ty::MaybeAbsent(_) | Ty::List { .. } | Ty::Text | Ty::Owned(_) => BaseKind::Text,
@@ -912,6 +1007,7 @@ pub fn holds_one_value(ty: &Ty) -> bool {
     match strip_absent(ty) {
         Ty::List { .. } | Ty::Tuple { .. } | Ty::Json => false,
         Ty::Union(members) => members.iter().all(holds_one_value),
+        Ty::Branded { of, .. } => holds_one_value(of),
         Ty::Text | Ty::Owned(_) | Ty::Number | Ty::Boolean | Ty::Date | Ty::Datetime | Ty::File | Ty::Absent | Ty::Never | Ty::Dict { .. } | Ty::HeldRecord(_) | Ty::Enum { .. } | Ty::Record(_) | Ty::MaybeAbsent(_) => true,
     }
 }
@@ -944,6 +1040,7 @@ pub fn comparison_category(ty: &Ty) -> ComparisonCategory {
         Ty::Boolean => ComparisonCategory::Boolean,
         Ty::Json => ComparisonCategory::Opaque,
         Ty::Absent | Ty::Never => ComparisonCategory::Absent,
+        Ty::Branded { of, .. } => comparison_category(of),
         Ty::Union(members) => {
             let categories: Vec<ComparisonCategory> = members.iter().map(comparison_category).collect();
             if categories.iter().all(|c| *c == categories[0]) { categories[0] } else { ComparisonCategory::Structural }
@@ -1067,7 +1164,7 @@ fn kinds_held_in(ty: &Ty, seen: &mut HashMap<NodeKey, (bool, bool)>) -> (bool, b
         let found = match ty {
             Ty::Record(_) => (true, false),
             Ty::File => (false, true),
-            Ty::List { .. } | Ty::Tuple { .. } | Ty::Dict { .. } | Ty::Union(_) => {
+            Ty::List { .. } | Ty::Tuple { .. } | Ty::Dict { .. } | Ty::Union(_) | Ty::Branded { .. } => {
                 ty.children().into_iter().map(|m| walk(m, seen)).fold((false, false), |a, b| (a.0 || b.0, a.1 || b.1))
             }
             _ => (false, false),
@@ -1147,6 +1244,7 @@ fn handle_within_node(ty: &Ty, walk: &HeldWalk, nothing: &mut HeldNothing) -> Op
             handle_within_in(Some(of), &walk.into(HeldStep::Member), nothing)
         }
         Ty::Union(members) => members.iter().find_map(|m| handle_within_in(Some(m), walk, nothing)).map(|held| HeldHandle { may: true, ..held }),
+        Ty::Branded { of, .. } => handle_within_in(Some(of), walk, nothing),
         _ => None,
     }
 }
@@ -1329,6 +1427,7 @@ fn equals_node(left: &Ty, right: &Ty, known: &mut HashMap<(NodeKey, NodeKey), bo
         | (Ty::Json, Ty::Json)
         | (Ty::Absent, Ty::Absent) => true,
         (Ty::Owned(l), Ty::Owned(r)) => l == r,
+        (Ty::Branded { of: l, brands: lb }, Ty::Branded { of: r, brands: rb }) => lb == rb && equals_in(l, r, known),
         (Ty::List { of: l, .. }, Ty::List { of: r, .. }) => equals_in(l, r, known),
         (Ty::Tuple { of: l, rest: lr }, Ty::Tuple { of: r, rest: rr }) => {
             fn slots(of: &[Option<Ty>]) -> Vec<Option<&Ty>> {
@@ -1460,6 +1559,15 @@ pub fn field_assignable(source: &Ty, target: &Ty) -> bool {
     if let Ty::Union(members) = target {
         return members.iter().any(|m| field_assignable(source, m));
     }
+    // TypeScript's `A & Brand<"a"> extends B & Brand<"b">`: the bases fit
+    // and the source carries every brand asked for. A value with no brand
+    // never fits a branded target, and a branded one fits where its base does.
+    match (source, target) {
+        (Ty::Branded { of: source, brands: has }, Ty::Branded { of: target, brands: asked }) => return asked.is_subset(has) && field_assignable(source, target),
+        (_, Ty::Branded { .. }) => return false,
+        (Ty::Branded { of, .. }, _) => return field_assignable(of, target),
+        _ => {}
+    }
     if let (Ty::Tuple { of, rest }, false) = (source, is_tuple(target)) {
         return widen_tuple(of, rest.as_ref(), Widening::Shared).is_none_or(|list| field_assignable(&list, target));
     }
@@ -1553,6 +1661,7 @@ pub fn written_type(ty: &Ty) -> WrittenType {
         Ty::Enum { options, open } => WrittenType::Enum { options: options.clone(), open: open.is_some() },
         Ty::Owned(owned) => WrittenType::name(&owned.name),
         Ty::MaybeAbsent(of) => WrittenType::or_null(written_type(of)),
+        Ty::Branded { of, brands } => WrittenType::branded(written_type(of), brands.iter().cloned()),
         Ty::Union(members) => WrittenType::union(members.iter().map(written_type)),
         Ty::Record(None) => WrittenType::name("record"),
         Ty::Record(Some(position)) => written_position(position),

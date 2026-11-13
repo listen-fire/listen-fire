@@ -517,10 +517,11 @@ fn compared_by_value(field: &FieldType) -> bool {
     let scalar = |field: &FieldType| match field {
         FieldType::Scalar(scalar) => !matches!(scalar, Scalar::File | Scalar::Json),
         FieldType::Composite(Composite::Enum { .. } | Composite::Owned { .. }) => true,
+        FieldType::Composite(Composite::Branded { of, .. }) => compared_by_value(of),
         FieldType::Composite(_) => false,
     };
     match field {
-        FieldType::Composite(Composite::MaybeAbsent { of }) => compared_by_value(of),
+        FieldType::Composite(Composite::MaybeAbsent { of } | Composite::Branded { of, .. }) => compared_by_value(of),
         FieldType::Composite(Composite::List { of, .. }) => scalar(of),
         other => scalar(other),
     }

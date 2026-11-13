@@ -122,6 +122,7 @@ type SchemaFieldType =
   | { kind: 'enum'; options: string[]; open?: { allowPattern?: string } }
   | { kind: 'owned'; name: string; owner: string; allowPattern?: string; format?: 'cron' | 'timeZone' }   // a named scalar its owner (the adapter) parses: a cron schedule; `format`, a format the checker validates a literal by, whatever the name
   | { kind: 'maybeAbsent'; of: SchemaFieldType }
+  | { kind: 'branded'; of: SchemaFieldType; brands: string[] }   // `text & Brand<"claim:email/address">`: `of` narrowed by each brand, each a name compared whole, never parsed; it fits where `of` is asked for, and a value without the brand never fits where it is
   | { kind: 'record'; position: { kind: 'position'; position: string } | { kind: 'union'; union: string } };   // a record held as the value, of a position of this instance: read on with `.`, never fetched
 
 interface InstanceSchema {
@@ -243,6 +244,7 @@ interface FieldCapability {
 
 ## Changes
 
+- **Version 3, with 0.16:** a `SchemaFieldType` gains `branded` (`{ kind: 'branded', of, brands }`, spelled `text & Brand<"claim:email/address">`): a module's field or a plugin's argument or answer narrowed by brands, each a name compared whole. The checker refuses a value without the brand where one is asked for (`MOV_BRAND_REQUIRED`). It is optional and additive, so the version stays 3. A Rust reader built before it refuses a snapshot that carries it.
 - **Version 3, with the shared description of the graph:** a `CollectionSchema` gains `description?`, as an `EdgeSchema` already has. A type known only by what is written to it has no position, so its module's description had nowhere to go. Both builders now carry it here, for such a type only; a type with a position keeps its description there. It is optional and additive, so the version stays 3. A Rust reader built before it refuses a snapshot that carries it, so a host's cached catalog stays keyed by the release that built it.
 - **Version 3, after 0.13.0:** an `AdapterSpec` gains `package?`, the package the module is installed from, compared whole against what a `connect` names (``connect `@lf/github` ``). It is optional and additive, so the version stays 3. A Rust reader built before it refuses a snapshot that carries it, so a builder writes it only for a reader of this release or later.
 - **Version 3, with 0.13's listen:** the settings listen (`listen to x { … }`) is retired, and with it what said what it could hear.

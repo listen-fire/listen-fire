@@ -508,3 +508,28 @@ fn a_snapshot_carries_deletable_and_resources() {
     assert_eq!(read.positions["Attached Resource"].deletable, None);
     assert_eq!(serde_json::to_value(read).unwrap(), schema);
 }
+
+/// A branded field type (`text & Brand<"claim:email/address">`) loads and
+/// goes back out as it came; it is a schema type, as its base is; and a
+/// member the reader does not declare is still refused on it.
+#[test]
+fn a_branded_field_type_round_trips_and_an_unknown_member_on_it_is_refused() {
+    let branded = json!({ "kind": "branded", "of": "text", "brands": ["claim:email/address"] });
+    let schema = json!({
+        "positions": { "Message": { "properties": { "Email": branded.clone() }, "edges": {} } },
+        "collections": { "Messages": { "target": "Message" } },
+        "writableRoots": {},
+    });
+    let snapshot = |schema: Value| json!({ "adapters": { "chat": { "constructionArgs": [], "schemas": { "": schema } } }, "credentials": {}, "plugins": {} });
+    let loaded = CatalogSnapshot::load(&snapshot(schema.clone()).to_string()).unwrap();
+    let read = &loaded.adapters["chat"].schemas[""];
+    assert_eq!(serde_json::to_value(read).unwrap(), schema);
+    assert!(ty(branded).is_schema());
+    assert_eq!(spell_field_type(&ty(json!({ "kind": "branded", "of": "text", "brands": ["b", "a"] }))), r#"text & Brand<"a"> & Brand<"b">"#);
+    let stray = json!({
+        "positions": { "Message": { "properties": { "Email": { "kind": "branded", "of": "text", "brands": ["claim:email/address"], "proven": true } }, "edges": {} } },
+        "collections": {},
+        "writableRoots": {},
+    });
+    assert!(CatalogSnapshot::load(&snapshot(stray).to_string()).is_err());
+}
