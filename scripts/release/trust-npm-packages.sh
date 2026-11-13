@@ -6,14 +6,17 @@
 #   scripts/release/trust-npm-packages.sh <package>...     those packages
 #   scripts/release/trust-npm-packages.sh --dry-run ...    pass --dry-run to npm; change nothing
 # A package that already has a trusted publisher for the workflow is skipped.
-# Needs npm 11.15.0 or later. A new trust config expires unless its first
-# successful publish comes within 2 days, so run this per release, not once.
+# `npm trust` needs npm 11.15.0 or later, newer than most machines carry, so
+# the script runs the pinned npm the workflow uses. A new trust config expires
+# unless its first successful publish comes within 2 days, so run this per
+# release, not once.
 set -euo pipefail
 
 cd "$(dirname "$0")/../.."
 
 repo=listen-fire/listen-fire
 workflow=npm-stage.yml
+npm=(npx -y npm@11.21.2)
 
 dry_run=()
 packages=()
@@ -34,11 +37,11 @@ if [ ${#packages[@]} -eq 0 ]; then
 fi
 
 for package in "${packages[@]}"; do
-  if npm trust list "$package" 2>/dev/null | grep -qF "$workflow"; then
+  if "${npm[@]}" trust list "$package" 2>/dev/null | grep -qF "$workflow"; then
     echo "skipped (already trusted): $package"
     continue
   fi
   echo "trusting: $package"
-  npm trust github "$package" --file "$workflow" --repo "$repo" --allow-stage-publish -y ${dry_run[@]+"${dry_run[@]}"}
+  "${npm[@]}" trust github "$package" --file "$workflow" --repo "$repo" --allow-stage-publish -y ${dry_run[@]+"${dry_run[@]}"}
   sleep 2
 done
