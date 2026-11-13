@@ -22,7 +22,8 @@ fn catalog() -> CatalogSnapshot {
                     "Work Email": branded(&["claim:email/address", "claim:work/address"]),
                     "Phone": branded(&["claim:phone/e164"]),
                     "Telegram": branded(&["claim:telegram/user_id"]),
-                    "Name": "text"
+                    "Name": "text",
+                    "Data": "json"
                 },
                 "edges": {}
             }
@@ -149,4 +150,30 @@ fn a_branded_type_is_its_base_and_its_brand_set() {
     assert_eq!(spell_type(&branded(maybe_absent(Ty::Text), ["a".to_string()])), r#"text & Brand<"a"> | null"#);
     assert_eq!(spell_type(&branded(brand(&["b"]), ["a".to_string()])), r#"text & Brand<"a"> & Brand<"b">"#);
     assert_eq!(spell_type(&unbranded(&Ty::list(maybe_absent(brand(&["a"]))))), "(text | null)[]");
+}
+
+#[test]
+fn an_unknown_value_never_fits_a_brand() {
+    let found = in_block("    r = t.isMember(ai(\"who\"))");
+    assert_eq!(codes(&found), ["MOV_BRAND_REQUIRED"], "{found:#?}");
+    let function = "function f(e: <text & Brand<\"claim:email/address\">>) {\n  return 1\n}\n";
+    let found = errors_of(&format!("{function}function go() {{\n  a = f(ai(\"who\"))\n  return a\n}}\n"));
+    assert_eq!(codes(&found), ["MOV_BRAND_REQUIRED"], "{found:#?}");
+}
+
+#[test]
+fn a_declared_branded_return_is_no_cast() {
+    let found = errors_of("function f(): <text & Brand<\"claim:email/address\">> {\n  return ai(\"who\")\n}\n");
+    assert_eq!(codes(&found), ["MOV_BRAND_REQUIRED"], "{found:#?}");
+}
+
+#[test]
+fn json_never_fits_a_brand() {
+    let found = in_block("    r = t.isMember(m.Data)");
+    assert_eq!(codes(&found), ["MOV_BRAND_REQUIRED"], "{found:#?}");
+    let function = "function f(e: <text & Brand<\"claim:email/address\">>) {\n  return 1\n}\n";
+    let found = errors_of(&format!("{function}function go() {{\n  c-[m:Messages]-> {{\n    a = f(m.Data)\n  }}\n}}\n"));
+    assert_eq!(codes(&found), ["MOV_BRAND_REQUIRED"], "{found:#?}");
+    let found = errors_of("function f(d: <json>): <text & Brand<\"claim:email/address\">> {\n  return d\n}\n");
+    assert_eq!(codes(&found), ["MOV_BRAND_REQUIRED"], "{found:#?}");
 }

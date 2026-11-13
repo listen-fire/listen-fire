@@ -460,12 +460,20 @@ pub fn lacks_a_brand(source: &Ty, target: &Ty) -> bool {
     !field_assignable(source, target) && field_assignable(&unbranded(source), &unbranded(target))
 }
 
+/// A value whose type says nothing (unknown, or `json`) where `target` asks
+/// for a brand: nothing vouches for it, so it is no more a brand than plain
+/// text is (MOV_BRAND_REQUIRED).
+pub fn unvouched_for_a_brand(source: Option<&Ty>, target: &Ty) -> bool {
+    source.is_none_or(|source| matches!(strip_absent(source), Ty::Json)) && has_brand(target, &mut Default::default())
+}
+
 /// MOV_BRAND_REQUIRED's words: `expected` says what asks for the brand
-/// (`'t.isMember' takes … for 'e'`), `argument` names what was handed it.
-pub fn brand_required_message(expected: &str, argument: &str, given: &Ty) -> String {
+/// (`'t.isMember' takes … for 'e'`), `argument` names what was handed it
+/// (`given` is None when its type is unknown).
+pub fn brand_required_message(expected: &str, argument: &str, given: Option<&Ty>) -> String {
     format!(
         "{expected}, but {argument} is {} — only a value read from a module's field or a plugin's answer carries a brand, and any operation on it (a function, an operator, a conditional) drops the brand. Pass the value as it was read",
-        spell_type(strip_absent(given))
+        given.map_or_else(|| "of unknown type".to_string(), |given| spell_type(strip_absent(given)))
     )
 }
 

@@ -18,7 +18,7 @@ use crate::scope::{Resolution, ScopeId, SymbolId};
 use crate::slots::is_bare_ident;
 use crate::types::scope_env::SymbolTypes;
 use crate::types::field::{
-    HeldWalk, Ty, brand_required_message, lacks_a_brand, spell_type, field_assignable, handle_within, holds_records, is_maybe_absent, mixes_record_with_value, spell_held_steps, strip_absent,
+    HeldWalk, Ty, brand_required_message, lacks_a_brand, unvouched_for_a_brand, spell_type, field_assignable, handle_within, holds_records, is_maybe_absent, mixes_record_with_value, spell_held_steps, strip_absent,
     values_beside_record,
 };
 use crate::types::position::{ClosureParam, Position, ReturnShape, describe_position, positions_match, system_difference};
@@ -493,10 +493,14 @@ impl Checker<'_> {
 
     /// `checkValueArgFit`: a value argument against a value parameter.
     fn check_value_arg_fit(&mut self, fit: &ArgFit, param_ty: &Ty, arg_ty: Option<&Ty>, options: ValueArg) {
-        let Some(arg_ty) = arg_ty else { return };
         let span = options.span;
         let expected = format!("{} expects {}{}", callee_words(fit), spell_type(param_ty), describe_arg_place(fit));
         let argument = fit.caller.as_ref().map_or("this argument", |caller| caller.argument.as_str());
+        if unvouched_for_a_brand(arg_ty, param_ty) {
+            self.report(codes::BRAND_REQUIRED, brand_required_message(&expected, argument, arg_ty), span);
+            return;
+        }
+        let Some(arg_ty) = arg_ty else { return };
         if let Some(literal) = string_literal_of(options.parsed)
             && self.report_enum_literal(literal, strip_absent(param_ty), span)
         {
@@ -520,7 +524,7 @@ impl Checker<'_> {
             return;
         }
         if lacks_a_brand(arg, param) {
-            self.report(codes::BRAND_REQUIRED, brand_required_message(&expected, argument, arg), span);
+            self.report(codes::BRAND_REQUIRED, brand_required_message(&expected, argument, Some(arg)), span);
             return;
         }
         let as_list = match (options.slot, param) {
@@ -589,8 +593,8 @@ impl Checker<'_> {
                 self.report(codes::CALL_ARG_TYPE, format!("{expected}, and its key '{key}' is required, but the value given for it may be absent"), span);
                 continue;
             }
-            if lacks_a_brand(given, key_ty) {
-                self.report(codes::BRAND_REQUIRED, brand_required_message(&format!("{expected}, and its key '{key}' takes {}", spell_type(strip_absent(key_ty))), "the value given for it", given), span);
+            if lacks_a_brand(given, key_ty) || unvouched_for_a_brand(Some(given), key_ty) {
+                self.report(codes::BRAND_REQUIRED, brand_required_message(&format!("{expected}, and its key '{key}' takes {}", spell_type(strip_absent(key_ty))), "the value given for it", Some(given)), span);
                 continue;
             }
             if !field_assignable(given, key_ty) {

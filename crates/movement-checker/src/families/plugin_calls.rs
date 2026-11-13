@@ -16,7 +16,7 @@ use crate::checker::Checker;
 use crate::codes;
 use crate::scope::SymbolId;
 use crate::types::field::{
-    CollectionOrder, HandleKinds, HeldHandle, HeldStep, Ty, brand_required_message, field_assignable, holds_records, lacks_a_brand, list_of, spell_held_steps, spell_type, strip_absent,
+    CollectionOrder, HandleKinds, HeldHandle, HeldStep, Ty, brand_required_message, field_assignable, holds_records, lacks_a_brand, unvouched_for_a_brand, list_of, spell_held_steps, spell_type, strip_absent,
     unbranded,
 };
 use crate::types::position::{LocalNode, PlaneType, Position, ReturnShape, describe_position};
@@ -281,9 +281,7 @@ impl Checker<'_> {
             return;
         }
         let expected = format!("'{callee}' takes {} for '{name}'", spell_type(&declared_ty));
-        if let Some(value) = value
-            && lacks_a_brand(value, &declared_ty)
-        {
+        if unvouched_for_a_brand(value, &declared_ty) || value.is_some_and(|value| lacks_a_brand(value, &declared_ty)) {
             self.report(codes::BRAND_REQUIRED, brand_required_message(&expected, "this", value), span);
             return;
         }
