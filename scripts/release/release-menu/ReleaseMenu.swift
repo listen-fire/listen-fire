@@ -136,31 +136,39 @@ enum Outcome {
 
 @MainActor
 protocol Prompter {
-    func confirmApproval(list: String) -> Bool
+    func confirmApproval(list: String) async -> Bool
     /// `rejected`: the previous code was refused or had expired. nil: the person cancelled.
-    func askCode(rejected: Bool) -> String?
-    func offerSignIn() -> Bool
+    func askCode(rejected: Bool) async -> String?
+    func offerSignIn() async -> Bool
     func signInURL(_ url: URL)
-    func report(_ summary: String)
+    func report(_ summary: String) async
 }
 
 @MainActor
 final class AlertPrompter: Prompter {
-    private func present(_ alert: NSAlert) -> NSApplication.ModalResponse {
+    /// The window to attach alerts to as sheets; nil while it is closed, when alerts stand alone.
+    private let sheetWindow: () -> NSWindow?
+
+    init(sheetWindow: @escaping () -> NSWindow?) { self.sheetWindow = sheetWindow }
+
+    private func present(_ alert: NSAlert) async -> NSApplication.ModalResponse {
         NSApp.activate(ignoringOtherApps: true)
-        return alert.runModal()
+        guard let window = sheetWindow() else { return alert.runModal() }
+        return await withCheckedContinuation { continuation in
+            alert.beginSheetModal(for: window) { continuation.resume(returning: $0) }
+        }
     }
 
-    func confirmApproval(list: String) -> Bool {
+    func confirmApproval(list: String) async -> Bool {
         let alert = NSAlert()
         alert.messageText = "Approve these staged packages?"
         alert.informativeText = list
         alert.addButton(withTitle: "Approve")
         alert.addButton(withTitle: "Cancel")
-        return present(alert) == .alertFirstButtonReturn
+        return await present(alert) == .alertFirstButtonReturn
     }
 
-    func askCode(rejected: Bool) -> String? {
+    func askCode(rejected: Bool) async -> String? {
         let alert = NSAlert()
         alert.messageText = rejected ? "npm refused that code" : "Authenticator code"
         alert.informativeText = rejected
@@ -171,28 +179,28 @@ final class AlertPrompter: Prompter {
         alert.addButton(withTitle: "Continue")
         alert.addButton(withTitle: "Cancel")
         alert.window.initialFirstResponder = field
-        guard present(alert) == .alertFirstButtonReturn else { return nil }
+        guard await present(alert) == .alertFirstButtonReturn else { return nil }
         let code = field.stringValue.filter { !$0.isWhitespace }
         return code.isEmpty ? nil : code
     }
 
-    func offerSignIn() -> Bool {
+    func offerSignIn() async -> Bool {
         let alert = NSAlert()
         alert.messageText = "npm on this Mac isn't signed in"
         alert.informativeText = "Sign in once; npm then remembers it. The sign-in opens in your browser."
         alert.addButton(withTitle: "Sign in")
         alert.addButton(withTitle: "Cancel")
-        return present(alert) == .alertFirstButtonReturn
+        return await present(alert) == .alertFirstButtonReturn
     }
 
     func signInURL(_ url: URL) { NSWorkspace.shared.open(url) }
 
-    func report(_ summary: String) {
+    func report(_ summary: String) async {
         let alert = NSAlert()
         alert.messageText = summary
         alert.addButton(withTitle: "OK")
         alert.addButton(withTitle: "Show log")
-        if present(alert) == .alertSecondButtonReturn { NSWorkspace.shared.open(logURL) }
+        if await present(alert) == .alertSecondButtonReturn { NSWorkspace.shared.open(logURL) }
     }
 }
 
@@ -201,24 +209,24 @@ final class AlertPrompter: Prompter {
 final class HeadlessPrompter: Prompter {
     private let code = ProcessInfo.processInfo.environment["LF_RELEASE_HEADLESS_CODE"]
 
-    func confirmApproval(list: String) -> Bool {
+    func confirmApproval(list: String) async -> Bool {
         print("ALERT confirm approval:\n\(list)")
         if code == nil { print("(headless: not confirmed without LF_RELEASE_HEADLESS_CODE)") }
         return code != nil
     }
 
-    func askCode(rejected: Bool) -> String? {
+    func askCode(rejected: Bool) async -> String? {
         print("ALERT ask for authenticator code\(rejected ? " (previous refused)" : "")")
         return rejected ? nil : code
     }
 
-    func offerSignIn() -> Bool {
+    func offerSignIn() async -> Bool {
         print("ALERT npm on this Mac isn't signed in; button: Sign in (runs `npm login`, URL opened in the browser)")
         return false
     }
 
     func signInURL(_ url: URL) { print("would open \(url)") }
-    func report(_ summary: String) { print("ALERT \(summary)") }
+    func report(_ summary: String) async { print("ALERT \(summary)") }
 }
 
 // MARK: the actions
@@ -242,9 +250,9 @@ final class Actions {
         var outcome = await body()
         if case .notSignedIn = outcome { outcome = await signInFlow() }
         switch outcome {
-        case .done(let summary), .nothingToDo(let summary), .failed(let summary): prompter.report(summary)
+        case .done(let summary), .nothingToDo(let summary), .failed(let summary): await prompter.report(summary)
         case .cancelled: break
-        case .notSignedIn: prompter.report("npm on this Mac isn't signed in")
+        case .notSignedIn: await prompter.report("npm on this Mac isn't signed in")
         }
     }
 
@@ -263,7 +271,7 @@ final class Actions {
             guard await signedIn() else { return .notSignedIn }
             guard wantsCode else { return .failed("Trust failed: \(lastLine(result.output))") }
             rejected = code != nil
-            guard let next = prompter.askCode(rejected: rejected) else { return .cancelled }
+            guard let next = await prompter.askCode(rejected: rejected) else { return .cancelled }
             code = next
         }
     }
@@ -283,11 +291,11 @@ final class Actions {
         guard listed.status == 0 else { return .failed("Could not list staged packages: \(lastLine(listed.output))") }
         if listed.output.contains("nothing staged") { return .nothingToDo("Nothing is staged for this release.") }
         let matching = listed.output.split(separator: "\n").filter { !$0.hasPrefix("left out:") }.map(String.init)
-        guard prompter.confirmApproval(list: matching.joined(separator: "\n")) else { return .cancelled }
+        guard await prompter.confirmApproval(list: matching.joined(separator: "\n")) else { return .cancelled }
 
         var rejected = false
         while true {
-            guard let code = prompter.askCode(rejected: rejected) else { return .cancelled }
+            guard let code = await prompter.askCode(rejected: rejected) else { return .cancelled }
             setStatus("Approving staged packages…")
             let result = await runProcess(node, [script("approve-npm-stages.mjs")], extraEnvironment: ["npm_config_otp": code])
             switch result.status {
@@ -304,7 +312,7 @@ final class Actions {
     }
 
     private func signInFlow() async -> Outcome {
-        guard prompter.offerSignIn() else { return .cancelled }
+        guard await prompter.offerSignIn() else { return .cancelled }
         setStatus("Finish the npm sign-in in your browser…")
         // Without a terminal npm prints the sign-in URL and polls for the result instead of opening the browser itself.
         let opened = OpenOnce()
@@ -332,15 +340,22 @@ final class OpenOnce: @unchecked Sendable {
     }
 }
 
-// MARK: the menu bar app
+// MARK: the menu bar app and its window
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
     private let trustItem = NSMenuItem(title: "Trust packages for the next release", action: #selector(trustClicked), keyEquivalent: "")
     private let approveItem = NSMenuItem(title: "Approve staged packages…", action: #selector(approveClicked), keyEquivalent: "")
+    private let trustButton = NSButton(title: "Trust packages for the next release", target: nil, action: #selector(trustClicked))
+    private let approveButton = NSButton(title: "Approve staged packages…", target: nil, action: #selector(approveClicked))
+    private let statusLabel = NSTextField(labelWithString: "Ready")
+    private var window: NSWindow?
     private var busy = false
-    private lazy var actions = Actions(prompter: AlertPrompter()) { [weak self] status in self?.runningItem?.title = status }
+    private lazy var actions = Actions(prompter: AlertPrompter { [weak self] in
+        guard let window = self?.window, window.isVisible else { return nil }
+        return window
+    }) { [weak self] status in self?.show(status: status) }
     private var runningItem: NSMenuItem?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -353,6 +368,86 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         for item in [trustItem, approveItem, .separator(), logItem, quitItem] { menu.addItem(item) }
         for item in [trustItem, approveItem, logItem] { item.target = self }
         statusItem.menu = menu
+
+        installMainMenu()
+        showWindow()
+    }
+
+    /// Spotlight opening a running app arrives here.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        showWindow()
+        return false
+    }
+
+    /// An accessory app has no menu bar of its own; this carries the Cmd-W and Cmd-Q shortcuts.
+    private func installMainMenu() {
+        let main = NSMenu()
+        let appMenu = NSMenu()
+        appMenu.addItem(NSMenuItem(title: "Quit lf release", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
+        let fileMenu = NSMenu(title: "File")
+        fileMenu.addItem(NSMenuItem(title: "Close", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w"))
+        for submenu in [appMenu, fileMenu] {
+            let item = NSMenuItem()
+            item.submenu = submenu
+            main.addItem(item)
+        }
+        NSApp.mainMenu = main
+    }
+
+    private func showWindow() {
+        let window = self.window ?? makeWindow()
+        self.window = window
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    private func makeWindow() -> NSWindow {
+        for button in [trustButton, approveButton] {
+            button.target = self
+            button.bezelStyle = .rounded
+            button.controlSize = .large
+            button.translatesAutoresizingMaskIntoConstraints = false
+            button.heightAnchor.constraint(equalToConstant: 40).isActive = true
+        }
+        let title = NSTextField(labelWithString: "lf release")
+        title.font = .systemFont(ofSize: 20, weight: .semibold)
+        statusLabel.textColor = .secondaryLabelColor
+        let logButton = NSButton(title: "Show last log", target: self, action: #selector(showLog))
+        logButton.bezelStyle = .inline
+
+        let stack = NSStackView(views: [title, trustButton, approveButton, statusLabel, logButton])
+        stack.orientation = .vertical
+        stack.alignment = .centerX
+        stack.spacing = 12
+        stack.edgeInsets = NSEdgeInsets(top: 20, left: 20, bottom: 20, right: 20)
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        for button in [trustButton, approveButton] {
+            button.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -40).isActive = true
+        }
+
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 360, height: 240),
+            styleMask: [.titled, .closable], backing: .buffered, defer: false)
+        window.title = "lf release"
+        window.isReleasedWhenClosed = false
+        window.delegate = self
+        let content = NSView(frame: window.contentRect(forFrameRect: window.frame))
+        content.addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+            stack.trailingAnchor.constraint(equalTo: content.trailingAnchor),
+            stack.topAnchor.constraint(equalTo: content.topAnchor),
+            stack.bottomAnchor.constraint(equalTo: content.bottomAnchor),
+        ])
+        window.contentView = content
+        window.setContentSize(NSSize(width: 360, height: stack.fittingSize.height))
+        window.center()
+        return window
+    }
+
+    private func show(status: String) {
+        runningItem?.title = status
+        statusLabel.stringValue = status
     }
 
     @objc private func trustClicked() { start(trustItem, "Trust") { await $0.trust() } }
@@ -363,13 +458,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         busy = true
         let idleTitle = item.title
         runningItem = item
+        show(status: "\(name)…")
         for each in [trustItem, approveItem] { each.isEnabled = false }
+        for each in [trustButton, approveButton] { each.isEnabled = false }
         Task {
             await actions.run(name) { await body(actions) }
             item.title = idleTitle
             runningItem = nil
+            statusLabel.stringValue = "Ready"
             busy = false
             for each in [trustItem, approveItem] { each.isEnabled = true }
+            for each in [trustButton, approveButton] { each.isEnabled = true }
         }
     }
 
