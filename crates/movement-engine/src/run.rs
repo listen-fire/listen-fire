@@ -2862,6 +2862,7 @@ mod tests {
         // the order they were made.
         let mut outstanding = std::collections::VecDeque::new();
         loop {
+            crate::assert_written_as_through_value(&step);
             match step {
                 Step::Done(done) => return (done, seen),
                 Step::Pending(pending) => {
@@ -3776,6 +3777,7 @@ mod tests {
         let mut seen = Vec::new();
         let mut step = segment.start().unwrap();
         loop {
+            crate::assert_written_as_through_value(&step);
             match step {
                 Step::Done(done) => return (done, seen),
                 Step::Pending(pending) => {

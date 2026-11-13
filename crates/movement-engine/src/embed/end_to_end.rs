@@ -236,6 +236,7 @@ impl<'a> Wire<'a> {
         let mut queue = VecDeque::new();
         let mut step = segment.start().unwrap();
         let done = loop {
+            crate::assert_written_as_through_value(&step);
             match step {
                 Step::Done(done) => break done,
                 Step::Pending(pending) => {

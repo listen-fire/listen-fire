@@ -99,13 +99,15 @@ fn to_value<T: Serialize>(value: &T) -> Value {
     serde_json::to_value(value).expect("parser output is always representable as JSON")
 }
 
-/// Serialises with every object's keys sorted, recursively. Going through
-/// `Value` is what sorts them: a derived `Serialize` writes struct fields in
-/// declaration order, whereas serde_json's `Map` is a `BTreeMap` while the
-/// `preserve_order` feature is off.
+/// Serialises with every object's keys sorted, recursively: the bytes
+/// `serde_json::to_value` then `to_vec` write, without the `Value` between
+/// (util::sorted_json). A derived `Serialize` writes struct fields in
+/// declaration order, so the writer sorts each object as it ends.
 pub fn to_sorted_json<T: Serialize>(value: &T) -> Vec<u8> {
-    let value = serde_json::to_value(value).expect("parser output is always representable as JSON");
-    serde_json::to_vec(&value).expect("a serde_json Value always serialises")
+    // serde_json's own starting capacity.
+    let mut out = Vec::with_capacity(128);
+    util::sorted_json::write(value, &mut out).expect("parser output is always representable as JSON");
+    out
 }
 
 #[cfg(test)]

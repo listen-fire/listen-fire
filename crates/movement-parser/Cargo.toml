@@ -34,8 +34,9 @@ required-features = ["generate"]
 # insertion order, as the TypeScript object it is read as does.
 indexmap = { version = "2", features = ["serde"] }
 serde = { version = "1", features = ["derive"] }
-# `preserve_order` stays off: serde_json's Map is then a BTreeMap, which is
-# what makes `to_sorted_json` emit sorted keys.
+# `preserve_order` stays off: serde_json's Map is then a BTreeMap, so a
+# `Value`'s keys iterate and serialise sorted, as `to_sorted_json` writes
+# every object's (it sorts without relying on it).
 # `float_roundtrip`: the lowering parses the tree's numbers, and the default
 # parser can be one ULP off. `unbounded_depth`: a tree at the grammar's depth
 # limit nests deeper than serde_json's default 128. `raw_value`: the catalog

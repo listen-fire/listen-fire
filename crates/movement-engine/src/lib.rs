@@ -81,6 +81,14 @@ use executor::join_all;
 #[cfg(test)]
 use host::{Family, Request};
 
+/// A step's JSON as the ABI writes it, held to what the `Value` path
+/// (`to_value`, then `to_vec`) wrote before `to_sorted_json` wrote straight.
+#[cfg(test)]
+pub(crate) fn assert_written_as_through_value(step: &executor::Step) {
+    let through_value = serde_json::to_vec(&serde_json::to_value(step).unwrap()).unwrap();
+    assert!(movement_parser::to_sorted_json(step) == through_value, "a step's sorted JSON moved: {step:?}");
+}
+
 /// The segment `start`'s input asks for, by its `entry`:
 ///
 /// - `segment`: a run, executed whole (crate::run says what it runs);

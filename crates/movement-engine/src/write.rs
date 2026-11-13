@@ -2285,6 +2285,7 @@ mod tests {
         let mut step = segment.start().unwrap();
         let mut outstanding = std::collections::VecDeque::new();
         let done = loop {
+            crate::assert_written_as_through_value(&step);
             match step {
                 crate::executor::Step::Done(done) => break done,
                 crate::executor::Step::Pending(pending) => {

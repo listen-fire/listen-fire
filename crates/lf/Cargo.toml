@@ -77,7 +77,7 @@ movement-engine = { package = "listen-fire-engine", version = "0.15.3", path = "
 module-wire = { package = "listen-fire-module-wire", version = "0.12.10", path = "../module-wire", optional = true }
 serde = { version = "1", features = ["derive"], optional = true }
 # As the parser's. `preserve_order` must stay off: features unify across the
-# workspace, and the parser's sorted output depends on it being off.
+# workspace, and a `Value`'s JSON is sorted only while it is off.
 serde_json = { version = "1", features = ["float_roundtrip", "raw_value", "unbounded_depth"], optional = true }
 serde_yaml = { version = "0.9", optional = true }
 # Objects in insertion order (src/json.rs).

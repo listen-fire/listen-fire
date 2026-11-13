@@ -14,9 +14,8 @@ use crate::tree::MAX_CHAIN;
 pub const MAX_DEPTH: usize = 2 * MAX_CHAIN;
 
 /// `json` as a value, refused when it nests past `MAX_DEPTH`. A `Value`'s
-/// objects are sorted (serde_json's `preserve_order` is off, which is what
-/// `to_sorted_json` relies on), so data whose key order matters is read with
-/// `from_json` into its own type instead.
+/// objects are sorted (serde_json's `preserve_order` is off), so data whose
+/// key order matters is read with `from_json` into its own type instead.
 pub fn read_bounded(json: &str) -> Result<Value, String> {
     from_json(json)
 }
