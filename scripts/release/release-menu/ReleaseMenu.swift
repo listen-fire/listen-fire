@@ -6,7 +6,8 @@
 //
 //   lf-release                  the menu bar app
 //   lf-release --run <action>   runs one action headless and prints what the alert would say
-//                               (actions: trust, approve; the code, if any, from LF_RELEASE_HEADLESS_CODE)
+//                               (actions: trust, approve; the code, if any, from LF_RELEASE_HEADLESS_CODE;
+//                               LF_RELEASE_HEADLESS_SIGN_IN=1 accepts the sign-in offer)
 import AppKit
 
 let nodeBin = NSHomeDirectory() + "/.nvm/versions/node/v22.23.4/bin"
@@ -222,7 +223,7 @@ final class HeadlessPrompter: Prompter {
 
     func offerSignIn() async -> Bool {
         print("ALERT npm on this Mac isn't signed in; button: Sign in (runs `npm login`, URL opened in the browser)")
-        return false
+        return ProcessInfo.processInfo.environment["LF_RELEASE_HEADLESS_SIGN_IN"] == "1"
     }
 
     func signInURL(_ url: URL) { print("would open \(url)") }
@@ -236,7 +237,8 @@ final class Actions {
     private let prompter: Prompter
     private let setStatus: (String) -> Void
     private let node = nodeBin + "/node"
-    private let npx = nodeBin + "/npx"
+    // LF_RELEASE_NPX stands in a fake npx for the headless sign-in test.
+    private let npx = ProcessInfo.processInfo.environment["LF_RELEASE_NPX"] ?? nodeBin + "/npx"
 
     init(prompter: Prompter, setStatus: @escaping (String) -> Void) {
         self.prompter = prompter
@@ -318,7 +320,8 @@ final class Actions {
         let opened = OpenOnce()
         let prompter = self.prompter
         let result = await runProcess(npx, npmArguments(["login"])) { line in
-            guard opened.claim(), let range = line.range(of: "https://\\S+", options: .regularExpression), let url = URL(string: String(line[range])) else { return }
+            // npm prints "Login at:" on one line and the URL on the next, so only a line with a URL claims the opening.
+            guard let range = line.range(of: "https://\\S+", options: .regularExpression), let url = URL(string: String(line[range])), opened.claim() else { return }
             Task { @MainActor in prompter.signInURL(url) }
         }
         return result.status == 0
