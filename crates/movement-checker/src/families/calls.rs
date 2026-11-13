@@ -1348,8 +1348,9 @@ impl Checker<'_> {
         matches!(self.resolve_callee(written, scope), Callee::Builtin { builtin: b } if builtin_form(b) == BuiltinForm::Extract)
     }
 
-    /// `checkDottedCall`: `o.f(…)` where `f` is no built-in, outside a write
-    /// field.
+    /// `checkDottedCall`: `o.f(…)` where `o` is a name in scope, outside a write
+    /// field. A name in scope is no package and no standard namespace, so the
+    /// call names nothing to run.
     fn check_dotted_call(&mut self, object: &str, key: &str, span: Span, scope: ScopeId, write_field: bool) {
         if write_field {
             return;
@@ -1360,7 +1361,7 @@ impl Checker<'_> {
             self.resolve_name(object, span, scope);
             return;
         }
-        if !matches!(self.scopes.resolve(scope, object), Resolution::Found(_)) || lookup_builtin(key).is_some() {
+        if !matches!(self.scopes.resolve(scope, object), Resolution::Found(_)) {
             return;
         }
         self.report(

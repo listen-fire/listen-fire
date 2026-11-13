@@ -1345,11 +1345,13 @@ pub fn impurity_of(fn_: &str, purity: PluginPurity) -> Option<String> {
     if let Some(pure) = purity(fn_) {
         return (!pure).then(|| "does not declare itself pure, so its answer to the same value could change from one arrival to the next".to_string());
     }
-    let Some(builtin) = crate::types::stdlib::lookup_builtin(fn_) else {
+    let Some(builtin) = crate::types::stdlib::builtin_under(&fn_.to_ascii_uppercase()) else {
         return Some("is neither a built-in nor a plugin this program imports, and only a run calls anything else".to_string());
     };
     let effects = builtin.effects;
-    if effects.now {
+    if matches!(builtin.returns, crate::types::stdlib::Returns::Never) {
+        Some("fails the run, and a filter cannot fail: it answers yes or no for each arrival".to_string())
+    } else if effects.now {
         Some("reads the clock".to_string())
     } else if effects.ai {
         Some("calls a model".to_string())

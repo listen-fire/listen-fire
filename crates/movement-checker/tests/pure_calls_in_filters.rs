@@ -182,6 +182,37 @@ fn a_call_outside_a_filter_still_binds_first() {
     assert_eq!(codes(&found), Vec::<&str>::new(), "{found:#?}");
 }
 
+#[test]
+fn a_dotted_call_off_a_record_is_refused() {
+    // `r.lower(…)` once read as a built-in scoped to `r`; it now reads as one
+    // dotted call, and nothing at run time names it.
+    let found = errors_of("function go(r: <s-[:Message]->>) {\n  return r.lower(r.Name)\n}\n");
+    assert_eq!(codes(&found), ["MOV_FUNCTION_UNKNOWN"], "{found:#?}");
+    // A bare `Name` is its own error; the call is refused as well.
+    let found = errors_of("function go(r: <s-[:Message]->>) {\n  x = r.lower(Name)\n  return x\n}\n");
+    assert!(codes(&found).contains(&"MOV_FUNCTION_UNKNOWN"), "{found:#?}");
+    let found = errors_of("function go(r: <s-[:Message]->>) {\n  x = r.lower(r.Name)\n  return x\n}\n");
+    assert_eq!(codes(&found), ["MOV_FUNCTION_UNKNOWN"], "{found:#?}");
+    let found = errors_of("function go(r: <s-[:Message]->>) {\n  xs = r-[m:Replies WHERE r.lower(m.Name) == \"a\"]->\n  return xs\n}\n");
+    assert!(codes(&found).contains(&"MOV_FUNCTION_UNKNOWN"), "{found:#?}");
+}
+
+#[test]
+fn fail_is_refused_in_a_filter() {
+    let found = listen("m.Channel == \"C1\" AND Text.lower(ERROR(\"no\")) == \"x\"");
+    let found: Vec<_> = found.into_iter().filter(|d| d.code == "MOV_LISTEN_IMPURE_WHERE").collect();
+    assert_eq!(found.len(), 1);
+    assert!(found[0].message.contains("cannot fail"), "{}", found[0].message);
+}
+
+#[test]
+fn fail_is_refused_in_a_wait() {
+    let found = wait("Text.lower(ERROR(\"no\")) == \"x\"");
+    let found: Vec<_> = found.into_iter().filter(|d| d.code == "MOV_AWAIT_IMPURE_WHERE").collect();
+    assert_eq!(found.len(), 1);
+    assert!(found[0].message.contains("cannot fail"), "{}", found[0].message);
+}
+
 /// The top-level terms of `filter` as the plan keeps them: its operands when
 /// it is an AND, else itself.
 fn terms(filter: &Expression) -> Vec<String> {
