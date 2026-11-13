@@ -1,0 +1,42 @@
+name: npm-stage
+# Stages, on npm, every public package whose version npm does not have yet.
+# Staged is not published: a maintainer approves each package on npmjs.com
+# (2FA) before it goes live. Authentication is npm trusted publishing (this
+# job's OIDC token); no npm token is stored anywhere. Each package's trusted
+# publisher names this file, so renaming it breaks them all.
+# Most pushes stage nothing: the script skips what npm already has.
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: npm-stage
+  cancel-in-progress: false
+
+jobs:
+  stage:
+    timeout-minutes: 30
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v3
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: "https://registry.npmjs.org"
+          package-manager-cache: false
+      # `npm stage` needs npm 11.15.0 or later; pinned so a release never changes under us.
+      - run: npm install -g npm@11.21.2
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm -r build
+      - name: Stage unreleased packages
+        run: node scripts/release/stage-npm-packages.mjs
