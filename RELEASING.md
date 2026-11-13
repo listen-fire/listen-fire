@@ -22,13 +22,15 @@ Every change to a published package adds a changeset (`corepack pnpm changeset`)
 
 ### How the npm packages are published
 
-CI stages them and a maintainer approves. `.github/workflows/npm-stage.yml` runs on every push to `main`: for each public package whose `name@version` npm lacks, it packs the package with pnpm (which rewrites the `workspace:` specifiers) and runs `npm stage publish` on the extracted tarball, with `--tag` from the package's `publishConfig.tag`, else `latest`. Staging uploads the release and holds it; nothing is live until the maintainer approves each package on npmjs.com (Staged Packages tab, with 2FA). CI authenticates by npm trusted publishing, so no npm token is stored anywhere. Most pushes stage nothing, because every version is already on npm.
+CI stages them and a maintainer approves. `.github/workflows/npm-stage.yml` runs on every push to `main`: for each public package whose `name@version` npm lacks, it packs the package with pnpm (which rewrites the `workspace:` specifiers) and runs `npm stage publish` on the extracted tarball, with `--tag` from the package's `publishConfig.tag`, else `latest`. Staging uploads the release and holds it; nothing is live until the maintainer approves each package on npmjs.com (Staged Packages tab, with 2FA). `scripts/release/approve-npm-stages.mjs` approves them from the terminal instead (`--list` previews; it approves only versions in this checkout and reads the authenticator code from `npm_config_otp`). CI authenticates by npm trusted publishing, so no npm token is stored anywhere. Most pushes stage nothing, because every version is already on npm.
 
 Trust is set per release, not once. Each package must name `npm-stage.yml` as a trusted publisher, and a new trust config expires unless its first successful publish happens within 2 days. So before the push that stages a release, run the trust script for the packages about to release (it takes the ones npm lacks; it asks for 2FA on the first call; `--dry-run` previews):
 ```sh
 scripts/release/trust-npm-packages.sh
 ```
 `scripts/release/stage-npm-packages.mjs --dry-run` previews what CI would stage, and stages nothing.
+
+`scripts/release/release-menu/build.sh` builds `~/Applications/lf release.app`, a menu bar app that runs both of your steps, trusting and approving, with no Terminal window; it asks for the authenticator code itself.
 
 If staging fails (npm's staged publishing is new, November 2026), see the fallback after the verify step.
 
