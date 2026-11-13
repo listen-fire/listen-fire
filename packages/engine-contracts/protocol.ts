@@ -1016,6 +1016,21 @@ export const WirePluginSpec = z.object({
   output: z.record(z.string(), z.unknown()).optional(),
   /** What the plugin does, in its author's words: shown when an author hovers a call. */
   description: z.string().optional(),
+  /** Same arguments, same answer, until the host says otherwise: what lets a
+   *  call stand where only a pure expression may (a listen's filter). Absent
+   *  ⇒ not pure. */
+  pure: z.boolean().optional(),
+  /** How long a host may keep a pure plugin's answer. Only a pure plugin
+   *  declares one. */
+  maxAgeSeconds: z.number().int().positive().optional(),
+}).superRefine((spec, ctx) => {
+  if (spec.maxAgeSeconds !== undefined && spec.pure !== true) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['maxAgeSeconds'],
+      message: "a plugin's 'maxAgeSeconds' is the age of a pure plugin's answer: declare 'pure: true' with it",
+    });
+  }
 });
 export type WirePluginSpecShape = z.infer<typeof WirePluginSpec>;
 

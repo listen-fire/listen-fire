@@ -9,7 +9,7 @@ use super::helpers::*;
 use super::written_type::spell_field_type;
 use super::query::query_json;
 use super::snapshot::{Args, instance_schema_key};
-use super::types::{CatalogSnapshot, FieldType, InstanceSchema};
+use super::types::{CatalogSnapshot, FieldType, InstanceSchema, PluginSpec, read_catalog};
 
 fn ty(v: Value) -> FieldType {
     serde_json::from_value(v).unwrap()
@@ -532,4 +532,30 @@ fn a_branded_field_type_round_trips_and_an_unknown_member_on_it_is_refused() {
         "writableRoots": {},
     });
     assert!(CatalogSnapshot::load(&snapshot(stray).to_string()).is_err());
+}
+
+/// A plugin declares itself pure, with the age a host may keep its answer; a
+/// plugin that says nothing is not pure; and an age without purity is refused.
+#[test]
+fn a_plugin_declares_itself_pure_with_a_maximum_age() {
+    let spec = |extra: &str| -> Result<PluginSpec, String> { read_catalog(&format!(r#"{{"args":["email"],"priced":false{extra}}}"#)) };
+    let pure = spec(r#","pure":true,"maxAgeSeconds":60"#).unwrap();
+    assert!(pure.pure());
+    assert_eq!(pure.max_age_seconds, Some(60));
+    assert_eq!(serde_json::to_value(&pure).unwrap()["maxAgeSeconds"], json!(60));
+    let silent = spec("").unwrap();
+    assert!(!silent.pure());
+    assert_eq!(silent.max_age_seconds, None);
+    assert!(spec(r#","pure":true"#).unwrap().pure());
+    let refused = spec(r#","maxAgeSeconds":60"#).unwrap_err();
+    assert!(refused.contains("maxAgeSeconds"), "{refused}");
+    assert!(spec(r#","pure":false,"maxAgeSeconds":60"#).is_err());
+    assert!(spec(r#","pure":true,"maxAgeSeconds":0"#).is_err());
+}
+
+/// A plugin's argument may ask for a branded type, as a function's does.
+#[test]
+fn a_plugin_argument_type_may_be_branded() {
+    let spec: PluginSpec = read_catalog(r#"{"args":["email"],"priced":false,"argTypes":{"email":{"kind":"branded","of":"text","brands":["claim:email/address"]}}}"#).unwrap();
+    assert_eq!(serde_json::to_value(&spec).unwrap()["argTypes"]["email"]["brands"], json!(["claim:email/address"]));
 }

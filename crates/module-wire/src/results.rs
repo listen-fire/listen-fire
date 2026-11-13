@@ -161,7 +161,7 @@ fn related_page() -> S {
 }
 
 fn schema_type_descriptor() -> S {
-    let described = loose(vec![req("fieldId", S::Str)]);
+    let described = loose(vec![req("fieldId", S::Str), opt("brands", arr(S::NonEmptyStr))]);
     loose(vec![
         req("typeId", S::Str),
         req("displayName", S::Str),
@@ -512,6 +512,14 @@ mod tests {
         }
         // A module's own reply, which runs nothing, may say anything.
         assert!(check("checkInbound", "mail", &js(r#"{"outcome":"reply","status":503}"#)).is_ok());
+    }
+
+    #[test]
+    fn a_fields_brands_are_names_and_nothing_else() {
+        let described = |brands: &str| format!(r#"{{"typeId":"t","displayName":"T","fields":[{{"fieldId":"f","brands":{brands}}}],"references":[]}}"#);
+        assert!(check("describe", "mail", &js(&described(r#"["claim:email/address"]"#))).is_ok());
+        assert!(check("describe", "mail", &js(&described("[1]"))).is_err());
+        assert!(check("describe", "mail", &js(&described(r#"[""]"#))).is_err());
     }
 
     #[test]

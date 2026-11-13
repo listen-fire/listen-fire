@@ -27,6 +27,10 @@ import { neverAsAny } from 'movement-lang';
 export interface PluginDeclaration {
   signature: TransformSignature;
   priced: boolean;
+  /** Same arguments, same answer, until the host says otherwise. Absent ⇒ not pure. */
+  pure?: boolean;
+  /** How long a host may keep a pure plugin's answer. */
+  maxAgeSeconds?: number;
 }
 
 /** The name a program writes for a plugin: movement identifiers can't carry
@@ -104,6 +108,8 @@ export function pluginSpecOf(declaration: PluginDeclaration): PluginSpec {
     ...(fedByExtraction ? { fedByExtraction: true } : {}),
     ...(signature.output !== undefined ? { output: pluginOutputOf(signature.output) } : {}),
     // The author's words, which the language service's hover leads with.
+    ...(declaration.pure === true ? { pure: true as const } : {}),
+    ...(declaration.maxAgeSeconds !== undefined ? { maxAgeSeconds: declaration.maxAgeSeconds } : {}),
     ...(signature.description !== undefined && signature.description.length > 0 ? { description: signature.description } : {}),
   };
 }

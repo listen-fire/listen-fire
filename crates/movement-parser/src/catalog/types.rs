@@ -993,7 +993,7 @@ pub enum PluginOutput {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase", deny_unknown_fields, remote = "Self")]
 pub struct PluginSpec {
     pub args: Vec<String>,
     /// Whether invoking it may cost money (`priced()`). Absent reads as
@@ -1027,9 +1027,43 @@ pub struct PluginSpec {
     /// What the plugin does, in its author's words (its signature's `description`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    /// Same arguments, same answer, until the host says otherwise: what lets a
+    /// call stand where only a pure expression may (a listen's filter).
+    /// Absent reads as not pure.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pure: Option<bool>,
+    /// How long a host may keep a pure plugin's answer. Only a pure plugin
+    /// declares one (`Deserialize` refuses it otherwise).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_age_seconds: Option<u32>,
+}
+
+impl<'de> Deserialize<'de> for PluginSpec {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let spec = PluginSpec::deserialize(deserializer)?;
+        if spec.max_age_seconds.is_some() && !spec.pure() {
+            return Err(serde::de::Error::custom("a plugin's 'maxAgeSeconds' is the age of a pure plugin's answer: declare 'pure: true' with it"));
+        }
+        if spec.max_age_seconds == Some(0) {
+            return Err(serde::de::Error::custom("a plugin's 'maxAgeSeconds' is a whole number of seconds above zero"));
+        }
+        Ok(spec)
+    }
+}
+
+impl Serialize for PluginSpec {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        PluginSpec::serialize(self, serializer)
+    }
 }
 
 impl PluginSpec {
+    /// Whether the same arguments give the same answer until the host says
+    /// otherwise.
+    pub fn pure(&self) -> bool {
+        self.pure.unwrap_or(false)
+    }
+
     /// Whether invoking it may cost money: the engine refuses to start a
     /// priced plugin once the run has spent its cost cap.
     pub fn priced(&self) -> bool {

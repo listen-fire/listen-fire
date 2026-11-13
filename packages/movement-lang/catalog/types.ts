@@ -361,6 +361,13 @@ export interface PluginSpec {
    */
   fedByExtraction?: boolean;
   /**
+   * The same arguments give the same answer until the host says otherwise, so
+   * a call of it may stand where only a pure expression may. Absent ⇒ not pure.
+   */
+  pure?: boolean;
+  /** How long a host may keep a pure plugin's answer, in seconds. Only a pure plugin declares one. */
+  maxAgeSeconds?: number;
+  /**
    * Arguments the EXTRACTION fills inside a `through [ … ]` stage — the engine
    * feeds them from the `from [ … ]` source, which is why a stage never writes
    * one and `args` deliberately excludes them.

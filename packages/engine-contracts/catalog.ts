@@ -875,6 +875,10 @@ export const schemaFieldDescriptorSchema = z.object({
   /** A record may not hold the field at all (a change's row before, when
    *  the row was created): a read of it may be absent. Absent ⇒ false. */
   mayBeAbsent: z.boolean().optional(),
+  /** With `kind: 'string'` or `'number'`: the module vouches for the value
+   *  under these names (`claim:email/address`). A brand narrows the type, as
+   *  TypeScript's intersection does; a name is compared whole, never parsed. */
+  brands: z.array(z.string().min(1)).min(1).optional(),
   /** The release that changed what the field holds, and how, as a check for
    *  an upgrade from before it warns where a program reads it (gmail's
    *  `Labels`: label ids before 0.13, names since). `unchangedValues` are
@@ -888,6 +892,13 @@ export const schemaFieldDescriptorSchema = z.object({
       code: z.ZodIssueCode.custom,
       path: ['owned'],
       message: `'${field.displayName}': 'owned' names the scalar of a field of kind 'owned', and only of one`,
+    });
+  }
+  if (field.brands !== undefined && field.kind !== 'string' && field.kind !== 'number') {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['brands'],
+      message: `'${field.displayName}': 'brands' narrow a string or a number, and this field is of kind '${field.kind}'`,
     });
   }
   if ((field.kind === 'record') !== (field.record !== undefined)) {

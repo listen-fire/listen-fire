@@ -406,7 +406,14 @@ reads every declaration from it, the listen declarations included.
   A field of kind `record` that names no type is refused, naming the field.
   `"mayBeAbsent": true` says a record may lack the field (a change's row
   before, on a created row): it reaches the catalog as
-  `{ "kind": "maybeAbsent", "of": … }`, and a read of it may be absent. `owned` is a named scalar your module
+  `{ "kind": "maybeAbsent", "of": … }`, and a read of it may be absent.
+  `"brands": ["claim:email/address"]`, on a field of kind `string` or
+  `number` only, says your module vouches for the value under those names. It
+  reaches the catalog as `{ "kind": "branded", "of": "text", "brands": […] }`
+  (inside `maybeAbsent` and `list` when those apply), and a brand narrows the
+  type as TypeScript's intersection does. A name is compared whole, never
+  parsed. A field of another kind that declares `brands`, or an empty list,
+  is refused. `owned` is a named scalar your module
   owns and parses, a cron schedule or a mailbox key:
   `"owned": { "name": "Cron", "allowPattern": "^…$", "format": "cron" }`,
   `allowPattern` being optional, the least you say of its values. `format`,
@@ -1637,6 +1644,14 @@ page = web.fetchUrl(u)
   plugin that only reads what the stage extracted. Its optional
   `description` says what the plugin does; an author's editor shows it when
   they hover a call.
+- `pure: true` says the same arguments give the same answer until the host
+  says otherwise; absent means not pure. `maxAgeSeconds` (a whole number
+  above zero) is how long a host may keep an answer, and only a pure plugin
+  declares one: `maxAgeSeconds` without `pure: true` is refused. Both are
+  optional spec members of the protocol's current minor (no new minor row).
+- An argument's type in `argTypes` may be any catalog type, a branded one
+  included (`{ "kind": "branded", "of": "text", "brands": ["claim:email/address"] }`):
+  a call whose argument does not carry the brand is refused by the checker.
 - `plugins` pairs with the method `invokePlugin`:
   `{ name, config, extractedContext }` → `{ text?, data?, records?, outcome?, costMicrodollars?, files?, warnings? }`.
   `config` is the author's arguments by name; `extractedContext` the fields

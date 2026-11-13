@@ -40,6 +40,24 @@ impl PluginSpec {
         }
         self
     }
+
+    /// The same arguments give the same answer until the host says otherwise,
+    /// so a call of it may stand where only a pure expression may (a listen's
+    /// filter).
+    pub fn pure(mut self) -> PluginSpec {
+        if let Js::Obj(spec) = &mut self.spec {
+            spec.insert("pure".into(), Js::Bool(true));
+        }
+        self
+    }
+
+    /// Pure, and a host may keep an answer for this long.
+    pub fn pure_for_seconds(mut self, seconds: u32) -> PluginSpec {
+        if let Js::Obj(spec) = &mut self.spec {
+            spec.insert("maxAgeSeconds".into(), Js::Num(seconds.into()));
+        }
+        self.pure()
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -146,4 +164,18 @@ fn spelled(name: &str) -> String {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_plugin_declares_itself_pure_with_a_maximum_age() {
+        let plugin = PluginSpec { name: "is-member".into(), spec: Js::Obj(Obj::new()) };
+        assert_eq!(plugin.clone().pure().spec.to_json(), r#"{"pure":true}"#);
+        let aged = plugin.pure_for_seconds(60);
+        assert_eq!(aged.spec.get("pure").map(Js::to_json).as_deref(), Some("true"));
+        assert_eq!(aged.spec.get("maxAgeSeconds").map(Js::to_json).as_deref(), Some("60"));
+    }
 }

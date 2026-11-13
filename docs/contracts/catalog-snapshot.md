@@ -94,6 +94,8 @@ interface PluginSpec {
   requiredArgs?: string[];
   effects?: { reads?: string[]; writes?: string[]; ai?: boolean; now?: boolean; suspend?: boolean };
   fedByExtraction?: boolean;
+  pure?: boolean;   // the same arguments give the same answer until the host says otherwise; absent: not pure
+  maxAgeSeconds?: number;   // how long a host may keep a pure plugin's answer; only with `pure: true`
   fedArgs?: Array<{ name: string; required?: true }>;
   output?: PluginOutput;
   package?: string;   // the package tag it is a member of (`@lf/web`); absent when it is in none
