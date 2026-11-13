@@ -1016,13 +1016,33 @@ fn kg_query_retired_message(retired: &str) -> String {
 /// Where an expression tree's visit is: inside a SORT key (each member read
 /// apart), inside a resource hop's WHERE, inside what a hop's landing scopes
 /// (its WHERE or ORDER BY), and whether a walk here may have no root (the walk
-/// of an EXISTS read inside a hop's scope).
+/// of an EXISTS read inside a hop's scope), and inside a WHERE the host
+/// judges on each arrival (a listen's, a wait's).
 #[derive(Clone, Copy, Default)]
 struct Within {
     per_member: bool,
     in_resource_where: bool,
     in_hop: bool,
     rootless_ok: bool,
+    judged: bool,
+}
+
+/// The walk a head's probe reads a field off, which is the head, and which
+/// of its hops' WHEREs the host judges.
+#[derive(Clone, Copy)]
+struct HeadAt {
+    walk: *const MExpr,
+    judged: JudgedHops,
+}
+
+/// Which hops of a head have a WHERE the host judges on each arrival,
+/// where a pure call needs no binding first: none of a run's walk, every one
+/// of a listen's, a wait's last.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum JudgedHops {
+    None,
+    All,
+    Last,
 }
 
 pub fn expression_children(e: &MExpr) -> Vec<&MExpr> {
@@ -1192,7 +1212,7 @@ impl Checker<'_> {
 
     /// The calls in a block head's hops, read through the probe the head is
     /// parsed as; every place is the head's.
-    pub fn check_head_expression(&mut self, probe: &str, head: &movement_parser::ast::PathHead, scope: ScopeId) {
+    pub fn check_head_expression(&mut self, probe: &str, head: &movement_parser::ast::PathHead, judged: JudgedHops, scope: ScopeId) {
         let Ok(tree) = movement_parser::expr::parse_expression(probe) else { return };
         // The probe reads a field off the head's walk; that walk is the head.
         let walk = match &tree {
@@ -1201,12 +1221,14 @@ impl Checker<'_> {
         };
         let at_ = TreeAt::Head { head, probe_len: probe.encode_utf16().count() };
         self.check_walk_fields(&tree, (probe, probe), at_, scope);
+        let walk = walk.map(|walk| HeadAt { walk, judged });
         self.visit_expression_tree(&tree, Within::default(), (at_, walk), scope, false);
     }
 
-    fn visit_expression_tree(&mut self, expr: &MExpr, within: Within, place: (TreeAt, Option<*const MExpr>), scope: ScopeId, write_field: bool) {
-        let Within { per_member, in_resource_where, in_hop, rootless_ok } = within;
-        let (at_, head) = place;
+    fn visit_expression_tree(&mut self, expr: &MExpr, within: Within, place: (TreeAt, Option<HeadAt>), scope: ScopeId, write_field: bool) {
+        let Within { per_member, in_resource_where, in_hop, rootless_ok, judged } = within;
+        let (at_, head_at) = place;
+        let head = head_at.map(|h| h.walk);
         if let MExpr::Path { root, hops, at } = expr {
             self.check_walk_keeps_what_is_written(hops, at_.span_of(*at));
             self.check_resource_walk(root.as_deref(), hops, at_.span_of(*at), head == Some(expr as *const MExpr));
@@ -1257,11 +1279,17 @@ impl Checker<'_> {
                     }
                     self.check_call_in_expression(expr, written, args, at_, scope, write_field);
                 }
-                MExpr::Member { object, property, .. } => {
-                    if let MExpr::Name { name, .. } = object.as_ref() {
-                        self.check_dotted_call(&name.text, &property.text, at_.span_of(*at), scope, write_field);
+                MExpr::Member { object, property, .. } => match self.package_member_callee(callee, scope) {
+                    // A pure one is the host's to judge in a WHERE it judges,
+                    // and any other is refused there by the purity rule.
+                    Some(member) if judged => self.note_callee(&member, at_.span_of(*at).start, scope),
+                    Some(member) => self.check_call_in_expression(expr, &member, args, at_, scope, write_field),
+                    None => {
+                        if let MExpr::Name { name, .. } = object.as_ref() {
+                            self.check_dotted_call(&name.text, &property.text, at_.span_of(*at), scope, write_field);
+                        }
                     }
-                }
+                },
                 _ => {}
             }
         }
@@ -1282,6 +1310,22 @@ impl Checker<'_> {
             MExpr::Where { predicate, .. } => vec![predicate.as_ref()],
             _ => Vec::new(),
         };
+        // The hops of the head whose WHERE the host judges.
+        let judged_wheres: Vec<&MExpr> = match expr {
+            MExpr::Path { hops, .. } if head == Some(expr as *const MExpr) => {
+                let last = hops.len().saturating_sub(1);
+                hops.iter()
+                    .enumerate()
+                    .filter(|(i, _)| match head_at.map_or(JudgedHops::None, |h| h.judged) {
+                        JudgedHops::None => false,
+                        JudgedHops::All => true,
+                        JudgedHops::Last => *i == last,
+                    })
+                    .filter_map(|(_, h)| h.where_.as_ref())
+                    .collect()
+            }
+            _ => Vec::new(),
+        };
         let exists_walk: Option<&MExpr> = match expr {
             MExpr::Call { callee, args, .. } if matches!(callee.as_ref(), MExpr::Name { name, .. } if name.text.eq_ignore_ascii_case("exists")) => {
                 args.first().map(|a| &a.value)
@@ -1294,7 +1338,8 @@ impl Checker<'_> {
             let in_where = in_resource_where || resource_wheres.iter().any(|w| std::ptr::eq(*w, child));
             let scoped = in_hop || hop_scoped.iter().any(|w| std::ptr::eq(*w, child));
             let walked = in_hop && exists_walk.is_some_and(|w| std::ptr::eq(w, child));
-            let within = Within { per_member: per_member || keyed, in_resource_where: in_where, in_hop: scoped, rootless_ok: walked };
+            let judged = judged || judged_wheres.iter().any(|w| std::ptr::eq(*w, child));
+            let within = Within { per_member: per_member || keyed, in_resource_where: in_where, in_hop: scoped, rootless_ok: walked, judged };
             self.visit_expression_tree(child, within, place, scope, write_field);
         }
     }
@@ -1307,6 +1352,12 @@ impl Checker<'_> {
     /// field.
     fn check_dotted_call(&mut self, object: &str, key: &str, span: Span, scope: ScopeId, write_field: bool) {
         if write_field {
+            return;
+        }
+        // `pdf.render(t)` with no import of `@lf/pdf`: the name says which
+        // import is missing.
+        if matches!(self.scopes.resolve(scope, object), Resolution::Unknown) && movement_parser::catalog::packages::package_called(&self.catalog.plugins, object).is_some() {
+            self.resolve_name(object, span, scope);
             return;
         }
         if !matches!(self.scopes.resolve(scope, object), Resolution::Found(_)) || lookup_builtin(key).is_some() {

@@ -1265,6 +1265,13 @@ impl<'c> Checker<'c> {
 
     /// `checkPathHead`, the name half: its root and every name its hops read.
     pub fn check_path_head(&mut self, head: &PathHead, scope: ScopeId) -> Vec<String> {
+        self.check_path_head_judged(head, crate::families::calls::JudgedHops::None, scope)
+    }
+
+    /// `check_path_head` of a listen's or a wait's head, whose `judged` hops'
+    /// WHEREs the host judges on each arrival: a pure call there needs no
+    /// binding first.
+    pub fn check_path_head_judged(&mut self, head: &PathHead, judged: crate::families::calls::JudgedHops, scope: ScopeId) -> Vec<String> {
         let aliases = extract_hop_aliases(&head.hops_raw);
         if head.root.is_none() {
             self.report(crate::codes::WALK_ROOTLESS, crate::families::walks::rootless_head_message(&head.hops_raw), head.span);
@@ -1322,7 +1329,7 @@ impl<'c> Checker<'c> {
                 }
             }
             self.report_block_read_back(&names, scope, head.span);
-            self.check_head_expression(&probe, head, scope);
+            self.check_head_expression(&probe, head, judged, scope);
         }
         self.check_head_resources(head, &probe, root_name.as_deref(), scope);
         if let Some(name) = &root_name {
@@ -1375,7 +1382,7 @@ impl<'c> Checker<'c> {
             AwaitSource::Traversal { head, arrivals_only, .. } => {
                 self.check_awaited_head(head);
                 self.report_await_on_list(head, scope);
-                self.check_path_head(head, scope);
+                self.check_path_head_judged(head, crate::families::calls::JudgedHops::Last, scope);
                 self.report_head_off_maybe_absent(head, scope, crate::families::walks::HeadUse::Wait);
                 let walk = self.walk_head(head, scope, true);
                 self.check_awaitable(head, walk.as_ref(), *arrivals_only);

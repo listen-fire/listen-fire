@@ -50,6 +50,11 @@ pub trait TypeEnv {
     fn name_in_scope(&self, _name: &str) -> bool {
         false
     }
+    /// The plugin a call names here (`team.isMember`, as the program
+    /// imports it), as its catalog declares it.
+    fn plugin(&self, _name: &str) -> Option<movement_parser::catalog::types::PluginSpec> {
+        None
+    }
     /// The variables in scope, innermost first: what a bare name in a hop's
     /// WHERE may have meant (the did-you-mean).
     fn value_names_in_scope(&self) -> Vec<String> {
@@ -1314,6 +1319,12 @@ impl<'a> Typing<'a> {
                 (None, prompt.into_iter().collect())
             }
             Expression::Function { fn_, args } => {
+                if let Some(spec) = self.env.plugin(fn_) {
+                    // A plugin's argument keeps its brand: only an operation drops one.
+                    let types: Vec<Option<Ty>> = args.iter().map(|a| self.infer_at(a, position)).collect();
+                    let ty = crate::families::plugin_calls::type_plugin_call(self, fn_, &spec, &types);
+                    return (ty, types);
+                }
                 let options = crate::families::extraction::options_contract(fn_);
                 let types: Vec<Option<Ty>> = args
                     .iter()

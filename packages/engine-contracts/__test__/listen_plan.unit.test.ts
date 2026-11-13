@@ -155,6 +155,20 @@ describe('what the listen judge reads and answers', () => {
     expect(listenPlanSchema.parse(plan)).toEqual(plan);
   });
 
+  it('keeps whether a hop asks the host', () => {
+    const hop = {
+      edge: 'Messages',
+      from: '',
+      to: 'Message',
+      judged: 'arrival',
+      asksHost: true,
+      checked: { type: 'compare', op: 'eq', left: { type: 'edge_property', propertyTypeId: 'Channel', fieldOnly: true }, right: { type: 'static', value: 'C1' } },
+    };
+    const plan = { movement: 'f', connection: 'slack', adapter: 'slack', hops: [hop] };
+    expect(listenPlanSchema.parse(plan)).toEqual(plan);
+    expect(listenPlanSchema.safeParse({ ...plan, hops: [{ ...hop, asksHost: 'yes' }] }).success).toBe(false);
+  });
+
   it('reads an arrival, each record with the record type it states, its parents null where it carries none, and refuses a member it does not know', () => {
     const arrival = {
       edge: 'Interactions',

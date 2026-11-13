@@ -435,9 +435,18 @@ fn a_namespace_member_call_is_its_stdlib_function() {
 fn an_unknown_all_caps_namespace_in_call_position_is_refused() {
     let message = "Unknown function namespace 'NOPE' — the namespaced families are: CURRENCY, DATE, DATETIME, TEXT, URL, NUMBER, LIST, DICT";
     assert_eq!(refused("NOPE.F(x)"), message);
-    assert_eq!(value("Nope.F(x)")["aliasRoot"], "Nope");
-    assert_eq!(value("N.F(x)")["aliasRoot"], "N");
     assert_eq!(value("NOPE.x")["aliasRoot"], "NOPE");
+}
+
+/// A dot on a record reads a field and there are no methods, so a call off a
+/// root that is no namespace calls a plugin package's member, by the one
+/// dotted name the program imports it under, its letter case kept.
+#[test]
+fn a_call_off_a_name_that_is_no_namespace_calls_a_package_member() {
+    assert_eq!(value("team.isMember(m.Email)"), serde_json::json!({ "type": "function", "fn": "team.isMember", "args": [{ "type": "traverse", "aliasRoot": "m", "steps": [], "expression": { "type": "property", "propertyTypeId": "Email" } }] }));
+    assert_eq!(value("Nope.F(x)")["fn"], "Nope.F");
+    assert_eq!(value("N.F(x)")["fn"], "N.F");
+    assert_eq!(refused("web.fetchUrl(url: x)"), "a named argument (url: …) is a movement call's, not an expression's");
 }
 
 // ── A built-in call's static shape (BridgeError) ──
@@ -448,8 +457,8 @@ fn file_and_read_have_a_fixed_shape() {
     assert_eq!(shape_refused("FILE(x, \"doc\")"), "FILE()'s second argument is the artifact type — a literal \"pdf\" or \"text\"");
     assert_eq!(value("FILE(x, \"pdf\")")["fn"], "file");
     assert_eq!(shape_refused("READ(a, b)"), "READ(file) takes exactly 1 argument, got 2 — e.g. READ(attachment)");
-    // A scoped member's name is checked as the bare built-in's.
-    assert_eq!(shape_refused("X.READ()"), "READ(file) takes exactly 1 argument, got 0 — e.g. READ(attachment)");
+    // A family's member is checked as the bare built-in's.
+    assert_eq!(shape_refused("TEXT.READ()"), "READ(file) takes exactly 1 argument, got 0 — e.g. READ(attachment)");
 }
 
 #[test]

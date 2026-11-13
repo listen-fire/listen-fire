@@ -26,9 +26,70 @@ use crate::codes;
 use crate::families::filter_split::{EdgeView, owned_fields, split_hop, spell};
 use crate::families::flow::spell_path_head;
 use crate::families::names::spell_name;
-use crate::families::walks::{alias_reads, is_pure_predicate};
+use crate::families::walks::{alias_reads, asks_host, is_pure_predicate, unjudgeable_callee};
 use crate::scope::{Resolution, ScopeId, SymbolId, SymbolKind};
 use crate::types::position::{Instance, InstanceRef, Position, describe_position, display_name_of, position_ref_in, positions_match};
+
+/// What a listen's filter reads or calls that the host cannot judge on
+/// each arrival.
+enum Foreign {
+    /// A name that is neither a hop nor a literal, or a construct only a run
+    /// can evaluate.
+    Read(String),
+    /// A call whose answer could change for the same arguments.
+    Call { name: String, why: String },
+}
+
+/// `filter` with the operands of each AND and OR that ask no host first,
+/// in the order they were written, then those that do.
+fn host_calls_last(filter: Expression, purity: crate::families::walks::PluginPurity) -> Expression {
+    match filter {
+        Expression::Logical { op, operands } => {
+            let ordered = operands.into_iter().map(|operand| host_calls_last(operand, purity));
+            let (asking, local): (Vec<Expression>, Vec<Expression>) = ordered.partition(|operand| asks_host(operand, purity));
+            Expression::Logical { op, operands: local.into_iter().chain(asking).collect() }
+        }
+        Expression::Not { expression } => Expression::Not { expression: Box::new(host_calls_last(*expression, purity)) },
+        other => other,
+    }
+}
+
+/// Each call in `filter` of a plugin, renamed from the name the program
+/// imports it by to its catalog key. A filter the host judges holds only
+/// the shapes `is_judgeable_predicate` admits, which are the ones walked.
+fn name_plugins_by_key(filter: &mut Expression, key_of: &dyn Fn(&str) -> Option<String>) {
+    use movement_parser::lowering::expression::ListElement;
+    let each = |e: &mut Expression| name_plugins_by_key(e, key_of);
+    match filter {
+        Expression::Function { fn_, args } => {
+            if let Some(key) = key_of(fn_) {
+                *fn_ = key;
+            }
+            args.iter_mut().for_each(each);
+        }
+        Expression::Traverse { expression, .. } | Expression::Not { expression } | Expression::Negate { expression } => each(expression),
+        Expression::Compare { left, right, .. } | Expression::Arithmetic { left, right, .. } => {
+            each(left);
+            each(right);
+        }
+        Expression::Logical { operands, .. } => operands.iter_mut().for_each(each),
+        Expression::Concat { parts } => parts.iter_mut().for_each(each),
+        Expression::Conditional { condition, then, else_ } => {
+            each(condition);
+            each(then);
+            each(else_);
+        }
+        Expression::At { expression, index } => {
+            each(expression);
+            each(index);
+        }
+        Expression::List { elements } => elements.iter_mut().for_each(|element| match element {
+            ListElement::Expression(e) => each(e),
+            ListElement::Spread(s) => each(&mut s.expression),
+        }),
+        _ => {}
+    }
+}
 
 /// One hop of the traversal, as its module declares it.
 #[derive(Clone, Copy)]
@@ -104,7 +165,7 @@ impl Checker<'_> {
     /// by.
     pub(super) fn check_listen_traversal(&mut self, statement: &ListenDeclaration, path: &PathHead, scope: ScopeId) {
         let before = self.diagnostics.len();
-        self.check_path_head(path, scope);
+        self.check_path_head_judged(path, crate::families::calls::JudgedHops::All, scope);
         let instance = match self.listen_root(statement, path, scope) {
             Some(Position::Meta { instance }) => Some(instance),
             _ => None,
@@ -257,15 +318,27 @@ impl Checker<'_> {
         for step in steps {
             aliases.extend(step.alias.as_deref());
             let Some(filter) = step.expression_filter.as_deref() else { continue };
-            if let Some(name) = self.foreign_read(filter, &aliases, scope) {
-                self.report(codes::LISTEN_IMPURE_WHERE, format!("a listen's WHERE reads only its hops and literals — '{name}' is neither"), path.span);
+            if let Some(foreign) = self.foreign_read(filter, &aliases, scope) {
+                let message = match foreign {
+                    Foreign::Read(name) => format!("a listen's WHERE reads only its hops and literals — '{name}' is neither"),
+                    Foreign::Call { name, why } => format!(
+                        "a listen's WHERE is judged on each arrival, so it calls only pure functions — '{name}' {why}. Call a built-in that reads no clock, model or source, or a plugin that declares itself pure"
+                    ),
+                };
+                self.report(codes::LISTEN_IMPURE_WHERE, message, path.span);
+                watchable = false;
+            } else if let Some((name, key)) = self.plugin_keyed_as_builtin(filter, scope) {
+                let message = format!(
+                    "'{name}' is the plugin the catalog keys '{key}', which is also a built-in's name, so the host judging an arrival could not tell which to run — a listen's filter calls a plugin whose catalog key is no built-in's name"
+                );
+                self.report(codes::LISTEN_UNWATCHABLE, message, path.span);
                 watchable = false;
             }
         }
         let planned: Option<ListenPlan> = match watchable {
             true => {
                 let plans: Vec<Option<ListenPlan>> = members.iter().map(|hops| self.plan_member(statement, path, instance, hops)).collect();
-                plans.into_iter().collect::<Option<Vec<ListenPlan>>>().and_then(one_listen)
+                plans.into_iter().collect::<Option<Vec<ListenPlan>>>().and_then(one_listen).map(|plan| self.plan_host_calls(plan, scope))
             }
             false => None,
         };
@@ -280,6 +353,43 @@ impl Checker<'_> {
         }
         self.diagnostics.extend(kept);
         planned
+    }
+
+    /// The plan with each hop's checked part as the host asks it: every
+    /// term of an AND or an OR that asks no host before one that does, so a
+    /// local term that decides the hop costs no round trip, and each plugin
+    /// it calls named by its catalog key, which is what the host invokes.
+    fn plan_host_calls(&self, mut plan: ListenPlan, scope: ScopeId) -> ListenPlan {
+        let purity = |name: &str| self.plugin_purity(name, scope);
+        let key_of = |name: &str| self.plugin_key(name, scope);
+        let hops = plan.hops.iter_mut().chain(plan.members.iter_mut().flat_map(|member| member.hops.iter_mut()));
+        for hop in hops {
+            let Some(checked) = hop.checked.take() else { continue };
+            hop.asks_host = asks_host(&checked, &purity);
+            let mut ordered = host_calls_last(checked, &purity);
+            name_plugins_by_key(&mut ordered, &key_of);
+            hop.checked = Some(ordered);
+        }
+        plan
+    }
+
+    /// A plugin `filter` calls whose catalog key is a built-in's name: the
+    /// plan names a host call by its key, and the judge runs a built-in by
+    /// its name.
+    fn plugin_keyed_as_builtin(&self, filter: &Expression, scope: ScopeId) -> Option<(String, String)> {
+        if let Expression::Function { fn_, .. } = filter
+            && let Some(key) = self.plugin_key(fn_, scope).filter(|key| crate::types::stdlib::lookup_builtin(key).is_some())
+        {
+            return Some((fn_.clone(), key));
+        }
+        crate::families::values::sub_expressions(filter).into_iter().find_map(|e| self.plugin_keyed_as_builtin(e, scope))
+    }
+
+    /// The catalog key of the plugin `name` is bound to in `scope`.
+    fn plugin_key(&self, name: &str, scope: ScopeId) -> Option<String> {
+        let Resolution::Found(id) = self.scopes.resolve(scope, name) else { return None };
+        let symbol = self.scopes.symbol(id);
+        (symbol.kind == SymbolKind::Plugin).then(|| symbol.imported_name.clone().unwrap_or_else(|| name.to_string()))
     }
 
     /// Whether every hop of one member's traversal is one a listen can take:
@@ -361,6 +471,7 @@ impl Checker<'_> {
                 taken: joined(split.taken),
                 checked: joined(split.checked),
                 judged,
+                asks_host: false,
             });
         }
         if unwatchable {
@@ -423,26 +534,44 @@ impl Checker<'_> {
     }
 
     /// A name `filter` reads that is neither one of `aliases` nor a field of
-    /// the record its hop lands on, or a construct only a run can evaluate.
-    fn foreign_read(&self, filter: &Expression, aliases: &[&str], scope: ScopeId) -> Option<String> {
+    /// the record its hop lands on, a construct only a run can evaluate, or
+    /// a call whose answer could change for the same arguments.
+    fn foreign_read(&self, filter: &Expression, aliases: &[&str], scope: ScopeId) -> Option<Foreign> {
         let is_alias = |name: &str| aliases.contains(&name);
+        let read = |name: String| Some(Foreign::Read(name));
         match filter {
             Expression::Property { property_type_id: name, field_only: false } | Expression::EdgeProperty { property_type_id: name, field_only: false } => {
                 let variable = !is_alias(name) && matches!(self.scopes.resolve(scope, name), Resolution::Found(_));
-                variable.then(|| name.clone())
+                variable.then(|| Foreign::Read(name.clone()))
             }
-            Expression::AliasRef { name } => (!is_alias(name)).then(|| name.clone()),
-            Expression::Traverse { .. } | Expression::Exists { .. } if walk_in(filter).is_some() => walk_in(filter),
+            Expression::AliasRef { name } => (!is_alias(name)).then(|| Foreign::Read(name.clone())),
+            Expression::Traverse { .. } | Expression::Exists { .. } if walk_in(filter).is_some() => walk_in(filter).map(Foreign::Read),
             // `b.Name`: a field of another hop's record.
             Expression::Traverse { alias_root: Some(root), .. } if is_alias(root) => None,
-            Expression::Traverse { alias_root: Some(root), .. } => Some(root.clone()),
-            Expression::Meta { key } => Some(format!("@{key}")),
-            Expression::Llm { .. } => Some("AI".to_string()),
-            Expression::Exists { .. } => Some("EXISTS".to_string()),
-            Expression::Function { fn_, .. } => Some(fn_.clone()),
-            _ if !is_pure_predicate(filter) && crate::families::values::sub_expressions(filter).is_empty() => Some(spell(filter, None)),
+            Expression::Traverse { alias_root: Some(root), .. } => read(root.clone()),
+            Expression::Meta { key } => read(format!("@{key}")),
+            Expression::Llm { .. } => read("AI".to_string()),
+            Expression::Exists { .. } => read("EXISTS".to_string()),
+            Expression::Function { fn_, args } => {
+                let purity = |name: &str| self.plugin_purity(name, scope);
+                match unjudgeable_callee(fn_, &purity) {
+                    Some((name, why)) => Some(Foreign::Call { name, why }),
+                    None => args.iter().find_map(|arg| self.foreign_read(arg, aliases, scope)),
+                }
+            }
+            _ if !is_pure_predicate(filter) && crate::families::values::sub_expressions(filter).is_empty() => read(spell(filter, None)),
             _ => crate::families::values::sub_expressions(filter).into_iter().find_map(|e| self.foreign_read(e, aliases, scope)),
         }
+    }
+
+    /// Whether `name` is a plugin this program imports in `scope`, and if
+    /// so whether it declares itself pure.
+    pub(crate) fn plugin_purity(&self, name: &str, scope: ScopeId) -> Option<bool> {
+        let Resolution::Found(id) = self.scopes.resolve(scope, name) else { return None };
+        if self.scopes.symbol(id).kind != SymbolKind::Plugin {
+            return None;
+        }
+        Some(self.plugin_spec_of(id, name).is_some_and(|spec| spec.pure()))
     }
 
     /// The node a listen states its landing is (`-[:Requests]-><Payment>`):

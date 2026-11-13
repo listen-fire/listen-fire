@@ -273,6 +273,14 @@ fn namespace_shaped(text: &str) -> bool {
     b.len() >= 2 && b[0].is_ascii_uppercase() && b[1..].iter().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || *c == b'_')
 }
 
+/// `x.f(…)` where `x` is no function family: a dot on a record reads a
+/// field and there are no methods, so this is a call of a plugin package's
+/// member, which the program imports under the dotted name.
+fn is_package_member_call(root: &Name, member: &Name) -> bool {
+    let standard = crate::surface::table::NAMESPACES.contains(&root.text.as_str()) || vocabulary().family(&root.text).is_some() || namespace_shaped(&root.text);
+    !root.quoted && !member.quoted && !standard
+}
+
 /// `/^[A-Za-z_][A-Za-z0-9_]*$/`.
 fn plain_identifier(text: &str) -> bool {
     let b = text.as_bytes();
@@ -654,6 +662,11 @@ impl Lowering {
                         return refuse("edge.<property> reads one property of the walked edge");
                     }
                     return Ok(Expression::EdgeProperty { property_type_id: property.text.clone(), field_only: false });
+                }
+                if let ([Segment::Call(args)], false) = (rest, *optional)
+                    && is_package_member_call(name, property)
+                {
+                    return self.package_member_call(name, property, args, ctx);
                 }
                 let expression = self.lower_name(property, rest, ctx, true)?;
                 match self.fold_namespace(Some(name.text.clone()), Vec::new(), expression)? {
@@ -1146,6 +1159,18 @@ impl Lowering {
             }
             _ => None,
         })
+    }
+
+    /// `team.isMember(e)`: a plugin package's member, one name as the
+    /// program imports it (`member_local`), its letter case kept, so the
+    /// checker and an engine resolve it as they resolve the statement
+    /// `r = team.isMember(e)`.
+    fn package_member_call(&self, package: &Name, member: &Name, args: &[CallArg], ctx: Ctx) -> Lowered<Expression> {
+        if let Some(named) = args.iter().find_map(|a| a.name.as_ref()) {
+            return refuse(format!("a named argument ({}: …) is a movement call's, not an expression's", named.text));
+        }
+        let args = args.iter().map(|a| self.lower(&a.value, ctx)).collect::<Lowered<Vec<_>>>()?;
+        Ok(Expression::Function { fn_: crate::catalog::packages::member_local(&package.text, &member.text), args })
     }
 
     // ── Namespaced stdlib calls ──

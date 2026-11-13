@@ -40,6 +40,10 @@ export interface PlanHop {
    *  evaluate (an owned one). Absent when it reads none. */
   owned?: string[];
   judged: HopJudged;
+  /** Whether `checked` calls a plugin the host answers, named there by its
+   *  catalog key. Each AND and OR in it lists the terms that ask no host
+   *  first. Absent when it calls none. */
+  asksHost?: boolean;
 }
 
 export interface ListenPlan {
@@ -103,6 +107,7 @@ export const planHopSchema: z.ZodType<PlanHop> = z
     checked: expressionSchema.optional(),
     owned: z.array(z.string()).optional(),
     judged: hopJudgedSchema,
+    asksHost: z.boolean().optional(),
   })
   .strict();
 

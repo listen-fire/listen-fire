@@ -62,6 +62,7 @@ impl Checker<'_> {
             upgrading_from: self.upgrading_from,
             function_values: &self.function_values,
             entry_reads: &self.entry_reads,
+            catalog: Some(self.catalog),
         }
     }
 

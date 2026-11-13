@@ -223,6 +223,13 @@ fn a_listen_where_reads_only_its_hops_and_literals() {
         check("listen to chat-[:Channels]->-[:Messages]->-[i:Interactions WHERE AI(\"is it a yes\")]-> fire f\n"),
         ["MOV_LISTEN_IMPURE_WHERE 6:11-6:86 a listen's WHERE reads only its hops and literals — 'ai' is neither"]
     );
+    // A pure built-in is judged with the filter; one that reads the clock
+    // is a run's to call.
+    assert_eq!(check("listen to chat-[:Channels]->-[m:Messages WHERE Text.lower(m.Topic) == \"lunch-poll\"]->-[:Interactions]-> fire f\n"), Vec::<String>::new());
+    assert_eq!(
+        check("listen to chat-[:Channels]->-[m:Messages WHERE Date.from(m.`Posted At`) == Date.today(\"UTC\")]->-[:Interactions]-> fire f\n"),
+        ["MOV_LISTEN_IMPURE_WHERE 6:11-6:114 a listen's WHERE is judged on each arrival, so it calls only pure functions — 'Date.today' reads the clock. Call a built-in that reads no clock, model or source, or a plugin that declares itself pure"]
+    );
     // A walk is only a run's to take, whatever it starts from: off a hop's
     // alias, or inside EXISTS. It is refused once, as the listen's.
     assert_eq!(

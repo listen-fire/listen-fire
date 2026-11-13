@@ -37,6 +37,51 @@ fn found(callee: &str, fields: &movement_parser::catalog::types::JsMap<SchemaFie
     })
 }
 
+/// A plugin called inside an expression, which only a listen's filter and a
+/// wait's WHERE admit (`team.isMember(m.Email)`): each argument fills the
+/// parameter at its place and is held to its declared type, a brand and its
+/// presence included, since the host is never asked about a missing value;
+/// the call's value is the output the plugin declares.
+pub fn type_plugin_call(typing: &mut crate::types::infer::Typing, callee: &str, spec: &PluginSpec, operands: &[Option<Ty>]) -> Option<Ty> {
+    let params = spec.positional_params(PluginCallSite::Plain);
+    if operands.len() < params.len() {
+        let missing: Vec<String> = params[operands.len()..].iter().map(|p| format!("'{p}'")).collect();
+        let which = if missing.len() == 1 { "the required argument" } else { "required arguments" };
+        typing.report(codes::THROUGH_ARG_MISSING, format!("'{callee}' is missing {which} {}", missing.join(", ")));
+    }
+    if operands.len() > params.len() {
+        let takes = params.iter().map(|p| format!("'{p}'")).collect::<Vec<_>>().join(", ");
+        typing.report(codes::THROUGH_BAD_ARG, format!("'{callee}' takes {} argument{} ({takes}), and is given {}", params.len(), if params.len() == 1 { "" } else { "s" }, operands.len()));
+    }
+    for (param, value) in params.iter().zip(operands) {
+        let Some(declared) = spec.arg_types.as_ref().and_then(|types| types.0.get(*param)) else { continue };
+        let declared = Ty::from_schema(declared);
+        let expected = format!("'{callee}' takes {} for '{param}'", spell_type(&declared));
+        if unvouched_for_a_brand(value.as_ref(), &declared) || value.as_ref().is_some_and(|value| lacks_a_brand(value, &declared)) {
+            typing.report(codes::BRAND_REQUIRED, brand_required_message(&expected, "this", value.as_ref()));
+            continue;
+        }
+        let Some(value) = value else { continue };
+        if crate::types::field::is_maybe_absent(Some(value)) && !crate::types::field::is_maybe_absent(Some(&declared)) {
+            typing.report(
+                codes::ABSENT_REQUIRED,
+                format!("{expected}, and this may be missing — nothing is asked about a missing value. Test it first: `x != null AND {callee}(x)`"),
+            );
+            continue;
+        }
+        if !field_assignable(value, &declared) {
+            let mut warning = crate::diagnostic::Diagnostic::error(codes::CALL_ARG_TYPE, format!("{expected}, and this is {}", spell_type(strip_absent(value))), typing.span);
+            warning.severity = Some(crate::diagnostic::Severity::Warning);
+            typing.diagnostics.push(warning);
+        }
+    }
+    match spec.output.as_ref()? {
+        PluginOutput::Value { type_ } => Some(Ty::from_schema(type_)),
+        PluginOutput::Record { fields } => Some(Ty::record(Some(found(callee, fields)))),
+        PluginOutput::Records { fields } => Some(list_of(Ty::record(Some(found(callee, fields))), CollectionOrder::Ordered)),
+    }
+}
+
 impl Checker<'_> {
     /// The plugin a callable symbol names, by its catalog name.
     pub fn plugin_spec_of(&self, id: SymbolId, written: &str) -> Option<PluginSpec> {

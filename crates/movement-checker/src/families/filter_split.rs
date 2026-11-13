@@ -464,6 +464,10 @@ pub fn spell(expr: &Expression, alias: Option<&str>) -> String {
             Expression::Compare { .. } if is_presence_test(expression) => format!("NOT {}", spell(expression, alias)),
             _ => format!("NOT ({})", spell(expression, alias)),
         },
+        Expression::Function { fn_, args } => {
+            let args: Vec<String> = args.iter().map(|a| spell(a, alias)).collect();
+            format!("{}({})", movement_parser::surface::table::spell(fn_), args.join(", "))
+        }
         _ => "…".to_string(),
     }
 }
