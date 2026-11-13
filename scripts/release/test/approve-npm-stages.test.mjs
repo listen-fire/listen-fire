@@ -1,4 +1,4 @@
-// Run from anywhere: node scripts/release/release-menu/test/approve-npm-stages.test.mjs
+// Run from anywhere: node scripts/release/test/approve-npm-stages.test.mjs
 // Proves the matching rule and the exit statuses of approve-npm-stages.mjs over a fake npm and a fixture in the shape of npm's `stage list --json`.
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
