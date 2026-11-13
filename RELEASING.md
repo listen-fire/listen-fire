@@ -30,7 +30,7 @@ scripts/release/trust-npm-packages.sh
 ```
 `scripts/release/stage-npm-packages.mjs --dry-run` previews what CI would stage, and stages nothing.
 
-`scripts/release/release-menu/build.sh` builds `~/Applications/lf release.app`, a menu bar app that runs both of your steps, trusting and approving, with no Terminal window; it asks for the authenticator code itself.
+`scripts/release/release-menu/build.sh` builds `~/Applications/lf release.app`, a menu bar app whose window shows what is waiting and runs both of your steps, **Let CI upload these** and **Publish these**, with no Terminal window; it asks for the authenticator code itself.
 
 If staging fails (npm's staged publishing is new, November 2026), see the fallback after the verify step.
 

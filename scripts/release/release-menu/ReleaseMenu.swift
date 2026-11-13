@@ -1,12 +1,13 @@
 // A menu bar app for the two npm release steps that need the maintainer's 2FA:
-// trusting the packages before the release push, and approving what CI staged.
+// letting CI upload the packages that are ready, and publishing what CI staged.
+// Its window shows what is waiting, from scripts/release/npm-release-status.mjs.
 // It runs the repository's release scripts with no terminal. npm cannot prompt
 // without one, so the app asks for the authenticator code itself and hands it to
 // npm in the environment (npm_config_otp), never on a command line and never in the log.
 //
 //   lf-release                  the menu bar app
 //   lf-release --run <action>   runs one action headless and prints what the alert would say
-//                               (actions: trust, approve; the code, if any, from LF_RELEASE_HEADLESS_CODE;
+//                               (actions: status, trust, approve; the code, if any, from LF_RELEASE_HEADLESS_CODE;
 //                               LF_RELEASE_HEADLESS_SIGN_IN=1 accepts the sign-in offer)
 import AppKit
 
@@ -29,15 +30,19 @@ final class OutputSink: @unchecked Sendable {
     private var text = ""
     private var partialLine = ""
     private let onLine: (@Sendable (String) -> Void)?
+    private let logged: Bool
 
-    init(onLine: (@Sendable (String) -> Void)?) { self.onLine = onLine }
+    init(onLine: (@Sendable (String) -> Void)?, logged: Bool) {
+        self.onLine = onLine
+        self.logged = logged
+    }
 
     func append(_ data: Data) {
         guard !data.isEmpty else { return }
         lock.lock()
         let chunk = String(decoding: data, as: UTF8.self)
         text += chunk
-        appendToLog(data)
+        if logged { appendToLog(data) }
         partialLine += chunk
         var lines: [String] = []
         while let newline = partialLine.firstIndex(of: "\n") {
@@ -78,9 +83,10 @@ func runProcess(
     _ executable: String,
     _ arguments: [String],
     extraEnvironment: [String: String] = [:],
+    logged: Bool = true,
     onLine: (@Sendable (String) -> Void)? = nil
 ) async -> ProcessResult {
-    appendToLog(Data("\n$ \(([executable] + arguments).joined(separator: " "))\n".utf8))
+    if logged { appendToLog(Data("\n$ \(([executable] + arguments).joined(separator: " "))\n".utf8)) }
     let process = Process()
     process.executableURL = URL(fileURLWithPath: executable)
     process.arguments = arguments
@@ -95,7 +101,7 @@ func runProcess(
     process.standardOutput = pipe
     process.standardError = pipe
 
-    let sink = OutputSink(onLine: onLine)
+    let sink = OutputSink(onLine: onLine, logged: logged)
     pipe.fileHandleForReading.readabilityHandler = { handle in sink.append(handle.availableData) }
 
     return await withCheckedContinuation { continuation in
@@ -124,6 +130,69 @@ func lastLine(_ output: String) -> String {
 func mentions(_ output: String, _ pattern: String) -> Bool {
     output.range(of: pattern, options: .regularExpression) != nil
 }
+
+// MARK: what is waiting
+
+struct ReadyPackage: Decodable {
+    let name: String
+    let version: String
+    let onNpm: String?
+}
+
+struct StagedPackage: Decodable {
+    let name: String
+    let version: String
+    let tag: String
+}
+
+struct ReleaseStatus: Decodable {
+    let signedIn: Bool
+    let ready: [ReadyPackage]
+    /// nil when npm is not signed in, so the staged list cannot be read.
+    let staged: [StagedPackage]?
+}
+
+enum ButtonAction { case uploadReady, publishStaged, signIn }
+
+struct ActionButton {
+    let title: String
+    let caption: String?
+    let action: ButtonAction
+}
+
+/// One part of the window's content; the window draws it and `--run status` prints it.
+enum Block {
+    case section(heading: String, note: String, lines: [String], button: ActionButton)
+    case message(String, button: ActionButton?)
+}
+
+func blocks(for status: ReleaseStatus) -> [Block] {
+    var result: [Block] = []
+    if !status.ready.isEmpty {
+        result.append(.section(
+            heading: "Ready to release", note: "(newer here than on npm)",
+            lines: status.ready.map { "\($0.name)   \($0.onNpm ?? "new") → \($0.version)" },
+            button: ActionButton(title: "Let CI upload these", caption: "asks for your 2FA", action: .uploadReady)))
+    }
+    if let staged = status.staged {
+        if !staged.isEmpty {
+            result.append(.section(
+                heading: "Waiting for you to publish", note: "(uploaded by CI)",
+                lines: staged.map { "\($0.name)   \($0.version)" + ($0.tag == "latest" ? "" : " (\($0.tag))") },
+                button: ActionButton(title: "Publish these", caption: "asks for your authenticator code", action: .publishStaged)))
+        }
+    } else {
+        result.append(.message(
+            "npm isn't signed in on this Mac, so staged packages can't be listed",
+            button: ActionButton(title: "Sign in", caption: nil, action: .signIn)))
+    }
+    if result.isEmpty {
+        result.append(.message("Nothing to do: npm has every version in this checkout.", button: nil))
+    }
+    return result
+}
+
+func plural(_ count: Int, _ noun: String) -> String { "\(count) \(noun)\(count == 1 ? "" : "s")" }
 
 // MARK: what the person is shown
 
@@ -162,9 +231,9 @@ final class AlertPrompter: Prompter {
 
     func confirmApproval(list: String) async -> Bool {
         let alert = NSAlert()
-        alert.messageText = "Approve these staged packages?"
+        alert.messageText = "Publish these staged packages?"
         alert.informativeText = list
-        alert.addButton(withTitle: "Approve")
+        alert.addButton(withTitle: "Publish")
         alert.addButton(withTitle: "Cancel")
         return await present(alert) == .alertFirstButtonReturn
     }
@@ -211,7 +280,7 @@ final class HeadlessPrompter: Prompter {
     private let code = ProcessInfo.processInfo.environment["LF_RELEASE_HEADLESS_CODE"]
 
     func confirmApproval(list: String) async -> Bool {
-        print("ALERT confirm approval:\n\(list)")
+        print("ALERT confirm publishing:\n\(list)")
         if code == nil { print("(headless: not confirmed without LF_RELEASE_HEADLESS_CODE)") }
         return code != nil
     }
@@ -258,20 +327,32 @@ final class Actions {
         }
     }
 
-    func trust() async -> Outcome {
+    /// Asks npm what is waiting. Not logged: the log stays the last action's.
+    func checkStatus() async -> Result<ReleaseStatus, StatusError> {
+        setStatus("Checking npm…")
+        let result = await runProcess(node, [script("npm-release-status.mjs"), "--json"], logged: false)
+        guard result.status == 0, let data = result.output.data(using: .utf8),
+              let status = try? JSONDecoder().decode(ReleaseStatus.self, from: data) else {
+            return .failure(StatusError(message: "Could not check npm: \(lastLine(result.output))"))
+        }
+        return .success(status)
+    }
+
+    func trust(packages: [String]) async -> Outcome {
+        guard !packages.isEmpty else { return .nothingToDo("Nothing to upload: npm has every version in this checkout.") }
         var code: String?
         var rejected = false
         while true {
-            setStatus("Trusting packages…")
-            let result = await runProcess("/bin/bash", [script("trust-npm-packages.sh")], extraEnvironment: code.map { ["npm_config_otp": $0] } ?? [:])
+            setStatus("Letting CI upload \(plural(packages.count, "package"))…")
+            let result = await runProcess("/bin/bash", [script("trust-npm-packages.sh")] + packages, extraEnvironment: code.map { ["npm_config_otp": $0] } ?? [:])
             if result.status == 0 { return trustSummary(result.output) }
             let wantsCode = mentions(result.output, "EOTP")
             guard wantsCode || mentions(result.output, "E401|ENEEDAUTH") else {
-                return .failed("Trust failed: \(lastLine(result.output))")
+                return .failed("Letting CI upload failed: \(lastLine(result.output))")
             }
             // Either complaint can hide the other, so ask npm who it thinks we are.
             guard await signedIn() else { return .notSignedIn }
-            guard wantsCode else { return .failed("Trust failed: \(lastLine(result.output))") }
+            guard wantsCode else { return .failed("Letting CI upload failed: \(lastLine(result.output))") }
             rejected = code != nil
             guard let next = await prompter.askCode(rejected: rejected) else { return .cancelled }
             code = next
@@ -279,11 +360,10 @@ final class Actions {
     }
 
     private func trustSummary(_ output: String) -> Outcome {
-        if output.contains("nothing to trust") { return .nothingToDo("Nothing to trust: every version is already on npm.") }
         let lines = output.split(separator: "\n")
-        let trusted = lines.filter { $0.hasPrefix("trusting:") }.count
+        let allowed = lines.filter { $0.hasPrefix("trusting:") }.count
         let skipped = lines.filter { $0.hasPrefix("skipped (already trusted)") }.count
-        return .done("Trusted \(trusted) package\(trusted == 1 ? "" : "s"); \(skipped) already trusted.")
+        return .done("CI may now upload \(plural(allowed, "package")); \(skipped) already allowed. The next push to main uploads them.")
     }
 
     func approve() async -> Outcome {
@@ -298,13 +378,13 @@ final class Actions {
         var rejected = false
         while true {
             guard let code = await prompter.askCode(rejected: rejected) else { return .cancelled }
-            setStatus("Approving staged packages…")
+            setStatus("Publishing \(plural(matching.count, "package"))…")
             let result = await runProcess(node, [script("approve-npm-stages.mjs")], extraEnvironment: ["npm_config_otp": code])
             switch result.status {
             case 0: return .done(lastLine(result.output))
             case 3: rejected = true
             case 4: return .notSignedIn
-            default: return .failed("Approval failed: \(lastLine(result.output))")
+            default: return .failed("Publishing failed: \(lastLine(result.output))")
             }
         }
     }
@@ -330,6 +410,8 @@ final class Actions {
     }
 }
 
+struct StatusError: Error { let message: String }
+
 /// True for the first caller that finds a URL, so a line mentioning two links opens one.
 final class OpenOnce: @unchecked Sendable {
     private let lock = NSLock()
@@ -345,31 +427,42 @@ final class OpenOnce: @unchecked Sendable {
 
 // MARK: the menu bar app and its window
 
+let windowWidth: CGFloat = 420
+
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
+    private enum Content {
+        case checking
+        case known(ReleaseStatus)
+        case unknown(String)
+    }
+
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-    private let trustItem = NSMenuItem(title: "Trust packages for the next release", action: #selector(trustClicked), keyEquivalent: "")
-    private let approveItem = NSMenuItem(title: "Approve staged packages…", action: #selector(approveClicked), keyEquivalent: "")
-    private let trustButton = NSButton(title: "Trust packages for the next release", target: nil, action: #selector(trustClicked))
-    private let approveButton = NSButton(title: "Approve staged packages…", target: nil, action: #selector(approveClicked))
-    private let statusLabel = NSTextField(labelWithString: "Ready")
+    private let uploadItem = NSMenuItem(title: "Let CI upload ready packages", action: #selector(uploadClicked), keyEquivalent: "")
+    private let publishItem = NSMenuItem(title: "Publish staged packages…", action: #selector(publishClicked), keyEquivalent: "")
+    private let statusLabel = NSTextField(labelWithString: "")
+    private let stack = NSStackView()
+    private let refreshButton = NSButton(title: "Refresh", target: nil, action: #selector(refreshClicked))
+    private let logButton = NSButton(title: "Show last log", target: nil, action: #selector(showLog))
+    private var actionButtons: [NSButton] = []
     private var window: NSWindow?
+    private var content = Content.checking
     private var busy = false
     private lazy var actions = Actions(prompter: AlertPrompter { [weak self] in
         guard let window = self?.window, window.isVisible else { return nil }
         return window
     }) { [weak self] status in self?.show(status: status) }
-    private var runningItem: NSMenuItem?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         statusItem.button?.image = NSImage(systemSymbolName: "shippingbox", accessibilityDescription: "lf release")
 
         let menu = NSMenu()
         menu.autoenablesItems = false
+        let openItem = NSMenuItem(title: "Open lf release", action: #selector(openClicked), keyEquivalent: "")
         let logItem = NSMenuItem(title: "Show last log", action: #selector(showLog), keyEquivalent: "")
         let quitItem = NSMenuItem(title: "Quit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
-        for item in [trustItem, approveItem, .separator(), logItem, quitItem] { menu.addItem(item) }
-        for item in [trustItem, approveItem, logItem] { item.target = self }
+        for item in [uploadItem, publishItem, .separator(), openItem, logItem, quitItem] { menu.addItem(item) }
+        for item in [uploadItem, publishItem, openItem, logItem] { item.target = self }
         statusItem.menu = menu
 
         installMainMenu()
@@ -402,76 +495,185 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         self.window = window
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+        refresh()
     }
 
     private func makeWindow() -> NSWindow {
-        for button in [trustButton, approveButton] {
+        for button in [refreshButton, logButton] {
             button.target = self
-            button.bezelStyle = .rounded
-            button.controlSize = .large
-            button.translatesAutoresizingMaskIntoConstraints = false
-            button.heightAnchor.constraint(equalToConstant: 40).isActive = true
+            button.bezelStyle = .inline
         }
-        let title = NSTextField(labelWithString: "lf release")
-        title.font = .systemFont(ofSize: 20, weight: .semibold)
         statusLabel.textColor = .secondaryLabelColor
-        let logButton = NSButton(title: "Show last log", target: self, action: #selector(showLog))
-        logButton.bezelStyle = .inline
-
-        let stack = NSStackView(views: [title, trustButton, approveButton, statusLabel, logButton])
         stack.orientation = .vertical
-        stack.alignment = .centerX
-        stack.spacing = 12
-        stack.edgeInsets = NSEdgeInsets(top: 20, left: 20, bottom: 20, right: 20)
+        stack.alignment = .leading
+        stack.spacing = 14
+        stack.edgeInsets = NSEdgeInsets(top: 20, left: 20, bottom: 16, right: 20)
         stack.translatesAutoresizingMaskIntoConstraints = false
-        for button in [trustButton, approveButton] {
-            button.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -40).isActive = true
-        }
 
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 360, height: 240),
+            contentRect: NSRect(x: 0, y: 0, width: windowWidth, height: 200),
             styleMask: [.titled, .closable], backing: .buffered, defer: false)
         window.title = "lf release"
         window.isReleasedWhenClosed = false
         window.delegate = self
-        let content = NSView(frame: window.contentRect(forFrameRect: window.frame))
-        content.addSubview(stack)
+        let container = NSView(frame: window.contentRect(forFrameRect: window.frame))
+        container.addSubview(stack)
         NSLayoutConstraint.activate([
-            stack.leadingAnchor.constraint(equalTo: content.leadingAnchor),
-            stack.trailingAnchor.constraint(equalTo: content.trailingAnchor),
-            stack.topAnchor.constraint(equalTo: content.topAnchor),
-            stack.bottomAnchor.constraint(equalTo: content.bottomAnchor),
+            stack.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            stack.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            stack.topAnchor.constraint(equalTo: container.topAnchor),
+            stack.widthAnchor.constraint(equalToConstant: windowWidth),
         ])
-        window.contentView = content
-        window.setContentSize(NSSize(width: 360, height: stack.fittingSize.height))
+        window.contentView = container
         window.center()
+        self.window = window
+        render()
         return window
     }
 
-    private func show(status: String) {
-        runningItem?.title = status
-        statusLabel.stringValue = status
+    // MARK: drawing
+
+    private func wrapped(_ label: NSTextField) -> NSTextField {
+        label.maximumNumberOfLines = 0
+        label.lineBreakMode = .byWordWrapping
+        label.preferredMaxLayoutWidth = windowWidth - 40
+        return label
     }
 
-    @objc private func trustClicked() { start(trustItem, "Trust") { await $0.trust() } }
-    @objc private func approveClicked() { start(approveItem, "Approve") { await $0.approve() } }
+    private func actionButton(_ spec: ActionButton) -> NSView {
+        let button = NSButton(title: spec.title, target: self, action: #selector(blockButtonClicked(_:)))
+        button.bezelStyle = .rounded
+        button.controlSize = .large
+        button.isEnabled = !busy
+        button.identifier = NSUserInterfaceItemIdentifier("\(spec.action)")
+        actionButtons.append(button)
+        guard let caption = spec.caption else { return button }
+        let note = NSTextField(labelWithString: caption)
+        note.textColor = .secondaryLabelColor
+        let row = NSStackView(views: [button, note])
+        row.spacing = 10
+        return row
+    }
 
-    private func start(_ item: NSMenuItem, _ name: String, _ body: @escaping (Actions) async -> Outcome) {
+    private func view(for block: Block) -> NSView {
+        switch block {
+        case .message(let text, let button):
+            let views: [NSView] = [wrapped(NSTextField(labelWithString: text))] + (button.map { [actionButton($0)] } ?? [])
+            return column(views)
+        case .section(let heading, let note, let lines, let button):
+            let title = NSTextField(labelWithString: heading)
+            title.font = .systemFont(ofSize: 15, weight: .semibold)
+            let hint = NSTextField(labelWithString: note)
+            hint.textColor = .secondaryLabelColor
+            let header = NSStackView(views: [title, hint])
+            header.alignment = .firstBaseline
+            header.spacing = 8
+            let rows = lines.map { line -> NSView in
+                let label = wrapped(NSTextField(labelWithString: line))
+                label.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
+                return label
+            }
+            return column([header] + rows + [actionButton(button)])
+        }
+    }
+
+    private func column(_ views: [NSView]) -> NSStackView {
+        let column = NSStackView(views: views)
+        column.orientation = .vertical
+        column.alignment = .leading
+        column.spacing = 6
+        return column
+    }
+
+    /// Redraws everything from the current content and `busy`, then fits the window to it.
+    private func render() {
+        guard window != nil else { return }
+        actionButtons = []
+        for view in stack.arrangedSubviews {
+            stack.removeArrangedSubview(view)
+            view.removeFromSuperview()
+        }
+        let title = NSTextField(labelWithString: "lf release")
+        title.font = .systemFont(ofSize: 20, weight: .semibold)
+        stack.addArrangedSubview(title)
+        switch content {
+        case .checking: break
+        case .known(let status): for block in blocks(for: status) { stack.addArrangedSubview(view(for: block)) }
+        case .unknown(let message): stack.addArrangedSubview(wrapped(NSTextField(labelWithString: message)))
+        }
+        if !statusLabel.stringValue.isEmpty { stack.addArrangedSubview(statusLabel) }
+        let footer = NSStackView(views: [refreshButton, NSTextField(labelWithString: "·"), logButton])
+        footer.spacing = 6
+        stack.addArrangedSubview(footer)
+
+        refreshButton.isEnabled = !busy
+        for item in [uploadItem, publishItem] { item.isEnabled = !busy }
+        fitWindow()
+    }
+
+    private func fitWindow() {
+        guard let window else { return }
+        stack.layoutSubtreeIfNeeded()
+        let top = window.frame.maxY
+        window.setContentSize(NSSize(width: windowWidth, height: stack.fittingSize.height))
+        window.setFrameOrigin(NSPoint(x: window.frame.origin.x, y: top - window.frame.height))
+    }
+
+    private func show(status: String) {
+        statusLabel.stringValue = status
+        render()
+    }
+
+    // MARK: doing things
+
+    /// One thing at a time: the buttons are disabled meanwhile, and the window checks npm again afterwards.
+    private func exclusive(_ work: @escaping @MainActor () async -> Void) {
         guard !busy else { return }
         busy = true
-        let idleTitle = item.title
-        runningItem = item
-        show(status: "\(name)…")
-        for each in [trustItem, approveItem] { each.isEnabled = false }
-        for each in [trustButton, approveButton] { each.isEnabled = false }
+        render()
         Task {
-            await actions.run(name) { await body(actions) }
-            item.title = idleTitle
-            runningItem = nil
-            statusLabel.stringValue = "Ready"
+            await work()
+            await check()
             busy = false
-            for each in [trustItem, approveItem] { each.isEnabled = true }
-            for each in [trustButton, approveButton] { each.isEnabled = true }
+            show(status: "")
+        }
+    }
+
+    private func check() async {
+        content = .checking
+        render()
+        switch await actions.checkStatus() {
+        case .success(let status): content = .known(status)
+        case .failure(let error): content = .unknown(error.message)
+        }
+    }
+
+    private func refresh() {
+        exclusive {}
+    }
+
+    private var readyNames: [String] {
+        if case .known(let status) = content { return status.ready.map(\.name) }
+        return []
+    }
+
+    @objc private func refreshClicked() { refresh() }
+    @objc private func openClicked() { showWindow() }
+
+    @objc private func uploadClicked() {
+        exclusive { [self] in await actions.run("upload") { await actions.trust(packages: readyNames) } }
+    }
+
+    @objc private func publishClicked() {
+        exclusive { [self] in await actions.run("publish") { await actions.approve() } }
+    }
+
+    @objc private func blockButtonClicked(_ sender: NSButton) {
+        switch sender.identifier?.rawValue {
+        case "\(ButtonAction.uploadReady)": uploadClicked()
+        case "\(ButtonAction.publishStaged)": publishClicked()
+        case "\(ButtonAction.signIn)": exclusive { [self] in await actions.run("sign in") { .notSignedIn } }
+        default: break
         }
     }
 
@@ -483,15 +685,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
 // MARK: entry point
 
+/// What the window shows for a status, in words, for `--run status`.
+func printWindowContent(_ result: Result<ReleaseStatus, StatusError>) {
+    print("lf release\n")
+    switch result {
+    case .failure(let error): print(error.message)
+    case .success(let status):
+        for block in blocks(for: status) {
+            switch block {
+            case .message(let text, let button):
+                print(text)
+                if let button { print("[ \(button.title) ]") }
+            case .section(let heading, let note, let lines, let button):
+                print("\(heading)  \(note)")
+                for line in lines { print("  \(line)") }
+                print("[ \(button.title) ]  \(button.caption ?? "")")
+            }
+            print("")
+        }
+    }
+    print("Refresh · Show last log")
+}
+
 if let flag = CommandLine.arguments.firstIndex(of: "--run") {
     let name = CommandLine.arguments.dropFirst(flag + 1).first ?? ""
     Task { @MainActor in
         let actions = Actions(prompter: HeadlessPrompter()) { print("status: \($0)") }
         switch name {
-        case "trust": await actions.run("trust") { await actions.trust() }
-        case "approve": await actions.run("approve") { await actions.approve() }
+        case "status": printWindowContent(await actions.checkStatus())
+        case "trust":
+            switch await actions.checkStatus() {
+            case .success(let status): await actions.run("upload") { await actions.trust(packages: status.ready.map(\.name)) }
+            case .failure(let error): print(error.message)
+            }
+        case "approve": await actions.run("publish") { await actions.approve() }
         default:
-            print("usage: lf-release --run trust|approve")
+            print("usage: lf-release --run status|trust|approve")
             exit(2)
         }
         exit(0)

@@ -14,8 +14,8 @@
 // Exit status: 0 done (or nothing staged), 1 a stage failed, 2 usage,
 // 3 npm wants a (fresh) authenticator code, 4 npm is not signed in.
 // A rerun is safe: an approved stage leaves the list.
-import { execFileSync, spawnSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { belongsToRelease, listStaged, stageCommand } from './npm-packages.mjs';
 
 const EXIT_CODE_NEEDED = 3;
 const EXIT_NOT_SIGNED_IN = 4;
@@ -27,17 +27,7 @@ if (args.some((arg) => arg !== '--list')) {
 }
 const listOnly = args.includes('--list');
 
-// `npm stage` needs npm 11.15.0 or later; the pinned npm is the one the trust script and CI use. LF_NPM replaces the command (tests, other installs).
-const npmCommand = (process.env.LF_NPM ?? 'npx -y npm@11.21.2').split(' ').filter((word) => word !== '');
-
-const publicPackages = execFileSync('git', ['ls-files', '*/package.json'], { encoding: 'utf8' })
-  .split('\n')
-  .filter((file) => file !== '' && !/^(apps|examples)\//.test(file))
-  .map((file) => JSON.parse(readFileSync(file, 'utf8')))
-  .filter((manifest) => !manifest.private && manifest.name !== undefined);
-const releasing = new Set(publicPackages.map(({ name, version }) => `${name}@${version}`));
-
-const npm = (npmArgs) => spawnSync(npmCommand[0], [...npmCommand.slice(1), ...npmArgs], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+const npm = (npmArgs) => spawnSync(stageCommand[0], [...stageCommand.slice(1), ...npmArgs], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
 
 /** Exits with the distinct status when npm's output says it is not signed in or wants a code. */
 function exitOnAuth(result) {
@@ -52,17 +42,19 @@ function exitOnAuth(result) {
   }
 }
 
-const listed = npm(['stage', 'list', '--json']);
-if (listed.status !== 0) {
-  exitOnAuth(listed);
-  console.error(`npm stage list failed: ${(listed.stderr.trim() || listed.stdout.trim() || String(listed.error))}`);
+const listed = await listStaged();
+if (listed.staged === undefined) {
+  if (listed.notSignedIn) {
+    console.error('npm on this machine is not signed in');
+    process.exit(EXIT_NOT_SIGNED_IN);
+  }
+  console.error(`npm stage list failed: ${listed.detail}`);
   process.exit(1);
 }
-// stage list --json prints an array of { id, packageName, version, tag, status, ... } (npm lib/commands/stage/list.js, key-values.js).
-const staged = JSON.parse(listed.stdout);
-const matching = staged.filter(({ packageName, version }) => releasing.has(`${packageName}@${version}`));
-for (const { packageName, version, tag } of staged) {
-  if (!releasing.has(`${packageName}@${version}`)) console.log(`left out: ${packageName}@${version} (${tag}), not a version in this checkout`);
+const { staged } = listed;
+const matching = staged.filter(belongsToRelease);
+for (const stage of staged) {
+  if (!belongsToRelease(stage)) console.log(`left out: ${stage.packageName}@${stage.version} (${stage.tag}), not a version in this checkout`);
 }
 
 if (matching.length === 0) {

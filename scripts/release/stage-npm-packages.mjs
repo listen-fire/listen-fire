@@ -14,31 +14,16 @@
 // manifest that still carries a `workspace:` or `catalog:` specifier fails the
 // package. One package's failure does not stop the others; the exit code names
 // every failure. Run from the repository root.
-import { execFileSync, spawnSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { isOnNpm, mapConcurrently, publicPackages } from './npm-packages.mjs';
 
 const dryRun = process.argv.includes('--dry-run');
 const listOnly = process.argv.includes('--list');
 
-// The set RELEASING.md's verify step walks: every package.json outside apps/ and examples/, minus private ones.
-const publicPackages = execFileSync('git', ['ls-files', '*/package.json'], { encoding: 'utf8' })
-  .split('\n')
-  .filter((file) => file !== '' && !/^(apps|examples)\//.test(file))
-  .map((file) => ({ dir: file.slice(0, -'/package.json'.length), manifest: JSON.parse(readFileSync(file, 'utf8')) }))
-  .filter(({ manifest }) => !manifest.private && manifest.name !== undefined)
-  .map(({ dir, manifest }) => ({ dir, name: manifest.name, version: manifest.version, tag: manifest.publishConfig?.tag ?? 'latest' }));
-
 const run = (command, args, options = {}) => spawnSync(command, args, { encoding: 'utf8', ...options });
-
-/** True when the registry has name@version. Anything but a plain 404 is an error, never "absent". */
-function onNpm({ name, version }) {
-  const result = run('npm', ['view', `${name}@${version}`, 'version']);
-  if (result.status === 0) return true;
-  if (/E404/.test(result.stderr)) return false;
-  throw new Error(`npm view ${name}@${version} failed: ${result.stderr.trim() || result.error}`);
-}
 
 // A version staged but not yet approved is not on the registry, so a second push
 // stages it again and npm answers with a conflict. The wording is not documented;
@@ -81,11 +66,17 @@ function stage({ dir, name, version, tag }) {
 
 const failures = [];
 const unreleased = [];
-for (const pkg of publicPackages) {
-  let present;
+// Ask npm about every package at once; staging itself stays one at a time.
+const presence = await mapConcurrently(publicPackages, async (pkg) => {
   try {
-    present = onNpm(pkg);
+    return { present: await isOnNpm(pkg) };
   } catch (error) {
+    return { error };
+  }
+});
+for (const [index, pkg] of publicPackages.entries()) {
+  const { present, error } = presence[index];
+  if (error !== undefined) {
     failures.push(pkg.name);
     console.log(`failed: ${pkg.name}@${pkg.version}\n    ${error.message}`);
     continue;
