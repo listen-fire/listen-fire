@@ -457,7 +457,13 @@ pub fn unbranded(ty: &Ty) -> Ty {
 /// fits, but `target` (or every member of it the base fits) asks for a
 /// brand the value does not carry (MOV_BRAND_REQUIRED).
 pub fn lacks_a_brand(source: &Ty, target: &Ty) -> bool {
-    !field_assignable(source, target) && field_assignable(&unbranded(source), &unbranded(target))
+    if field_assignable(source, target) {
+        return false;
+    }
+    let (base, asked) = (unbranded(source), unbranded(target));
+    // Plain text where an option set is asked is a warning of its own, not a
+    // missing base: the brand is what the value lacks, as for a branded text.
+    field_assignable(&base, &asked) || (matches!(strip_absent(&base), Ty::Text) && is_enum(Some(strip_absent(&asked))))
 }
 
 /// A value whose type says nothing (unknown, or `json`) where `target` asks

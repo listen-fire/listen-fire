@@ -72,6 +72,20 @@ export const expressionTypeSchema: z.ZodType<ExpressionType> = z.lazy(() =>
       kind: z.literal('record'),
       fields: z.record(z.string(), expressionTypeSchema),
     }),
+    /** `string & Brand<"claim:email/address">`: `of` narrowed by each brand. A
+     *  plugin parameter declares one; only a string or a number takes a brand. */
+    z.object({
+      kind: z.literal('branded'),
+      of: expressionTypeSchema.refine((of) => of.kind === 'string' || of.kind === 'number', {
+        error: 'branded.of: expected a string or a number',
+      }),
+      brands: z.array(z.string().min(1)).min(1),
+    }),
+    /** One of several types, as the catalog spells a union. */
+    z.object({
+      kind: z.literal('union'),
+      of: z.array(expressionTypeSchema).min(1),
+    }),
   ]),
 );
 
@@ -85,7 +99,9 @@ export type ExpressionType =
   | { kind: 'enum'; values: string[] }
   | { kind: 'file' }
   | { kind: 'list'; element: ExpressionType }
-  | { kind: 'record'; fields: Record<string, ExpressionType> };
+  | { kind: 'record'; fields: Record<string, ExpressionType> }
+  | { kind: 'branded'; of: ExpressionType; brands: string[] }
+  | { kind: 'union'; of: ExpressionType[] };
 
 // ── GenericShape: declared in-memory contract for a TG side ─────────────────
 // Used by `kind: 'generic'` schemaRefs. The shape declares properties (typed

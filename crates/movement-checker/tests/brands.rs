@@ -177,3 +177,28 @@ fn json_never_fits_a_brand() {
     let found = errors_of("function f(d: <json>): <text & Brand<\"claim:email/address\">> {\n  return d\n}\n");
     assert_eq!(codes(&found), ["MOV_BRAND_REQUIRED"], "{found:#?}");
 }
+
+#[test]
+fn a_branded_enum_fits_its_enum_and_plain_text_but_plain_text_does_not_fit_it() {
+    let tier = json!({ "kind": "branded", "of": { "kind": "enum", "options": ["free", "paid"] }, "brands": ["claim:plan/tier"] });
+    let catalog = json!({
+        "adapters": { "chat": { "canFire": false, "constructionArgs": [], "schemas": { "": {
+            "positions": { "Message": { "properties": { "Tier": tier, "Name": "text" }, "edges": {} } },
+            "collections": { "Messages": { "target": "Message" } },
+            "writableRoots": {}
+        } } } },
+        "credentials": {},
+        "plugins": { "plan_of": { "args": ["t"], "priced": false, "requiredArgs": ["t"], "argTypes": { "t": tier }, "effects": {}, "output": { "kind": "value", "type": "boolean" }, "package": "@lf-platform/team" } }
+    });
+    let catalog = CatalogSnapshot::load(&catalog.to_string()).expect("a branded enum field loads");
+    let check = |body: &str| {
+        let source = format!("import {{ `@lf-platform/team` as t }} from plugins\nimport {{ chat }} from adapters\nc = connect chat\nfunction go() {{\n  c-[m:Messages]-> {{\n{body}\n  }}\n}}\n");
+        let options = CheckOptions { upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
+        check_source(&source, &catalog, options).unwrap_or_else(|e| panic!("{source}: {e:?}")).into_iter().filter(|d| d.is_error()).collect::<Vec<_>>()
+    };
+    // Branded enum fits its own parameter, and fits plain text where text is asked.
+    assert_eq!(check("    r = t.planOf(m.Tier)\n    y = Text.lower(m.Tier)"), Vec::<Diagnostic>::new());
+    // Plain text does not fit the branded enum.
+    let found = check("    r = t.planOf(m.Name)");
+    assert_eq!(codes(&found), ["MOV_BRAND_REQUIRED"], "{found:#?}");
+}

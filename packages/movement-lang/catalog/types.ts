@@ -324,7 +324,7 @@ export interface PluginSpec {
    * where it is written, and an argument declared to take structured data
    * (`json`) is handed a record's fields. Absent for an argument nobody typed.
    */
-  argTypes?: Record<string, SchemaFieldType>;
+  argTypes?: Record<string, PluginArgType>;
   /**
    * Arguments (⊆ `args`) a call MUST supply: a call missing one is
    * MOV_THROUGH_ARG_MISSING.
@@ -1511,6 +1511,11 @@ export type SchemaFieldType =
    *  edges and no identity, so a checker refuses a walk, a write or a record
    *  parameter on it, bound to a name or not. */
   | { kind: 'record'; position: SchemaPositionRef };
+
+/** What a plugin's argument takes: a field type, or one of several (`text &
+ *  Brand<"a"> | text & Brand<"b">`). A union is the checker's typing, which a
+ *  schema's field never is, so it lives here and not on `SchemaFieldType`. */
+export type PluginArgType = SchemaFieldType | { kind: 'union'; of: PluginArgType[] };
 
 /** Which record a `record` field holds: one record type of the instance, or
  *  one of several (`unions`). */

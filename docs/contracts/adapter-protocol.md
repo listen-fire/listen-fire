@@ -1651,7 +1651,14 @@ page = web.fetchUrl(u)
   optional spec members of the protocol's current minor (no new minor row).
 - An argument's type in `argTypes` may be any catalog type, a branded one
   included (`{ "kind": "branded", "of": "text", "brands": ["claim:email/address"] }`):
-  a call whose argument does not carry the brand is refused by the checker.
+  the checker refuses a call (`MOV_BRAND_REQUIRED`) whose argument is plain
+  text, a value of unknown type, `json`, or the result of any operation on a
+  branded value, and accepts one read from a field or answer carrying the
+  brand. A parameter that takes one of several brands is a catalog `union`
+  (`{ "kind": "union", "of": [ …branded types… ] }`); either member fits. A
+  plugin declared in TypeScript writes the same as `{ kind: 'branded', of:
+  { kind: 'string' }, brands: [...] }` and `{ kind: 'union', of: [...] }` in
+  its parameter's `type`.
 - `plugins` pairs with the method `invokePlugin`:
   `{ name, config, extractedContext }` → `{ text?, data?, records?, outcome?, costMicrodollars?, files?, warnings? }`.
   `config` is the author's arguments by name; `extractedContext` the fields

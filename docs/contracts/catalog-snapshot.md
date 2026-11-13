@@ -90,7 +90,7 @@ interface ConstructionArg {
 interface PluginSpec {
   args: string[];
   priced: boolean;
-  argTypes?: Record<string, SchemaFieldType>;   // each argument's declared input type, by name; absent for one nobody typed
+  argTypes?: Record<string, PluginArgType>;   // each argument's declared input type, by name (a `SchemaFieldType`, or `{ kind: 'union', of: PluginArgType[] }` for one of several); absent for one nobody typed
   requiredArgs?: string[];
   effects?: { reads?: string[]; writes?: string[]; ai?: boolean; now?: boolean; suspend?: boolean };
   fedByExtraction?: boolean;
@@ -115,6 +115,8 @@ type PluginOutput =
   | { kind: 'value'; type: SchemaFieldType }
   | { kind: 'record'; fields: Record<string, SchemaFieldType> }
   | { kind: 'records'; fields: Record<string, SchemaFieldType> };
+
+type PluginArgType = SchemaFieldType | { kind: 'union'; of: PluginArgType[] };   // an argument takes one of several types (a union of brands); a schema's field never does
 
 type SchemaFieldType =
   | 'text' | 'number' | 'boolean' | 'date' | 'datetime' | 'file' | 'json' | 'absent'

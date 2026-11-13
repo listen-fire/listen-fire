@@ -1002,7 +1002,8 @@ pub struct PluginSpec {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     priced: Option<bool>,
     /// What each argument takes, by name: the plugin's declared input types.
-    /// The checker reads them; nothing here does yet.
+    /// The checker reads them: a call whose argument does not fit is held to
+    /// it, a missing brand included (MOV_BRAND_REQUIRED).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub arg_types: Option<JsMap<SchemaFieldType>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

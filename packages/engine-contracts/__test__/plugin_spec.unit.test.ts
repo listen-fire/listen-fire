@@ -2,7 +2,10 @@
 // (same arguments, same answer until the host says otherwise) and for how long
 // an answer may be kept. Absent is not pure.
 
-import { pluginSpecOf, type PluginDeclaration } from '../plugin_spec';
+import { LANGUAGE_VERSION, checkSourceInRust, type CatalogSnapshot } from 'movement-lang';
+
+import type { ExpressionType } from '../catalog';
+import { pluginSpecOf, pluginSpecsOf, type PluginDeclaration } from '../plugin_spec';
 import { WirePluginSpec } from '../protocol';
 
 const declaration = (more: Partial<PluginDeclaration> = {}): PluginDeclaration => ({
@@ -57,5 +60,41 @@ describe('a plugin argument may ask for a brand', () => {
     const email = { kind: 'branded', of: 'text', brands: ['claim:email/address'] };
     const parsed = WirePluginSpec.parse({ args: ['email'], priced: false, argTypes: { email }, pure: true });
     expect(parsed.argTypes.email).toEqual(email);
+  });
+});
+
+describe('a TypeScript plugin declaration may ask for a brand', () => {
+  const brand = (name: string): ExpressionType => ({ kind: 'branded', of: { kind: 'string' }, brands: [name] });
+  const email = brand('claim:email/address');
+  const phone = brand('claim:phone/e164');
+  const withParam = (type: ExpressionType): PluginDeclaration =>
+    declaration({ signature: { ...declaration().signature, name: 'is-member', params: [{ name: 'email', type, required: true, description: 'The address.' }] } });
+
+  it('projects a branded parameter to the catalog branded type', () => {
+    const spec = pluginSpecOf(withParam(email));
+    expect(spec.argTypes?.email).toEqual({ kind: 'branded', of: 'text', brands: ['claim:email/address'] });
+    expect(WirePluginSpec.safeParse(spec).success).toBe(true);
+  });
+
+  it('projects a union of branded types to the catalog union', () => {
+    const spec = pluginSpecOf(withParam({ kind: 'union', of: [email, phone] }));
+    expect(spec.argTypes?.email).toEqual({
+      kind: 'union',
+      of: [
+        { kind: 'branded', of: 'text', brands: ['claim:email/address'] },
+        { kind: 'branded', of: 'text', brands: ['claim:phone/e164'] },
+      ],
+    });
+    expect(WirePluginSpec.parse(spec).argTypes.email).toEqual(spec.argTypes?.email);
+  });
+
+  it('a plugin declared this way makes the Rust checker refuse plain text with MOV_BRAND_REQUIRED', () => {
+    const plugins = pluginSpecsOf([withParam({ kind: 'union', of: [email, phone] })]);
+    const snapshot = { adapters: {}, credentials: {}, plugins: { is_member: { ...plugins.is_member, package: '@lf-platform/team' } } } as unknown as CatalogSnapshot;
+    const check = (argument: string) =>
+      checkSourceInRust(`import { \`@lf-platform/team\` as t } from plugins\nr = t.isMember(${argument})\n`, snapshot, { languageVersion: LANGUAGE_VERSION });
+    const refused = check('"a@x.com"').filter((d) => d.code === 'MOV_BRAND_REQUIRED');
+    expect(refused).toHaveLength(1);
+    expect(refused[0].message).toContain('text & Brand<"claim:email/address"> | text & Brand<"claim:phone/e164">');
   });
 });

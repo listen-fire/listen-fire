@@ -8,7 +8,7 @@
 // host's (`llm.transforms.invoke`): a host serves the plugins it implements
 // and refuses the rest by name.
 
-import { maybeAbsent, type PluginOutput, type PluginSpec, type SchemaFieldType } from 'movement-lang';
+import { maybeAbsent, type PluginArgType, type PluginOutput, type PluginSpec, type SchemaFieldType } from 'movement-lang';
 
 import type {
   ExpressionType,
@@ -96,7 +96,7 @@ export function pluginSpecOf(declaration: PluginDeclaration): PluginSpec {
   // Every argument's declared type, the auto-fed ones included: a plain call
   // writes those itself.
   const argTypes = Object.fromEntries(
-    signature.params.map((p) => [p.name, fieldTypeOfExpressionType(p.type)]),
+    signature.params.map((p) => [p.name, argTypeOfExpressionType(p.type)]),
   );
   return {
     args: authorParams.map((p) => p.name),
@@ -151,6 +151,20 @@ function outputFieldType(field: { type: ExpressionType; optional?: boolean }): S
 }
 
 /**
+ * A parameter's declared type as the catalog's argument type: the field types
+ * a plugin takes, and a union of them (a brand rides the field type). Only an
+ * argument accepts one of several, so an output stays a `SchemaFieldType`.
+ */
+function argTypeOfExpressionType(type: ExpressionType): PluginArgType {
+  switch (type.kind) {
+    case 'union':
+      return { kind: 'union', of: type.of.map(argTypeOfExpressionType) };
+    default:
+      return fieldTypeOfExpressionType(type);
+  }
+}
+
+/**
  * `ExpressionType` → `SchemaFieldType`. Deliberately narrow: a plugin's inputs
  * and outputs are scalars, lists of them, and nothing else. A `record` inside one would be a
  * node, and a node needs a graph to belong to — a plugin output that wants one
@@ -174,6 +188,12 @@ function fieldTypeOfExpressionType(type: ExpressionType): SchemaFieldType {
       return { kind: 'enum', options: [...type.values] };
     case 'list':
       return { kind: 'list', of: fieldTypeOfExpressionType(type.element) };
+    case 'branded':
+      return { kind: 'branded', of: fieldTypeOfExpressionType(type.of), brands: [...type.brands] };
+    case 'union':
+      // Only an argument accepts one of several (`argTypeOfExpressionType`); a
+      // value a plugin hands back is one type, so there is nothing to project.
+      throw new Error('a union is a parameter type only: a plugin output field or list element cannot be one');
     case 'json':
     case 'record':
       // Structured data nothing further describes — the data top type, which is
