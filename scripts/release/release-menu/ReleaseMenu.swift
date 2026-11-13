@@ -397,11 +397,10 @@ final class Actions {
         guard await prompter.offerSignIn() else { return .cancelled }
         setStatus("Finish the npm sign-in in your browser…")
         // Without a terminal npm prints the sign-in URL and polls for the result instead of opening the browser itself.
-        let opened = OpenOnce()
+        let picker = SignInURLPicker()
         let prompter = self.prompter
         let result = await runProcess(npx, npmArguments(["login"])) { line in
-            // npm prints "Login at:" on one line and the URL on the next, so only a line with a URL claims the opening.
-            guard let range = line.range(of: "https://\\S+", options: .regularExpression), let url = URL(string: String(line[range])), opened.claim() else { return }
+            guard let url = picker.pick(line) else { return }
             Task { @MainActor in prompter.signInURL(url) }
         }
         return result.status == 0
@@ -412,16 +411,21 @@ final class Actions {
 
 struct StatusError: Error { let message: String }
 
-/// True for the first caller that finds a URL, so a line mentioning two links opens one.
-final class OpenOnce: @unchecked Sendable {
+/// The sign-in URL is the line after npm's title ("Login at:", or "Authenticate your account at:" for a
+/// 2FA challenge). Other lines carry URLs too (npm's notices name the registry and docs), so a URL
+/// counts only right after a title, and only the first one opens.
+final class SignInURLPicker: @unchecked Sendable {
     private let lock = NSLock()
+    private var afterTitle = false
     private var opened = false
-    func claim() -> Bool {
+    func pick(_ line: String) -> URL? {
         lock.lock()
         defer { lock.unlock() }
-        if opened { return false }
+        let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+        defer { afterTitle = trimmed.hasSuffix(" at:") }
+        guard afterTitle, !opened, trimmed.hasPrefix("https://"), let url = URL(string: trimmed) else { return nil }
         opened = true
-        return true
+        return url
     }
 }
 
