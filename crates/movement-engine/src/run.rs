@@ -1983,6 +1983,10 @@ impl Run<'_> {
             Ask::Ai { prompt, tier } => self.ai(&prompt, tier.as_deref()).await.map(|value| Ok(Evaluated { value, prov: Prov::Built(Trail::default()) })),
             // Asked only of a write field's evaluation, which answers it.
             Ask::FieldFunction { id, .. } => Err(Failure::engine("MOVENG_RUNTIME", format!("{id}() was asked of no write field"))),
+            Ask::PluginCall { written, args } => {
+                let value = self.expression_call(&written, args, scope).await?;
+                Ok(Ok(Evaluated { value, prov: Prov::Built(Trail::default()) }))
+            }
         }
     }
 
@@ -2521,6 +2525,10 @@ impl Reader for Reading<'_, '_> {
 
     fn field_function(&self, id: &str) -> bool {
         self.field.is_some_and(|field| field.has(id))
+    }
+
+    fn plugin(&self, id: &str) -> bool {
+        matches!(self.scope.resolve(id), Some(Binding::Plugin(_)))
     }
 
     fn step(&self) -> Result<(), EvalError> {

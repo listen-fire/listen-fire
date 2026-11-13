@@ -264,7 +264,8 @@ impl<R: Reader> LfDoors<'_, R> {
             for (at, listen) in self.listens.iter().enumerate().filter(|(_, l)| l.is_on(adapter_type, &arrival.edge) && l.hears(credential)) {
                 match listen.fires(arrival, credential, now_ms) {
                     Some(movement_engine::listen_judge::Verdict::Fires) => {}
-                    Some(movement_engine::listen_judge::Verdict::Undecided { reason }) => {
+                    Some(verdict @ (movement_engine::listen_judge::Verdict::Undecided { .. } | movement_engine::listen_judge::Verdict::Asks(_))) => {
+                        let reason = crate::routing::unjudged_reason(&verdict).unwrap_or_default();
                         unjudged.push(Unjudged { listen: at, arrival: index, reason });
                         continue;
                     }

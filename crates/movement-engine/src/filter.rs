@@ -166,7 +166,7 @@ pub fn is_null_literal(expr: &Expression) -> bool {
 /// engine evaluates through `eval`, whose semantics this mirrors; adapters
 /// filter through this.
 pub fn evaluate_predicate(expr: &Expression, read: &dyn Fn(&str) -> Js) -> Result<Js, EvalError> {
-    ready(evaluate_predicate_with(expr, read, PredicateOptions { ask: None, read_field: None }))
+    ready(evaluate_predicate_with(expr, read, PredicateOptions { ask: None, read_field: None, call: None }))
 }
 
 /// A comparison `compare_values` handed back, being answered by the host.
@@ -174,6 +174,13 @@ pub type Comparing<'p> = Pin<Box<dyn Future<Output = Result<bool, EvalError>> + 
 
 /// What answers a comparison `compare_values` hands back.
 pub type AskCompare<'p> = dyn Fn(FilterOperator, Js, Js) -> Comparing<'p> + 'p;
+
+/// A call of a function no built-in answers, being answered by the host.
+pub type Calling<'p> = Pin<Box<dyn Future<Output = Result<Js, EvalError>> + 'p>>;
+
+/// What answers a call of a function no built-in answers: a plugin, by the
+/// name the predicate writes it under, with its arguments' values.
+pub type AskCall<'p> = dyn Fn(&str, Vec<Js>) -> Calling<'p> + 'p;
 
 /// What a predicate's comparisons read beyond their operands: what answers
 /// one `compare_values` hands back (`WITHIN`, which reads the wall clock),
@@ -187,6 +194,10 @@ pub struct PredicateOptions<'p> {
     /// (`m.email == email`). Absent, `read` answers it: a record's own
     /// fields, which is all `read` knows.
     pub read_field: Option<&'p dyn Fn(&str) -> Js>,
+    /// What answers a call of a function that is no built-in (a listen's
+    /// filter calling a pure plugin). Absent, such a call is not evaluated
+    /// here.
+    pub call: Option<&'p AskCall<'p>>,
 }
 
 /// `evaluatePredicate`, its comparisons as `options` say.
@@ -276,8 +287,48 @@ async fn predicate_in_place<'p>(expr: &'p Expression, read: &'p dyn Fn(&str) -> 
             let index = eval(index).await?.to_number();
             at_index(&value, index)
         }
+        Expression::Function { fn_, args } if crate::stdlib::is_builtin(fn_) => builtin(fn_, args, &eval).await?,
+        Expression::Function { fn_, args } => {
+            let Some(call) = options.call else {
+                return Err(EvalError::Fallback(format!("{fn_} is no built-in, and nothing here answers a call of it")));
+            };
+            let mut values = Vec::with_capacity(args.len());
+            for arg in args {
+                values.push(eval(arg).await?);
+            }
+            call(fn_, values).await?
+        }
         _ => return Err(EvalError::Fallback("not a pure predicate kind this unit evaluates".into())),
     })
+}
+
+/// A built-in a predicate calls, by its canonical name, as a run answers it
+/// (crate::stdlib): with no run, nothing reads the run's pinned instant.
+async fn builtin<'p, F>(id: &str, args: &'p [Expression], eval: &F) -> Result<Js, EvalError>
+where
+    F: Fn(&'p Expression) -> Pin<Box<dyn Future<Output = Result<Js, EvalError>> + 'p>>,
+{
+    // COALESCE short-circuits, as `??` does.
+    if id == "coalesce" {
+        for arg in args {
+            let value = eval(arg).await?;
+            if !value.is_nullish() {
+                return Ok(value);
+            }
+        }
+        return Ok(Js::Null);
+    }
+    let mut values = Vec::with_capacity(args.len());
+    for arg in args {
+        values.push(eval(arg).await?);
+    }
+    if crate::stdlib::FLAT.contains(&id) {
+        crate::stdlib::apply_flat(id, &values)
+    } else if crate::stdlib::NAMESPACED.contains(&id) {
+        crate::stdlib::apply_namespaced(id, &values, crate::stdlib::Surroundings { services: crate::env_services::current(), now: None })
+    } else {
+        Err(EvalError::Fallback(format!("{id} is a built-in only a run evaluates")))
+    }
 }
 
 /// `isPurePredicate` then `pureLeafReads`: the leaf read nodes a pure
@@ -285,13 +336,21 @@ async fn predicate_in_place<'p>(expr: &'p Expression, read: &'p dyn Fn(&str) -> 
 /// `leaf_read_key`); `None` for one that is not pure.
 pub fn pure_leaf_reads(expr: &Expression) -> Option<Vec<&Expression>> {
     let mut leaves = Vec::new();
-    leaf_reads(expr, &mut leaves).then_some(leaves)
+    leaf_reads(expr, &mut leaves, false).then_some(leaves)
 }
 
-fn leaf_reads<'e>(expr: &'e Expression, into: &mut Vec<&'e Expression>) -> bool {
-    fn all<'e>(items: &'e [Expression], into: &mut Vec<&'e Expression>) -> bool {
-        items.iter().all(|e| leaf_reads(e, into))
-    }
+/// `pure_leaf_reads`, the arguments of the calls a listen's filter may hold
+/// (a pure built-in's, a pure plugin's) read too: what the judge reads. A
+/// predicate holding a call is never one a module takes, so no other
+/// reader admits one.
+pub fn judged_leaf_reads(expr: &Expression) -> Option<Vec<&Expression>> {
+    let mut leaves = Vec::new();
+    leaf_reads(expr, &mut leaves, true).then_some(leaves)
+}
+
+fn leaf_reads<'e>(expr: &'e Expression, into: &mut Vec<&'e Expression>, calls: bool) -> bool {
+    let all = |items: &'e [Expression], into: &mut Vec<&'e Expression>| items.iter().all(|e| leaf_reads(e, into, calls));
+    let leaf_reads = |e: &'e Expression, into: &mut Vec<&'e Expression>| leaf_reads(e, into, calls);
     match expr {
         Expression::Static { .. } => true,
         Expression::Property { .. } | Expression::EdgeProperty { .. } | Expression::AliasRef { .. } | Expression::Meta { .. } => {
@@ -317,6 +376,7 @@ fn leaf_reads<'e>(expr: &'e Expression, into: &mut Vec<&'e Expression>) -> bool 
         Expression::Logical { operands, .. } => all(operands, into),
         Expression::Not { expression } | Expression::Negate { expression } => leaf_reads(expression, into),
         Expression::At { expression, index } => leaf_reads(expression, into) && leaf_reads(index, into),
+        Expression::Function { args, .. } if calls => all(args, into),
         _ => false,
     }
 }
@@ -408,7 +468,7 @@ fn leaf_keys(expr: &Expression, into: &mut Vec<String>) -> bool {
             true
         }
         Expression::Traverse { steps, .. } if steps.is_empty() => {
-            if !leaf_reads(expr, &mut Vec::new()) {
+            if !leaf_reads(expr, &mut Vec::new(), false) {
                 return false;
             }
             into.push(leaf_read_key(expr));

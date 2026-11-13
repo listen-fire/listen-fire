@@ -10,11 +10,11 @@
 
 import { createHash } from 'node:crypto';
 
-import { lastEdgeOf, listenPlanSchema, verdictSchema } from 'engine-contracts';
-import { RUN_HOST_UNITS, callJudgeArrival, callLandingMisfits, callLandingNode, callListenIdentity, entryPositionKeyOf, instanceSchemaKey, unwrapCredentialArg } from 'movement-lang';
+import { explanationSchema, judgementSchema, lastEdgeOf, listenPlanSchema } from 'engine-contracts';
+import { RUN_HOST_UNITS, callExplainArrival, callJudgeArrival, callLandingMisfits, callLandingNode, callListenIdentity, entryPositionKeyOf, instanceSchemaKey, unwrapCredentialArg } from 'movement-lang';
 import { z } from 'zod';
 
-import type { ArrivedRecord, Arrival, AwaitLanding, ListenPlan, PlanArrival, TriggerEvent, Verdict } from 'engine-contracts';
+import type { ArrivedRecord, Arrival, AwaitLanding, Explanation, Judgement, ListenPlan, PlanArrival, PluginAnswers, TriggerEvent } from 'engine-contracts';
 import type { AdapterSnapshot, CheckAnswer, ImportStatement, InstanceSchema, Program } from 'movement-lang';
 
 import { listenHearsCredential } from './listen_config';
@@ -81,13 +81,33 @@ export function listenPlansOf(answer: unknown): ListenPlan[] {
   return listenPlanSchema.array().parse(answer.listens);
 }
 
-/** Whether `arrival` fires the listen `plan` describes, `nowMs` (epoch ms)
- *  the instant WITHIN measures from. An undecided verdict runs nothing; the
- *  host logs its reason. */
-export function judgeArrival(plan: ListenPlan, arrival: PlanArrival, nowMs: number): Verdict {
-  const reply = callJudgeArrival(JSON.stringify({ plan, arrival, nowMs }));
+/** What the listen judge reads beyond the plan and the arrival: the instant
+ *  (epoch ms) WITHIN measures from, and what the host answered the questions
+ *  the judge asked; none on a first judgement. */
+export interface Judging {
+  nowMs: number;
+  answers?: PluginAnswers;
+}
+
+/** Whether `arrival` fires the listen `plan` describes, as of `judging`. An
+ *  undecided verdict runs nothing; the host logs its reason, and judges it
+ *  again when it names a host function the host could not answer
+ *  (`unreachable`). `{asks}` names the host functions to ask before judging
+ *  again, their answers added. */
+export function judgeArrival(plan: ListenPlan, arrival: PlanArrival, judging: Judging): Judgement {
+  const reply = callJudgeArrival(JSON.stringify({ plan, arrival, ...judging }));
   if (!reply.ok) throw new Error(`the listen judge refused its input: ${JSON.stringify(reply.json)}`);
-  return verdictSchema.parse(reply.json);
+  return judgementSchema.parse(reply.json);
+}
+
+/** `judgeArrival`'s judgement, with the term of the filter that skipped the
+ *  arrival as the filter writes it (`firstFailed`): what a host says when
+ *  asked why a listen did not fire. A host function's answer is as of the
+ *  question. */
+export function explainArrival(plan: ListenPlan, arrival: PlanArrival, judging: Judging): Explanation {
+  const reply = callExplainArrival(JSON.stringify({ plan, arrival, ...judging }));
+  if (!reply.ok) throw new Error(`the listen judge refused its input: ${JSON.stringify(reply.json)}`);
+  return explanationSchema.parse(reply.json);
 }
 
 const landingMisfitsSchema = z.object({ node: z.string(), misfits: z.array(z.string()) }).strict();
@@ -181,9 +201,11 @@ export function plannedListensOf(input: { file: string; program: Program; plans:
  * record went; it is on another module or another edge than the listen's
  * last; it came for another connection (`listenHearsCredential`); or it is
  * marked for this listen's own sake (`notFor` its pipeline). An Undecided
- * verdict runs nothing, and the host says why.
+ * verdict runs nothing, and the host says why. A listen whose filter calls a
+ * host function asks it (`{asks}`) until `answers` answer what it reached;
+ * one that calls none never asks.
  */
-export function listenFires(listen: PlannedListen, arrival: Arrival, delivery: { adapterType: string; credentialName?: string }, nowMs: number): Verdict | null {
+export function listenFires(listen: PlannedListen, arrival: Arrival, delivery: { adapterType: string; credentialName?: string }, nowMs: number, answers?: PluginAnswers): Judgement | null {
   const { plan } = listen;
   if ('gone' in arrival || plan.adapter !== delivery.adapterType || lastEdgeOf(plan) !== arrival.edge) return null;
   if (!listenHearsCredential(listen.credentialName, delivery.credentialName) || arrival.notFor === listen.pipeline) return null;
@@ -196,7 +218,7 @@ export function listenFires(listen: PlannedListen, arrival: Arrival, delivery: {
       ...(arrival.parents !== undefined ? { parents: arrival.parents.map((parent) => (parent === null ? null : arrivedRecord(parent))) } : {}),
       ...(arrival.takenApplied === true ? { takenApplied: true } : {}),
     },
-    nowMs,
+    { nowMs, ...(answers !== undefined ? { answers } : {}) },
   );
 }
 

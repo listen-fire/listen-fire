@@ -958,8 +958,9 @@ impl Session {
                         skipped.push(listen);
                         continue;
                     }
-                    Verdict::Undecided { reason } => {
+                    Verdict::Undecided { .. } | Verdict::Asks(_) => {
                         taken = true;
+                        let reason = crate::routing::unjudged_reason(&verdict).unwrap_or_default();
                         self.note_unjudged(set, adapter, listen, arrival, &delivered, &reason)?;
                         let line = format!("{named}: an arrival on {} cannot be judged ({reason}): it runs nothing", arrival.edge);
                         if !fired.redelivered.contains(&line) {
@@ -1180,7 +1181,10 @@ impl Session {
                 Some(Verdict::Fires) => matched.push(i),
                 Some(Verdict::Skips { hop, reason: None }) => fired.redelivered.push(format!("{named}: the invocation does not match the WHERE of hop {}: it runs nothing", hop + 1)),
                 Some(Verdict::Skips { hop, reason: Some(reason) }) => fired.redelivered.push(format!("{named}: the invocation is not this listen's at hop {}: {reason}: it runs nothing", hop + 1)),
-                Some(Verdict::Undecided { reason }) => fired.redelivered.push(format!("{named}: the invocation cannot be judged ({reason}): it runs nothing")),
+                Some(verdict @ (Verdict::Undecided { .. } | Verdict::Asks(_))) => {
+                    let reason = crate::routing::unjudged_reason(&verdict).unwrap_or_default();
+                    fired.redelivered.push(format!("{named}: the invocation cannot be judged ({reason}): it runs nothing"));
+                }
                 None => {}
             }
         }

@@ -229,6 +229,43 @@ impl Run<'_> {
     }
 }
 
+impl Run<'_> {
+    /// A plugin called inside an expression (a pure one, in a wait's WHERE,
+    /// judged once per arrival): `args` by position, bound to its parameters
+    /// in the order it declares them, and its value as it declares it. Timed
+    /// and traced as a plain call is. Only a plugin whose output is a value
+    /// is called so; a record's fields are read only off a bound name.
+    pub(crate) async fn expression_call(&self, written: &str, args: Vec<Js>, scope: &Scope) -> Result<Js, Failure> {
+        let registered = self.registered_plugin(written, scope);
+        let Some(spec) = self.plugin_spec(&registered) else {
+            return Err(Failure::engine("MOVENG_RUNTIME", format!("'{written}' is no plugin the catalog holds — the checker should have caught this")));
+        };
+        let Some(PluginOutput::Value { type_ }) = spec.output.clone() else {
+            return Err(Failure::unsupported(&format!("'{written}' inside an expression"), "a plugin called inside an expression hands back a value; bind a record it answers first"));
+        };
+        let mut config = JsObject::new();
+        for (name, value) in spec.as_called().positional_params(PluginCallSite::Plain).into_iter().zip(args) {
+            let value = match crate::record::binding_of(&value) {
+                Some(record) => Js::object(crate::record::fields_of(&record).map_err(|e| Failure::of_eval(e, ""))?),
+                None => value,
+            };
+            config.set(name.to_string(), value);
+        }
+        let started = self.clock_now().await?;
+        let result = self.invoke(&registered, &config, &JsObject::new()).await?;
+        let duration = self.clock_now().await? - started;
+        let answered = declared_value(&result, &type_);
+        let value = if matches!(answered, Js::Null) || fits(&answered, &type_) { answered } else { text_as(&answered, &type_).unwrap_or(Js::Null) };
+        let mut entry = Members::default();
+        entry.set("plugin", Js::str(registered.clone()));
+        entry.set("durationMs", Js::Number(duration));
+        result.trace_into(&mut entry);
+        entry.set("returned", Js::str(if matches!(value, Js::Null) { "absent" } else { "value" }));
+        self.trace(TraceEntry::Plugin(entry));
+        Ok(value)
+    }
+}
+
 /// A `value` output's value: a plugin answers it as `data.value`, in its own
 /// type; a text output may answer it as the text it fetched instead.
 fn declared_value(result: &crate::extract::run::PluginResult, declared: &FieldType) -> Js {

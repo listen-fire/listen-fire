@@ -234,23 +234,25 @@ pub struct Listen {
 }
 
 /// Whether an arrival fires a listen ([`Listen::judge`]).
-pub use crate::listen_judge::{ArrivedRecord, PlanArrival, Verdict as ListenVerdict};
+pub use crate::listen_judge::{ArrivedRecord, Explanation, Judging, PlanArrival, PluginAnswer, PluginAnswers, PluginQuestion, UndecidedReason, Verdict as ListenVerdict};
 pub use movement_parser::listen_plan::ListenPlan;
 
 impl Listen {
-    /// Whether `arrival` (on this listen's edge) fires it at `now_ms`
-    /// (epoch ms, the instant `WITHIN` measures from), as listen-fire's
-    /// judge decides: each record it carries is read by the names the
-    /// program writes, then judged against the plan's filters. A record of
-    /// another record type skips; an `Undecided` verdict runs nothing, and
-    /// says why, which a host reports rather than drops.
-    pub fn judge(&self, arrival: &PlanArrival, now_ms: f64) -> ListenVerdict {
+    /// Whether `arrival` (on this listen's edge) fires it as of `judging`
+    /// (the instant `WITHIN` measures from, the answers the host holds to
+    /// the questions it was asked), as listen-fire's judge decides: each
+    /// record it carries is read by the names the program writes, then
+    /// judged against the plan's filters. A record of another record type
+    /// skips; an `Undecided` verdict runs nothing, and says why, which a host
+    /// reports rather than drops; an `Asks` verdict names the host functions
+    /// to ask before judging again.
+    pub fn judge(&self, arrival: &PlanArrival, judging: Judging<'_>) -> ListenVerdict {
         let named = |record: &ArrivedRecord| match record.record_type.as_ref().and_then(|t| self.field_ids.get(t)) {
             Some(ids) => ArrivedRecord { fields: crate::listen_judge::named_fields(&record.fields, ids), ..record.clone() },
             None => record.clone(),
         };
         let arrival = PlanArrival { landing: named(&arrival.landing), parents: arrival.parents.iter().map(|p| p.as_ref().map(named)).collect(), ..arrival.clone() };
-        crate::listen_judge::judge_arrival(&self.plan, &arrival, now_ms)
+        crate::listen_judge::judge_arrival(&self.plan, &arrival, judging)
     }
 }
 
@@ -915,9 +917,11 @@ mod tests {
             parents: Vec::new(),
             taken_applied: false,
         };
-        assert_eq!(found[0].judge(&arrival("Message", "Hi"), 0.0), ListenVerdict::Fires);
-        assert_eq!(found[0].judge(&arrival("Message", "Bye"), 0.0), ListenVerdict::Skips { hop: 0, reason: None });
-        assert!(matches!(found[0].judge(&arrival("Draft", "Hi"), 0.0), ListenVerdict::Skips { reason: Some(_), .. }), "another record type's edge of that name");
+        let none = PluginAnswers::default();
+        let at_zero = Judging { now_ms: 0.0, answers: &none };
+        assert_eq!(found[0].judge(&arrival("Message", "Hi"), at_zero), ListenVerdict::Fires);
+        assert_eq!(found[0].judge(&arrival("Message", "Bye"), at_zero), ListenVerdict::Skips { hop: 0, reason: None });
+        assert!(matches!(found[0].judge(&arrival("Draft", "Hi"), at_zero), ListenVerdict::Skips { reason: Some(_), .. }), "another record type's edge of that name");
     }
 
     /// A host with no store cannot park: the run fails naming what it

@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use std::rc::Rc;
 
-use movement_engine::listen_judge::{ArrivedRecord, PlanArrival, Verdict, judge_arrival, named_fields};
+use movement_engine::listen_judge::{ArrivedRecord, Judging, PlanArrival, PluginAnswers, Verdict, judge_arrival, named_fields};
 use movement_engine::listen_landing::{DeclaredPayload, FileScope};
 use movement_parser::ast::{RValue, Statement};
 use movement_parser::catalog::types::CatalogSnapshot;
@@ -136,7 +136,7 @@ impl Listen {
             parents: arrival.parents.iter().map(arrived).collect(),
             taken_applied: arrival.taken_applied,
         };
-        Some(judge_arrival(plan, &planned, now_ms))
+        Some(judge_arrival(plan, &planned, Judging { now_ms, answers: &PluginAnswers::default() }))
     }
 
     /// What of an arrival's landing does not fit the node the listen states
@@ -415,6 +415,20 @@ pub fn arrival_trigger_of(pipeline_input_id: &str, adapter_type: &str, arrival: 
     Js::Obj(out)
 }
 
+/// Why an arrival on a listen runs nothing though it does not skip: the
+/// judge could not tell, or the listen's filter calls a host function, and
+/// listen-fire asks none, so the arrival is kept unjudged.
+pub fn unjudged_reason(verdict: &Verdict) -> Option<String> {
+    match verdict {
+        Verdict::Undecided { reason } => Some(reason.to_string()),
+        Verdict::Asks(questions) => {
+            let asked: Vec<&str> = questions.iter().map(|question| question.plugin.as_str()).collect();
+            Some(format!("this listen's filter calls {}, a host function, and listen-fire answers none", asked.join(", ")))
+        }
+        Verdict::Fires | Verdict::Skips { .. } => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -552,7 +566,7 @@ mod tests {
         let untyped = crate::arrivals::arrivals_of(&js(&format!(r#"{{"arrivals":[{{"edge":"Company","identity":"company-1","landing":{{"fields":{osprey}}}}}]}}"#))).unwrap().remove(0);
         assert_eq!(
             welcome.fires(&untyped, Some("acme"), 0.0),
-            Some(Verdict::Undecided { reason: "the arrival acme_crm reported on Company does not say its record type, so it cannot be told from another record type's Company (this listen's lands on Company)".into() })
+            Some(Verdict::Undecided { reason: movement_engine::listen_judge::UndecidedReason::Unjudgeable("the arrival acme_crm reported on Company does not say its record type, so it cannot be told from another record type's Company (this listen's lands on Company)".into()) })
         );
     }
 
@@ -581,7 +595,7 @@ mod tests {
         };
         assert_eq!(
             listens[0].fires(&unread("Name"), Some("acme"), 0.0),
-            Some(Verdict::Undecided { reason: "acme_crm could not read Name of the arrival on Company, which this listen's filter reads".into() }),
+            Some(Verdict::Undecided { reason: movement_engine::listen_judge::UndecidedReason::Unjudgeable("acme_crm could not read Name of the arrival on Company, which this listen's filter reads".into()) }),
             "never read as absent, which would skip it"
         );
         assert_eq!(listens[1].fires(&unread("Name"), Some("acme"), 0.0), Some(Verdict::Fires), "a listen reading no unknown field is judged as usual");

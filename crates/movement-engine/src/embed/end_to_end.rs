@@ -37,7 +37,8 @@ const CATALOG: &str = r#"{
   "plugins": {
     "lookup": { "args": ["q"], "requiredArgs": ["q"], "priced": false, "output": { "kind": "value", "type": "text" } },
     "weigh": { "args": ["q"], "requiredArgs": ["q"], "argTypes": { "q": "text" }, "priced": false, "output": { "kind": "value", "type": "number" } },
-    "tags": { "args": ["q"], "requiredArgs": ["q"], "argTypes": { "q": "text" }, "priced": false, "output": { "kind": "value", "type": { "kind": "list", "of": "text" } } }
+    "tags": { "args": ["q"], "requiredArgs": ["q"], "argTypes": { "q": "text" }, "priced": false, "output": { "kind": "value", "type": { "kind": "list", "of": "text" } } },
+    "@guild/roll/isSlayer": { "args": ["q"], "requiredArgs": ["q"], "argTypes": { "q": "text" }, "priced": false, "output": { "kind": "value", "type": "boolean" }, "package": "@guild/roll", "name": "isSlayer", "pure": true }
   },
   "models": ["claude-haiku-4-5", "claude-sonnet-4-5", "claude-opus-4-5"]
 }"#;
@@ -1013,6 +1014,41 @@ fn await_new_never_lists_and_binds_a_logged_arrival() {
     assert_eq!(titles(&world), vec!["Logged"]);
     assert!(world.calls.iter().all(|(method, _)| method != "getRelated"), "{:?}", world.calls.iter().map(|(m, _)| m).collect::<Vec<_>>());
     assert!(parks.wait_parks.is_empty());
+}
+
+/// A plugin that answers whether `q` is on the guild's roll of slayers.
+struct Roll {
+    slayers: Vec<&'static str>,
+    asked: Vec<Data>,
+}
+
+impl Modules for Roll {
+    fn invoke(&mut self, call: PluginCall) -> HostFuture<PluginReply> {
+        let on_roll = call.config.get("q").and_then(Data::as_text).is_some_and(|q| self.slayers.contains(&q));
+        self.asked.push(call.config);
+        ready(Ok(PluginReply { data: Some(Data::map([("value", Data::Bool(on_roll))])), ..PluginReply::default() }))
+    }
+}
+
+/// A wait's WHERE may call a pure plugin, as a listen's filter may: the run
+/// asks it of each arrival it judges, and binds the first it answers for.
+#[test]
+fn a_wait_s_where_asks_a_pure_plugin_of_each_arrival() {
+    let body = "  t = write game-[:tickets]-> { Subject: monster.Name }
+  r = await new t-[r:Reply WHERE roll.isSlayer(r.Body)]->
+  write game-[:notes]-> { Title: r.Body }
+";
+    let source = movement("import { `@guild/roll` as roll } from plugins\n", body);
+    assert_eq!(errors(&source), vec![]);
+    let (mut world, mut parks) = (World::default(), Parks::default());
+    parks.landing_as_it_opens.push(("reply-1".into(), "Bob".into()));
+    parks.landing_as_it_opens.push(("reply-2".into(), "Ada".into()));
+    let mut roll = Roll { slayers: vec!["Ada"], asked: Vec::new() };
+    let ran = finished(block_on(run(&mut Hosts::new().adapters(&mut world).store(&mut parks).modules(&mut roll), &input(&source))));
+    assert_eq!(ran.parked_address, None);
+    assert_eq!(titles(&world), vec!["Ada"]);
+    assert_eq!(roll.asked, vec![Data::map([("q", Data::text("Bob"))]), Data::map([("q", Data::text("Ada"))])]);
+    assert_eq!(parks.waits[0].noted, vec![("reply-1".to_string(), false), ("reply-2".to_string(), true)]);
 }
 
 #[test]

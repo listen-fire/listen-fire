@@ -34,9 +34,9 @@ describe('the plans a check answers for its listens', () => {
 });
 
 describe('whether an arrival fires a listen', () => {
-  it.each(table.cases)('$case', ({ plan, arrival, now, verdict }) => {
+  it.each(table.cases)('$case', ({ plan, arrival, answers, now, verdict }) => {
     const entry = table.plans[plan];
     if (entry === undefined) throw new Error(`no plan '${plan}' in the table`);
-    expect(judgeArrival(entry.plan, arrival, Date.parse(now))).toEqual(verdict);
+    expect(judgeArrival(entry.plan, arrival, { nowMs: Date.parse(now), ...(answers !== undefined ? { answers } : {}) })).toEqual(verdict);
   });
 });

@@ -187,6 +187,9 @@ pub enum Ask {
     /// A function the destination field advertises (`invokeFieldFunction`),
     /// called by its lowered name with its arguments' values.
     FieldFunction { id: String, args: Vec<Js> },
+    /// A plugin called inside an expression (a pure one, in a wait's WHERE),
+    /// by the name the program writes, with its arguments' values in order.
+    PluginCall { written: String, args: Vec<Js> },
     /// `AI(prompt[, tier])`: the model's answer (`evaluateAi`), or null.
     Ai { prompt: String, tier: Option<String> },
     /// `FILE(content, type)`: the host's rendered artifact (`files.render`).
@@ -243,6 +246,11 @@ pub trait Reader {
     /// Whether the write field this evaluation is the value of advertises a
     /// function of this lowered name (`ctx.fieldFunctions`).
     fn field_function(&self, _id: &str) -> bool {
+        false
+    }
+    /// Whether `id` names a plugin the program imports, in this
+    /// evaluation's scope.
+    fn plugin(&self, _id: &str) -> bool {
         false
     }
     /// An entry onto the running flow's trace (`ctx.trace.push`).
@@ -902,6 +910,21 @@ impl<'a> Evaluator<'a> {
             && let Some(reader) = self.reader()
         {
             return if id == "file" { self.render_file(reader, args).await } else { self.read_file(reader, args).await };
+        }
+        if let Some(reader) = self.reader()
+            && reader.plugin(id)
+        {
+            // The checker admits a plugin inside an expression only where
+            // the host judges it: a pure one in a wait's WHERE.
+            let mut values = Vec::new();
+            let mut provs = Vec::new();
+            for a in args {
+                let result = self.eval(a).await?;
+                provs.push(result.prov);
+                values.push(result.value);
+            }
+            let value = reader.ask(Ask::PluginCall { written: id.to_string(), args: values }).await?.value;
+            return Ok(Evaluated { value, prov: self.union(&provs.iter().collect::<Vec<_>>()) });
         }
         if !stdlib::FLAT.contains(&id) {
             let Some(reader) = self.reader() else {

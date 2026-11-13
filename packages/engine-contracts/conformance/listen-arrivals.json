@@ -1,5 +1,5 @@
 {
-  "about": "Whether an arrival fires a listen, by its plan's filters. Each plan is the checker's answer for its listen's source against `catalog` (both runners check that it still is). Hops judged on arrival are judged, each against the record the arrival carries for it: `landing` for the last hop, `parents` (aligned to the plan's `carries`) for earlier ones; where the record in a hop's place is missing or of another record type, the one of the hop's own record type is read (the k-th, for the k-th hop on an edge name), so a module may carry more records than a path declares, in another order (plan `positioned`), and only with none of that type does the record in its place skip by its type. So is a hop the host resolves by listing (`resolved`) whose edge the plan's `carries` names: the carried record is preferred to the listing, so a host that lists no members judges it all the same; any other resolved hop is the host's scope check, not judged here. Each record states its `recordType`, which must be the record type its hop lands on (`to`): one edge name may hang off several record types (`pay`'s Customer and Invoice each have `Changes`), and a record of another type skips at its hop, the landing judged first; a record that states none is undecided. A hop's checked part is always evaluated; its taken part too, unless `takenApplied` says the module applied it. `now` is the instant WITHIN measures from. The verdict is `{fires: true}`, `{skips: n}` (the hop whose filter fails, outermost 0; with a `reason` when the record carried for that hop is of another record type, so no filter was read), or `{undecided: reason}` (the host logs it and runs nothing). A listen through or onto a union is one plan holding each member's traversal (`members`), judged once: it fires when one member's does, a record of another member's type being that member's to decide; it is undecided when one member cannot tell; it skips when every member does, by a filter when one member's record types matched, else by type, naming every member's. Held by listen-fire's Rust (crates/movement-engine/src/listen_judge.rs, judge_arrival), the engine's TypeScript (judgeArrival, through the wasm) and the hosted product. A read on through a record a field holds (`c.Current.Stage`) reads that field of the landing, then the member of what it holds; a record absent reads its members absent. The checker has the listen test a record present before it reads through it (`exists(c.Current) AND c.Current.Stage == …`), and an operand of AND or OR is read only when the operands before it leave the answer open, so a read the test guards is never read on an absent record. A record may name the fields its module could not read (`unknown`): a part of the filter reading one is undecided, whatever `fields` holds for it, never read as absent; AND, OR and NOT are three-valued, so an OR one side holds holds and an AND one side fails fails, in either order; a hop that fails still decides.",
+  "about": "Whether an arrival fires a listen, by its plan's filters. Each plan is the checker's answer for its listen's source against `catalog` (both runners check that it still is). Hops judged on arrival are judged, each against the record the arrival carries for it: `landing` for the last hop, `parents` (aligned to the plan's `carries`) for earlier ones; where the record in a hop's place is missing or of another record type, the one of the hop's own record type is read (the k-th, for the k-th hop on an edge name), so a module may carry more records than a path declares, in another order (plan `positioned`), and only with none of that type does the record in its place skip by its type. So is a hop the host resolves by listing (`resolved`) whose edge the plan's `carries` names: the carried record is preferred to the listing, so a host that lists no members judges it all the same; any other resolved hop is the host's scope check, not judged here. Each record states its `recordType`, which must be the record type its hop lands on (`to`): one edge name may hang off several record types (`pay`'s Customer and Invoice each have `Changes`), and a record of another type skips at its hop, the landing judged first; a record that states none is undecided. A hop's checked part is always evaluated; its taken part too, unless `takenApplied` says the module applied it. `now` is the instant WITHIN measures from. The verdict is `{fires: true}`, `{skips: n}` (the hop whose filter fails, outermost 0; with a `reason` when the record carried for that hop is of another record type, so no filter was read), or `{undecided: reason}` (the host logs it and runs nothing). A listen through or onto a union is one plan holding each member's traversal (`members`), judged once: it fires when one member's does, a record of another member's type being that member's to decide; it is undecided when one member cannot tell; it skips when every member does, by a filter when one member's record types matched, else by type, naming every member's. Held by listen-fire's Rust (crates/movement-engine/src/listen_judge.rs, judge_arrival), the engine's TypeScript (judgeArrival, through the wasm) and the hosted product. A read on through a record a field holds (`c.Current.Stage`) reads that field of the landing, then the member of what it holds; a record absent reads its members absent. The checker has the listen test a record present before it reads through it (`exists(c.Current) AND c.Current.Stage == …`), and an operand of AND or OR is read only when the operands before it leave the answer open, so a read the test guards is never read on an absent record. A record may name the fields its module could not read (`unknown`): a part of the filter reading one is undecided, whatever `fields` holds for it, never read as absent; AND, OR and NOT are three-valued, so an OR one side holds holds and an AND one side fails fails, in either order; a hop that fails still decides. A filter may call a pure function: a standard library one is evaluated; a host function, named by its catalog key (`@lf-platform/team/isMember`), is the host's to answer. The plan puts every term that asks no host first in each AND and OR, and the taken part is read before the checked part's host terms, so a local term that decides the verdict asks nothing. A case's `answers` are what the host answered, each the question (`plugin`, `args`) with its `value`, or `unreachable` and why. A host function no answer is given for makes the verdict `{asks: [{plugin, args}]}`: the first question the judge reached, asked only once every term before it passed; the host answers it and judges again. One the host could not answer is `{undecided: reason, unreachable: plugin}`, kept unjudged and retried.",
   "catalog": {
     "adapters": {
       "chat": {
@@ -717,10 +717,83 @@
             }
           }
         }
+      },
+      "talk": {
+        "canFire": false,
+        "constructionArgs": [],
+        "schemas": {
+          "": {
+            "positions": {
+              "Message": {
+                "properties": {
+                  "Id": "text",
+                  "Channel": "text",
+                  "Name": "text",
+                  "User Email": {
+                    "kind": "branded",
+                    "of": "text",
+                    "brands": [
+                      "claim:email/address"
+                    ]
+                  }
+                },
+                "edges": {},
+                "propertyCapabilities": {
+                  "Channel": {
+                    "filterOperators": [
+                      "eq"
+                    ]
+                  }
+                }
+              }
+            },
+            "collections": {
+              "Messages": {
+                "target": "Message",
+                "listenable": true,
+                "identity": "Id",
+                "delivery": "connection",
+                "capability": {
+                  "filter": "native",
+                  "supportsLimit": false
+                }
+              }
+            },
+            "writableRoots": {}
+          }
+        }
       }
     },
     "credentials": {},
-    "plugins": {}
+    "plugins": {
+      "@lf-platform/team/isMember": {
+        "args": [
+          "e"
+        ],
+        "priced": false,
+        "requiredArgs": [
+          "e"
+        ],
+        "argTypes": {
+          "e": {
+            "kind": "branded",
+            "of": "text",
+            "brands": [
+              "claim:email/address"
+            ]
+          }
+        },
+        "effects": {},
+        "output": {
+          "kind": "value",
+          "type": "boolean"
+        },
+        "package": "@lf-platform/team",
+        "name": "isMember",
+        "pure": true,
+        "maxAgeSeconds": 300
+      }
+    }
   },
   "plans": {
     "lunch": {
@@ -1974,6 +2047,159 @@
         ],
         "movement": "noted"
       }
+    },
+    "insiders": {
+      "source": "import { talk as talk_module } from adapters; talk = connect talk_module\nimport { `@lf-platform/team` as team } from plugins\nfunction greet(m: <talk-[:Message]->>) { return m.Name }\nlisten to talk-[m:Messages WHERE m.Channel == \"C1\" AND m.Name != \"bot\" AND team.isMember(m.`User Email`)]-> fire greet\n",
+      "plan": {
+        "adapter": "talk",
+        "connection": "talk",
+        "hops": [
+          {
+            "alias": "m",
+            "asksHost": true,
+            "checked": {
+              "op": "and",
+              "operands": [
+                {
+                  "left": {
+                    "fieldOnly": true,
+                    "propertyTypeId": "Name",
+                    "type": "edge_property"
+                  },
+                  "op": "neq",
+                  "right": {
+                    "type": "static",
+                    "value": "bot"
+                  },
+                  "type": "compare"
+                },
+                {
+                  "args": [
+                    {
+                      "fieldOnly": true,
+                      "propertyTypeId": "User Email",
+                      "type": "edge_property"
+                    }
+                  ],
+                  "fn": "@lf-platform/team/isMember",
+                  "type": "function"
+                }
+              ],
+              "type": "logical"
+            },
+            "edge": "Messages",
+            "from": "",
+            "judged": "arrival",
+            "taken": {
+              "left": {
+                "fieldOnly": true,
+                "propertyTypeId": "Channel",
+                "type": "edge_property"
+              },
+              "op": "eq",
+              "right": {
+                "type": "static",
+                "value": "C1"
+              },
+              "type": "compare"
+            },
+            "to": "Message"
+          }
+        ],
+        "movement": "greet"
+      }
+    },
+    "insider_or_ann": {
+      "source": "import { talk as talk_module } from adapters; talk = connect talk_module\nimport { `@lf-platform/team` as team } from plugins\nfunction greet(m: <talk-[:Message]->>) { return m.Name }\nlisten to talk-[m:Messages WHERE m.Name == \"ann\" OR team.isMember(m.`User Email`)]-> fire greet\n",
+      "plan": {
+        "adapter": "talk",
+        "connection": "talk",
+        "hops": [
+          {
+            "alias": "m",
+            "asksHost": true,
+            "checked": {
+              "op": "or",
+              "operands": [
+                {
+                  "left": {
+                    "fieldOnly": true,
+                    "propertyTypeId": "Name",
+                    "type": "edge_property"
+                  },
+                  "op": "eq",
+                  "right": {
+                    "type": "static",
+                    "value": "ann"
+                  },
+                  "type": "compare"
+                },
+                {
+                  "args": [
+                    {
+                      "fieldOnly": true,
+                      "propertyTypeId": "User Email",
+                      "type": "edge_property"
+                    }
+                  ],
+                  "fn": "@lf-platform/team/isMember",
+                  "type": "function"
+                }
+              ],
+              "type": "logical"
+            },
+            "edge": "Messages",
+            "from": "",
+            "judged": "arrival",
+            "to": "Message"
+          }
+        ],
+        "movement": "greet"
+      }
+    },
+    "domain": {
+      "source": "import { talk as talk_module } from adapters; talk = connect talk_module\nimport { `@lf-platform/team` as team } from plugins\nfunction greet(m: <talk-[:Message]->>) { return m.Name }\nlisten to talk-[m:Messages WHERE Text.regexExtract(m.`User Email`, \"@([^@]+)$\", 1) == \"acme.com\"]-> fire greet\n",
+      "plan": {
+        "adapter": "talk",
+        "connection": "talk",
+        "hops": [
+          {
+            "alias": "m",
+            "checked": {
+              "left": {
+                "args": [
+                  {
+                    "fieldOnly": true,
+                    "propertyTypeId": "User Email",
+                    "type": "edge_property"
+                  },
+                  {
+                    "type": "static",
+                    "value": "@([^@]+)$"
+                  },
+                  {
+                    "type": "static",
+                    "value": 1
+                  }
+                ],
+                "fn": "text.regex_extract",
+                "type": "function"
+              },
+              "op": "eq",
+              "right": {
+                "type": "static",
+                "value": "acme.com"
+              },
+              "type": "compare"
+            },
+            "edge": "Messages",
+            "from": "",
+            "judged": "arrival",
+            "to": "Message"
+          }
+        ],
+        "movement": "greet"
+      }
     }
   },
   "cases": [
@@ -2056,6 +2282,19 @@
     {"case": "a change on a connection positioned at its base, from another table, skips at Tables", "plan": "positioned", "arrival": {"edge": "Changes", "key": "tblDEALS", "landing": {"recordType": "Change", "fields": {"Id": "c1", "Kind": "created"}}, "parents": [{"recordType": "Base", "fields": {"Name": "Hiring"}}, {"recordType": "Table", "fields": {"Name": "Roles"}}]}, "now": "2026-10-31T10:00:00Z", "verdict": {"skips": 0}},
     {"case": "a change on a connection positioned at its base carrying its table first fires the same", "plan": "positioned", "arrival": {"edge": "Changes", "key": "tblDEALS", "landing": {"recordType": "Change", "fields": {"Id": "c1", "Kind": "created"}}, "parents": [{"recordType": "Table", "fields": {"Name": "Deals"}}, {"recordType": "Base", "fields": {"Name": "Hiring"}}]}, "now": "2026-10-31T10:00:00Z", "verdict": {"fires": true}},
     {"case": "a change carrying its table before its base is judged the same: each hop reads the record of its own type", "plan": "carried", "arrival": {"edge": "Changes", "key": "tblDEALS", "landing": {"recordType": "Change", "fields": {"Id": "c1", "Kind": "created"}}, "parents": [{"recordType": "Table", "fields": {"Name": "Deals"}}, {"recordType": "Base", "fields": {"Name": "Hiring"}}]}, "now": "2026-10-31T10:00:00Z", "verdict": {"fires": true}},
-    {"case": "a change carrying its table before its base, from another base, skips at Bases", "plan": "carried", "arrival": {"edge": "Changes", "key": "tblDEALS", "landing": {"recordType": "Change", "fields": {"Id": "c1", "Kind": "created"}}, "parents": [{"recordType": "Table", "fields": {"Name": "Deals"}}, {"recordType": "Base", "fields": {"Name": "Finance"}}]}, "now": "2026-10-31T10:00:00Z", "verdict": {"skips": 0}}
+    {"case": "a change carrying its table before its base, from another base, skips at Bases", "plan": "carried", "arrival": {"edge": "Changes", "key": "tblDEALS", "landing": {"recordType": "Change", "fields": {"Id": "c1", "Kind": "created"}}, "parents": [{"recordType": "Table", "fields": {"Name": "Deals"}}, {"recordType": "Base", "fields": {"Name": "Finance"}}]}, "now": "2026-10-31T10:00:00Z", "verdict": {"skips": 0}},
+    {"case": "a host function's filter whose local term fails asks the host nothing", "plan": "insiders", "arrival": {"edge": "Messages", "landing": {"recordType": "Message", "fields": {"Id": "m1", "Channel": "C1", "Name": "bot", "User Email": "a@acme.com"}}}, "now": "2026-11-13T10:00:00Z", "verdict": {"skips": 0}},
+    {"case": "a host function's filter whose taken term fails asks nothing, though its module did not apply it", "plan": "insiders", "arrival": {"edge": "Messages", "landing": {"recordType": "Message", "fields": {"Id": "m1", "Channel": "C2", "Name": "ann", "User Email": "a@acme.com"}}}, "now": "2026-11-13T10:00:00Z", "verdict": {"skips": 0}},
+    {"case": "a host function's filter whose local terms pass asks the host, the function by its catalog key", "plan": "insiders", "arrival": {"edge": "Messages", "landing": {"recordType": "Message", "fields": {"Id": "m1", "Channel": "C1", "Name": "ann", "User Email": "a@acme.com"}}}, "now": "2026-11-13T10:00:00Z", "verdict": {"asks": [{"plugin": "@lf-platform/team/isMember", "args": ["a@acme.com"]}]}},
+    {"case": "the module applied the taken part, so the judge asks once the rest passes", "plan": "insiders", "arrival": {"edge": "Messages", "landing": {"recordType": "Message", "fields": {"Id": "m1", "Channel": "C2", "Name": "ann", "User Email": "a@acme.com"}}, "takenApplied": true}, "now": "2026-11-13T10:00:00Z", "verdict": {"asks": [{"plugin": "@lf-platform/team/isMember", "args": ["a@acme.com"]}]}},
+    {"case": "the host's true answer fires it", "plan": "insiders", "arrival": {"edge": "Messages", "landing": {"recordType": "Message", "fields": {"Id": "m1", "Channel": "C1", "Name": "ann", "User Email": "a@acme.com"}}}, "answers": [{"plugin": "@lf-platform/team/isMember", "args": ["a@acme.com"], "value": true}], "now": "2026-11-13T10:00:00Z", "verdict": {"fires": true}},
+    {"case": "the host's false answer skips it", "plan": "insiders", "arrival": {"edge": "Messages", "landing": {"recordType": "Message", "fields": {"Id": "m1", "Channel": "C1", "Name": "ann", "User Email": "a@acme.com"}}}, "answers": [{"plugin": "@lf-platform/team/isMember", "args": ["a@acme.com"], "value": false}], "now": "2026-11-13T10:00:00Z", "verdict": {"skips": 0}},
+    {"case": "an answer for another argument is no answer: the judge asks", "plan": "insiders", "arrival": {"edge": "Messages", "landing": {"recordType": "Message", "fields": {"Id": "m1", "Channel": "C1", "Name": "ann", "User Email": "a@acme.com"}}}, "answers": [{"plugin": "@lf-platform/team/isMember", "args": ["b@acme.com"], "value": true}], "now": "2026-11-13T10:00:00Z", "verdict": {"asks": [{"plugin": "@lf-platform/team/isMember", "args": ["a@acme.com"]}]}},
+    {"case": "a host that could not answer leaves the arrival undecided, naming the function", "plan": "insiders", "arrival": {"edge": "Messages", "landing": {"recordType": "Message", "fields": {"Id": "m1", "Channel": "C1", "Name": "ann", "User Email": "a@acme.com"}}}, "answers": [{"plugin": "@lf-platform/team/isMember", "args": ["a@acme.com"], "unreachable": "connection refused"}], "now": "2026-11-13T10:00:00Z", "verdict": {"undecided": "the host could not answer @lf-platform/team/isMember (connection refused), which this listen's filter on Messages calls", "unreachable": "@lf-platform/team/isMember"}},
+    {"case": "an OR whose local side holds fires without asking", "plan": "insider_or_ann", "arrival": {"edge": "Messages", "landing": {"recordType": "Message", "fields": {"Id": "m1", "Channel": "C1", "Name": "ann", "User Email": "a@acme.com"}}}, "now": "2026-11-13T10:00:00Z", "verdict": {"fires": true}},
+    {"case": "an OR whose local side fails asks the host", "plan": "insider_or_ann", "arrival": {"edge": "Messages", "landing": {"recordType": "Message", "fields": {"Id": "m1", "Channel": "C1", "Name": "bob", "User Email": "a@acme.com"}}}, "now": "2026-11-13T10:00:00Z", "verdict": {"asks": [{"plugin": "@lf-platform/team/isMember", "args": ["a@acme.com"]}]}},
+    {"case": "an OR whose local side fails fires on the host's true answer", "plan": "insider_or_ann", "arrival": {"edge": "Messages", "landing": {"recordType": "Message", "fields": {"Id": "m1", "Channel": "C1", "Name": "bob", "User Email": "a@acme.com"}}}, "answers": [{"plugin": "@lf-platform/team/isMember", "args": ["a@acme.com"], "value": true}], "now": "2026-11-13T10:00:00Z", "verdict": {"fires": true}},
+    {"case": "a standard library call in a filter is evaluated: the sender's domain matches", "plan": "domain", "arrival": {"edge": "Messages", "landing": {"recordType": "Message", "fields": {"Id": "m1", "Channel": "C1", "Name": "ann", "User Email": "a@acme.com"}}}, "now": "2026-11-13T10:00:00Z", "verdict": {"fires": true}},
+    {"case": "a standard library call in a filter is evaluated: a domain that only starts the same does not", "plan": "domain", "arrival": {"edge": "Messages", "landing": {"recordType": "Message", "fields": {"Id": "m1", "Channel": "C1", "Name": "ann", "User Email": "a@acme.com.evil.com"}}}, "now": "2026-11-13T10:00:00Z", "verdict": {"skips": 0}}
   ]
 }

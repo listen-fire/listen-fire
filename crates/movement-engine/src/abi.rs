@@ -301,19 +301,41 @@ fn standing_json(pin: &str) -> serde_json::Value {
     json!({ "standing": name, "message": refusal_message(pin, LANGUAGE_VERSION, standing) })
 }
 
-/// `judge_arrival({plan, arrival, nowMs})`: whether the arrival fires the
-/// listen (crate::listen_judge) — `{"fires":true}`, `{"skips":n}` (with
-/// `"reason"` when a record's type, not a filter, skipped it) or
-/// `{"undecided":"…"}` — and 0; `{error}` and 1 for an input that does not
-/// read.
+/// `judge_arrival({plan, arrival, nowMs, answers?})`: whether the arrival
+/// fires the listen (crate::listen_judge), `answers` what the host answered
+/// the questions it was asked — `{"fires":true}`, `{"skips":n}` (with
+/// `"reason"` when a record's type, not a filter, skipped it),
+/// `{"undecided":"…"}` (with `"unreachable"` naming a host function the host
+/// could not answer) or `{"asks":[{plugin, args}]}` — and 0; `{error}` and 1
+/// for an input that does not read.
 ///
 /// # Safety
 /// The input range must be readable; the out slots writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn judge_arrival(input_ptr: *const u8, input_len: u32, out_ptr_ptr: *mut usize, out_len_ptr: *mut usize) -> u32 {
     install_panic_hook();
-    let (status, answer) = match unsafe { utf8(input_ptr, input_len, "the input") }.and_then(judgement_json) {
-        Ok(verdict) => (OK, verdict),
+    let judged = unsafe { utf8(input_ptr, input_len, "the input") }.and_then(|input| explained_json(input, "judge_arrival"));
+    let (status, answer) = match judged {
+        Ok(explained) => (OK, serde_json::to_value(explained.verdict).expect("a verdict is always JSON")),
+        Err(error) => (ERROR, json!({ "error": error })),
+    };
+    unsafe { write_out(to_sorted_json(&answer), out_ptr_ptr, out_len_ptr) };
+    status
+}
+
+/// `explain_arrival({plan, arrival, nowMs, answers?})`: `judge_arrival`'s
+/// verdict with the term of the filter that skipped the arrival, as
+/// `{verdict, firstFailed?}`, and 0; `{error}` and 1 for an input that does
+/// not read. What a host says when asked why a listen did not fire.
+///
+/// # Safety
+/// The input range must be readable; the out slots writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn explain_arrival(input_ptr: *const u8, input_len: u32, out_ptr_ptr: *mut usize, out_len_ptr: *mut usize) -> u32 {
+    install_panic_hook();
+    let explained = unsafe { utf8(input_ptr, input_len, "the input") }.and_then(|input| explained_json(input, "explain_arrival"));
+    let (status, answer) = match explained {
+        Ok(explained) => (OK, serde_json::to_value(explained).expect("an explanation is always JSON")),
         Err(error) => (ERROR, json!({ "error": error })),
     };
     unsafe { write_out(to_sorted_json(&answer), out_ptr_ptr, out_len_ptr) };
@@ -429,18 +451,21 @@ fn misfits_json(input: &str) -> Result<serde_json::Value, serde_json::Value> {
     Ok(json!({ "node": declared.name, "misfits": misfits }))
 }
 
-fn judgement_json(input: &str) -> Result<serde_json::Value, serde_json::Value> {
+/// The judgement `export` (`judge_arrival` or `explain_arrival`) is asked
+/// for, explained.
+fn explained_json(input: &str, export: &str) -> Result<crate::listen_judge::Explanation, serde_json::Value> {
     #[derive(serde::Deserialize)]
     #[serde(rename_all = "camelCase", deny_unknown_fields)]
-    struct Judging {
+    struct Asked {
         plan: movement_parser::listen_plan::ListenPlan,
         arrival: crate::listen_judge::PlanArrival,
         now_ms: f64,
+        #[serde(default)]
+        answers: crate::listen_judge::PluginAnswers,
     }
-    let judging: Judging =
-        serde_json::from_str(input).map_err(|e| json!({ "message": format!("judge_arrival's input is not a plan, an arrival and nowMs: {e}") }))?;
-    let verdict = crate::listen_judge::judge_arrival(&judging.plan, &judging.arrival, judging.now_ms);
-    Ok(serde_json::to_value(verdict).expect("a verdict is always JSON"))
+    let asked: Asked = serde_json::from_str(input).map_err(|e| json!({ "message": format!("{export}'s input is not a plan, an arrival, nowMs and the answers held: {e}") }))?;
+    let judging = crate::listen_judge::Judging { now_ms: asked.now_ms, answers: &asked.answers };
+    Ok(crate::listen_judge::explain_arrival(&asked.plan, &asked.arrival, judging))
 }
 
 #[cfg(test)]
@@ -591,7 +616,34 @@ mod tests {
         assert_eq!(judge(&judging("standup")), (OK, json!({ "skips": 0 })));
         let (status, answer) = judge(r#"{"plan":{},"arrival":{},"nowMs":0}"#);
         assert_eq!(status, ERROR);
-        assert!(answer["error"]["message"].as_str().unwrap().starts_with("judge_arrival's input is not a plan, an arrival and nowMs: "), "{answer}");
+        assert!(answer["error"]["message"].as_str().unwrap().starts_with("judge_arrival's input is not a plan, an arrival, nowMs and the answers held: "), "{answer}");
+    }
+
+    #[test]
+    fn the_judge_reads_the_answers_it_is_handed_and_explains_a_skip() {
+        let call = |export: unsafe extern "C" fn(*const u8, u32, *mut usize, *mut usize) -> u32, text: &str| {
+            let (ptr, len) = input(text);
+            let (mut out_ptr, mut out_len) = (0usize, 0usize);
+            let status = unsafe { export(ptr, len, &mut out_ptr, &mut out_len) };
+            unsafe { dealloc(ptr, len) };
+            (status, output(out_ptr, out_len))
+        };
+        let member = json!({ "type": "function", "fn": "@lf-platform/team/isMember", "args": [{ "type": "edge_property", "propertyTypeId": "From", "fieldOnly": true }] });
+        let plan = json!({
+            "movement": "f", "connection": "chat", "adapter": "chat",
+            "hops": [{ "edge": "Messages", "from": "", "to": "Message", "alias": "m", "judged": "arrival", "asksHost": true, "checked": member }]
+        });
+        let arrival = json!({ "edge": "Messages", "landing": { "recordType": "Message", "fields": { "From": "a@acme.com" } } });
+        let asked = |answers: Json| json!({ "plan": plan, "arrival": arrival, "nowMs": 0, "answers": answers }).to_string();
+        let question = json!({ "plugin": "@lf-platform/team/isMember", "args": ["a@acme.com"] });
+        assert_eq!(call(judge_arrival, &asked(json!([]))), (OK, json!({ "asks": [question] })));
+        let no = json!([{ "plugin": "@lf-platform/team/isMember", "args": ["a@acme.com"], "value": false }]);
+        assert_eq!(call(judge_arrival, &asked(no.clone())), (OK, json!({ "skips": 0 })));
+        assert_eq!(call(explain_arrival, &asked(no)), (OK, json!({ "verdict": { "skips": 0 }, "firstFailed": "@lf-platform/team/isMember(m.From)" })));
+        let both = json!([{ "plugin": "@lf-platform/team/isMember", "args": ["a@acme.com"], "value": true, "unreachable": "down" }]);
+        let (status, answer) = call(judge_arrival, &asked(both));
+        assert_eq!(status, ERROR);
+        assert!(answer["error"]["message"].as_str().unwrap().contains("never both or neither"), "{answer}");
     }
 
     #[test]
