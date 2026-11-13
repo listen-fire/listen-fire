@@ -125,7 +125,10 @@ jobs:
             exit 1
           }
       # Each artifact's download size in view: the parser's ships to every
-      # browser, the engine's to the API only.
+      # browser, the engine's to the API only. The engine's warning line sits
+      # about 256 KiB under its fail line, so the warning means the budget is
+      # close (raised 2026-11-13 at 1,574,175 bytes; it grew about 65 KB in the
+      # fortnight before).
       - name: Size budgets
         run: |
           budget() {
@@ -142,4 +145,4 @@ jobs:
             fi
           }
           budget movement_parser.wasm 409600 614400
-          budget movement.wasm 1048576 1572864
+          budget movement.wasm 1835008 2097152
