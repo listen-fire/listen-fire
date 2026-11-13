@@ -49,8 +49,8 @@
 #![cfg_attr(not(feature = "serve"), allow(dead_code))]
 
 mod actor;
-#[cfg(feature = "anthropic")]
 mod address;
+#[cfg(feature = "anthropic")]
 mod anthropic;
 mod arrivals;
 mod backend;
