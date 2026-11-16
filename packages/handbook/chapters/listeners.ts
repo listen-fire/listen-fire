@@ -86,7 +86,7 @@ function intake(m: <slack-[:Message]->>) {
   write m-[:Reactions]-> { Emoji: "eyes" }
 }
 
-listen to slack-[m:Messages WHERE m.Channel == "C0DEALS" AND m.\`User Email\` != null AND team.isMember(m.\`User Email\`)]-> fire intake
+listen to slack-[ch:Channels WHERE ch.Name == "dealflow"]->-[m:Messages WHERE m.\`User Email\` != null AND team.isMember(m.\`User Email\`)]-> fire intake
 \`\`\`
 
 - Which functions exist is the host's choice. The platform's \`@lf-platform/team\` offers \`isMember(claim)\` and \`userFor(claim)\`; \`listen-fire\` alone offers none.
