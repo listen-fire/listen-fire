@@ -5,8 +5,6 @@
 // summary/transcript as TEXT `#resources`. Source-only: no writes.
 
 import type {
-  ActorCandidate,
-  ActorIdentity,
   Adapter,
   EdgesFromResult,
   GetFieldValueInput,
@@ -15,7 +13,6 @@ import type {
 } from 'movement-engine/public/adapter';
 import type { SchemaEntryPoint, SchemaFieldDescriptor, SchemaTypeDescriptor, SourcePosition } from 'movement-engine/public/catalog';
 import type { Expression } from 'engine-contracts/expression/expression';
-import type { TriggerEvent } from 'engine-contracts';
 
 import {
   ADAPTER_META_TYPE_ID,
@@ -23,7 +20,6 @@ import {
   makeUnstablePosition,
   positionData,
 } from 'movement-engine/public/catalog';
-import { firedActor } from 'module-kit';
 import { BaseAdapter } from 'module-kit/adapter/base';
 import { uniformWalk } from 'module-kit/adapter/hop';
 import type { GranolaClient } from './api_client';
@@ -318,18 +314,6 @@ export class GranolaAdapter extends BaseAdapter implements Adapter {
       }),
     }));
   }
-
-  // ── 4. Actor — the note's owner is its originator ──────────────────────
-
-  async getActorCandidates(input: { event: TriggerEvent }): Promise<ActorCandidate[]> {
-    const actor = firedActor(input.event);
-    return actor ? [{ identity: actor, source: 'originator' }] : [];
-  }
-
-  async extractActor(input: { event: TriggerEvent }): Promise<ActorIdentity | null> {
-    return firedActor(input.event);
-  }
-
 }
 
 /**
@@ -377,7 +361,7 @@ const NOTE_FIELDS: SchemaFieldDescriptor[] = [
   { fieldId: 'organizer_email', displayName: 'Organizer Email', kind: 'string', writable: false, required: false, description: 'The meeting organizer.' },
   { fieldId: 'folder_names', displayName: 'Folder Names', kind: 'string', writable: false, required: false, description: 'The Granola folders this note belongs to.' },
   { fieldId: GRANOLA_FOLDERS_FIELD_ID, displayName: GRANOLA_FOLDERS_FIELD, kind: 'string', cardinality: 'many', writable: false, required: false, capability: { filterOperators: ['contains'] }, description: 'The folders this note is in, by name, lowercased: `n.Folders CONTAINS "deals"`.' },
-  { fieldId: 'note_owner_email', displayName: 'Note Owner Email', kind: 'string', writable: false, required: true, description: 'The Granola user who owns the note.' },
+  { fieldId: 'note_owner_email', displayName: 'Note Owner Email', kind: 'string', brands: ['claim:email/address'], writable: false, required: true, description: 'The Granola user who owns the note, lower case. A claim Granola vouches for: the address is its own answer to the connection\'s credential, and a plugin function such as a team check accepts it where it refuses plain text.' },
   { fieldId: 'note_owner_name', displayName: 'Note Owner Name', kind: 'string', writable: false, required: false },
   { fieldId: 'created_at', displayName: 'Created At', kind: 'date', writable: false, required: true },
   { fieldId: 'updated_at', displayName: 'Updated At', kind: 'date', writable: false, required: true },

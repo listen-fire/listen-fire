@@ -16,11 +16,10 @@ import { createHash } from 'node:crypto';
 
 import { z } from 'zod';
 
-import type { ActorIdentity, Arrival, AwaitLanding } from 'engine-contracts';
+import type { Arrival, AwaitLanding } from 'engine-contracts';
 import type { SchemaEntryPoint, SchemaFieldDescriptor, SchemaTypeDescriptor, SchemaReferenceDescriptor } from 'movement-engine/public/catalog';
 
 import { extractAttioValue, type AttioAttribute } from './attributes';
-import { ATTIO_ADAPTER_TYPE } from './types';
 
 /** The edge every object's records hang their changes off. */
 export const ATTIO_CHANGES_EDGE = 'Changes';
@@ -108,6 +107,10 @@ export function describeChange(object: ChangedObject, attributes: readonly Attio
         ? field('Field', 'enum', { enumValues: titles, description: `On an update, the attribute that changed, by its title (\`Stage\`).` })
         : field('Field', 'string', { description: 'On an update, the attribute that changed, by its title.' }),
       field('Record', 'string', { required: true, description: `The ${noun}'s record id.` }),
+      field('Changed By', 'string', {
+        brands: [ATTIO_USER_CLAIM],
+        description: `The workspace member who made the change, by their Attio member id; null for a change by an api token or Attio itself. A claim Attio vouches for: a plugin function that accepts \`${ATTIO_USER_CLAIM}\` takes it where it refuses plain text.`,
+      }),
     ],
     references: [
       {
@@ -125,23 +128,17 @@ export function describeChange(object: ChangedObject, attributes: readonly Attio
 
 const attioActor = z.object({ id: z.string().nullable(), type: z.string() }).optional();
 
-/** Where a change keeps who made it, as Attio's webhook names them
- *  (`{ type, id }`, `type` Attio's own: `workspace-member`, `api-token`,
- *  `system`): beside its named fields. The arrival's `actor` carries the id
- *  alone; the type stays here, for the one reader that gates on it (whether
- *  the actor is a workspace member whose email can be fetched). */
-export const ATTIO_CHANGE_ACTOR = 'actor';
+/** The claim Attio vouches for on the member who made a change: their
+ *  workspace member id, `claim:attio/user_id`. */
+export const ATTIO_USER_CLAIM = 'claim:attio/user_id';
 
-/** Who made a change, as the door names them on its arrival: the id of the
- *  actor Attio's webhook names, whatever its type. Pure parse — a bare id
- *  with no resolved email maps to no Listen-Fire user (`scheme: 'opaque'`);
- *  the candidate path resolves a workspace member's email separately. None
- *  when the webhook names no actor id. `proven`: the host admits only a
- *  delivery signed with the webhook's secret, so the id is Attio's own. */
-function changeActorOf(actor: { id: string | null } | undefined): ActorIdentity | undefined {
-  const id = actor?.id;
-  if (id === undefined || id === null || id.length === 0) return undefined;
-  return { identifier: id, scheme: 'opaque', adapterType: ATTIO_ADAPTER_TYPE, label: id, proven: true };
+/** Who made a change, as a claim: the id Attio's webhook names, when that
+ *  actor is a workspace member. The webhook is signed with the connection's
+ *  secret, so the id is Attio's own. An api token or the system made a change
+ *  without being a user, and a webhook that names no actor id says nobody:
+ *  none of those is a user id. */
+function changedByOf(actor: { type: string; id: string | null } | undefined): string | null {
+  return actor?.type === 'workspace-member' && actor.id !== null && actor.id.length > 0 ? actor.id : null;
 }
 
 /** One of a change's fields, by name, from what its position holds. */
@@ -213,9 +210,8 @@ export async function changeArrivals(raw: unknown, sources: ChangeSources): Prom
       Kind: kind,
       Record: recordId,
       ...(attribute !== undefined ? { Field: attribute.name } : {}),
-      ...(event.actor !== undefined ? { [ATTIO_CHANGE_ACTOR]: event.actor } : {}),
+      'Changed By': changedByOf(event.actor),
     };
-    const actor = changeActorOf(event.actor);
     arrivals.push({
       edge: ATTIO_CHANGES_EDGE,
       key: recordId,
@@ -223,7 +219,6 @@ export async function changeArrivals(raw: unknown, sources: ChangeSources): Prom
       landing: { recordId: identity, recordType: changeTypeName(object), fields },
       parents: [record === null ? null : recordLanding(object, recordId, record, attributes)],
       about: { recordType: object.name, externalId: recordId },
-      ...(actor !== undefined ? { actor } : {}),
       ...(occurredAt !== undefined ? { occurredAt } : {}),
     });
   }

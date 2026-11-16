@@ -1,5 +1,11 @@
 # @listen-fire/telegram
 
+## 0.14.0
+
+### Minor Changes
+
+- Claims: `Message` gains `Sender Email`: the address the sender bound by the link handshake, lower case, a `claim:email/address` Telegram vouches for; null for a sender who never linked, and unknown when the binding could not be read. The module no longer declares `getActorCandidates` or `extractActor`, and its arrivals carry no `actor`.
+
 ## 0.13.4
 
 ### Patch Changes

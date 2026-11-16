@@ -34,12 +34,12 @@ import type { SourcePosition } from 'movement-engine/public/catalog';
 import type { FileRef, WriteInput } from 'movement-engine/public/adapter';
 
 import { ADAPTER_META_TYPE_ID, isStablePosition, makeMetaPosition, makeStablePosition, makeUnstablePosition, positionRecordId } from 'movement-engine/public/catalog';
-import { arrivalTriggerOf } from 'movement-engine/public/inbound';
 import {
   AttioAdapter,
   ATTIO_LIST_ENTRY_TYPE_ID,
   ATTIO_LISTS_EDGE,
 } from '../adapter';
+import { ATTIO_MANIFEST } from '../manifest';
 import { testHost, testFileStore } from './fake_host';
 import { fileValue, RESOURCES_REFERENCE_FIELD_ID, type FileValue } from 'movement-engine/public/adapter';
 import { instanceSchemaFromDescriptors } from 'movement-engine/public/catalog';
@@ -915,12 +915,6 @@ describe('AttioAdapter — a record’s Changes', () => {
         if (record === undefined) throw Object.assign(new Error('Not found'), { status: 404 });
         return record;
       },
-      // The workspace member a change's actor names, for the run's acting user.
-      fetch: async ({ route }: { route: string }) => {
-        if (route === '/v2/workspace_members/m-1') return { data: { email_address: 'Ada@Fund.example' } };
-        if (route === '/v2/workspace_members/m-3') return { data: { email_address: null } };
-        throw Object.assign(new Error('Not found'), { status: 404 });
-      },
     } as unknown as Awaited<ReturnType<typeof import('../api_client').getAttioClient>>;
     (adapter as unknown as { getApiClient: () => Promise<typeof fakeClient> }).getApiClient = async () => fakeClient;
     return adapter;
@@ -978,51 +972,38 @@ describe('AttioAdapter — a record’s Changes', () => {
     expect(arrival!.landing.fields['Id']).toBe(arrival!.identity);
   });
 
-  it('the run a change fires reads the workspace member who made it as its actor', async () => {
+  it('the sender\'s claim is on the event, branded: the workspace member who made a change is its Changed By', async () => {
     const adapter = makeChangesAdapter('team-changes-actor', { 'deal-1': deal });
+    const changed = (await adapter.describe('DealChange'))?.fields.find((f) => f.displayName === 'Changed By');
+    expect(changed).toMatchObject({ kind: 'string', brands: ['claim:attio/user_id'], required: false, writable: false });
     const { arrivals } = await adapter.preprocessInbound({ raw: delivery({ event_type: 'record.updated', object_id: 'deals-uuid', record_id: 'deal-1', attribute_id: 'stage-attr' }) });
     const [arrival] = arrivals;
     if (arrival === undefined) throw new Error('no change arrived');
-    // The run's trigger, as the host hands it to a run its listen fired.
-    // The door names the actor on the arrival itself, by id.
-    expect(arrival.actor).toEqual({ identifier: 'm-1', scheme: 'opaque', adapterType: 'attio', label: 'm-1', proven: true });
-    const event = arrivalTriggerOf({ pipelineInputId: 'crm:stage', adapterType: 'attio', arrival, now: new Date() });
-    expect(await adapter.extractActor({ event })).toEqual({ identifier: 'm-1', scheme: 'opaque', adapterType: 'attio', label: 'm-1', proven: true });
-    expect(await adapter.getActorCandidates({ event })).toEqual([
-      { identity: { identifier: 'm-1', scheme: 'email', adapterType: 'attio', email: 'ada@fund.example' }, source: 'originator' },
-    ]);
+    expect(arrival.landing.fields['Changed By']).toBe('m-1');
+    expect(arrival).not.toHaveProperty('actor');
   });
 
-  it('a change whose webhook names no actor id arrives with none, and one by an api token names its id but resolves no email', async () => {
+  it('a change by no member says nobody: a webhook naming no actor, an api token, or the system gives no Changed By', async () => {
     const adapter = makeChangesAdapter('team-changes-no-actor', { 'deal-1': deal });
     const named = (actor: unknown) => ({
       webhook_id: 'wh-1',
       events: [{ event_type: 'record.updated', id: { workspace_id: 'w', object_id: 'deals-uuid', record_id: 'deal-1', attribute_id: 'stage-attr' }, ...(actor !== undefined ? { actor } : {}) }],
     });
-    const fired = async (actor: unknown) => {
+    const changedBy = async (actor: unknown) => {
       const [arrival] = (await adapter.preprocessInbound({ raw: named(actor) })).arrivals;
       if (arrival === undefined) throw new Error('no change arrived');
-      return { arrival, event: arrivalTriggerOf({ pipelineInputId: 'crm:stage', adapterType: 'attio', arrival, now: new Date() }) };
+      return arrival.landing.fields['Changed By'];
     };
-    const none = await fired(undefined);
-    expect(none.arrival).not.toHaveProperty('actor');
-    expect(await adapter.extractActor({ event: none.event })).toBeNull();
-    const token = await fired({ type: 'api-token', id: 'm-1' });
-    expect(token.arrival.actor).toEqual({ identifier: 'm-1', scheme: 'opaque', adapterType: 'attio', label: 'm-1', proven: true });
-    expect(await adapter.getActorCandidates({ event: token.event })).toEqual([]);
+    expect(await changedBy(undefined)).toBeNull();
+    expect(await changedBy({ type: 'workspace-member', id: null })).toBeNull();
+    expect(await changedBy({ type: 'api-token', id: 'm-1' })).toBeNull();
+    expect(await changedBy({ type: 'system', id: null })).toBeNull();
+    expect(await changedBy({ type: 'workspace-member', id: 'm-9' })).toBe('m-9');
   });
 
-  it('a workspace member whose lookup fails is not a member with no email: the lookup throws, and a member with no email gives none', async () => {
-    const adapter = makeChangesAdapter('team-changes-lookup-fails', { 'deal-1': deal });
-    const fired = async (actor: unknown) => {
-      const raw = { webhook_id: 'wh-1', events: [{ event_type: 'record.updated', id: { workspace_id: 'w', object_id: 'deals-uuid', record_id: 'deal-1', attribute_id: 'stage-attr' }, actor }] };
-      const [arrival] = (await adapter.preprocessInbound({ raw })).arrivals;
-      if (arrival === undefined) throw new Error('no change arrived');
-      return arrivalTriggerOf({ pipelineInputId: 'crm:stage', adapterType: 'attio', arrival, now: new Date() });
-    };
-    // m-2 is not found by the fake: Attio did not answer, so who they are is unknown.
-    await expect(adapter.getActorCandidates({ event: await fired({ type: 'workspace-member', id: 'm-2' }) })).rejects.toThrow('Not found');
-    expect(await adapter.getActorCandidates({ event: await fired({ type: 'workspace-member', id: 'm-3' }) })).toEqual([]);
+  it('declares no actor identity methods', () => {
+    expect(ATTIO_MANIFEST.methods).not.toContain('getActorCandidates');
+    expect(ATTIO_MANIFEST.methods).not.toContain('extractActor');
   });
 
   it('a redelivered change names the same identity; the attribute’s next value is another change', async () => {

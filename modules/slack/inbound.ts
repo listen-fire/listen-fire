@@ -27,7 +27,7 @@
 
 import { z } from 'zod';
 
-import type { ActorIdentity, Arrival, AwaitLanding } from 'engine-contracts';
+import type { Arrival, AwaitLanding } from 'engine-contracts';
 
 import { SLACK_ADAPTER_TYPE } from './types';
 
@@ -152,18 +152,6 @@ export const slackEnvelope = slackEnvelopeSchema;
 
 // ── Arrivals ─────────────────────────────────────────────────────────────
 
-/** Who acted on an arrival, as its delivery names them: the member's id,
- *  from a message's, a reaction's or a press's `user`. Pure parse — no email
- *  or name, which would take a `users.info` round trip, so the identity is
- *  `opaque` and resolves to no Listen-Fire user until the candidate path
- *  looks the member up. None when the delivery names no member (a bot's
- *  post). `proven`: the host admits only a delivery signed with the app's
- *  secret (`slack_v0`), so the member id is Slack's own. */
-function slackActorOf(userId: string | undefined): { actor: ActorIdentity } | Record<string, never> {
-  if (userId === undefined || userId.length === 0) return {};
-  return { actor: { identifier: userId, scheme: 'opaque', adapterType: SLACK_ADAPTER_TYPE, label: userId, proven: true } };
-}
-
 /** The key a message's listenable edges are waited on under, and its
  *  arrivals reported on: the message's channel and `ts`. A thread's `Replies`
  *  are keyed by its root message. It is also a message's record id. */
@@ -241,17 +229,50 @@ export function slackMentionsApp(message: { type?: unknown; text?: unknown }, bo
   return typeof message.text === 'string' && message.text.includes(`<@${botUserId}>`);
 }
 
+/** What a message or a reaction says of whoever sent it, for the two fields a
+ *  listen's WHERE reads: the address Slack holds for the member (lower case,
+ *  null when the profile has none), and whether the app itself sent it.
+ *  `emailKnown` is false when Slack could not be asked, so a filter reading
+ *  the address is not judged on a guess. */
+export interface SlackSenderClaims {
+  userEmail: string | null;
+  emailKnown: boolean;
+  sentByThisApp: boolean;
+}
+
+/** Whether the app itself sent something: as its bot user, or as its bot (a
+ *  `bot_message` names no user). Slack may name neither, and a sender nobody
+ *  can tie to the app is not the app's: a person's message is never true. */
+export function slackSentByThisApp(sender: Readonly<Record<string, unknown>>, app: { botUserId: string | null; botId: string | null }): boolean {
+  return (app.botUserId !== null && sender.user === app.botUserId) || (app.botId !== null && sender.bot_id === app.botId);
+}
+
+/** The sender's claims, from the lookups the module already makes. */
+export async function slackSenderClaims(sender: Readonly<Record<string, unknown>>, lookups: Pick<SlackArrivalLookups, 'botUserId' | 'botId' | 'userEmail'>): Promise<SlackSenderClaims> {
+  const user = typeof sender.user === 'string' && sender.user.length > 0 ? sender.user : null;
+  const [botUserId, botId, member] = await Promise.all([lookups.botUserId(), lookups.botId(), user === null ? { email: null } : lookups.userEmail(user)]);
+  return { userEmail: member?.email ?? null, emailKnown: member !== null, sentByThisApp: slackSentByThisApp(sender, { botUserId, botId }) };
+}
+
+/** A sender's claims as the landing's fields, named as a listen's WHERE
+ *  compares them. */
+function senderFields(sender: SlackSenderClaims): Record<string, unknown> {
+  return { 'User Email': sender.userEmail, 'Sent By This App': sender.sentByThisApp };
+}
+
 /** A Slack message as a landing or a carried parent: its payload as Slack
  *  sent it (what a read of the record finds), with its channel, and its
  *  fields by the names a listen's WHERE compares. `Mentions App` is null and
- *  named `unknown` when the bot user could not be read, so a listen whose
- *  filter reads it is not judged on a guess: the host reports it, and judges
- *  every other listen as usual. */
-export function slackMessageRecord(input: { channel: string; message: Record<string, unknown>; botUserId: string | null }): AwaitLanding & { recordId: string } {
-  const { channel, message, botUserId } = input;
+ *  named `unknown` when the bot user could not be read, as is `User Email`
+ *  when the member could not be looked up, so a listen whose filter reads
+ *  either is not judged on a guess: the host reports it, and judges every
+ *  other listen as usual. */
+export function slackMessageRecord(input: { channel: string; message: Record<string, unknown>; botUserId: string | null; sender: SlackSenderClaims }): AwaitLanding & { recordId: string } {
+  const { channel, message, botUserId, sender } = input;
   const ts = typeof message.ts === 'string' ? message.ts : '';
   const recordId = slackMessageKey(channel, ts);
   const mentionsApp = slackMentionsApp(message, botUserId);
+  const unknown = [...(mentionsApp === null ? ['Mentions App'] : []), ...(sender.emailKnown ? [] : ['User Email'])];
   return {
     recordId,
     recordType: SLACK_MESSAGE_TYPE_NAME,
@@ -266,8 +287,9 @@ export function slackMessageRecord(input: { channel: string; message: Record<str
       [SLACK_MESSAGE_TIMESTAMP_ID]: isoInstantFromSlackTs(ts),
       Topic: slackTopicOfBlocks(message.blocks),
       'Mentions App': mentionsApp,
+      ...senderFields(sender),
     },
-    ...(mentionsApp === null ? { unknown: ['Mentions App'] } : {}),
+    ...(unknown.length > 0 ? { unknown } : {}),
   };
 }
 
@@ -287,10 +309,9 @@ export interface SlackArrivalLookups {
   channelName(channelId: string): Promise<string | null>;
   botUserId(): Promise<string | null>;
   botId(): Promise<string | null>;
-  /** The connection's `drop_own_messages`: a message the app itself posted is
-   *  no arrival. */
-  dropOwnMessages: boolean;
-  warn(message: string): void;
+  /** The address Slack holds for a member, lower case; its `email` null for a
+   *  member with none, and the whole answer null when Slack could not say. */
+  userEmail(userId: string): Promise<{ email: string | null } | null>;
   /** The messages that share a file (`files.info`'s `shares`): none for a
    *  file in no conversation, null when Slack could not say. */
   fileShares(fileId: string): Promise<SlackMessageAt[] | null>;
@@ -431,15 +452,19 @@ async function interactionArrival(press: z.infer<typeof slackBlockActionsSchema>
   };
   const key = slackMessageKey(channel, ts);
   const occurredAt = isoInstantFromSlackTs(at);
-  const message = pressed !== undefined ? slackMessageRecord({ channel, message: pressed, botUserId: await lookups.botUserId() }) : null;
+  const presser = await lookups.userEmail(id);
+  const message = pressed !== undefined ? slackMessageRecord({ channel, message: pressed, botUserId: await lookups.botUserId(), sender: await slackSenderClaims(pressed, lookups) }) : null;
   return {
     edge: SLACK_INTERACTIONS_EDGE_NAME,
     key,
     identity: press.trigger_id,
-    landing: { recordType: SLACK_INTERACTION_TYPE_NAME, fields: { ...fields, Id: press.trigger_id, At: occurredAt, [SLACK_PRESSED_AT_ID]: occurredAt } },
+    landing: {
+      recordType: SLACK_INTERACTION_TYPE_NAME,
+      fields: { ...fields, Id: press.trigger_id, At: occurredAt, [SLACK_PRESSED_AT_ID]: occurredAt, 'Pressed By Email': presser?.email ?? null },
+      ...(presser === null ? { unknown: ['Pressed By Email'] } : {}),
+    },
     parents: [slackChannelRecord(channel, await lookups.channelName(channel)), message],
     about: { recordType: SLACK_MESSAGE_TYPE_NAME, externalId: key },
-    ...slackActorOf(id),
     ...(occurredAt !== null ? { occurredAt } : {}),
   };
 }
@@ -468,6 +493,7 @@ async function messageReactionArrival(input: { event: z.infer<typeof slackInnerE
   const { channel } = message;
   const key = slackMessageKey(channel, message.ts);
   const occurredAt = isoInstantFromSlackTs(event.event_ts);
+  const sender = await slackSenderClaims(event, lookups);
   return {
     edge: SLACK_REACTIONS_EDGE_NAME,
     key,
@@ -481,25 +507,13 @@ async function messageReactionArrival(input: { event: z.infer<typeof slackInnerE
       recordType: SLACK_REACTION_TYPE_NAME,
       // `item` names the message, as a reaction's `Channel` and `Message`
       // read it: for a file's, the message sharing it, beside the file.
-      fields: { ...event, item: { ...event.item, channel, ts: message.ts }, Emoji: reaction, Channel: channel, Reactor: event.user ?? null },
+      fields: { ...event, item: { ...event.item, channel, ts: message.ts }, Emoji: reaction, Channel: channel, Reactor: event.user ?? null, ...senderFields(sender) },
+      ...(sender.emailKnown ? {} : { unknown: ['User Email'] }),
     },
     parents: [slackChannelRecord(channel, await lookups.channelName(channel))],
     about: { recordType: SLACK_MESSAGE_TYPE_NAME, externalId: key },
-    ...slackActorOf(event.user),
     ...(occurredAt !== null ? { occurredAt } : {}),
   };
-}
-
-/** Whether the app itself posted or reacted in `event`: as its bot user, or as
- *  its bot (a `bot_message` names no user). When Slack cannot say who the app is, nothing
- *  is dropped: a message that cannot be identified is a message. */
-async function postedByApp(event: z.infer<typeof slackInnerEventSchema>, botUserId: string | null, lookups: SlackArrivalLookups): Promise<boolean> {
-  const botId = await lookups.botId();
-  if (botUserId === null && botId === null) {
-    lookups.warn('drop_own_messages is on, but Slack did not say who the app is, so its own messages are delivered');
-    return false;
-  }
-  return (botUserId !== null && event.user === botUserId) || (botId !== null && event.bot_id === botId);
 }
 
 /** What one Events API event says arrived: a top-level message on its
@@ -508,12 +522,7 @@ async function postedByApp(event: z.infer<typeof slackInnerEventSchema>, botUser
  *  message that mentions the app comes twice, as a `message` and an
  *  `app_mention`, under the one identity, so the second is a repeat. */
 async function eventArrivals(event: z.infer<typeof slackInnerEventSchema>, lookups: SlackArrivalLookups): Promise<Arrival[]> {
-  if (event.type === 'reaction_added') {
-    // The app's own reaction is its own act, as its post is: a listen on
-    // Reactions whose run reacts would otherwise fire itself.
-    if (lookups.dropOwnMessages && (await postedByApp(event, await lookups.botUserId(), lookups))) return [];
-    return reactionArrival(event, lookups);
-  }
+  if (event.type === 'reaction_added') return reactionArrival(event, lookups);
   if (!isSlackMessageEventType(event.type) || event.channel === undefined) return [];
   const channel = event.channel;
   if (event.subtype === 'message_deleted') {
@@ -529,10 +538,9 @@ async function eventArrivals(event: z.infer<typeof slackInnerEventSchema>, looku
   // An edit or a deletion is hidden.
   if (event.hidden === true || event.ts === undefined) return [];
   const botUserId = await lookups.botUserId();
-  if (lookups.dropOwnMessages && (await postedByApp(event, botUserId, lookups))) return [];
-  const message = slackMessageRecord({ channel, message: { ...event }, botUserId });
+  const message = slackMessageRecord({ channel, message: { ...event }, botUserId, sender: await slackSenderClaims(event, lookups) });
   const occurredAt = isoInstantFromSlackTs(event.ts);
-  const when = { ...slackActorOf(event.user), ...(occurredAt !== null ? { occurredAt } : {}) };
+  const when = occurredAt !== null ? { occurredAt } : {};
   // A root message carries no `thread_ts`, or its own `ts` there. Each is
   // named by its record id, `channel:ts`: the name the same message has
   // when its channel's history or its thread is listed, so a message both

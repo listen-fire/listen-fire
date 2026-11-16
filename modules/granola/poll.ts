@@ -6,33 +6,14 @@
 // applies the taken filter itself over the note it fetched, so every arrival
 // says `takenApplied`.
 
-import type { ActorIdentity } from 'engine-contracts';
 import { holds, takenComparisons, type PollEdgeAnswer, type PollEdgeInput } from 'module-kit';
 
 import { noteHasContent, normalizeNote, type GranolaClient } from './api_client';
 import { noteFields } from './adapter';
-import { GRANOLA_ADAPTER_TYPE, GRANOLA_MEETINGS_COLLECTION, GRANOLA_NOTE_DISPLAY_NAME, type GranolaCheckpoint } from './types';
+import { GRANOLA_MEETINGS_COLLECTION, GRANOLA_NOTE_DISPLAY_NAME, type GranolaCheckpoint } from './types';
 
 /** An arrival that landed (the gone kind is never a poll's). */
 type Arrival = Extract<PollEdgeAnswer['arrivals'][number], { landing: unknown }>;
-
-/** A meeting's owner is its actor: who the note belongs to, by the address
- *  Granola holds. None when the note names no owner address. `proven`: the
- *  address is Granola's own answer to the connection's credential. */
-function noteActorOf(fields: Record<string, unknown>): { actor: ActorIdentity } | Record<string, never> {
-  const { note_owner_email: email, note_owner_name: name } = fields;
-  if (typeof email !== 'string' || email === '') return {};
-  return {
-    actor: {
-      identifier: email,
-      scheme: 'email',
-      adapterType: GRANOLA_ADAPTER_TYPE,
-      email,
-      ...(typeof name === 'string' && name !== '' ? { name } : {}),
-      proven: true,
-    },
-  };
-}
 
 function parseCheckpoint(cursor: unknown): GranolaCheckpoint | undefined {
   if (typeof cursor !== 'object' || cursor === null) return undefined;
@@ -73,7 +54,6 @@ export async function pollGranola(client: GranolaClient, input: PollEdgeInput): 
       version: note.updated_at,
       landing: { recordId: note.id, recordType: GRANOLA_NOTE_DISPLAY_NAME, fields },
       occurredAt: note.updated_at,
-      ...noteActorOf(fields),
       ...(taken !== undefined ? { takenApplied: true } : {}),
     });
   }

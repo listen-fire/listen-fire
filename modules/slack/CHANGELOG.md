@@ -1,5 +1,11 @@
 # @listen-fire/slack
 
+## 0.14.0
+
+### Minor Changes
+
+- Claims: `Message` and `Reaction` gain `User Email` (the sender's profile address, lower case, a `claim:email/address` Slack vouches for) and `Sent By This App` (true when Slack names the app's bot user or bot as the sender, false when it names neither). `Interaction` (a button press) gains `Pressed By Email`, the presser's profile address as a `claim:email/address`, unknown when the lookup fails. The `drop_own_messages` setting is gone: a listen that should not hear the app's own posts filters on `NOT m.`Sent By This App``. The module no longer declares `getActorCandidates`, `extractActor` or the registered sender gate (`inboundRequiresRegisteredActor`).
+
 ## 0.13.5
 
 ### Patch Changes

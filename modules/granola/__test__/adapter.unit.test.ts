@@ -4,7 +4,6 @@
 // ordering). No network; the API client is faked.
 
 import { RESOURCES_REFERENCE_FIELD_ID } from 'movement-engine/public/adapter';
-import { arrivalTriggerOf } from 'movement-engine/public/inbound';
 import {
   ADAPTER_META_TYPE_ID,
   makeMetaPosition,
@@ -20,6 +19,7 @@ import {
   GRANOLA_NOTE_DISPLAY_NAME,
   GRANOLA_WORKSPACE_TYPE_ID,
 } from '../index';
+import { GRANOLA_MANIFEST } from '../manifest';
 import { pollGranola } from '../poll';
 import {
   GranolaClient,
@@ -204,24 +204,20 @@ describe('GranolaAdapter', () => {
     ).rejects.toThrow();
   });
 
-  it('extracts the note owner as the email-scheme originator, from the meeting its poll delivered', async () => {
-    const { arrivals } = await pollGranola(fakeClient([note()]), { edge: 'Meetings', cursor: { updatedAfter: '2026-06-19T00:00:00.000Z' } });
+  it('the sender\'s claim is on the event, branded, normalised: the note owner\'s address, lower case', async () => {
+    const field = (await adapter.describe(GRANOLA_NOTE_TYPE_ID))?.fields.find((f) => f.displayName === 'Note Owner Email');
+    expect(field).toMatchObject({ kind: 'string', brands: ['claim:email/address'], required: true, writable: false });
+    const mixed = { ...note(), owner: { name: 'Priya Owner', email: ' Priya@Fund.com ' } };
+    const { arrivals } = await pollGranola(fakeClient([mixed]), { edge: 'Meetings', cursor: { updatedAfter: '2026-06-19T00:00:00.000Z' } });
     const [arrival] = arrivals;
     if (arrival === undefined || 'gone' in arrival) throw new Error('the poll delivered no meeting');
-    // The run's trigger, as the host hands it to a run its listen fired.
-    // The door names the owner on the arrival itself.
-    expect(arrival.actor).toEqual({ identifier: 'priya@fund.com', scheme: 'email', adapterType: 'granola', email: 'priya@fund.com', name: 'Priya Owner', proven: true });
-    const event = arrivalTriggerOf({ pipelineInputId: 'notes:summarise', adapterType: 'granola', arrival, now: new Date() });
-    const actor = await adapter.extractActor({ event });
-    expect(actor).toEqual({
-      identifier: 'priya@fund.com',
-      scheme: 'email',
-      adapterType: 'granola',
-      email: 'priya@fund.com',
-      name: 'Priya Owner',
-      proven: true,
-    });
-    expect(await adapter.getActorCandidates({ event })).toEqual([{ identity: actor, source: 'originator' }]);
+    expect(arrival.landing.fields['Note Owner Email']).toBe('priya@fund.com');
+    expect(arrival).not.toHaveProperty('actor');
+  });
+
+  it('declares no actor identity methods', () => {
+    expect(GRANOLA_MANIFEST.methods).not.toContain('getActorCandidates');
+    expect(GRANOLA_MANIFEST.methods).not.toContain('extractActor');
   });
 });
 

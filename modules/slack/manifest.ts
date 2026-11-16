@@ -58,12 +58,11 @@ export const SLACK_MANIFEST: AdapterManifest = {
     'the user wants all-message capture, tell them it depends on their Slack app\'s ' +
     'subscriptions and ask. A listen on a message\'s Reactions runs on each emoji ' +
     'added, and on its Interactions on each button press (one run per press). ' +
-    'Also: a listener only fires when the message\'s SENDER (or the person who ' +
-    'reacted) resolves to a registered member of this team (matched by Slack ' +
-    'profile email). Activity from unregistered people — guests, external ' +
-    'members of shared channels, other bots, and Listen-Fire\'s own posts — is dropped ' +
-    'before any automation runs, so do not promise runs on activity from people ' +
-    'outside the team.',
+    'Also: a listen hears every sender Slack delivers — guests, external members of ' +
+    'shared channels, other bots and the app itself — unless its WHERE narrows it. A ' +
+    'Message and a Reaction say who sent them: `User Email` (the member\'s profile ' +
+    'address, a claim Slack vouches for) and `Sent By This App`; an Interaction says ' +
+    'who pressed in `Pressed By Email`.',
   authoringHints:
     'Listen on the edge the record arrives on, each its own record type: a channel\'s ' +
     'Messages (a Message), a message\'s Replies (a Message in its thread), Reactions (a ' +
@@ -74,7 +73,6 @@ export const SLACK_MANIFEST: AdapterManifest = {
     'Reactions listen by channel only (chat-[ch:Channels WHERE ch.Name == "deals"]->-[:Messages]->-[:Replies]->). ' +
     'Write a Topic with a message\'s Buttons to listen to its presses alone: ' +
     'chat-[:Channels]->-[m:Messages WHERE m.Topic == "lunch-poll" AND m.Timestamp WITHIN 3d]->-[:Interactions]->.',
-  inboundRequiresRegisteredActor: true,
   handbookSection: SLACK_HANDBOOK_SECTION,
   supportedTriggers: ['webhook'],
   // A 0.12 `listen to chat { channels, events }` heard messages and mentions,
@@ -102,7 +100,7 @@ export const SLACK_MANIFEST: AdapterManifest = {
   // implementations.
   methods: [
     'listEntryPoints', 'describe', 'getFieldValue', 'getRelated', 'preprocessInbound',
-    'getActorCandidates', 'extractActor', 'resolveFileRef',
+    'resolveFileRef',
     'createRecord', 'invokeFieldFunction', 'awaitKeys',
   ],
   requiredCredentialType: 'SLACK',
