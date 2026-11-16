@@ -110,7 +110,7 @@ These hold everywhere, in every chapter, and are not restated per situation:
   order the callee declares them (\`\`Log Lead\`(msg)\`), as TypeScript calls a
   function, with an optional settings record last
   (\`map(xs, (x) => x.Name, { concurrency: 2 })\`). A plugin is called the
-  same way (\`fetchUrl(c.website)\`, \`fetchUrl(u, { email: @user_email })\`). A function, a plugin, a built-in and a
+  same way (\`fetchUrl(c.website)\`, \`fetchUrl(u, { email: "deals@acme.test" })\`). A function, a plugin, a built-in and a
   closure bound to a name are all called the same way. Names are exact in
   case, inside walk brackets too. Braces are declarative bodies.
 - Fields read with a dot (\`msg.Subject\`); "double quotes" are strings;

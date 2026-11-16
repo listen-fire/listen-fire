@@ -3,7 +3,7 @@
 // Listen-Fire's phone→user lookup (`acting_user_shared.lookupTeamUserByPhone`).
 //
 // Keeping ONE normalizer guarantees the phone the adapter surfaces as the
-// `@actor_*` identifier is byte-identical to the value matched against
+// sender's claim is byte-identical to the value matched against
 // `phone_number.phone_number` — they previously drifted (the adapter trimmed
 // outer whitespace only; the lookup additionally stripped all internal
 // whitespace), so a number could authenticate under one form and be reported

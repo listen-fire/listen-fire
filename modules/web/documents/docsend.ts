@@ -79,7 +79,7 @@ class DocsendCrawler extends Crawler {
     if (await emailField.isVisible()) {
       if (!this.email) {
         return new InvalidCredentialsError(
-          'This DocSend link needs an email to view — pass email: to vc_url_retrieval (e.g. email: @user_email)',
+          'This DocSend link needs an email to view — pass email: to vc_url_retrieval (an address your team reads)',
         );
       }
 
@@ -103,7 +103,7 @@ class DocsendCrawler extends Crawler {
     if (await spacesEmail.isVisible()) {
       if (!this.email) {
         return new InvalidCredentialsError(
-          'This DocSend link needs an email to view — pass email: to vc_url_retrieval (e.g. email: @user_email)',
+          'This DocSend link needs an email to view — pass email: to vc_url_retrieval (an address your team reads)',
         );
       }
 

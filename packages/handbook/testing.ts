@@ -96,6 +96,39 @@ const CAPTURED_PACKAGES: Record<string, string> = {
   gmail: '@lf/gmail',
 };
 
+const EMAIL_CLAIM = { kind: 'branded', of: 'text', brands: ['claim:email/address'] } as const;
+
+/**
+ * A host's functions, as the examples meet them: the team a platform serves
+ * (`import { \`@lf-platform/team\` as team } from plugins`). Whether a host
+ * offers any, and which, is its own choice; the language only reads what a
+ * plugin package declares.
+ */
+const TEAM_PLUGINS: CatalogSnapshot['plugins'] = {
+  '@lf-platform/team/isMember': {
+    args: ['claim'],
+    requiredArgs: ['claim'],
+    argTypes: { claim: EMAIL_CLAIM },
+    priced: false,
+    effects: {},
+    output: { kind: 'value', type: 'boolean' },
+    package: '@lf-platform/team',
+    name: 'isMember',
+    pure: true,
+  },
+  '@lf-platform/team/userFor': {
+    args: ['claim'],
+    requiredArgs: ['claim'],
+    argTypes: { claim: EMAIL_CLAIM },
+    priced: false,
+    effects: {},
+    output: { kind: 'record', fields: { Id: 'text', Name: 'text', Level: 'text' } },
+    package: '@lf-platform/team',
+    name: 'userFor',
+    pure: true,
+  },
+};
+
 /** The snapshot a run of any example would be handed. */
 export const HANDBOOK_CATALOG: CatalogSnapshot = mockCatalogSnapshot({
   adapters: {
@@ -111,7 +144,7 @@ export const HANDBOOK_CATALOG: CatalogSnapshot = mockCatalogSnapshot({
   // The real registry, not a hand-kept copy: a chapter teaching an argument
   // the plugin doesn't accept fails here rather than passing against a
   // literal someone remembered to update.
-  plugins: bundledPluginSpecs(),
+  plugins: { ...bundledPluginSpecs(), ...TEAM_PLUGINS },
 });
 
 /**

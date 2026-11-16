@@ -54,7 +54,7 @@ changed = was != null && was.Domains != company.Domains
 write crm-[:Companies]-> {
   unique by (Name)
   Name:          msg.Subject
-  Description ?: "Owner: \${@user_email}"
+  Description ?: "Filed on \${@current_date}"
 }
 \`\`\`
 
@@ -82,7 +82,7 @@ A few fields take a **structured value** — an object with named keys, nested a
 \`\`\`
 Layout: {
   heading: "\${company.Name} is ready",
-  blocks: [{ kind: "text", value: "Approved by \${@user_email}" }]
+  blocks: [{ kind: "text", value: "Approved on \${@current_date}" }]
 }
 \`\`\`
 
@@ -346,7 +346,7 @@ function \`Intake\`(m: <inbox-[:Emails]->>) {
   write crm-[:Companies]-> {
     unique by (Name)
     Name:          m.Subject
-    Description ?: "Owner: \${@user_email}"
+    Description ?: "Filed on \${@current_date}"
   }
 }
 `,

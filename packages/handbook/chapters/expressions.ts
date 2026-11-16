@@ -63,17 +63,15 @@ if (\`Suggested Action\` != null) {
 \`\`\`
 write crm-[:Companies]-> {
   Name:          msg.Subject
-  Description ?: "Owner: \${@user_email} — forwarded in by \${@actor_name} on \${@current_date}"
+  Description ?: "Forwarded in on \${@current_date}"
 }
 \`\`\`
 
-Values that come from the run itself rather than from any record wear an \`@\` prefix and read like any other value, anywhere an expression can appear. There are eight, in three groups:
+Values that come from the run itself rather than from any record wear an \`@\` prefix and read like any other value, anywhere an expression can appear. There are two:
 
 - \`@current_date\` (\`"2026-03-12"\`) and \`@current_timestamp\`, the moment the run fires, in UTC — \`Deadline: Date.addDays(@current_date, 14)\`. Every clock reading in a run gives that same moment, however long the run takes. For the date somewhere in particular, reach for \`Date.today(zone)\`.
-- \`@user_email\`, \`@user_name\`, \`@user_id\` — the identity the host resolves for the run: the person it acts *on behalf of*. The platform resolves it through its workspace members, \`listen-fire\` through the project. Forwarders are followed back to the real person: a message forwarded in by a teammate still names the original sender, the person whose work this is.
-- \`@actor_email\`, \`@actor_name\`, \`@actor_id\` — whoever literally triggered the event in the source system, exactly as it reported them, member or not.
 
-The two agree until a forward, relay, or service account sits between the originator and the responsible person. A meta-field the run can't resolve — an event the host maps to no identity, a source that reports no sender — is simply empty, never an error.
+Who sent or pressed something is never a meta-field. A module publishes it as a field of what landed (listeners chapter, *who-acted*).
 
 ### aggregates
 
@@ -551,7 +549,7 @@ function \`Intake\`(m: <inbox-[:Emails]->>) {
 `,
     },
     {
-      construct: 'ambient values (@user_email, @actor_*, @current_date)',
+      construct: 'ambient values (@current_date)',
       status: 'runs',
       probe: `
 inbox = connect \`@lf/email\`
@@ -560,7 +558,7 @@ crm   = connect \`@lf/attio\` using acme
 function \`Intake\`(m: <inbox-[:Emails]->>) {
   write crm-[:Companies]-> {
     Name:          m.Subject
-    Description ?: "Owner: \${@user_email} — from \${@actor_name} on \${@current_date}"
+    Description ?: "Forwarded in on \${@current_date}"
   }
 }
 `,

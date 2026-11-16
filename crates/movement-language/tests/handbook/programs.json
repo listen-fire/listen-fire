@@ -116,8 +116,8 @@
   },
   {
     "chapter": "expressions",
-    "construct": "ambient values (@user_email, @actor_*, @current_date)",
-    "source": "\ninbox = connect `@lf/email`\ncrm   = connect `@lf/attio` using acme\n\nfunction `Intake`(m: <inbox-[:Emails]->>) {\n  write crm-[:Companies]-> {\n    Name:          m.Subject\n    Description ?: \"Owner: ${@user_email} — from ${@actor_name} on ${@current_date}\"\n  }\n}\n"
+    "construct": "ambient values (@current_date)",
+    "source": "\ninbox = connect `@lf/email`\ncrm   = connect `@lf/attio` using acme\n\nfunction `Intake`(m: <inbox-[:Emails]->>) {\n  write crm-[:Companies]-> {\n    Name:          m.Subject\n    Description ?: \"Forwarded in on ${@current_date}\"\n  }\n}\n"
   },
   {
     "chapter": "expressions",
@@ -177,7 +177,7 @@
   {
     "chapter": "writes",
     "construct": "the '?:' set-if-empty field marker",
-    "source": "\ninbox = connect `@lf/email`\ncrm   = connect `@lf/attio` using acme\n\nfunction `Intake`(m: <inbox-[:Emails]->>) {\n  write crm-[:Companies]-> {\n    unique by (Name)\n    Name:          m.Subject\n    Description ?: \"Owner: ${@user_email}\"\n  }\n}\n"
+    "source": "\ninbox = connect `@lf/email`\ncrm   = connect `@lf/attio` using acme\n\nfunction `Intake`(m: <inbox-[:Emails]->>) {\n  write crm-[:Companies]-> {\n    unique by (Name)\n    Name:          m.Subject\n    Description ?: \"Filed on ${@current_date}\"\n  }\n}\n"
   },
   {
     "chapter": "writes",
@@ -318,6 +318,16 @@
     "chapter": "branching",
     "construct": "a chain of flat guard clauses, each narrowing a separate only-bound binding",
     "source": "\ncrm  = connect `@lf/attio` using acme\nchat = connect `@lf/slack` using team_workspace\n\nfunction m(evt: <crm-[:CompanyChange]->>) {\n  channel = only(chat-[ch:Channels WHERE ch.Name == \"alerts\"]->)\n  if (channel == null) { fail(\"channel not found\") }\n\n  evt-[co:Company]-> {\n    owner = only(co-[t:Team]->)\n    if (owner == null) { fail(\"no owner\") }\n\n    write channel-[:Messages]-> { Message: \"${co.Name} owned by ${owner.Name}\" }\n  }\n}\n"
+  },
+  {
+    "chapter": "listeners",
+    "construct": "a host function in a listen's filter (a claim passed to team.isMember), the app's own posts left out",
+    "source": "\nimport { `@lf-platform/team` as team } from plugins\nslack = connect `@lf/slack` using team_workspace\n\nfunction intake(m: <slack-[:Message]->>) {\n  write m-[:Reactions]-> { Emoji: \"eyes\" }\n}\n\nlisten to slack-[ch:Channels WHERE ch.Name == \"dealflow\"]->-[m:Messages WHERE NOT m.`Sent By This App` AND team.isMember(m.`User Email`)]-> fire intake\n"
+  },
+  {
+    "chapter": "listeners",
+    "construct": "a domain test off a claim with Text.regexExtract in a listen's filter",
+    "source": "\nslack = connect `@lf/slack` using team_workspace\n\nfunction intake(m: <slack-[:Message]->>) {\n  write m-[:Reactions]-> { Emoji: \"eyes\" }\n}\n\nlisten to slack-[ch:Channels WHERE ch.Name == \"dealflow\"]->-[m:Messages WHERE Text.regexExtract(m.`User Email`, \"@([^@]+)$\", 1) == \"acme.com\"]-> fire intake\n"
   },
   {
     "chapter": "listeners",
@@ -472,7 +482,7 @@
   {
     "chapter": "use-cases",
     "construct": "dealflow extraction (body, attachments and retrieved deck links as content → a nested tree → linked fuzzy writes, plus the sender by extractOne)",
-    "source": "\nimport { vcUrlRetrieval } from plugins\ninbox = connect `@lf/email`\ncrm   = connect `@lf/attio` using acme\n\nnode Company: \"each company this message is about — the one being pitched for investment, not competitors or customers named in passing\" {\n  name:    <text> \"the company's name\"\n  website: <text> \"the company's official website\"\n  node founder: \"each founder or C-suite leader of this company named in the message\" {\n    name: <text> \"the person's full name\"\n    role: <text> \"the person's title\"\n  }\n}\n\nnode Introducer: \"the person who sent or forwarded this message to us\" {\n  name:  <text> \"their full name\"\n  email: <text | null> \"their email address\"\n}\n\nfunction `Log Dealflow`(msg: <inbox-[:Emails]->>) {\n  decks     = vcUrlRetrieval(msg.Body, { email: @user_email })\n  content   = [msg.Body, ...msg-[a:Attachments]->.File, ...map(decks, (d) => coalesce(d.text, \"\"))]\n  companies = extract(content, Company, { tier: \"careful\" })\n  introducer = extractOne(content, Introducer, { tier: \"careful\" })\n\n  map(companies, (c) => {\n    company = write crm-[:Companies]-> {\n      unique by (FUZZY Name)\n      Name:    c.name\n      Domains: c.website\n      Description ?: \"Introduced by ${introducer?.name}\"\n    }\n    c-[f:founder]-> {\n      write company-[:Team]-> {\n        unique by (FUZZY Name)\n        Name:        f.name\n        `Job Title`: f.role\n      }\n    }\n  })\n}\n"
+    "source": "\nimport { vcUrlRetrieval } from plugins\ninbox = connect `@lf/email`\ncrm   = connect `@lf/attio` using acme\n\nnode Company: \"each company this message is about — the one being pitched for investment, not competitors or customers named in passing\" {\n  name:    <text> \"the company's name\"\n  website: <text> \"the company's official website\"\n  node founder: \"each founder or C-suite leader of this company named in the message\" {\n    name: <text> \"the person's full name\"\n    role: <text> \"the person's title\"\n  }\n}\n\nnode Introducer: \"the person who sent or forwarded this message to us\" {\n  name:  <text> \"their full name\"\n  email: <text | null> \"their email address\"\n}\n\nfunction `Log Dealflow`(msg: <inbox-[:Emails]->>) {\n  decks     = vcUrlRetrieval(msg.Body, { email: \"deals@acme.test\" })\n  content   = [msg.Body, ...msg-[a:Attachments]->.File, ...map(decks, (d) => coalesce(d.text, \"\"))]\n  companies = extract(content, Company, { tier: \"careful\" })\n  introducer = extractOne(content, Introducer, { tier: \"careful\" })\n\n  map(companies, (c) => {\n    company = write crm-[:Companies]-> {\n      unique by (FUZZY Name)\n      Name:    c.name\n      Domains: c.website\n      Description ?: \"Introduced by ${introducer?.name}\"\n    }\n    c-[f:founder]-> {\n      write company-[:Team]-> {\n        unique by (FUZZY Name)\n        Name:        f.name\n        `Job Title`: f.role\n      }\n    }\n  })\n}\n"
   },
   {
     "chapter": "builtins",

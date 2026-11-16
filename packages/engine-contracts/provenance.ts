@@ -77,7 +77,7 @@ export type ProvenanceOrigin =
   | { kind: 'ai'; prompt: string; inputs: ProvenanceOrigin[] }
   /** A literal in the movement text — the span locates it in the file. */
   | { kind: 'literal'; span?: Span }
-  /** An ambient meta value (`@user_email`, `@current_date`, …) —
+  /** An ambient meta value (`@current_date`, `@current_timestamp`) —
    *  literal-ish: the value comes from the dispatch context, not from
    *  any record, so the key is the whole story. */
   | { kind: 'meta'; key: string };

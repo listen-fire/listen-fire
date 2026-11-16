@@ -3090,7 +3090,15 @@
                 "Channel": "text",
                 "Timestamp": "date",
                 "Topic": "text",
-                "Mentions App": "boolean"
+                "Mentions App": "boolean",
+                "User Email": {
+                  "kind": "branded",
+                  "of": "text",
+                  "brands": [
+                    "claim:email/address"
+                  ]
+                },
+                "Sent By This App": "boolean"
               },
               "edges": {
                 "Files": {
@@ -3173,7 +3181,9 @@
                 "Channel": "The C… channel id (read-only — a post is written along a Channel's `Messages` edge).",
                 "Timestamp": "When the message was posted.",
                 "Topic": "A marker of your own for a message with Buttons (`Topic: \"lunch-poll\"`), so a listen can tell its presses from other messages' presses: `listen to chat-[:Channels]->-[m:Messages WHERE m.Topic == \"lunch-poll\"]->-[:Interactions]->`. Only a message with Buttons takes one: Slack keeps no other data on a message that comes back with a press, so the Topic is stored as the id of the block its buttons sit in (`lf:<topic>`), and read back from there — on the pressed message and on a listed one alike. It is written only with Buttons, and block ids starting `lf:` are reserved for it: a message whose own Blocks use one is refused.",
-                "Mentions App": "Whether the message @-mentions the connected app: `listen to chat-[:Channels]->-[m:Messages WHERE m.`Mentions App` == true]->` runs when somebody asks it something."
+                "Mentions App": "Whether the message @-mentions the connected app: `listen to chat-[:Channels]->-[m:Messages WHERE m.`Mentions App` == true]->` runs when somebody asks it something.",
+                "User Email": "The address Slack holds for the member who sent the message, lower case; null for a member with none and for a bot. A claim Slack vouches for: a plugin function such as a team check accepts it where it refuses plain text.",
+                "Sent By This App": "Whether this app itself sent the message. A listen that should not hear the app's own posts filters on NOT Sent By This App. False when Slack does not say who the app is."
               },
               "fieldIds": {
                 "Id": "id",
@@ -3182,7 +3192,9 @@
                 "Channel": "channel",
                 "Timestamp": "timestamp",
                 "Topic": "topic",
-                "Mentions App": "mentions_app"
+                "Mentions App": "mentions_app",
+                "User Email": "user_email",
+                "Sent By This App": "sent_by_this_app"
               }
             },
             "File": {
@@ -3207,7 +3219,14 @@
             "Interaction": {
               "properties": {
                 "Id": "text",
-                "At": "date"
+                "At": "date",
+                "Pressed By Email": {
+                  "kind": "branded",
+                  "of": "text",
+                  "brands": [
+                    "claim:email/address"
+                  ]
+                }
               },
               "edges": {
                 "Actions": {
@@ -3231,7 +3250,8 @@
               },
               "fieldIds": {
                 "Id": "id",
-                "At": "pressed_at"
+                "At": "pressed_at",
+                "Pressed By Email": "pressed_by_email"
               }
             },
             "Action": {
@@ -3254,7 +3274,15 @@
               "properties": {
                 "Emoji": "text",
                 "Channel": "text",
-                "Reactor": "text"
+                "Reactor": "text",
+                "User Email": {
+                  "kind": "branded",
+                  "of": "text",
+                  "brands": [
+                    "claim:email/address"
+                  ]
+                },
+                "Sent By This App": "boolean"
               },
               "edges": {
                 "Message": {
@@ -3271,12 +3299,16 @@
               "fieldDocs": {
                 "Emoji": "The reaction emoji name (e.g. \"thumbsup\"), without colons. On a write along `msg-[:Reactions]->`: the single emoji to react with — required.",
                 "Channel": "The C… channel id the reaction is in (read-only — walk the `Channel` edge for the Channel node).",
-                "Reactor": "The U… id of the user who added the reaction (read-only — walk the `Reactor` edge for the User node)."
+                "Reactor": "The U… id of the user who added the reaction (read-only — walk the `Reactor` edge for the User node).",
+                "User Email": "The address Slack holds for the member who sent the reaction, lower case; null for a member with none and for a bot. A claim Slack vouches for: a plugin function such as a team check accepts it where it refuses plain text.",
+                "Sent By This App": "Whether this app itself sent the reaction. A listen that should not hear the app's own posts filters on NOT Sent By This App. False when Slack does not say who the app is."
               },
               "fieldIds": {
                 "Emoji": "emoji",
                 "Channel": "channel",
-                "Reactor": "reactor"
+                "Reactor": "reactor",
+                "User Email": "user_email",
+                "Sent By This App": "sent_by_this_app"
               }
             },
             "Channel": {
@@ -3521,7 +3553,15 @@
                 "Channel": "text",
                 "Timestamp": "date",
                 "Topic": "text",
-                "Mentions App": "boolean"
+                "Mentions App": "boolean",
+                "User Email": {
+                  "kind": "branded",
+                  "of": "text",
+                  "brands": [
+                    "claim:email/address"
+                  ]
+                },
+                "Sent By This App": "boolean"
               },
               "edges": {
                 "Files": {
@@ -3604,7 +3644,9 @@
                 "Channel": "The C… channel id (read-only — a post is written along a Channel's `Messages` edge).",
                 "Timestamp": "When the message was posted.",
                 "Topic": "A marker of your own for a message with Buttons (`Topic: \"lunch-poll\"`), so a listen can tell its presses from other messages' presses: `listen to chat-[:Channels]->-[m:Messages WHERE m.Topic == \"lunch-poll\"]->-[:Interactions]->`. Only a message with Buttons takes one: Slack keeps no other data on a message that comes back with a press, so the Topic is stored as the id of the block its buttons sit in (`lf:<topic>`), and read back from there — on the pressed message and on a listed one alike. It is written only with Buttons, and block ids starting `lf:` are reserved for it: a message whose own Blocks use one is refused.",
-                "Mentions App": "Whether the message @-mentions the connected app: `listen to chat-[:Channels]->-[m:Messages WHERE m.`Mentions App` == true]->` runs when somebody asks it something."
+                "Mentions App": "Whether the message @-mentions the connected app: `listen to chat-[:Channels]->-[m:Messages WHERE m.`Mentions App` == true]->` runs when somebody asks it something.",
+                "User Email": "The address Slack holds for the member who sent the message, lower case; null for a member with none and for a bot. A claim Slack vouches for: a plugin function such as a team check accepts it where it refuses plain text.",
+                "Sent By This App": "Whether this app itself sent the message. A listen that should not hear the app's own posts filters on NOT Sent By This App. False when Slack does not say who the app is."
               },
               "fieldIds": {
                 "Id": "id",
@@ -3613,7 +3655,9 @@
                 "Channel": "channel",
                 "Timestamp": "timestamp",
                 "Topic": "topic",
-                "Mentions App": "mentions_app"
+                "Mentions App": "mentions_app",
+                "User Email": "user_email",
+                "Sent By This App": "sent_by_this_app"
               }
             },
             "File": {
@@ -3638,7 +3682,14 @@
             "Interaction": {
               "properties": {
                 "Id": "text",
-                "At": "date"
+                "At": "date",
+                "Pressed By Email": {
+                  "kind": "branded",
+                  "of": "text",
+                  "brands": [
+                    "claim:email/address"
+                  ]
+                }
               },
               "edges": {
                 "Actions": {
@@ -3662,7 +3713,8 @@
               },
               "fieldIds": {
                 "Id": "id",
-                "At": "pressed_at"
+                "At": "pressed_at",
+                "Pressed By Email": "pressed_by_email"
               }
             },
             "Action": {
@@ -3685,7 +3737,15 @@
               "properties": {
                 "Emoji": "text",
                 "Channel": "text",
-                "Reactor": "text"
+                "Reactor": "text",
+                "User Email": {
+                  "kind": "branded",
+                  "of": "text",
+                  "brands": [
+                    "claim:email/address"
+                  ]
+                },
+                "Sent By This App": "boolean"
               },
               "edges": {
                 "Message": {
@@ -3702,12 +3762,16 @@
               "fieldDocs": {
                 "Emoji": "The reaction emoji name (e.g. \"thumbsup\"), without colons. On a write along `msg-[:Reactions]->`: the single emoji to react with — required.",
                 "Channel": "The C… channel id the reaction is in (read-only — walk the `Channel` edge for the Channel node).",
-                "Reactor": "The U… id of the user who added the reaction (read-only — walk the `Reactor` edge for the User node)."
+                "Reactor": "The U… id of the user who added the reaction (read-only — walk the `Reactor` edge for the User node).",
+                "User Email": "The address Slack holds for the member who sent the reaction, lower case; null for a member with none and for a bot. A claim Slack vouches for: a plugin function such as a team check accepts it where it refuses plain text.",
+                "Sent By This App": "Whether this app itself sent the reaction. A listen that should not hear the app's own posts filters on NOT Sent By This App. False when Slack does not say who the app is."
               },
               "fieldIds": {
                 "Emoji": "emoji",
                 "Channel": "channel",
-                "Reactor": "reactor"
+                "Reactor": "reactor",
+                "User Email": "user_email",
+                "Sent By This App": "sent_by_this_app"
               }
             },
             "Channel": {
@@ -3952,7 +4016,15 @@
                 "Channel": "text",
                 "Timestamp": "date",
                 "Topic": "text",
-                "Mentions App": "boolean"
+                "Mentions App": "boolean",
+                "User Email": {
+                  "kind": "branded",
+                  "of": "text",
+                  "brands": [
+                    "claim:email/address"
+                  ]
+                },
+                "Sent By This App": "boolean"
               },
               "edges": {
                 "Files": {
@@ -4035,7 +4107,9 @@
                 "Channel": "The C… channel id (read-only — a post is written along a Channel's `Messages` edge).",
                 "Timestamp": "When the message was posted.",
                 "Topic": "A marker of your own for a message with Buttons (`Topic: \"lunch-poll\"`), so a listen can tell its presses from other messages' presses: `listen to chat-[:Channels]->-[m:Messages WHERE m.Topic == \"lunch-poll\"]->-[:Interactions]->`. Only a message with Buttons takes one: Slack keeps no other data on a message that comes back with a press, so the Topic is stored as the id of the block its buttons sit in (`lf:<topic>`), and read back from there — on the pressed message and on a listed one alike. It is written only with Buttons, and block ids starting `lf:` are reserved for it: a message whose own Blocks use one is refused.",
-                "Mentions App": "Whether the message @-mentions the connected app: `listen to chat-[:Channels]->-[m:Messages WHERE m.`Mentions App` == true]->` runs when somebody asks it something."
+                "Mentions App": "Whether the message @-mentions the connected app: `listen to chat-[:Channels]->-[m:Messages WHERE m.`Mentions App` == true]->` runs when somebody asks it something.",
+                "User Email": "The address Slack holds for the member who sent the message, lower case; null for a member with none and for a bot. A claim Slack vouches for: a plugin function such as a team check accepts it where it refuses plain text.",
+                "Sent By This App": "Whether this app itself sent the message. A listen that should not hear the app's own posts filters on NOT Sent By This App. False when Slack does not say who the app is."
               },
               "fieldIds": {
                 "Id": "id",
@@ -4044,7 +4118,9 @@
                 "Channel": "channel",
                 "Timestamp": "timestamp",
                 "Topic": "topic",
-                "Mentions App": "mentions_app"
+                "Mentions App": "mentions_app",
+                "User Email": "user_email",
+                "Sent By This App": "sent_by_this_app"
               }
             },
             "File": {
@@ -4069,7 +4145,14 @@
             "Interaction": {
               "properties": {
                 "Id": "text",
-                "At": "date"
+                "At": "date",
+                "Pressed By Email": {
+                  "kind": "branded",
+                  "of": "text",
+                  "brands": [
+                    "claim:email/address"
+                  ]
+                }
               },
               "edges": {
                 "Actions": {
@@ -4093,7 +4176,8 @@
               },
               "fieldIds": {
                 "Id": "id",
-                "At": "pressed_at"
+                "At": "pressed_at",
+                "Pressed By Email": "pressed_by_email"
               }
             },
             "Action": {
@@ -4116,7 +4200,15 @@
               "properties": {
                 "Emoji": "text",
                 "Channel": "text",
-                "Reactor": "text"
+                "Reactor": "text",
+                "User Email": {
+                  "kind": "branded",
+                  "of": "text",
+                  "brands": [
+                    "claim:email/address"
+                  ]
+                },
+                "Sent By This App": "boolean"
               },
               "edges": {
                 "Message": {
@@ -4133,12 +4225,16 @@
               "fieldDocs": {
                 "Emoji": "The reaction emoji name (e.g. \"thumbsup\"), without colons. On a write along `msg-[:Reactions]->`: the single emoji to react with — required.",
                 "Channel": "The C… channel id the reaction is in (read-only — walk the `Channel` edge for the Channel node).",
-                "Reactor": "The U… id of the user who added the reaction (read-only — walk the `Reactor` edge for the User node)."
+                "Reactor": "The U… id of the user who added the reaction (read-only — walk the `Reactor` edge for the User node).",
+                "User Email": "The address Slack holds for the member who sent the reaction, lower case; null for a member with none and for a bot. A claim Slack vouches for: a plugin function such as a team check accepts it where it refuses plain text.",
+                "Sent By This App": "Whether this app itself sent the reaction. A listen that should not hear the app's own posts filters on NOT Sent By This App. False when Slack does not say who the app is."
               },
               "fieldIds": {
                 "Emoji": "emoji",
                 "Channel": "channel",
-                "Reactor": "reactor"
+                "Reactor": "reactor",
+                "User Email": "user_email",
+                "Sent By This App": "sent_by_this_app"
               }
             },
             "Channel": {
@@ -4383,7 +4479,15 @@
                 "Channel": "text",
                 "Timestamp": "date",
                 "Topic": "text",
-                "Mentions App": "boolean"
+                "Mentions App": "boolean",
+                "User Email": {
+                  "kind": "branded",
+                  "of": "text",
+                  "brands": [
+                    "claim:email/address"
+                  ]
+                },
+                "Sent By This App": "boolean"
               },
               "edges": {
                 "Files": {
@@ -4466,7 +4570,9 @@
                 "Channel": "The C… channel id (read-only — a post is written along a Channel's `Messages` edge).",
                 "Timestamp": "When the message was posted.",
                 "Topic": "A marker of your own for a message with Buttons (`Topic: \"lunch-poll\"`), so a listen can tell its presses from other messages' presses: `listen to chat-[:Channels]->-[m:Messages WHERE m.Topic == \"lunch-poll\"]->-[:Interactions]->`. Only a message with Buttons takes one: Slack keeps no other data on a message that comes back with a press, so the Topic is stored as the id of the block its buttons sit in (`lf:<topic>`), and read back from there — on the pressed message and on a listed one alike. It is written only with Buttons, and block ids starting `lf:` are reserved for it: a message whose own Blocks use one is refused.",
-                "Mentions App": "Whether the message @-mentions the connected app: `listen to chat-[:Channels]->-[m:Messages WHERE m.`Mentions App` == true]->` runs when somebody asks it something."
+                "Mentions App": "Whether the message @-mentions the connected app: `listen to chat-[:Channels]->-[m:Messages WHERE m.`Mentions App` == true]->` runs when somebody asks it something.",
+                "User Email": "The address Slack holds for the member who sent the message, lower case; null for a member with none and for a bot. A claim Slack vouches for: a plugin function such as a team check accepts it where it refuses plain text.",
+                "Sent By This App": "Whether this app itself sent the message. A listen that should not hear the app's own posts filters on NOT Sent By This App. False when Slack does not say who the app is."
               },
               "fieldIds": {
                 "Id": "id",
@@ -4475,7 +4581,9 @@
                 "Channel": "channel",
                 "Timestamp": "timestamp",
                 "Topic": "topic",
-                "Mentions App": "mentions_app"
+                "Mentions App": "mentions_app",
+                "User Email": "user_email",
+                "Sent By This App": "sent_by_this_app"
               }
             },
             "File": {
@@ -4500,7 +4608,14 @@
             "Interaction": {
               "properties": {
                 "Id": "text",
-                "At": "date"
+                "At": "date",
+                "Pressed By Email": {
+                  "kind": "branded",
+                  "of": "text",
+                  "brands": [
+                    "claim:email/address"
+                  ]
+                }
               },
               "edges": {
                 "Actions": {
@@ -4524,7 +4639,8 @@
               },
               "fieldIds": {
                 "Id": "id",
-                "At": "pressed_at"
+                "At": "pressed_at",
+                "Pressed By Email": "pressed_by_email"
               }
             },
             "Action": {
@@ -4547,7 +4663,15 @@
               "properties": {
                 "Emoji": "text",
                 "Channel": "text",
-                "Reactor": "text"
+                "Reactor": "text",
+                "User Email": {
+                  "kind": "branded",
+                  "of": "text",
+                  "brands": [
+                    "claim:email/address"
+                  ]
+                },
+                "Sent By This App": "boolean"
               },
               "edges": {
                 "Message": {
@@ -4564,12 +4688,16 @@
               "fieldDocs": {
                 "Emoji": "The reaction emoji name (e.g. \"thumbsup\"), without colons. On a write along `msg-[:Reactions]->`: the single emoji to react with — required.",
                 "Channel": "The C… channel id the reaction is in (read-only — walk the `Channel` edge for the Channel node).",
-                "Reactor": "The U… id of the user who added the reaction (read-only — walk the `Reactor` edge for the User node)."
+                "Reactor": "The U… id of the user who added the reaction (read-only — walk the `Reactor` edge for the User node).",
+                "User Email": "The address Slack holds for the member who sent the reaction, lower case; null for a member with none and for a bot. A claim Slack vouches for: a plugin function such as a team check accepts it where it refuses plain text.",
+                "Sent By This App": "Whether this app itself sent the reaction. A listen that should not hear the app's own posts filters on NOT Sent By This App. False when Slack does not say who the app is."
               },
               "fieldIds": {
                 "Emoji": "emoji",
                 "Channel": "channel",
-                "Reactor": "reactor"
+                "Reactor": "reactor",
+                "User Email": "user_email",
+                "Sent By This App": "sent_by_this_app"
               }
             },
             "Channel": {
@@ -8349,6 +8477,62 @@
       "description": "Draw plain text as a PDF file. A character the default writer has no glyph for prints as \"?\", with a warning on the run.",
       "package": "@lf/pdf",
       "name": "render"
+    },
+    "@lf-platform/team/isMember": {
+      "args": [
+        "claim"
+      ],
+      "requiredArgs": [
+        "claim"
+      ],
+      "argTypes": {
+        "claim": {
+          "kind": "branded",
+          "of": "text",
+          "brands": [
+            "claim:email/address"
+          ]
+        }
+      },
+      "priced": false,
+      "effects": {},
+      "output": {
+        "kind": "value",
+        "type": "boolean"
+      },
+      "package": "@lf-platform/team",
+      "name": "isMember",
+      "pure": true
+    },
+    "@lf-platform/team/userFor": {
+      "args": [
+        "claim"
+      ],
+      "requiredArgs": [
+        "claim"
+      ],
+      "argTypes": {
+        "claim": {
+          "kind": "branded",
+          "of": "text",
+          "brands": [
+            "claim:email/address"
+          ]
+        }
+      },
+      "priced": false,
+      "effects": {},
+      "output": {
+        "kind": "record",
+        "fields": {
+          "Id": "text",
+          "Name": "text",
+          "Level": "text"
+        }
+      },
+      "package": "@lf-platform/team",
+      "name": "userFor",
+      "pure": true
     }
   }
 }

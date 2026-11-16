@@ -86,20 +86,14 @@ Types **always** wear angle brackets; positions, scalar values, and handles **ne
 
 ### meta-fields
 
-\`@\`-prefixed values from the run itself; read like any other value. Eight, in three groups:
-
-- Time: \`@current_date\` (\`YYYY-MM-DD\`), \`@current_timestamp\`.
-- Responsible user (forwarder-resolved — *whose work is this*): \`@user_email\`, \`@user_name\`, \`@user_id\`.
-- Raw originator (*who literally sent this*, unresolved): \`@actor_email\`, \`@actor_name\`, \`@actor_id\`.
-
-A meta-field the run can't resolve is simply empty.
+\`@\`-prefixed values from the run itself; read like any other value. Two: \`@current_date\` (\`YYYY-MM-DD\`) and \`@current_timestamp\`.
 
 ### writes
 
 \`\`\`
 company = write crm-[:Companies]-> {
   Name:      msg.Subject      # plain — overwrites every run
-  Owner   ?: @user_email      # set-if-empty — leaves an existing value alone
+  Owner   ?: c.Owner          # set-if-empty — leaves an existing value alone
   Tags    +: ["inbound"]      # append to a multi-value field (duplicates allowed)
   Sources +?:["email"]        # append only what's missing (set-union)
   ?...e                       # every field of e (extracted, <Decl>-typed, or a graph), set-if-empty; \`...e\`: plain

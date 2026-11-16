@@ -32,7 +32,7 @@ import { fetchUrl } from plugins
 import { \`Log Lead\`, Lead as \`Inbound Lead\` } from "lib/intake-routines"
 \`\`\`
 
-- \`plugins\` — functions the platform ships, called as a function is, by position, with any other inputs in one settings record last: \`page = fetchUrl(c.website)\`, \`deck = fetchUrl(o.deck_url, { email: @user_email })\`.
+- \`plugins\` — functions the platform ships, called as a function is, by position, with any other inputs in one settings record last: \`page = fetchUrl(c.website)\`, \`deck = fetchUrl(o.deck_url, { email: "deals@acme.test" })\`.
 - A quoted path — automations and record structures from another saved file. Only declarations it marks \`export\` are importable, and \`as\` renames locally.
 
 The quoted path is the other file's saved name, matched exactly — no folders, no extension, no case-folding; \`"lib/…"\` is a naming habit, not a directory. Importing from a file changes nothing about that file: its own \`listen\` lines keep firing it, and never fire yours.

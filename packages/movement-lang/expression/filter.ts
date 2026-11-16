@@ -48,7 +48,7 @@ const PURE_KINDS: ReadonlySet<Expression['type']> = new Set<Expression['type']>(
   'property',
   'edge_property',
   'alias_ref',
-  // `@current_date` / `@user_email` / `@current_timestamp` — an ambient scalar
+  // `@current_date` / `@current_timestamp` — an ambient scalar
   // the engine resolves with no adapter, no AI, no traversal. A childless leaf,
   // so `isPurePredicate` admits it with no recursion (childExpressions → []).
   'meta',

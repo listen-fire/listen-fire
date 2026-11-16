@@ -584,7 +584,7 @@ function describeCommentMeta(): SchemaTypeDescriptor {
       { fieldId: 'content_plaintext', displayName: 'Content', kind: 'string', writable: true, required: true },
       // Attio requires every comment to carry a workspace-member author.
       // Authors set this by EMAIL (the same convention as actor-reference
-      // fields on records — `@user_email` is the natural mapping); the write
+      // fields on records); the write
       // resolves it to a workspace member and rejects unknown addresses.
       { fieldId: 'author', displayName: 'Author (email)', kind: 'string', writable: true, required: true },
       // Set Thread ID to reply into an existing thread; leave it blank to
@@ -2891,13 +2891,12 @@ export class AttioAdapter extends BaseAdapter {
 
   /**
    * Coerce author-provided values for `actor-reference` ("User") fields into
-   * Attio's write shape. Authors set these by EMAIL — a literal, or a meta
-   * value like `@actor_email` / `@user_email` — and Attio's API expects
+   * Attio's write shape. Authors set these by EMAIL — a literal, or a
+   * claim a host function answers — and Attio's API expects
    * `[{ referenced_actor_type: 'workspace-member', referenced_actor_id }]`. We
    * resolve each email to a workspace member (case-insensitive). An email that
    * matches no member is dropped with a warning rather than sent as a broken
-   * value (e.g. an external sender's address can't own a record — the author
-   * should use `@user_email`, the responsible team member, for an owner field).
+   * value (e.g. an external sender's address can't own a record).
    * Mutates `fields` in place. No-op — and no workspace-member fetch — when the
    * write touches no actor-reference field.
    */
@@ -3195,7 +3194,7 @@ export class AttioAdapter extends BaseAdapter {
   }
 
   /** POST /v2/comments — Attio requires a workspace-member author, set by
-   *  EMAIL (the `author` field; `@user_email` is the natural mapping). Target
+   *  EMAIL (the `author` field). Target
    *  is the parent record's thread (new) or an explicit `thread_id` (reply). */
   private async createCommentFromWrite(input: WriteInput): Promise<WriteResult> {
     const content = this.requireStringField(input, 'content_plaintext');
@@ -3208,7 +3207,7 @@ export class AttioAdapter extends BaseAdapter {
     );
     if (!member) {
       throw new Error(
-        `AttioAdapter.createRecord(${input.recordType}): author "${authorEmail}" does not match any Attio workspace member. Comments must be authored by a workspace member — map the "author" field to a member's email (e.g. @user_email).`,
+        `AttioAdapter.createRecord(${input.recordType}): author "${authorEmail}" does not match any Attio workspace member. Comments must be authored by a workspace member — map the "author" field to a member's email.`,
       );
     }
 
@@ -4259,8 +4258,7 @@ function mapAttributeTypeToFieldKind(type: string): SchemaFieldKind {
     // Actor-references (Attio "User" fields — Deal owner, Created by, …) are
     // SETTABLE values: you assign a workspace member by email, not an edge to a
     // traversable record. Surface them as a writable string field (the author
-    // writes an email — a literal or a meta value like @actor_email /
-    // @user_email — and createRecord/updateRecord resolves it to the workspace
+    // writes an email — a literal or a claim a host function answers — and createRecord/updateRecord resolves it to the workspace
     // member). Mapping them to 'reference' made them phantom edges that
     // buildTypeDescriptor never added to `references` and schema_projection then
     // silently dropped, so required User fields vanished from write completions.

@@ -24,8 +24,7 @@ export const ATTIO_MANIFEST: AdapterManifest = {
     'Listen on a record’s Changes, narrowed by Kind (created, updated, deleted) and, on an update, by ' +
     'Field (the attribute’s title): crm-[:Deals]->-[c:Changes WHERE c.Field == "Stage"]->. A deal’s ' +
     'Changes are DealChange (a company’s CompanyChange, …); walk the change’s Deal edge for the deal as ' +
-    'it is now. For any owner field, `@user_email` is the best value to set it from — it identifies the ' +
-    'connected user as the record owner.',
+    'it is now.',
   supportedTriggers: ['webhook'],
   methods: [
     'listEntryPoints', 'describe', 'resolveEntity', 'getFieldValue',

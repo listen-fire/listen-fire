@@ -81,7 +81,7 @@ describe('isPurePredicate — alias-rooted zero-step traverse carve-out', () => 
   });
 });
 
-// A `meta` node (`@current_date`, `@user_email`, `@current_timestamp`) is a
+// A `meta` node (`@current_date`, `@current_timestamp`) is a
 // pure, engine-resolvable ambient scalar — a childless leaf, just like the
 // alias-rooted zero-step traverse. A pure scalar WHERE that compares a field to
 // one (the UnsnoozeActions `Snoozed Until` <= @current_date case) must classify
