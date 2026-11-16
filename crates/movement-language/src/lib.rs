@@ -123,7 +123,7 @@ impl Service {
     }
 
     fn options(&self) -> CheckOptions<'static> {
-        CheckOptions { upgrading_from: None, zones: self.zones }
+        CheckOptions { upgrading_from: None, limiting_function: None, zones: self.zones }
     }
 
     /// The file checked, repaired around `cursor` (a 0-based line) when it

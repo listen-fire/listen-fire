@@ -15,7 +15,7 @@ const SNAPSHOT: &str = r#"{"adapters":{
 
 fn check(source: &str) -> Vec<movement_checker::Diagnostic> {
     let catalog = CatalogSnapshot::load(SNAPSHOT).unwrap();
-    let options = CheckOptions { upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
+    let options = CheckOptions { upgrading_from: None, limiting_function: None, zones: &movement_checker::host::native::NativeZones };
     check_source(source, &catalog, options).unwrap()
 }
 

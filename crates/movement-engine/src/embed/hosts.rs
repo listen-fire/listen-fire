@@ -418,21 +418,10 @@ impl AdapterReply {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub struct ActingUser {
-    pub id: String,
-    pub display: Option<String>,
-    pub email: Option<String>,
-}
-
 /// The adapters slot: every system a movement reads or writes.
 pub trait Adapters {
     fn resolve(&mut self, request: AdapterRequest) -> HostFuture<AdapterInstance>;
     fn call(&mut self, call: AdapterCall) -> HostFuture<AdapterReply>;
-    /// `@user_*`: who caused the event, as the source instance says.
-    fn acting_user(&mut self, _instance: &str, _event: &Data) -> HostFuture<Option<ActingUser>> {
-        ready(Ok(None))
-    }
 }
 
 // ── modules (plugins) ──

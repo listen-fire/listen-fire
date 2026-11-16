@@ -143,17 +143,6 @@ pub trait Reader {
     /// that takes no credential). None when it offers no `awaitKeys`: a run
     /// waiting on it fails as it starts, saying so.
     async fn await_keys(&self, external: &str, install: Option<&Credential>, edge: &str, heads: Js) -> Result<Option<Js>, String>;
-    /// The external's `getActorCandidates` of `event`, called as `install`.
-    /// None when it offers none: the identity an arrival named is all there is.
-    async fn actor_candidates(&self, external: &str, install: Option<&Credential>, event: &Js) -> Result<Option<Js>, String>;
-    /// Whether a lookup of who acted could be read by anything (crate::actor::needs_lookup).
-    fn needs_actor_lookup(&self) -> bool;
-    /// Whether the module's landing of `record_type`, on the connection `install`
-    /// names, declares an `Actor` of its own, so listen-fire writes none there.
-    /// A reader with no described schemas declares none.
-    fn declares_own_actor(&self, _external: &str, _install: Option<&Credential>, _record_type: &str) -> bool {
-        false
-    }
     /// The answers its host functions give `questions` (crate::plugin_answers).
     /// A reader that serves none can reach none.
     async fn answer_host(&self, questions: &[PluginQuestion]) -> Result<PluginAnswers, Refused> {
@@ -235,12 +224,6 @@ impl<'a> LfDoors<'a, SessionReader<'a>> {
 }
 
 impl<R: Reader> LfDoors<'_, R> {
-    /// Each arrival with who acted written on its landing, before it is judged
-    /// or logged (crate::actor).
-    pub(crate) async fn with_actors(&self, external: &str, install: Option<&Credential>, arrivals: Vec<ArrivalIn>) -> Vec<ArrivalIn> {
-        crate::actor::with_actors(&self.reader, &crate::actor::ActorSource { external, install }, arrivals, self.reader.needs_actor_lookup()).await
-    }
-
     pub(crate) fn install(&self, name: &str) -> Option<&Credential> {
         self.installs.iter().find(|c| c.name == name)
     }
@@ -515,10 +498,6 @@ impl<R: Reader> InboundStore for LfDoors<'_, R> {
         self.reader.reads_deliveries(&source.adapter_type)
     }
 
-    async fn with_actors(&self, source: &Source, arrivals: Vec<ArrivalIn>) -> Vec<ArrivalIn> {
-        LfDoors::with_actors(self, &source.adapter_type, self.install(&source.install), arrivals).await
-    }
-
     async fn preprocess(&self, source: &Source, raw: &Js, checkpoint: Option<&Js>) -> Result<Extraction, Unanswered> {
         let install = self.install(&source.install).ok_or_else(|| Unanswered::Refused(format!("no install {}", source.install)))?;
         self.reader.preprocess(&source.adapter_type, install, raw, checkpoint).await
@@ -669,7 +648,6 @@ impl<R: Reader> PushStore for LfDoors<'_, R> {
     /// mark before the arrivals, and each run's trigger is noted on its
     /// waits. What landed for none is logged alone.
     async fn log_pushed_arrivals(&self, caller: &PushCaller, arrivals: &[ArrivalIn], request: &Js) -> Result<(), String> {
-        let arrivals = &self.with_actors(&caller.adapter_type, self.install(&caller.subscription_id), arrivals.to_vec()).await;
         let (logged, at) = (logged(arrivals), iso(0));
         let log = DeliveryArrivals { team_id: &caller.team_id, adapter_type: &caller.adapter_type, arrivals: &logged, at: &at, resend_window_ms: self.resend_window_ms(&caller.adapter_type) };
         let credential = self.install(&caller.subscription_id).filter(|c| c.binding != Binding::Install).map(|c| c.name.as_str());
@@ -718,12 +696,6 @@ pub struct SessionReader<'a> {
     session: &'a Session,
 }
 
-impl<'a> SessionReader<'a> {
-    pub(crate) fn of(session: &'a Session) -> SessionReader<'a> {
-        SessionReader { session }
-    }
-}
-
 impl SessionReader<'_> {
     async fn call(&self, external: &str, install: Option<&Credential>, method: &str, params: serde_json::Value) -> Result<Js, Unanswered> {
         let set = self.session.file_set();
@@ -770,23 +742,6 @@ impl Reader for SessionReader<'_> {
         }
         let params = serde_json::json!({ "edge": edge, "heads": crate::wire::json_of_js(&heads) });
         Ok(Some(self.call(external, install, "awaitKeys", params).await?))
-    }
-
-    async fn actor_candidates(&self, external: &str, install: Option<&Credential>, event: &Js) -> Result<Option<Js>, String> {
-        if !self.lists(external, "getActorCandidates") {
-            return Ok(None);
-        }
-        let params = serde_json::json!({ "event": crate::wire::json_of_js(event) });
-        Ok(Some(self.call(external, install, "getActorCandidates", params).await?))
-    }
-
-    fn needs_actor_lookup(&self) -> bool {
-        crate::actor::needs_lookup(&self.session.file_set().files)
-    }
-
-    fn declares_own_actor(&self, external: &str, install: Option<&Credential>, record_type: &str) -> bool {
-        let set = self.session.file_set();
-        set.schemas_of(external).is_some_and(|schemas| crate::actor::declares_own_actor(schemas, install.map(|install| install.name.as_str()), record_type))
     }
 
     async fn preprocess(&self, external: &str, install: &Credential, raw: &Js, checkpoint: Option<&Js>) -> Result<Extraction, Unanswered> {
@@ -1584,13 +1539,7 @@ pub(crate) mod tests {
     pub(crate) struct NoReader;
 
     impl Reader for NoReader {
-        async fn actor_candidates(&self, _external: &str, _install: Option<&Credential>, _event: &Js) -> Result<Option<Js>, String> {
-            Ok(None)
-        }
 
-        fn needs_actor_lookup(&self) -> bool {
-            false
-        }
 
         async fn await_keys(&self, _: &str, _: Option<&Credential>, _: &str, _: Js) -> Result<Option<Js>, String> {
             Ok(None)
@@ -1674,13 +1623,7 @@ pub(crate) mod tests {
     struct ArrivalsReader(Vec<ArrivalIn>);
 
     impl Reader for ArrivalsReader {
-        async fn actor_candidates(&self, _external: &str, _install: Option<&Credential>, _event: &Js) -> Result<Option<Js>, String> {
-            Ok(None)
-        }
 
-        fn needs_actor_lookup(&self) -> bool {
-            false
-        }
 
         async fn await_keys(&self, _: &str, _: Option<&Credential>, _: &str, _: Js) -> Result<Option<Js>, String> {
             Ok(None)

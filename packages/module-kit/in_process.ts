@@ -137,8 +137,6 @@ const VALIDATED_METHODS: ReadonlySet<string> = new Set<MethodName>([
   'readRecord',
   'translateFilter',
   'getDedupRules',
-  'getActorCandidates',
-  'extractActor',
   'describeOpaqueId',
   'invokeFieldFunction',
   'poll',

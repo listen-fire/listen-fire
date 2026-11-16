@@ -19,7 +19,7 @@ fn catalog() -> CatalogSnapshot {
 }
 
 fn check(source: &str) -> Vec<Diagnostic> {
-    let options = CheckOptions { upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
+    let options = CheckOptions { upgrading_from: None, limiting_function: None, zones: &movement_checker::host::native::NativeZones };
     check_source(source, &catalog(), options).unwrap()
 }
 

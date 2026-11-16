@@ -125,7 +125,7 @@ describe('@lf/email checks its own inbound', () => {
     expect(calls[0]).toBe('https://api.resend.com/emails/receiving/em_1');
   });
 
-  it("the run an email fires reads its sender as the actor, and a forwarding inbox it came through as a relay", async () => {
+  it("the door names an email's sender on its arrival, and claims nothing", async () => {
     const { adapter } = load({ resendApiKey: 're_1' });
     /** The event the run the delivery's one arrival fires is handed, as the host hands it. */
     const fired = async (input: InboundCheckInput) => {
@@ -135,20 +135,13 @@ describe('@lf/email checks its own inbound', () => {
       return arrivalTriggerOf({ pipelineInputId: 'inbox:triage', adapterType: 'email', arrival, now: new Date() });
     };
     const forwarded = await fired(request({ body: mailgunForm(MAILGUN_KEY, { 'X-Forwarded-For': 'dealflow@fund.example' }), secret: MAILGUN_KEY }));
-    expect(await adapter.extractActor!({ event: forwarded })).toMatchObject({ identifier: 'ada@example.com', scheme: 'email', email: 'ada@example.com' });
-    expect((await adapter.getActorCandidates!({ event: forwarded })).map((c) => [c.identity.identifier, c.source])).toEqual([
-      ['ada@example.com', 'originator'],
-      ['dealflow@fund.example', 'relay'],
-      ['in+k@lf.test', 'relay'],
-    ]);
     const body = JSON.stringify({ type: 'email.received', data: { email_id: 'em_1', from: 'Ada <ada@example.com>', to: ['in+k@lf.test'] } });
     const sent = await fired(request({ body, headers: resendDelivery(body), secret: RESEND_SECRET }));
-    expect(await adapter.extractActor!({ event: sent })).toMatchObject({ identifier: 'ada@example.com', name: 'Ada', label: 'Ada' });
-    // The door names the sender on the arrival itself, and a run reads that.
     expect(sent.arrival?.actor).toEqual({ identifier: 'ada@example.com', scheme: 'email', adapterType: 'email', email: 'ada@example.com', name: 'Ada', label: 'Ada' });
-    // Nothing vouches for a From: line, so the module claims nothing.
-    expect(sent.arrival?.actor).not.toHaveProperty('proven');
     expect(forwarded.arrival?.actor).toEqual({ identifier: 'ada@example.com', scheme: 'email', adapterType: 'email', email: 'ada@example.com', label: 'ada@example.com' });
+    // Hosts no longer ask a module who acted (adapter protocol 2.10).
+    expect('extractActor' in adapter).toBe(false);
+    expect('getActorCandidates' in adapter).toBe(false);
   });
 
   it('a message says which inboxes forwarded it, as a list of addresses: none when no header names one', async () => {

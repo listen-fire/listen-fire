@@ -799,6 +799,13 @@ pub struct AdapterSpec {
     /// `listen to x { … }`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub listen_settings_become: Option<SettingsBecome>,
+    /// The release before which a host may have let only registered senders
+    /// set a listen on this module off (`listensLimitedBefore`, Slack's
+    /// `0.16.0`): from it, only a listen's filter decides. An upgrade from an
+    /// older key tells each listen whose filter does not limit it
+    /// (MOV_LISTEN_NOW_OPEN).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub listens_limited_before: Option<String>,
 }
 
 /// A module's mapping from its 0.12 listen settings to the traversal a

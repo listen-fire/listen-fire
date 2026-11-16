@@ -42,7 +42,7 @@ fn diagnostics(catalog: &str, body: &str, pin: Option<&str>) -> Vec<Diagnostic> 
         "import { desk as desk_module, chat as chat_module } from adapters; desk = connect desk_module; chat = connect chat_module; function go(t: <text>, p: <desk-[:Tickets]->>) {"
     };
     let source = format!("{header}\n{body}}}\n");
-    let options = CheckOptions { upgrading_from: pin, zones: &movement_checker::host::native::NativeZones };
+    let options = CheckOptions { upgrading_from: pin, limiting_function: None, zones: &movement_checker::host::native::NativeZones };
     let mut found = check_source(&source, &CatalogSnapshot::load(catalog).unwrap(), options).unwrap_or_else(|e| panic!("{source}: {e:?}"));
     found.retain(|d| d.code != "MOV_AWAIT_MAY_HANG");
     found

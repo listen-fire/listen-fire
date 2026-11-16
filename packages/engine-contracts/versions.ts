@@ -37,11 +37,13 @@ export const PARK_STATE_VERSION = 4;
 export const SUPPORTED_PARK_STATE_VERSIONS: ReadonlySet<number> = new Set([1, 3, 4]);
 
 /** The host families and the entry points (docs/contracts/host-families.md),
- *  carried on every `segment.open`. */
-export const HOST_FAMILIES_VERSION = 2;
+ *  carried on every `segment.open`. Version 3 is 0.16's, which has no
+ *  `lookup` family (`@user_*` is retired); 2 was 0.15's. */
+export const HOST_FAMILIES_VERSION = 3;
 
-/** The host families versions this release serves. */
-export const SUPPORTED_HOST_FAMILIES_VERSIONS: ReadonlySet<number> = new Set([2]);
+/** The host families versions this release serves: its own engine's. A host
+ *  that also runs an older release's engine serves that one's version with it. */
+export const SUPPORTED_HOST_FAMILIES_VERSIONS: ReadonlySet<number> = new Set([3]);
 
 /** What a system caller verifier sees and answers (docs/contracts/system-caller.md):
  *  the in-process interface a host's system endpoints authenticate through. */

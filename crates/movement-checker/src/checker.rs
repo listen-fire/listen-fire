@@ -55,6 +55,11 @@ pub struct Checker<'c> {
     pub bound_sort_keys: std::cell::RefCell<std::collections::HashSet<(Option<String>, usize, usize)>>,
     /// Checking for a move up from this version (`upgradingFrom`).
     pub upgrading_from: Option<&'c str>,
+    /// The plugin a host limits a listen's senders with (crate::CheckOptions).
+    pub limiting_function: Option<&'c str>,
+    /// Where the checked file's last import ends: a fix that imports a
+    /// plugin adds its import after it (MOV_LISTEN_NOW_OPEN).
+    pub last_import: Option<movement_parser::ast::Span>,
     /// The host's zone database.
     pub zones: &'c dyn crate::host::ZoneLookup,
     /// Each movement's parameter names, by its symbol (`ScopeSymbol.movement`).
@@ -268,6 +273,8 @@ impl<'c> Checker<'c> {
             bound_sort_keys: Default::default(),
             schemas: Default::default(),
             upgrading_from: options.upgrading_from,
+            limiting_function: options.limiting_function,
+            last_import: None,
             return_stack: Vec::new(),
             file_value: None,
             function_returns: Default::default(),

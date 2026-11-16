@@ -9,7 +9,7 @@ const CATALOG: &str = r#"{"adapters":{"registry":{"canFire":true,"constructionAr
 
 fn check(source: &str) -> Vec<Diagnostic> {
     let catalog = CatalogSnapshot::load(CATALOG).unwrap();
-    let options = CheckOptions { upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
+    let options = CheckOptions { upgrading_from: None, limiting_function: None, zones: &movement_checker::host::native::NativeZones };
     check_source(source, &catalog, options)
         .unwrap()
         .into_iter()
@@ -83,7 +83,7 @@ function main(e: <reg-[:entities]->>) {
 }
 "#;
     let catalog = CatalogSnapshot::load(WRITABLE).unwrap();
-    let options = CheckOptions { upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
+    let options = CheckOptions { upgrading_from: None, limiting_function: None, zones: &movement_checker::host::native::NativeZones };
     let said: Vec<(String, String)> = check_source(source, &catalog, options)
         .unwrap()
         .into_iter()

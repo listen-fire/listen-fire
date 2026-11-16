@@ -314,26 +314,6 @@ const ROUTES: Record<string, Route> = {
     context.ledger.charge(answer.cost);
     return new Plain(wired(wire, answer, 'files.resolveFileText'));
   },
-  /** The principal the event acts as (`@user_*`), the event on the eval
-   *  wire, and the answer back on it. A host that throws answers an error,
-   *  which the engine reads as no user, as the TypeScript engine forgives
-   *  the throw (`resolveMovementActingUserUncached`). */
-  async 'lookup.resolveActingUser'(request, { host, wire }) {
-    if (request.wire !== true) throw new RustShimError('lookup.resolveActingUser carries its event on the eval wire');
-    const event = wire.read(request.event);
-    if (!isTriggerEvent(event)) throw new RustShimError('lookup.resolveActingUser event is a trigger event');
-    const triggerId = optionalString(request.triggerId, 'lookup.resolveActingUser triggerId');
-    const actingUser = await host.lookup.resolveActingUser({
-      ...(triggerId !== undefined ? { triggerId } : {}),
-      instance: string(request.instance, 'lookup.resolveActingUser instance'),
-      event,
-      // Last, as run_context.ts's binding adds it.
-      segmentId: segmentOf(request),
-    });
-    const value = wire.value(actingUser);
-    if (value === REFUSED) throw new RustShimError('lookup.resolveActingUser answered a principal the eval wire cannot carry as itself');
-    return new Plain(value);
-  },
   /** `FILE(content, type)`: the host renders and stores the artifact; its
    *  descriptor comes back on the eval wire. */
   async 'files.render'(request, { host, wire }) {

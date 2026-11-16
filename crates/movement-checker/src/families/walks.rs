@@ -808,6 +808,9 @@ fn report_read(typing: &mut Typing, position: &Position, property: &str) {
             if schema.open_properties == Some(true) || report_edge_read_as_field(typing, position, &FieldRead { root: None, property, rest: &[] }, None) {
                 return;
             }
+            if crate::families::claims::report_actor_retired(typing, position, schema, property) {
+                return;
+            }
             let mut available: Vec<&str> = schema.properties.keys().map(String::as_str).collect();
             available.extend(write_typed.iter().map(String::as_str).filter(|name| !schema.properties.contains_key(*name)));
             let hint = match p.instance.schema.narrow_by.as_ref().and_then(|n| n.get(&p.position)).map(Vec::as_slice) {
@@ -1389,7 +1392,7 @@ pub fn asks_host(expr: &Expression, purity: PluginPurity) -> bool {
 
 /// Called by the type core for each `@key` read (`checkMetaKey`).
 pub fn observe_meta(typing: &mut Typing, key: &str) {
-    if META_KEYS.contains(&key) {
+    if META_KEYS.contains(&key) || crate::families::claims::report_acting_user_retired(typing, key) {
         return;
     }
     let closest = closest_by_edit_distance(key, META_KEYS);
@@ -1400,7 +1403,7 @@ pub fn observe_meta(typing: &mut Typing, key: &str) {
 }
 
 /// `MOVEMENT_META_KEYS`, in the TypeScript's order (the first closest wins).
-const META_KEYS: &[&str] = &["current_date", "current_timestamp", "user_email", "user_name", "user_id", "actor_email", "actor_name", "actor_id"];
+const META_KEYS: &[&str] = &["current_date", "current_timestamp"];
 
 /// `didYouMean`: ` — did you mean 'x'?` when a close candidate exists.
 pub fn did_you_mean(value: &str, candidates: &[&str]) -> String {

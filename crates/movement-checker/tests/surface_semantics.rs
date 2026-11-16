@@ -13,7 +13,7 @@ const CATALOG: &str = r#"{"adapters":{"slack":{"constructionArgs":[],"schemas":{
 
 fn check(source: &str) -> Vec<Diagnostic> {
     let catalog = CatalogSnapshot::load(CATALOG).unwrap();
-    let options = CheckOptions { upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
+    let options = CheckOptions { upgrading_from: None, limiting_function: None, zones: &movement_checker::host::native::NativeZones };
     check_source(source, &catalog, options).unwrap().into_iter().filter(|d| d.is_error()).collect()
 }
 
@@ -82,7 +82,7 @@ const CHAT: &str = r#"{"adapters":{"chat":{"constructionArgs":[],"schemas":{"":{
 fn chat_codes(body: &str) -> Vec<String> {
     let source = format!("import {{ `@lf/chat` as chat }} from adapters\nc = connect chat\n\nfunction go() {{\n{body}\n}}");
     let catalog = CatalogSnapshot::load(CHAT).unwrap();
-    let options = CheckOptions { upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
+    let options = CheckOptions { upgrading_from: None, limiting_function: None, zones: &movement_checker::host::native::NativeZones };
     check_source(&source, &catalog, options).unwrap().into_iter().filter(|d| d.is_error()).map(|d| d.code).collect()
 }
 

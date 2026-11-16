@@ -796,7 +796,7 @@ mod tests {
         let source = "import { `@lf/slack` as slack } from adapters\nchat = connect slack\n\nfunction scan(c: <chat-[:channel]->>) {\n  name = Text.upper(c.Name)\n  return name\n}\n";
         let (status, answer) = ask(source, "{}");
         assert_eq!(status, OK);
-        let options = movement_checker::CheckOptions { upgrading_from: None, zones: &crate::env_services::EnvZones };
+        let options = movement_checker::CheckOptions { upgrading_from: None, limiting_function: None, zones: &crate::env_services::EnvZones };
         assert_eq!(answer, movement_checker::story::story_analysis_json(source, catalog, options));
         assert_eq!(answer["storyAnalysisVersion"], json!(movement_checker::story::STORY_ANALYSIS_VERSION));
         assert!(answer["nodes"].as_array().unwrap().iter().any(|n| n["kind"] == "instance" && n["name"] == "chat"), "{answer}");

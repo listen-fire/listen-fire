@@ -19,7 +19,7 @@ const CATALOG: &str = r#"{"adapters":{"at":{"canFire":false,"constructionArgs":[
 fn diagnostics(body: &str) -> (String, Vec<movement_checker::Diagnostic>) {
     let source = format!("import {{ at as m }} from adapters\nat = connect m\nfunction go() {{\n{body}\n}}\n");
     let catalog = CatalogSnapshot::load(CATALOG).unwrap();
-    let options = CheckOptions { upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
+    let options = CheckOptions { upgrading_from: None, limiting_function: None, zones: &movement_checker::host::native::NativeZones };
     let found = movement_checker::check_source(&source, &catalog, options).unwrap_or_else(|e| panic!("{source}: {e:?}"));
     (source, found.into_iter().filter(|d| d.severity.is_none()).collect())
 }
@@ -220,7 +220,7 @@ fn a_refused_read_is_never_called_an_always_present_test() {
     let every_code = |body: &str| -> Vec<String> {
         let source = format!("import {{ at as m }} from adapters\nat = connect m\nfunction go() {{\n{body}\n}}\n");
         let catalog = CatalogSnapshot::load(CATALOG).unwrap();
-        let options = CheckOptions { upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
+        let options = CheckOptions { upgrading_from: None, limiting_function: None, zones: &movement_checker::host::native::NativeZones };
         let found = movement_checker::check_source(&source, &catalog, options).unwrap_or_else(|e| panic!("{source}: {e:?}"));
         found.into_iter().map(|d| d.code).collect()
     };

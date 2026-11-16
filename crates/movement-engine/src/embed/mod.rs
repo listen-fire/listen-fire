@@ -190,7 +190,7 @@ pub fn check(source: &str, catalog: &Catalog, language_version: &str) -> Vec<Pro
     if let Some(refusal) = movement_checker::language_version_diagnostic(language_version) {
         return vec![Problem { code: refusal.code, message: external(&refusal.message), line: 0, column: 0, severity: Severity::Error }];
     }
-    let options = movement_checker::CheckOptions { upgrading_from: None, zones: &NativeZones };
+    let options = movement_checker::CheckOptions { upgrading_from: None, limiting_function: None, zones: &NativeZones };
     match movement_checker::check_source(source, &catalog.snapshot, options) {
         Err(refusal) => vec![Problem { code: "MOV_PARSE".into(), message: external(&refusal.message), line: 0, column: 0, severity: Severity::Error }],
         Ok(diagnostics) => diagnostics
@@ -264,7 +264,7 @@ pub fn listens(source: &str, catalog: &Catalog, language_version: &str) -> Resul
     let form = movement_parser::util::form::form_of_text(source);
     let program = movement_parser::stmt::parse_program(&form, true)
         .map_err(|e| format!("{} (line {}, col {})", movement_parser::util::form::external_text(&e.message), e.loc.line, e.loc.col))?;
-    let options = movement_checker::CheckOptions { upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
+    let options = movement_checker::CheckOptions { upgrading_from: None, limiting_function: None, zones: &movement_checker::host::native::NativeZones };
     let mut plans = movement_checker::answer::check_answer(&program, &catalog.snapshot, options).listens.into_iter();
     let mut aliases = std::collections::HashMap::new();
     let mut instances = std::collections::HashMap::new();
@@ -472,8 +472,8 @@ pub enum ActorScheme {
 }
 
 /// Who acted on an arrival, as its module says at the door (adapter protocol
-/// 2.7): what `@actor_*` reads, and what a host resolves `@user_*` from
-/// ([`Adapters::acting_user`] is handed it on the event's `arrival.actor`).
+/// 2.7): carried on the run's trigger as it came. A filter or a run reads who
+/// acted from a claim on the landing instead (a branded field).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Actor {
     /// The provider's id for them (an address, a phone number, a member id).
@@ -519,7 +519,7 @@ impl Actor {
 
 /// What landed on a listen's last edge, as its module reports it (adapter
 /// protocol 2.6; who acted, 2.7): the run it fires binds the function's
-/// parameter to the landing, reads `@actor_*` from the actor, and stamps its
+/// parameter to the landing, carries the actor on its trigger, and stamps its
 /// writes with when it happened.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Arrival {

@@ -4,7 +4,8 @@
 //! Codes: MOV_LISTEN_FILE_LEVEL, MOV_LISTEN_NOT_INSTANCE,
 //! MOV_LISTEN_DUPLICATE, MOV_LISTEN_ALIAS_DUPLICATE, MOV_LISTEN_PARAM_MISMATCH,
 //! MOV_LISTEN_SHAPE_MISMATCH, MOV_LISTEN_MISSING, MOV_CALLBACK_RETIRED,
-//! MOV_LISTEN_SETTINGS_RETIRED (settings_become.rs) (and
+//! MOV_LISTEN_SETTINGS_RETIRED (settings_become.rs), MOV_LISTEN_NOW_OPEN
+//! (now_open.rs) (and
 //! MOV_ADAPTER_NOT_CONSTRUCTED and MOV_CALL_NOT_MOVEMENT where a listen
 //! raises them).
 //!
@@ -33,6 +34,7 @@ use crate::scope::{Resolution, ScopeId, SymbolId, SymbolKind};
 const EVERY_KEY: &str = "every";
 const POLL_INTERVAL_KEY: &str = "pollIntervalSeconds";
 
+mod now_open;
 pub(crate) mod settings_become;
 mod traversal;
 

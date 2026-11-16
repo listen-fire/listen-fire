@@ -44,7 +44,6 @@ const firedActorSchema = z.object({
   email: z.string().optional(),
   name: z.string().optional(),
   label: z.string().optional(),
-  proven: z.boolean().optional(),
 });
 
 /** The source system's identifier for the record an inbound event is about. */

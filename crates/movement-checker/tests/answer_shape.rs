@@ -75,7 +75,7 @@ fn check(shape: &Shape, value: &str, body: &str) -> Vec<String> {
 }
 
 fn check_source_of(shape: &Shape, source: &str) -> Vec<String> {
-    let options = CheckOptions { upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
+    let options = CheckOptions { upgrading_from: None, limiting_function: None, zones: &movement_checker::host::native::NativeZones };
     check_source(source, &CatalogSnapshot::load(shape.catalog).unwrap(), options)
         .unwrap_or_else(|e| panic!("{source}: {e:?}"))
         .into_iter()
@@ -163,7 +163,7 @@ fn the_node_s_fields_are_stamped_on_the_field_s_value() {
         let source = source(shape, "Refund", "  return s.Approve\n");
         let catalog = CatalogSnapshot::load(shape.catalog).unwrap();
         let program = movement_parser::stmt::parse_program(&form_of_text(&source), false).unwrap();
-        let options = CheckOptions { upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
+        let options = CheckOptions { upgrading_from: None, limiting_function: None, zones: &movement_checker::host::native::NativeZones };
         let answer = check_answer(&program, &catalog, options);
         assert_eq!(answer.unplaced, Vec::<String>::new());
         let stamped: Vec<&Json> = answer.stamps.iter().filter(|s| s.get("nodeSchema").is_some()).collect();

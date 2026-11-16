@@ -181,9 +181,6 @@ pub enum Ask {
     /// A rootless `EXISTS(-[…]->)` inside a hop's WHERE, walked off the
     /// record the evaluation is scoped at (`evaluateExists`).
     ScopedExists { expr: Expression },
-    /// `@user_*` and `@actor_*` (`resolveMovementMetaKey`): the acting user
-    /// the host looks up, the actor the source adapter parses.
-    Meta { key: String },
     /// A function the destination field advertises (`invokeFieldFunction`),
     /// called by its lowered name with its arguments' values.
     FieldFunction { id: String, args: Vec<Js> },
@@ -205,12 +202,6 @@ fn json_text(value: &Js) -> String {
         Js::Undefined => "undefined".into(),
         other => crate::js::json_stringify(other, 0),
     }
-}
-
-/// The ambients a run reads through its host (`resolveMovementMetaKey`'s
-/// acting-user and raw-actor families).
-pub fn is_host_meta(key: &str) -> bool {
-    matches!(key, "user_email" | "user_name" | "user_id" | "actor_email" | "actor_name" | "actor_id")
 }
 
 /// An evaluation in progress, or a host answer it awaits.
@@ -547,16 +538,6 @@ impl<'a> Evaluator<'a> {
                 };
                 let value = reader.ask(Ask::Ai { prompt: text.clone(), tier: tier.clone() }).await?.value;
                 let id = reader.ai_origin(&text, &inputs);
-                Ok(Evaluated { value, prov: Prov::Built(Trail { origins: vec![id], direct: Some(id) }) })
-            }
-            // `@user_*` / `@actor_*`: the run's lookups, then the key's trail,
-            // minted after the value as the TypeScript's `fromOrigin` is.
-            Expression::Meta { key } if is_host_meta(key) => {
-                let Some(reader) = self.reader() else {
-                    return Err(EvalError::Fallback("an ambient is the run's".into()));
-                };
-                let value = reader.ask(Ask::Meta { key: key.clone() }).await?.value;
-                let id = reader.meta(key);
                 Ok(Evaluated { value, prov: Prov::Built(Trail { origins: vec![id], direct: Some(id) }) })
             }
             Expression::Traverse { alias_root: Some(root), .. } => self.traverse_from(expr, root).await,

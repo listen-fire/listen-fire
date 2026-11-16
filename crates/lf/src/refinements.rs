@@ -541,8 +541,6 @@ pub struct Refining<'a, 'w, W> {
     pub adapter: &'a str,
     /// Its `listEntryPoints` answer, for projecting a walked node.
     pub entries: &'a [Js],
-    /// What its module lists: whether what lands off a walked node says who acted (crate::actor).
-    pub methods: &'a [String],
     pub walker: &'a Walker<'w, W>,
 }
 
@@ -779,12 +777,10 @@ fn project_refined<W>(input: &Refining<'_, '_, W>, refined: &Refined) -> Result<
         entries.push(entry(target, target));
         descriptors.insert(target.clone(), descriptor.clone());
     }
-    // A walked edge's landing is described only here, so what lands on it is offered here.
-    let crate::actor::Offered { reached, descriptors, .. } = crate::actor::with_actor_descriptors(&crate::actor::Introspection { entries: &entries, descriptors: &descriptors, methods: input.methods });
     let projected = crate::schema::instance_schema_from_descriptors(&crate::schema::ProjectionInput {
         adapter_type: input.adapter,
         entries: &entries,
-        reached: &reached,
+        reached: &[],
         descriptors: &descriptors,
         meta_descriptor: None,
         supports_in_place_update: false,
@@ -956,7 +952,7 @@ mod tests {
     fn refined_with(walk: &Sheets, source: &str) -> Result<Js, String> {
         let walker = Walker::new(walk, "sheets");
         let found = chains(source);
-        block_on(refine_instance_schema(schema(), &found.iter().collect::<Vec<_>>(), &Refining { adapter: "sheets", entries: &[], methods: &[], walker: &walker }))
+        block_on(refine_instance_schema(schema(), &found.iter().collect::<Vec<_>>(), &Refining { adapter: "sheets", entries: &[], walker: &walker }))
     }
 
     fn refined(source: &str) -> (Js, Vec<String>) {
@@ -980,32 +976,13 @@ mod tests {
             schema.to_json()
         );
         let catalog = movement_parser::catalog::types::CatalogSnapshot::load(&catalog).unwrap();
-        let options = movement_checker::CheckOptions { upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
+        let options = movement_checker::CheckOptions { upgrading_from: None, limiting_function: None, zones: &movement_checker::host::native::NativeZones };
         movement_checker::check_source(source, &catalog, options)
             .unwrap()
             .into_iter()
             .filter(|d| d.severity.is_none())
             .map(|d| (d.code, d.message))
             .collect()
-    }
-
-    /// A walked edge's landing is described only by the walk, so it is offered
-    /// who acted there, or a filter narrowed to it could not read it.
-    #[test]
-    fn what_lands_on_a_walked_edge_may_say_who_acted_when_its_module_reports_it() {
-        let walk = Sheets { asked: RefCell::new(Vec::new()), failing: false };
-        let walker = Walker::new(&walk, "sheets");
-        let member = Js::parse(br#"{"typeId":"t","displayName":"Table","fields":[],"references":[{"fieldId":"Changes","name":"Changes","targetTypeId":"Change","listenable":true}]}"#).unwrap();
-        let landing = Js::parse(br#"{"typeId":"Change","displayName":"Change","fields":[],"references":[]}"#).unwrap();
-        let landings = [("Change".to_string(), landing)];
-        let refined = Refined { name: "Base \"x\"", synthetic: "Base::x", descriptor: &member, landings: &landings };
-        let actor_of = |methods: &[String]| {
-            let input = Refining { adapter: "sheets", entries: &[], methods, walker: &walker };
-            let projected = project_refined(&input, &refined).unwrap();
-            projected.landings[0].1.get("properties").and_then(|p| p.get("Actor")).map(Js::to_json)
-        };
-        assert_eq!(actor_of(&["extractActor".to_string()]).as_deref(), Some(r#"{"kind":"maybeAbsent","of":{"kind":"record","position":{"kind":"position","position":"ListenFireActor"}}}"#));
-        assert_eq!(actor_of(&[]), None);
     }
 
     const SELECT: &str = "  sheet = only(s-[x:Spreadsheet WHERE x.Title == \"Pipeline Sheet\"]->)\n  if (sheet == null) { fail(\"none\") }";
@@ -1048,7 +1025,7 @@ mod tests {
             schema.to_json()
         );
         let catalog = movement_parser::catalog::types::CatalogSnapshot::load(&catalog).unwrap();
-        let options = movement_checker::CheckOptions { upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
+        let options = movement_checker::CheckOptions { upgrading_from: None, limiting_function: None, zones: &movement_checker::host::native::NativeZones };
         let program = crate::check::parse(source).map_err(|e| e.message).unwrap();
         movement_checker::answer::check_answer(&program, &catalog, options).stamps
     }

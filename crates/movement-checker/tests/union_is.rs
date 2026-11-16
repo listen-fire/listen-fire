@@ -23,7 +23,7 @@ const CATALOG: &str = r#"{"adapters":{"crm":{"canFire":false,"constructionArgs":
 fn errors(functions: &str) -> Vec<String> {
     let source = format!("import {{ crm as m }} from adapters\ncrm = connect m\n{functions}\n");
     let catalog = CatalogSnapshot::load(CATALOG).unwrap();
-    let options = CheckOptions { upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
+    let options = CheckOptions { upgrading_from: None, limiting_function: None, zones: &movement_checker::host::native::NativeZones };
     check_source(&source, &catalog, options)
         .unwrap_or_else(|e| panic!("{source}: {e:?}"))
         .into_iter()
@@ -92,7 +92,7 @@ fn a_walk_or_a_write_off_the_narrowed_landing_is_held_to_its_member() {
 fn all(functions: &str) -> Vec<String> {
     let source = format!("import {{ crm as m }} from adapters\ncrm = connect m\n{functions}\n");
     let catalog = CatalogSnapshot::load(CATALOG).unwrap();
-    let options = CheckOptions { upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
+    let options = CheckOptions { upgrading_from: None, limiting_function: None, zones: &movement_checker::host::native::NativeZones };
     check_source(&source, &catalog, options)
         .unwrap()
         .into_iter()

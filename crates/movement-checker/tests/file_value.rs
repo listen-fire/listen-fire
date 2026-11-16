@@ -17,7 +17,7 @@ fn check(lines: &[&str], library: Option<&str>) -> Vec<Diagnostic> {
         None => "{}".to_string(),
     };
     let catalog = CatalogSnapshot::load(&SNAPSHOT.replace("FILES", &files)).unwrap();
-    let options = CheckOptions { upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
+    let options = CheckOptions { upgrading_from: None, limiting_function: None, zones: &movement_checker::host::native::NativeZones };
     check_source(&source, &catalog, options).unwrap()
 }
 

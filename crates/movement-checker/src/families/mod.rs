@@ -5,6 +5,7 @@
 
 pub mod arg_fit;
 pub mod calls;
+pub mod claims;
 pub mod closures;
 pub mod collection_config;
 pub mod extract_keyword;

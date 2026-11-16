@@ -8,7 +8,7 @@
 // It loads with the engine artifact, which a browser never downloads: the
 // editor's live diagnostics stay on the TypeScript checker.
 
-import { callCheckAnswer, callCheckCompatible, callCheckProgram, callLanguageStanding, callLanguageVersion } from '../wasm/loader';
+import { callCheckAnswer, callCheckCompatible, callCheckProgram, callLanguageStanding, callLanguageVersion, type CheckCallOptions } from '../wasm/loader';
 import type { Loc, Span } from '../parser/ast';
 import { languageVersionDiagnostic, type LanguageVersion, type LanguageVersionStanding } from '../language_version';
 import type { CatalogSnapshot } from '../service/snapshot';
@@ -21,6 +21,11 @@ export interface RustCheckOptions {
   languageVersion: LanguageVersion;
   /** Checking for a move up from this release (`CheckOptions.upgradingFrom`). */
   upgradingFrom?: LanguageVersion;
+  /** The catalog key of the pure plugin the host limits a listen's senders
+   *  with (`@lf-platform/team/isMember`): an upgrade's `MOV_LISTEN_NOW_OPEN`
+   *  then carries the check that calls it, as an unsafe fix
+   *  (`CheckOptions.limiting_function`). */
+  limitingFunction?: string;
 }
 
 /** A source the Rust checker could not check: it does not parse, or the
@@ -168,8 +173,11 @@ export function compatibleInRust(request: {
   throw new Error(`the Rust checker answered check.compatible with ${JSON.stringify(json)}`);
 }
 
-function callOptions(options: RustCheckOptions): { upgradingFrom?: string } {
-  return options.upgradingFrom === undefined ? {} : { upgradingFrom: options.upgradingFrom };
+function callOptions(options: RustCheckOptions): CheckCallOptions {
+  return {
+    ...(options.upgradingFrom !== undefined ? { upgradingFrom: options.upgradingFrom } : {}),
+    ...(options.limitingFunction !== undefined ? { limitingFunction: options.limitingFunction } : {}),
+  };
 }
 
 /** Every fact a stamp may carry; a stamp carries exactly one, as the
@@ -274,6 +282,7 @@ export function diagnosticOf(value: unknown): Diagnostic {
     ...(severity !== undefined ? { severity } : {}),
     ...(value.upgrade === true ? { upgrade: true } : {}),
     ...(value.fix !== undefined ? { fix: fixOf(value.fix) } : {}),
+    ...(typeof value.file === 'string' ? { file: value.file } : {}),
   };
 }
 

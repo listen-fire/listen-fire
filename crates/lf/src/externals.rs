@@ -534,11 +534,32 @@ pub fn needed_externals(externals: Vec<External>, files: &[std::rc::Rc<Parsed>],
         .collect()
 }
 
+/// A connection setting 0.16 retired, by the module it was the setting of:
+/// what replaces it. A setting is kept with the connection here, in
+/// listen-fire's own configuration, not in a movement's text, so no upgrade
+/// can rewrite it: listen-fire refuses the connection until the author has
+/// written the replacement and removed the setting.
+const RETIRED_SETTINGS: &[(&str, &str, &str)] = &[(
+    "slack",
+    "drop_own_messages",
+    "a listen hears the app's own messages unless its filter says otherwise. Add `NOT m.`Sent By This App`` to the WHERE of each Slack listen that should not hear them (`m`, the message or reaction's alias), then remove the setting from the connection",
+)];
+
+/// Why `external`'s install cannot be used: it holds a setting 0.16 retired.
+fn retired_setting_refusal(external: &str, install: Option<&Credential>) -> Option<String> {
+    let install = install?;
+    let (_, setting, instead) = RETIRED_SETTINGS.iter().find(|(module, setting, _)| *module == external && install.fields.contains_key(*setting))?;
+    Some(format!("{}: the setting `{setting}` is retired in 0.16: {instead}", install.name))
+}
+
 /// Read every external's manifest, its process started on that first call
 /// (and its runtime checked before). The externals start together: a
 /// project's start is its slowest module's, not the sum of them.
 pub async fn start_externals(project: &Project, externals: &[External], credentials: &Credentials, tenant: &str) -> Result<Vec<RunningExternal>, String> {
     crate::module_hosts::configure(project.module_idle_timeout, project.call_timeout);
+    if let Some(refusal) = externals.iter().find_map(|external| retired_setting_refusal(&external.manifest.name, install_of(credentials, &external.manifest.name))) {
+        return Err(refusal);
+    }
     // Every process registered before any starts, so the shared host
     // starts once with all its modules.
     let mut reaches = Vec::new();
@@ -757,6 +778,11 @@ fn listen_declarations(raw: &Js) -> Result<Obj, String> {
         let parsed = settings_become(value)?;
         let stored = serde_json::to_string(&parsed).map_err(|e| format!("listenSettingsBecome: {e}"))?;
         out.insert("listenSettingsBecome".into(), Js::parse(stored.as_bytes()).map_err(|e| format!("listenSettingsBecome: {e}"))?);
+    }
+    if let Some(value) = raw.get("listensLimitedBefore") {
+        let release = value.as_str().filter(|release| movement_parser::version::compatibility_key(release).is_ok());
+        let release = release.ok_or("listensLimitedBefore: expected a release (0.16.0)")?;
+        out.insert("listensLimitedBefore".into(), Js::str(release));
     }
     Ok(out)
 }
@@ -977,6 +1003,26 @@ fn serve_module_command(project: &Project, external: &str) -> Result<Vec<String>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn drop_own_messages_is_refused_with_its_replacement() {
+        let install = |external: &str, fields: &[(&str, &str)]| Credential {
+            name: format!("{external}_install"),
+            external: external.into(),
+            binding: crate::secrets::Binding::Install,
+            fields: fields.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
+            origin: Default::default(),
+        };
+        let configured = install("slack", &[("bot_token", "xoxb"), ("drop_own_messages", "on")]);
+        let refusal = retired_setting_refusal("slack", Some(&configured)).expect("refused");
+        assert_eq!(
+            refusal,
+            "slack_install: the setting `drop_own_messages` is retired in 0.16: a listen hears the app's own messages unless its filter says otherwise. Add `NOT m.`Sent By This App`` to the WHERE of each Slack listen that should not hear them (`m`, the message or reaction's alias), then remove the setting from the connection"
+        );
+        assert_eq!(retired_setting_refusal("slack", Some(&install("slack", &[("bot_token", "xoxb")]))), None);
+        assert_eq!(retired_setting_refusal("slack", None), None);
+        assert_eq!(retired_setting_refusal("acme", Some(&install("acme", &[("drop_own_messages", "on")]))), None, "only Slack's setting retired");
+    }
 
     #[test]
     fn lf_yaml_s_resend_window_for_a_module_wins_over_its_manifest_s_which_wins_over_the_hour() {

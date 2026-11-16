@@ -18,7 +18,7 @@ const MANY: &str = " Many answers in one run (`once: false`) become a standing l
 
 /// Every diagnostic on `source`, as `"CODE l:c-l:c message"`.
 fn found(source: &str) -> Vec<String> {
-    let options = CheckOptions { upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
+    let options = CheckOptions { upgrading_from: None, limiting_function: None, zones: &movement_checker::host::native::NativeZones };
     check_source(source, &CatalogSnapshot::load(EMPTY).unwrap(), options)
         .unwrap_or_else(|e| panic!("{source}: {e:?}"))
         .into_iter()
@@ -57,7 +57,7 @@ fn once_false_adds_its_replacement_and_a_ttl_adds_nothing() {
 fn it_is_an_error_whatever_the_pin() {
     let source = "function ask() {\n  go = callback({ })\n  return go.url\n}\n";
     for pin in [None, Some("0.12.13")] {
-        let options = CheckOptions { upgrading_from: pin, zones: &movement_checker::host::native::NativeZones };
+        let options = CheckOptions { upgrading_from: pin, limiting_function: None, zones: &movement_checker::host::native::NativeZones };
         let told = check_source(source, &CatalogSnapshot::load(EMPTY).unwrap(), options).unwrap();
         assert_eq!(told.len(), 1, "{told:?}");
         assert_eq!(told[0].code, "MOV_CALLBACK_RETIRED");

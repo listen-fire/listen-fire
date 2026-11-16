@@ -212,7 +212,7 @@ test('a press on a message without the topic, or on a poll older than 3d, runs n
 
 const DEALS = `${HEADER}
 function heard(m: <chat-[:Message]->>) {
-  return "heard \${m.Message} in \${m.Channel} from \${@actor_id}"
+  return "heard \${m.Message} in \${m.Channel} from \${m.User}"
 }
 
 listen to chat-[ch:Channels WHERE ch.Name IN ["deals"]]->-[:Messages]-> fire heard
@@ -508,7 +508,7 @@ listen to chat-[:Channels]->-[m:Messages WHERE m.Topic == "lunch-poll"]->-[:Reac
   }
 });
 
-test('upgrade rewrites a 0.12 Slack reaction listen onto Reactions; a message or mention listen heard thread replies too, two edges, and holds the pin', async () => {
+test('upgrade rewrites a 0.12 Slack reaction listen onto Reactions and holds the pin while it is open; a message or mention listen heard thread replies too, two edges, and holds the pin', async () => {
   const old = (settings: string, param = 'Message') => `${HEADER}
 function heard(m: <chat-[:${param}]->>) {
   return "heard"
@@ -525,9 +525,16 @@ listen to chat ${settings} fire heard
     const reactions = old('{ events: ["reaction_added"] }', 'Reaction');
     writeFileSync(file, reactions);
     pinned();
+    // Rewritten onto Reactions, and told it is open under 0.16: nothing
+    // limits who sets it off, so the pin waits until the author has checked.
     const upgraded = lfSync(world.dir, 'upgrade');
-    assert.equal(upgraded.code, 0, upgraded.out);
+    assert.equal(upgraded.code, 1, upgraded.out);
+    assert.match(upgraded.out, /warning MOV_LISTEN_NOW_OPEN before 0\.16\.0 a host may have let only registered senders set this listen off/, upgraded.out);
+    assert.match(upgraded.out, /lf\.yaml: engine: left at 0\.12\.13 until the 1 warning\(s\) are checked/, upgraded.out);
     assert.equal(readFileSync(file, 'utf8'), reactions.replace('listen to chat { events: ["reaction_added"] } fire heard', 'listen to chat-[:Channels]->-[:Messages]->-[:Reactions]-> fire heard'));
+    const acknowledged = lfSync(world.dir, 'upgrade', '--all');
+    assert.equal(acknowledged.code, 0, acknowledged.out);
+    assert.doesNotMatch(readFileSync(lfYaml, 'utf8'), /^engine: 0\.12\.13$/m, 'the pin moved once checked');
     const checked = lfSync(world.dir, 'check');
     assert.equal(checked.code, 0, checked.out);
     assert.doesNotMatch(checked.out, /MOV_LISTEN_SETTINGS_RETIRED/);

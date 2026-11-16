@@ -336,7 +336,7 @@ fn plans_of(file: &crate::sources::Parsed, program: &movement_parser::ast::Progr
     };
     // The file's own parse is checked: lf parses with every slot marked for
     // the eager export (`ExprSlot::eager`), which the checker never reads.
-    let options = movement_checker::CheckOptions { upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
+    let options = movement_checker::CheckOptions { upgrading_from: None, limiting_function: None, zones: &movement_checker::host::native::NativeZones };
     let answer = movement_checker::answer::check_answer(program, catalog, options);
     let planned = answer.listens.into_iter().map(|plan| {
         let awaits = trigger_awaits_of(program, &answer.stamps, &plan);

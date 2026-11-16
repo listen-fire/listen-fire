@@ -2,8 +2,9 @@
 //! host function, `team.isMember(m.`User Email`)`): each answer is kept by
 //! its plugin and arguments, so a cached answer costs no call, until the
 //! module says it changed (`plugins.invalidate`, adapter protocol 2.10) or
-//! the plugin's declared maximum age (`maxAgeSeconds`) passes. An answer the
-//! host could not get is never kept: the arrival waits and is asked again.
+//! its age passes: the plugin's declared maximum age (`maxAgeSeconds`), and
+//! never more than five minutes (`LONGEST_KEPT`). An answer the host could not
+//! get is never kept: the arrival waits and is asked again.
 //!
 //! One cache per process: the door a module invalidates through and every
 //! judgement in the process read the same answers.
@@ -22,12 +23,18 @@ use crate::externals::{ModuleCall, RunningExternal, Unanswered};
 use crate::json::Js;
 use crate::secrets::Credentials;
 
+/// The longest any answer is kept. An invalidation reaches only the process
+/// that started the module (`listen-fire drain` beside a door process does
+/// not hear it), so a kept answer that outlived its fact would let a
+/// removed member's messages through for as long as it is kept.
+pub const LONGEST_KEPT: Duration = Duration::from_secs(300);
+
 /// The answers a process holds, by question.
 #[derive(Default)]
 pub struct AnswerCache {
     kept: HashMap<String, Kept>,
     /// Each plugin's maximum age, by catalog key, as its module declares
-    /// it; one that declares none keeps its answers until invalidated.
+    /// it; one that declares none keeps its answers for `LONGEST_KEPT`.
     max_ages: HashMap<String, Duration>,
     /// Each plugin asked, by its module and the name it declares it under,
     /// to its catalog key: what the module names when it invalidates.
@@ -51,7 +58,7 @@ pub struct Asks {
 struct Kept {
     plugin: String,
     value: Json,
-    until: Option<Instant>,
+    until: Instant,
 }
 
 impl AnswerCache {
@@ -92,8 +99,8 @@ impl AnswerCache {
                     if let PluginAnswer::Value(value) = &answer
                         && unchanged
                     {
-                        let until = self.max_ages.get(&question.plugin).map(|age| now + *age);
-                        self.kept.insert(question.key(), Kept { plugin: question.plugin.clone(), value: value.clone(), until });
+                        let age = self.max_ages.get(&question.plugin).map_or(LONGEST_KEPT, |age| (*age).min(LONGEST_KEPT));
+                        self.kept.insert(question.key(), Kept { plugin: question.plugin.clone(), value: value.clone(), until: now + age });
                     }
                     answer
                 }
@@ -136,7 +143,7 @@ impl AnswerCache {
     fn live(&mut self, question: &PluginQuestion, now: Instant) -> Option<Json> {
         let key = question.key();
         let kept = self.kept.get(&key)?;
-        if kept.until.is_some_and(|until| now >= until) {
+        if now >= kept.until {
             self.kept.remove(&key);
             return None;
         }
@@ -308,7 +315,7 @@ mod tests {
         let now = Instant::now();
         let first = answered(&mut cache, &[member("a@acme.com")], counting(&asked), now);
         assert_eq!(first.get(&member("a@acme.com")), Some(&PluginAnswer::Value(Json::Bool(true))));
-        let again = answered(&mut cache, &[member("a@acme.com")], counting(&asked), now + Duration::from_secs(3600));
+        let again = answered(&mut cache, &[member("a@acme.com")], counting(&asked), now + Duration::from_secs(299));
         assert_eq!(again.get(&member("a@acme.com")), Some(&PluginAnswer::Value(Json::Bool(true))));
         assert_eq!(asked.borrow().len(), 1, "the second judgement read the kept answer");
         assert_eq!(missing(&mut cache, &[member("a@acme.com"), member("b@acme.com")], now), [member("b@acme.com")]);
@@ -329,6 +336,24 @@ mod tests {
         assert_eq!(asked.borrow().len(), 1, "within its age");
         answered(&mut cache, &[member("a@acme.com")], counting(&asked), now + Duration::from_secs(60));
         assert_eq!(asked.borrow().len(), 2, "asked again once its age passed");
+    }
+
+    /// An invalidation reaches only the process that started the module, so
+    /// no answer outlives five minutes, whatever its plugin declares.
+    #[test]
+    fn an_answer_lives_at_most_five_minutes_without_a_declared_age() {
+        let asked = RefCell::new(Vec::new());
+        let now = Instant::now();
+        for declared in [None, Some(Duration::from_secs(3600))] {
+            let mut cache = AnswerCache::default();
+            cache.keep_for("@lf-platform/team/isMember", declared);
+            asked.borrow_mut().clear();
+            answered(&mut cache, &[member("a@acme.com")], counting(&asked), now);
+            answered(&mut cache, &[member("a@acme.com")], counting(&asked), now + Duration::from_secs(299));
+            assert_eq!(asked.borrow().len(), 1, "{declared:?}: kept within five minutes");
+            answered(&mut cache, &[member("a@acme.com")], counting(&asked), now + Duration::from_secs(300));
+            assert_eq!(asked.borrow().len(), 2, "{declared:?}: asked again at five minutes");
+        }
     }
 
     #[test]

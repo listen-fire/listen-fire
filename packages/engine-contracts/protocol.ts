@@ -53,8 +53,8 @@ export type ProtocolMinorUse = { method: string } | { methodEndingWith: string }
  *  (`plugins.invalidate`): an older host keeps no answers, so it has none to
  *  forget. A minor that names no method has no row: 2.0, 2.3
  *  (labelled poll events), 2.7 (`pollAgainAt`), 2.8 (`hostRelease` on a
- *  slot request) and 2.9 (`proven` on an actor identity), each a host
- *  behaviour. */
+ *  slot request) and 2.9 (`proven` on an actor identity, gone from 2.10),
+ *  each a host behaviour. */
 export const PROTOCOL_MINORS: readonly { minor: number; feature: string; uses: ProtocolMinorUse }[] = [
   { minor: 1, feature: 'a <slot>.watch method', uses: { methodEndingWith: '.watch' } },
   { minor: 2, feature: 'work.enqueueIfAbsent', uses: { method: 'work.enqueueIfAbsent' } },
@@ -512,15 +512,7 @@ export const WireActorIdentity = z.object({
   email: z.string().optional(),
   name: z.string().optional(),
   label: z.string().optional(),
-  proven: z.boolean().optional(),
 });
-
-/** Mirror of `ActorCandidate`. */
-export const WireActorCandidate = z.object({
-  identity: WireActorIdentity,
-  source: z.enum(['originator', 'relay']),
-});
-export type WireActorCandidateShape = z.infer<typeof WireActorCandidate>;
 
 // ── Schema-introspection DTOs ────────────────────────────────────────────────
 // Mirror `SchemaEntryPoint` / `SchemaTypeDescriptor` structurally. Field /
@@ -750,9 +742,7 @@ export const WireDescribeOpaqueIdInput = z.object({
   value: z.string(),
 });
 
-export const WireGetActorCandidatesInput = z.object({ event: WireTriggerEvent });
 
-export const WireExtractActorInput = z.object({ event: WireTriggerEvent });
 
 // Field functions (e.g. Slack's SLACK_MESSAGE) — see
 // plans/2026-06-06-target-composer-functions. Fully serialisable: the engine
@@ -809,6 +799,9 @@ export const WireListenDeclarations = z.object({
   listenSettingsBecome: settingsMapping
     .extend({ byEvent: z.record(z.string(), settingsMapping).optional() })
     .optional(),
+  /** The release before which a host may have let only registered senders
+   *  set a listen on this module off (`AdapterManifest.listensLimitedBefore`). */
+  listensLimitedBefore: z.string().regex(/^\d+\.\d+\.\d+$/, 'listensLimitedBefore: expected a release (0.16.0)').optional(),
 });
 
 // ── Module declarations (within version 2: all optional) ─────────────────────
@@ -1317,8 +1310,7 @@ export const WireArrival = z.union([
     notFor: z.string().min(1).optional(),
     takenApplied: z.boolean().optional(),
     occurredAt: z.string().min(1).optional(),
-    /** Who acted (2.7): the run's `@actor_*`, and what a host resolves the
-     *  acting user from. */
+    /** Who acted (2.7), carried on the run's trigger as it came. */
     actor: WireActorIdentity.optional(),
   }),
   z.object({ edge: z.string().min(1), key: z.string().min(1), gone: z.literal(true) }),
@@ -1704,14 +1696,6 @@ export const METHODS = {
   getDedupRules: {
     params: WireGetDedupRulesInput,
     result: WireDedupRules.nullable(),
-  },
-  getActorCandidates: {
-    params: WireGetActorCandidatesInput,
-    result: z.array(WireActorCandidate),
-  },
-  extractActor: {
-    params: WireExtractActorInput,
-    result: WireActorIdentity.nullable(),
   },
   describeOpaqueId: {
     params: WireDescribeOpaqueIdInput,

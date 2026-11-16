@@ -39,8 +39,9 @@ pub struct ArrivalIn {
     /// and what its run's writes are stamped with.
     pub occurred_at: Option<String>,
     /// Who acted, as its module says at the door (adapter protocol 2.7):
-    /// `{ identifier, scheme, email?, name?, label? }`, what the run's
-    /// `@actor_*` reads.
+    /// `{ identifier, scheme, email?, name?, label? }`, carried on the run's
+    /// trigger as it came: nothing judges by it (a claim on the landing says
+    /// who acted).
     pub actor: Option<Js>,
 }
 

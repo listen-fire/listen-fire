@@ -52,7 +52,7 @@ fn catalog() -> CatalogSnapshot {
 /// Every error (a warning is not one).
 fn errors_of(source: &str) -> Vec<Diagnostic> {
     let source = format!("import {{ `@lf-platform/team` as t }} from plugins\nimport {{ chat }} from adapters\nc = connect chat\n{source}");
-    let options = CheckOptions { upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
+    let options = CheckOptions { upgrading_from: None, limiting_function: None, zones: &movement_checker::host::native::NativeZones };
     check_source(&source, &catalog(), options).unwrap_or_else(|e| panic!("{source}: {e:?}")).into_iter().filter(|d| d.is_error()).collect()
 }
 
@@ -193,7 +193,7 @@ fn a_branded_enum_fits_its_enum_and_plain_text_but_plain_text_does_not_fit_it() 
     let catalog = CatalogSnapshot::load(&catalog.to_string()).expect("a branded enum field loads");
     let check = |body: &str| {
         let source = format!("import {{ `@lf-platform/team` as t }} from plugins\nimport {{ chat }} from adapters\nc = connect chat\nfunction go() {{\n  c-[m:Messages]-> {{\n{body}\n  }}\n}}\n");
-        let options = CheckOptions { upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
+        let options = CheckOptions { upgrading_from: None, limiting_function: None, zones: &movement_checker::host::native::NativeZones };
         check_source(&source, &catalog, options).unwrap_or_else(|e| panic!("{source}: {e:?}")).into_iter().filter(|d| d.is_error()).collect::<Vec<_>>()
     };
     // Branded enum fits its own parameter, and fits plain text where text is asked.

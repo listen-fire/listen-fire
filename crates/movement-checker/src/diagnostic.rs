@@ -30,6 +30,12 @@ pub struct Diagnostic {
     /// narrows its catalog by it and checks again (`listen-fire upgrade`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub walks: Option<String>,
+    /// The library it came from, as the checked file's import names it
+    /// (`"lib/finance"`), when it came from one: its message names the
+    /// library too, but a host tells a library's fault by this, never by
+    /// reading the message.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file: Option<String>,
     /// What a refused `.` read reads through and the field it names
     /// (`MOV_ABSENT_REQUIRED`), until the slot it was read in places its fix,
     /// `?.` (`absent_read_fixes`).
@@ -53,7 +59,7 @@ pub struct AbsentRead {
 
 impl Diagnostic {
     pub fn error(code: &str, message: impl Into<String>, span: Span) -> Self {
-        Diagnostic { code: code.to_string(), message: message.into(), span, severity: None, upgrade: None, fix: None, walks: None, read_through: None, absent_read: None }
+        Diagnostic { code: code.to_string(), message: message.into(), span, severity: None, upgrade: None, fix: None, walks: None, file: None, read_through: None, absent_read: None }
     }
 
     pub fn is_error(&self) -> bool {

@@ -16,7 +16,7 @@ const STORE: &str = r#"{"adapters":{
 const HEAD: &str = "import { store } from adapters\n\ns = connect store\n\n";
 
 fn check(body: &str) -> Vec<Diagnostic> {
-    let options = CheckOptions { upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
+    let options = CheckOptions { upgrading_from: None, limiting_function: None, zones: &movement_checker::host::native::NativeZones };
     let source = format!("{HEAD}{body}");
     check_source(&source, &CatalogSnapshot::load(STORE).unwrap(), options).unwrap_or_else(|e| panic!("{source}: {e:?}"))
 }

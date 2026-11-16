@@ -1,8 +1,7 @@
-// What a run was fired on, as a module's actor methods (`extractActor`,
-// `getActorCandidates`) read it. Every run a listen fires is handed the
-// arrival that fired it, the record that landed on the listen's last edge
-// (adapter protocol 2.6), and who acted, as the module said at the door
-// (2.7); no 0.13 run is handed a `payload`.
+// What a run was fired on, as a module reads it. Every run a listen fires is
+// handed the arrival that fired it, the record that landed on the listen's
+// last edge (adapter protocol 2.6), and who acted, as the module said at the
+// door (2.7); no 0.13 run is handed a `payload`.
 
 import type { ActorIdentity, TriggerEvent } from 'engine-contracts';
 

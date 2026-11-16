@@ -102,11 +102,6 @@ fn hold_all(running: &[Rc<RunningExternal>], keep: Keep) -> Vec<Hold> {
 }
 
 impl FileSet {
-    /// What the module `external` described, by connection.
-    pub fn schemas_of(&self, external: &str) -> Option<&ConnectionSchemas> {
-        self.schemas.get(external)
-    }
-
     /// Each file's reading, in the files' order.
     pub fn parsed(&self) -> &[Rc<Parsed>] {
         &self.parsed
@@ -258,7 +253,7 @@ pub struct Session {
     file_set: RefCell<Rc<FileSet>>,
     /// `LF_CLOCK_AHEAD_MS`: what is due is judged this far ahead.
     due_offset_ms: i64,
-    /// The principal every event acts as (`localIdentity`).
+    /// Who presses run here (`localIdentity`): a manual run's caller.
     user: Js,
     /// The temporary folder an ephemeral session's state lives in.
     ephemeral_dir: Option<std::path::PathBuf>,
@@ -1434,8 +1429,6 @@ impl Session {
                 None => (arrivals, shared.clone()),
             };
             // Only what is new: an edge listed whole would ask again of everything still on it, every poll.
-            let reader = crate::doors::SessionReader::of(self);
-            let arrivals = crate::actor::with_actors(&reader, &crate::actor::ActorSource { external: &key.adapter, install: credential }, arrivals, crate::actor::needs_lookup(&set.files)).await;
             let (arrivals, shared) = (&arrivals, &shared);
             let (logged, at) = (crate::arrivals::logged(&arrivals), iso(0));
             let resend_window_ms = crate::externals::resend_window_ms(&self.project, &key.adapter, &resend_manifest);
@@ -1702,7 +1695,6 @@ impl Session {
             store: &*self.store,
             adapters,
             documents: &self.documents,
-            user: self.user.clone(),
             resumed_leaf,
             resumed_state,
             settling_race,
@@ -1741,7 +1733,6 @@ impl Session {
             store: &*self.store,
             adapters: SegmentAdapters::new(&segment_id, &externals),
             documents: &self.documents,
-            user: self.user.clone(),
             resumed_leaf: None,
             resumed_state: None,
             settling_race: None,

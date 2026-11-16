@@ -13,7 +13,7 @@ const EMPTY: &str = r#"{"adapters":{},"credentials":{"crm_cred":{"adapters":["at
 
 fn run(source: &str, catalog: &str) -> Vec<(String, String)> {
     let catalog = CatalogSnapshot::load(catalog).unwrap();
-    let options = CheckOptions { upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
+    let options = CheckOptions { upgrading_from: None, limiting_function: None, zones: &movement_checker::host::native::NativeZones };
     // The settings form's retirement is listen_settings_retired.rs's to pin.
     check_source(source, &catalog, options).unwrap().into_iter().filter(|d| d.code != "MOV_LISTEN_SETTINGS_RETIRED").map(|d| (d.code, d.message)).collect()
 }
@@ -195,7 +195,7 @@ fn a_parameter_type_names_a_position_the_schema_has() {
 
 #[test]
 fn an_unknown_meta_key_suggests_the_closest() {
-    assert_eq!(walk("  x = @user_emial"), [("MOV_META_UNKNOWN_KEY".to_string(), "'@user_emial' isn't a known meta field. Did you mean '@user_email'?".to_string())]);
+    assert_eq!(walk("  x = @current_dat"), [("MOV_META_UNKNOWN_KEY".to_string(), "'@current_dat' isn't a known meta field. Did you mean '@current_date'?".to_string())]);
 }
 
 // Listens
@@ -221,7 +221,7 @@ fn a_library_is_checked_once_and_its_errors_surface_at_the_import() {
     let catalog = r#"{"adapters":{},"credentials":{},"plugins":{},"files":{"lib/a":{"source":"export function helper(n: <number>) {\n  x = nowhere\n}"}}}"#;
     let source = "import { helper } from \"lib/a\"\nimport { nope } from \"lib/a\"\nfunction m(n: <number>) {\n  helper(n)\n}";
     let catalog = CatalogSnapshot::load(catalog).unwrap();
-    let options = CheckOptions { upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
+    let options = CheckOptions { upgrading_from: None, limiting_function: None, zones: &movement_checker::host::native::NativeZones };
     let found = check_source(source, &catalog, options).unwrap();
     assert_eq!(found.iter().map(|d| d.code.as_str()).collect::<Vec<_>>(), ["MOV_IMPORT_NOT_EXPORTED", "MOV_NAME_UNRESOLVED"]);
     assert!(found[0].message.starts_with("\"lib/a\" does not export 'nope'"), "{}", found[0].message);
@@ -235,7 +235,7 @@ fn a_library_is_checked_once_and_its_errors_surface_at_the_import() {
 fn a_retired_resource_read_is_refused_inside_a_head_with_the_bare_field_and_outside_it_with_a_walk() {
     let source = "import { registry } from adapters\nimport { public_registry as pr } from credentials\nreg = connect registry using pr\nnode Company: \"each company\" {\n  name: <text> \"its name\"\n}\nfunction main(e: <reg-[:entity]->>) {\n  found = extractOne([e.`Name`], Company)\n  found-[r:_resources WHERE @resource.url != \"\"]-> { u = r.url }\n  x = @resource.url\n}\n";
     let catalog = CatalogSnapshot::load(EXTRACT_CATALOG).unwrap();
-    let options = CheckOptions { upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
+    let options = CheckOptions { upgrading_from: None, limiting_function: None, zones: &movement_checker::host::native::NativeZones };
     let found: Vec<_> = check_source(source, &catalog, options).unwrap().into_iter().filter(|d| d.code != "MOV_LISTEN_MISSING").collect();
     assert_eq!(found.iter().map(|d| d.code.as_str()).collect::<Vec<_>>(), ["MOV_RESOURCE_READ_RETIRED", "MOV_RESOURCE_READ_RETIRED"]);
     assert_eq!(found[0].message, "'@resource.url' is retired — inside a -[:_resources WHERE …]-> filter, write the field's bare name: 'url'");

@@ -48,6 +48,7 @@ interface AdapterSpec {
   description?: string;                           // the adapter's own words for itself (its manifest's `description`); shown, never checked
   resendWindowSeconds?: number;                   // how long the provider may re-send an arrival it already sent (its manifest's); a default lf.yaml overrides per connection
   listenSettingsBecome?: SettingsBecome;          // what a 0.12 settings listen on it becomes as a traversal (its manifest's); `listen-fire upgrade` rewrites by it
+  listensLimitedBefore?: string;                  // the release before which a host may have let only registered senders set a listen on it off (its manifest's: Slack's `0.16.0`); an upgrade from an older key tells each listen its filter does not limit (MOV_LISTEN_NOW_OPEN)
 }
 
 interface SettingsBecome {
@@ -248,6 +249,7 @@ interface FieldCapability {
 
 ## Changes
 
+- **Version 3, with 0.16:** an `AdapterSpec` gains `listensLimitedBefore?`, the release before which a host may have let only registered senders set a listen on the module off (its manifest's; Slack declares `0.16.0`). The checker reads it on an upgrade from an older key to tell each listen whose filter calls no pure function taking a claim (`MOV_LISTEN_NOW_OPEN`). It is optional and additive, so the version stays 3. A Rust reader built before it refuses a snapshot that carries it.
 - **Version 3, with 0.16:** a `SchemaFieldType` gains `branded` (`{ kind: 'branded', of, brands }`, spelled `text & Brand<"claim:email/address">`): a module's field or a plugin's argument or answer narrowed by brands, each a name compared whole. The checker refuses a value without the brand where one is asked for (`MOV_BRAND_REQUIRED`). It is optional and additive, so the version stays 3. A Rust reader built before it refuses a snapshot that carries it.
 - **Version 3, with the shared description of the graph:** a `CollectionSchema` gains `description?`, as an `EdgeSchema` already has. A type known only by what is written to it has no position, so its module's description had nowhere to go. Both builders now carry it here, for such a type only; a type with a position keeps its description there. It is optional and additive, so the version stays 3. A Rust reader built before it refuses a snapshot that carries it, so a host's cached catalog stays keyed by the release that built it.
 - **Version 3, after 0.13.0:** an `AdapterSpec` gains `package?`, the package the module is installed from, compared whole against what a `connect` names (``connect `@lf/github` ``). It is optional and additive, so the version stays 3. A Rust reader built before it refuses a snapshot that carries it, so a builder writes it only for a reader of this release or later.

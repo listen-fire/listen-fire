@@ -42,7 +42,7 @@ fn diagnostics(body: &str) -> Vec<Diagnostic> {
         "import {{ chat as chat_module, crm as crm_module }} from adapters; chat = connect chat_module; crm = connect crm_module; function waits(msg: <chat-[:Message]->>, deal: <crm-[:Deal]->>) {{\n{body}}}\n"
     );
     let catalog = CatalogSnapshot::load(CATALOG).unwrap();
-    let options = CheckOptions { upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
+    let options = CheckOptions { upgrading_from: None, limiting_function: None, zones: &movement_checker::host::native::NativeZones };
     check_source(&source, &catalog, options).unwrap_or_else(|e| panic!("{source}: {e:?}"))
 }
 

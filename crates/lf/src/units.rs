@@ -113,7 +113,6 @@ pub fn descriptors(unit: &str) -> Vec<Js> {
                     field("actorName", "Run by (name)", "string", false),
                     field("text", "Text", "string", false),
                     field("content", "Content", "string", false),
-                    crate::wire::json_of_js(&crate::actor::record_field()),
                 ],
                 "references": [{ "fieldId": "files", "targetTypeId": "file", "cardinality": "many", "direction": "outgoing", "name": "Files", "writable": false }],
             }),
@@ -127,16 +126,9 @@ pub fn descriptors(unit: &str) -> Vec<Js> {
                 ],
                 "references": [],
             }),
-            crate::wire::json_of_js(&crate::actor::descriptor()),
         ],
     };
     list.iter().map(js_of_json).collect()
-}
-
-/// The types the unit holds that no program walks to: a schedule has nobody
-/// acting; a manual run has its caller.
-pub fn reached(unit: &str) -> Vec<Js> {
-    if unit == CRON { Vec::new() } else { vec![crate::actor::reached_entry()] }
 }
 
 /// The type a position naming none is read as: what lands on the unit's edge.
@@ -178,19 +170,6 @@ pub fn call(unit: &str, method: &str, args: &Hv) -> Result<Js, String> {
     }
 }
 
-/// Who pressed run, as an identity: nothing vouches for a local name, so it never says `proven`.
-fn caller_identity(user: &Js) -> Js {
-    let principal = user.get("principal");
-    let mut identity = obj! { "identifier" => principal.and_then(|p| p.get("id")).cloned().unwrap_or(Js::Null), "scheme" => Js::str("opaque") };
-    if let Some(email) = user.get("email").and_then(Js::as_str) {
-        identity.insert("email".into(), Js::str(email));
-    }
-    if let Some(name) = principal.and_then(|p| p.get("display")).and_then(Js::as_str) {
-        identity.insert("name".into(), Js::str(name));
-    }
-    Js::Obj(identity)
-}
-
 /// The arrival a manual run is, on `Invocations`: when it was asked for,
 /// by whom, and the text given with it. Each is its own invocation.
 pub fn invocation(fired_at: &str, user: &Js, text: Option<&str>) -> Js {
@@ -203,9 +182,6 @@ pub fn invocation(fired_at: &str, user: &Js, text: Option<&str>) -> Js {
     }
     if let Some(text) = text {
         fields.insert("Text".into(), Js::str(text));
-    }
-    if let Some(caller) = crate::actor::normalised(&caller_identity(user)) {
-        fields.insert(crate::actor::ACTOR.into(), caller);
     }
     let identity = format!("invocation:{}", uuid::Uuid::new_v4());
     Js::Obj(obj! {

@@ -342,3 +342,17 @@ pub const IMPORT_FILE_UNRESOLVED: &str = "MOV_IMPORT_FILE_UNRESOLVED";
 pub const IMPORT_FILE_INVALID: &str = "MOV_IMPORT_FILE_INVALID";
 pub const IMPORT_CYCLE: &str = "MOV_IMPORT_CYCLE";
 pub const IMPORT_NOT_EXPORTED: &str = "MOV_IMPORT_NOT_EXPORTED";
+/// A warning raised only by a check for an upgrade from before the release a
+/// module says its listens stopped being limited (`listensLimitedBefore`,
+/// Slack's 0.16): a listen on it whose filter calls no pure function taking a
+/// claim. A host may have let only registered senders set it off; only its
+/// filter decides now. Nothing to rewrite on `lf`; a host that knows the
+/// function that limits a listen offers the check as an unsafe fix.
+pub const LISTEN_NOW_OPEN: &str = "MOV_LISTEN_NOW_OPEN";
+/// From 0.16: a read of `Actor`, the field `lf` offered on what lands until
+/// 0.15, off a record that declares no such field. The record's claims (its
+/// branded fields) say who acted.
+pub const ACTOR_RETIRED: &str = "MOV_ACTOR_RETIRED";
+/// From 0.16: `@user_*` and `@actor_*`. Who acted is a claim on the event,
+/// and who they are to a host is a host function's answer.
+pub const ACTING_USER_RETIRED: &str = "MOV_ACTING_USER_RETIRED";

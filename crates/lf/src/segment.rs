@@ -70,7 +70,6 @@ const SERVES: &[&str] = &[
     "control.cancel.cancelledNow",
     "files.resolveFileText",
     "files.render",
-    "lookup.resolveActingUser",
     "locks.acquire",
     "locks.release",
     "trace.append",
@@ -162,8 +161,6 @@ pub struct SegmentHost<'s> {
     pub store: &'s dyn RunHostStore,
     pub adapters: SegmentAdapters<'s>,
     pub documents: &'s Documents,
-    /// The acting user every event acts as (`localIdentity`).
-    pub user: Js,
     wire: RefCell<Wire>,
     positions: RefCell<HashMap<i64, Hv>>,
     host_errors: RefCell<Vec<HostFailure>>,
@@ -240,7 +237,6 @@ impl<'s> SegmentHost<'s> {
             store: input.store,
             adapters: input.adapters,
             documents: input.documents,
-            user: input.user,
             wire: RefCell::new(Wire::default()),
             positions: RefCell::new(HashMap::new()),
             host_errors: RefCell::new(Vec::new()),
@@ -308,7 +304,6 @@ pub struct SegmentHostParts<'s> {
     pub store: &'s dyn RunHostStore,
     pub adapters: SegmentAdapters<'s>,
     pub documents: &'s Documents,
-    pub user: Js,
     /// The leaf the segment resumes, when it resumes one, and its state.
     pub resumed_leaf: Option<String>,
     pub resumed_state: Option<Js>,
@@ -1257,7 +1252,6 @@ async fn route(host: &SegmentHost<'_>, label: &str, args: &Json) -> Result<Answe
                 None => Err(failure(format!("write lock token '{token}' is not held: released twice, or never acquired"))),
             }
         }
-        "lookup.resolveActingUser" => Ok(Some(host.wire.borrow().write(&Hv::of_js(&host.user)))),
         "files.render" => {
             let content = text(args, "content", "files.render")?;
             let kind = text(args, "type", "files.render")?;

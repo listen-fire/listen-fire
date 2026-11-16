@@ -202,7 +202,6 @@ fn actor_identity() -> S {
         opt("email", S::Str),
         opt("name", S::Str),
         opt("label", S::Str),
-        opt("proven", S::Bool),
     ])
 }
 
@@ -291,8 +290,6 @@ fn result_schema(method: &str) -> Option<S> {
         "readRecord" => nullable(record(S::Unknown)),
         "describeOpaqueId" => nullable(S::Str),
         "resolveFileRef" => obj(vec![req("url", S::Str), opt("contentType", S::Str)]),
-        "getActorCandidates" => arr(obj(vec![req("identity", actor_identity()), req("source", S::Enum(&["originator", "relay"]))])),
-        "extractActor" => nullable(actor_identity()),
         _ => return None,
     })
 }

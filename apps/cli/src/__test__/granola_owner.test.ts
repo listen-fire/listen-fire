@@ -1,5 +1,5 @@
 // Who a polled Granola meeting came from, read by the run it fires: the
-// meeting's owner is its `@actor_email`. Against the fake Granola in
+// meeting's owner is its `Note Owner Email`, a claim. Against the fake Granola in
 // packages/fake-channels, every step as a person types it.
 
 import { test } from 'node:test';
@@ -30,7 +30,7 @@ async function fakeChannels(): Promise<{ url: string; stop(): Promise<void> }> {
   return { url, stop: async () => (child.kill('SIGTERM'), exited) };
 }
 
-test("a polled Granola meeting's run reads its owner as @actor_email", async () => {
+test("a polled Granola meeting's run reads its owner's claim", async () => {
   const fake = await fakeChannels();
   try {
     const dir = join(mkdtempSync(join(tmpdir(), 'lf-granola-')), 'granola-project');
@@ -45,7 +45,7 @@ import { notes_key } from credentials
 notes = connect granola using notes_key
 
 function summarise(n: <notes-[:Meetings]->>) {
-  who = @actor_email
+  who = n.\`Note Owner Email\`
   fail("\${n.Title} was held by \${who}")
 }
 

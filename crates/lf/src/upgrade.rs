@@ -143,7 +143,7 @@ fn check_text(source: &str, catalog: &CatalogSnapshot, from_pin: Option<&str>) -
     if let Err(refused) = parse(source) {
         return parse_refusal(refused.message, refused.line, refused.column);
     }
-    let options = CheckOptions { upgrading_from: from_pin, zones: &NativeZones };
+    let options = CheckOptions { upgrading_from: from_pin, limiting_function: None, zones: &NativeZones };
     match movement_checker::check_source(source, catalog, options) {
         Ok(diagnostics) => diagnostics,
         Err(refusal) => parse_refusal(refusal.message, 1, 1),
@@ -523,6 +523,37 @@ mod tests {
         assert!(matches!(pin_step("engine: 0.12.13\n", upgraded.remaining.len(), 0).unwrap(), PinStep::Set(_)));
         // Under this release's own pin there is nothing to say.
         assert!(upgrade_source(source, &catalog, false, LANGUAGE_VERSION).notes.is_empty());
+    }
+
+    const SLACK: &str = r#"{"adapters":{
+      "slack":{"canFire":true,"constructionArgs":[],"listensLimitedBefore":"0.16.0",
+        "schemas":{"":{"positions":{"Message":{"properties":{"Channel":"text",
+          "User Email":{"kind":"maybeAbsent","of":{"kind":"branded","of":"text","brands":["claim:email/address"]}},
+          "Sent By This App":"boolean"},"edges":{}}},
+          "collections":{"Messages":{"target":"Message","listenable":true,"delivery":"connection"}},"writableRoots":{}}}}
+    },"credentials":{},"plugins":{}}"#;
+
+    /// A Slack listen a host may have limited to registered senders is open
+    /// under 0.16: `lf` names no function that limits it, so the note has no
+    /// rewrite, and it holds the pin until the author has checked it.
+    #[test]
+    fn an_open_listen_holds_the_pin_until_all() {
+        let source = "import { slack } from adapters\ns = connect slack\nfunction f(m: <s-[:Message]->>) {\n  return m.Channel\n}\nlisten to s-[m:Messages WHERE m.Channel == \"C1\"]-> fire f\n";
+        let catalog = CatalogSnapshot::load(SLACK).unwrap();
+        for all in [false, true] {
+            let upgraded = upgrade_source(source, &catalog, all, "0.15.3");
+            assert_eq!(upgraded.source, source, "nothing is inserted (all: {all})");
+            assert!(upgraded.remaining.is_empty(), "{:?}", upgraded.remaining);
+            let notes: Vec<String> = upgraded.notes.iter().map(|d| listed("intake.mvt", d)).collect();
+            assert_eq!(notes.len(), 1, "{notes:?}");
+            assert!(notes[0].starts_with("intake.mvt:6:11 warning MOV_LISTEN_NOW_OPEN before 0.16.0 a host may have let only registered senders set this listen off"), "{notes:?}");
+            assert!(notes[0].contains("`NOT m.`Sent By This App``"), "{notes:?}");
+        }
+        let upgraded = upgrade_source(source, &catalog, false, "0.15.3");
+        assert!(matches!(pin_step("engine: 0.14.0\n", upgraded.remaining.len(), upgraded.notes.len()).unwrap(), PinStep::Held { remaining: 0, unchecked: 1 }));
+        // `--all` counts no note as unchecked.
+        assert!(matches!(pin_step("engine: 0.14.0\n", upgraded.remaining.len(), 0).unwrap(), PinStep::Set(_)));
+        assert!(upgrade_source(source, &catalog, false, "0.16.0").notes.is_empty(), "a file written under 0.16 is told nothing");
     }
 
     const GH: &str = r#"{"adapters":{

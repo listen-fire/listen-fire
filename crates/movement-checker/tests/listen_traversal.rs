@@ -67,7 +67,7 @@ const CATALOG: &str = r#"{"adapters":{
 const PRELUDE: &str = "import { chat as chat_module, at as at_module, crm as crm_module } from adapters; chat = connect chat_module; at = connect at_module; crm = connect crm_module; function f(i: <chat-[:Interaction]->>) { return i.Id }\nfunction c(x: <at-[:Change]->>) { return x.Kind }\nfunction r(x: <chat-[:Reaction]->>) { return x.Emoji }\nfunction k(x: <at-[:Comment]->>) { return x.Text }\nfunction n(x: <crm-[:Company]->>) { return x.Name }\n";
 
 fn options() -> CheckOptions<'static> {
-    CheckOptions { upgrading_from: None, zones: &movement_checker::host::native::NativeZones }
+    CheckOptions { upgrading_from: None, limiting_function: None, zones: &movement_checker::host::native::NativeZones }
 }
 
 fn check(source: &str) -> Vec<String> {

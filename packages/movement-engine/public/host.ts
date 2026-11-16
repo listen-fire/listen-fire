@@ -8,11 +8,9 @@ export {
   RANDOM_IDS,
   SegmentDirectory,
   WALL_CLOCK,
-  actingPrincipalOf,
   appendingInto,
   closeSegmentWith,
   openSegmentWith,
-  type ActingUserLookup,
   type QueuedWake,
   type SegmentFacts,
 } from '../services/movement_engine/host_kit';

@@ -775,7 +775,7 @@ mod tests {
         for (name, entry) in plans {
             let source = entry["source"].as_str().unwrap();
             let program = movement_parser::stmt::parse_program(source, false).unwrap_or_else(|e| panic!("{name}: {}", e.message));
-            let options = CheckOptions { upgrading_from: None, zones: &crate::env_services::EnvZones };
+            let options = CheckOptions { upgrading_from: None, limiting_function: None, zones: &crate::env_services::EnvZones };
             let answer = movement_checker::answer::check_answer(&program, &catalog, options);
             let errors: Vec<_> = answer.diagnostics.iter().filter(|d| d.severity.is_none()).map(|d| format!("{} {}", d.code, d.message)).collect();
             assert_eq!(errors, Vec::<String>::new(), "{name}");
@@ -830,7 +830,7 @@ mod tests {
         let plans = |source: &str| {
             let source = format!("import {{ crm as m }} from adapters; crm = connect m\nfunction f(n: <crm-[:Note]->>) {{ return n.Text }}\nfunction g(n: <crm-[:Things]->>) {{ return n.Name }}\n{source}");
             let program = movement_parser::stmt::parse_program(&source, false).unwrap();
-            let answer = movement_checker::answer::check_answer(&program, &catalog, CheckOptions { upgrading_from: None, zones: &crate::env_services::EnvZones });
+            let answer = movement_checker::answer::check_answer(&program, &catalog, CheckOptions { upgrading_from: None, limiting_function: None, zones: &crate::env_services::EnvZones });
             assert_eq!(answer.diagnostics.iter().filter(|d| d.severity.is_none()).count(), 0, "{source}");
             answer.listens
         };

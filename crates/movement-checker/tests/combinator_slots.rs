@@ -81,7 +81,7 @@ const SHAPES: [Shape; 2] = [
 fn found(shape: &Shape, program: &str) -> Vec<String> {
     let program = program.replace("$C", shape.collection).replace("$N", shape.needs).replace("$R", shape.read).replace("$W", shape.awaits);
     let source = format!("{}\n{program}", shape.header);
-    let options = CheckOptions { upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
+    let options = CheckOptions { upgrading_from: None, limiting_function: None, zones: &movement_checker::host::native::NativeZones };
     check_source(&source, &CatalogSnapshot::load(shape.catalog).unwrap(), options)
         .unwrap_or_else(|e| panic!("{source}: {e:?}"))
         .into_iter()

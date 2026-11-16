@@ -60,7 +60,7 @@ fn catalog() -> CatalogSnapshot {
 const PRELUDE: &str = "import { `@lf-platform/team` as t } from plugins\nimport { slack } from adapters\ns = connect slack\nfunction f(m: <s-[:Message]->>) { return m.Name }\n";
 
 fn options() -> CheckOptions<'static> {
-    CheckOptions { upgrading_from: None, zones: &movement_checker::host::native::NativeZones }
+    CheckOptions { upgrading_from: None, limiting_function: None, zones: &movement_checker::host::native::NativeZones }
 }
 
 /// Every error (a warning is not one).

@@ -29,9 +29,10 @@ pub struct ProtocolMinor {
 /// (`PROTOCOL_MINORS`, test-held equal to it in crates/lf). Offering one
 /// never raises the minor a module states: an older host never calls it. 2.3,
 /// labelled poll events, 2.7, `pollAgainAt`, 2.8, `hostRelease` on a slot
-/// request, and 2.9, `proven` on an actor identity, are host behaviours and name no method.
-/// 2.10's, `plugins.invalidate`, is a method a module calls at its host: an
-/// older host keeps no answers, so it has none to forget.
+/// request, and 2.9, `proven` on an actor identity (gone from 2.10), are host
+/// behaviours and name no method. 2.10's, `plugins.invalidate`, is a method a
+/// module calls at its host: an older host keeps no answers, so it has none to
+/// forget.
 pub const PROTOCOL_MINORS: &[ProtocolMinor] = &[
     ProtocolMinor { minor: 1, feature: "a <slot>.watch method", uses: MinorUse::MethodEndingWith(".watch") },
     ProtocolMinor { minor: 2, feature: "work.enqueueIfAbsent", uses: MinorUse::Method("work.enqueueIfAbsent") },

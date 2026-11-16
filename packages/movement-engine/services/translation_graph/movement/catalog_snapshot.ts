@@ -38,6 +38,7 @@ type CatalogManifest = Pick<
   | 'description'
   | 'resendWindowSeconds'
   | 'listenSettingsBecome'
+  | 'listensLimitedBefore'
 >;
 
 /**
@@ -122,6 +123,7 @@ function adapterSnapshotOf(input: CatalogAdapterInput): AdapterSnapshot {
     ...(manifest.description !== undefined && manifest.description.length > 0 ? { description: manifest.description } : {}),
     ...(manifest.resendWindowSeconds !== undefined ? { resendWindowSeconds: manifest.resendWindowSeconds } : {}),
     ...(manifest.listenSettingsBecome !== undefined ? { listenSettingsBecome: manifest.listenSettingsBecome } : {}),
+    ...(manifest.listensLimitedBefore !== undefined ? { listensLimitedBefore: manifest.listensLimitedBefore } : {}),
     schemaShape: manifest.introspectedSchema ? 'introspected' : 'static',
     schemas: input.schemas ?? {},
     ...(input.schemaNotes !== undefined ? { schemaNotes: input.schemaNotes } : {}),

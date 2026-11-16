@@ -129,6 +129,10 @@ export interface AdapterSpec {
   /** What a 0.12 settings listen on this module becomes as a traversal: the
    *  upgrade's rewrite of `listen to x { … }`. */
   listenSettingsBecome?: SettingsBecome;
+  /** The release before which a host may have let only registered senders set
+   *  a listen on this module off (Slack's `0.16.0`): an upgrade from an older
+   *  key tells each listen whose filter does not limit it. */
+  listensLimitedBefore?: string;
 }
 
 /**

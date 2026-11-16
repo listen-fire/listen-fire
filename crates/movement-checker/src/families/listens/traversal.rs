@@ -223,6 +223,9 @@ impl Checker<'_> {
                 self.report(codes::LISTEN_SHAPE_MISMATCH, message, stated.span);
             }
             self.check_listen_fires(statement, path, &steps, Landed { landed, members: &members }, landing, scope);
+            if let (Some(instance), Some(landed)) = (&instance, landed) {
+                self.report_listen_now_open(path, instance, &steps, landed, scope);
+            }
         }
         let identity = match &plan {
             Some(plan) => plan.identity(),

@@ -9,7 +9,9 @@ use movement_parser::abi::{install_panic_hook, utf8, write_out};
 use crate::CheckOptions;
 
 /// The options a check is asked with, as JSON: `{ "upgradingFrom": "0.11.0"
-/// | null }` (the release a move up starts from). A check reads its own
+/// | null, "limitingFunction": "@lf-platform/team/isMember" | null }` (the
+/// release a move up starts from; the plugin a host limits a listen's
+/// senders with, crate::CheckOptions). A check reads its own
 /// release's language and takes no pin: the host holds a pin to the rule
 /// before asking.
 #[derive(serde::Deserialize, Default)]
@@ -17,6 +19,8 @@ use crate::CheckOptions;
 struct AskedOptions {
     #[serde(default)]
     upgrading_from: Option<String>,
+    #[serde(default)]
+    limiting_function: Option<String>,
 }
 
 /// The inputs a check reads: source, catalog and options, each as text.
@@ -54,7 +58,7 @@ pub unsafe fn check_program_with(
     install_panic_hook();
     let answer = match unsafe { inputs((src_ptr, src_len), (catalog_ptr, catalog_len), (options_ptr, options_len)) } {
         Ok((source, catalog, options)) => {
-            crate::check_json(source, catalog, CheckOptions { upgrading_from: options.upgrading_from.as_deref(), zones })
+            crate::check_json(source, catalog, CheckOptions { upgrading_from: options.upgrading_from.as_deref(), limiting_function: options.limiting_function.as_deref(), zones })
         }
         Err(error) => serde_json::json!({ "error": error }),
     };
@@ -83,7 +87,7 @@ pub unsafe fn check_answer_with(
     install_panic_hook();
     let answer = match unsafe { inputs((src_ptr, src_len), (catalog_ptr, catalog_len), (options_ptr, options_len)) } {
         Ok((source, catalog, options)) => {
-            crate::check_answer_json(source, catalog, CheckOptions { upgrading_from: options.upgrading_from.as_deref(), zones })
+            crate::check_answer_json(source, catalog, CheckOptions { upgrading_from: options.upgrading_from.as_deref(), limiting_function: options.limiting_function.as_deref(), zones })
         }
         Err(error) => serde_json::json!({ "error": error }),
     };
@@ -112,7 +116,7 @@ pub unsafe fn story_analysis_with(
     install_panic_hook();
     let answer = match unsafe { inputs((src_ptr, src_len), (catalog_ptr, catalog_len), (options_ptr, options_len)) } {
         Ok((source, catalog, options)) => {
-            crate::story::story_analysis_json(source, catalog, CheckOptions { upgrading_from: options.upgrading_from.as_deref(), zones })
+            crate::story::story_analysis_json(source, catalog, CheckOptions { upgrading_from: options.upgrading_from.as_deref(), limiting_function: options.limiting_function.as_deref(), zones })
         }
         Err(error) => serde_json::json!({ "error": error }),
     };

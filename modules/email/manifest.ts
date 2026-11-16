@@ -41,7 +41,7 @@ export const EMAIL_MANIFEST: AdapterManifest = {
   supportedTriggers: ['webhook'],
   methods: [
     'listEntryPoints', 'describe', 'edgesFrom', 'getFieldValue', 'getRelated',
-    'getActorCandidates', 'extractActor', 'resolveFileRef',
+    'resolveFileRef',
   ],
   triggerKinds: ['CUSTOM_EMAIL', 'MAILGUN', 'INBOUND_EMAIL', 'GMAIL'],
   // A 0.12 `listen to inbox { key: "deals" }` is

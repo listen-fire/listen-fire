@@ -32,7 +32,7 @@ fn errors(unselected: bool, body: &str) -> Vec<String> {
     let catalog = json!({ "adapters": { "at": { "canFire": false, "constructionArgs": [], "schemas": { "": schema } } }, "credentials": {}, "plugins": {} });
     let catalog = CatalogSnapshot::load(&catalog.to_string()).unwrap();
     let source = format!("import {{ at }} from adapters\npipeline = connect at\n\nfunction f() {{\n  base = only(pipeline{HOP})\n{body}\n}}\n");
-    let options = CheckOptions { upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
+    let options = CheckOptions { upgrading_from: None, limiting_function: None, zones: &movement_checker::host::native::NativeZones };
     check_source(&source, &catalog, options).unwrap().into_iter().filter(|d| d.severity.is_none()).map(|d| format!("{}:{} {}", d.span.start.line, d.code, d.message)).collect()
 }
 

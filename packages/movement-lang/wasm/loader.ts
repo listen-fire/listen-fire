@@ -199,10 +199,13 @@ export function callCatalog(snapshotJson: string, queryJson: string): { ok: bool
 export interface CheckCallOptions {
   /** The release a move up starts from. */
   upgradingFrom?: string;
+  /** The catalog key of the pure plugin the host limits a listen's senders
+   *  with: an open listen told so on an upgrade is offered its check. */
+  limitingFunction?: string;
 }
 
 function optionsJson(options: CheckCallOptions): string {
-  return JSON.stringify({ upgradingFrom: options.upgradingFrom ?? null });
+  return JSON.stringify({ upgradingFrom: options.upgradingFrom ?? null, limitingFunction: options.limitingFunction ?? null });
 }
 
 /**

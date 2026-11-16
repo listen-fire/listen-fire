@@ -21,7 +21,7 @@ const LINKS: usize = 30;
 fn errors_under(outside: &[String], body: &[String]) -> (Vec<Diagnostic>, Duration) {
     let source = format!("{PRELUDE}\n{}\nfunction m() {{\n{}\n}}", outside.join("\n"), body.join("\n"));
     let catalog = CatalogSnapshot::load(CATALOG).unwrap();
-    let options = CheckOptions { upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
+    let options = CheckOptions { upgrading_from: None, limiting_function: None, zones: &movement_checker::host::native::NativeZones };
     let started = Instant::now();
     let found = check_source(&source, &catalog, options).unwrap();
     let took = started.elapsed();
@@ -145,7 +145,7 @@ fn file_errors_within_budget(source: String) -> Vec<Diagnostic> {
         .stack_size(256 << 20)
         .spawn(move || {
             let catalog = CatalogSnapshot::load(CATALOG).unwrap();
-            let options = CheckOptions { upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
+            let options = CheckOptions { upgrading_from: None, limiting_function: None, zones: &movement_checker::host::native::NativeZones };
             let found = check_source(&source, &catalog, options).unwrap();
             let _ = sent.send(found.into_iter().filter(Diagnostic::is_error).collect::<Vec<_>>());
         })

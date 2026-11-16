@@ -65,8 +65,6 @@ const ALL_METHODS = [
   'readRecord',
   'translateFilter',
   'getDedupRules',
-  'getActorCandidates',
-  'extractActor',
   'describeOpaqueId',
   'resolveFileRef',
   'invokeFieldFunction',
@@ -504,44 +502,25 @@ describe('RemoteAdapter streaming re-wrap', () => {
 
 describe('RemoteAdapter manifest gating', () => {
   it('omits an optional method the manifest did not advertise', () => {
-    const adapter = buildAdapter(ALL_METHODS.filter((m) => m !== 'getActorCandidates'));
-    expect(adapter.getActorCandidates).toBeUndefined();
+    const adapter = buildAdapter(ALL_METHODS.filter((m) => m !== 'describeOpaqueId'));
+    expect(adapter.describeOpaqueId).toBeUndefined();
   });
 
   it('keeps an optional method the manifest advertised as a callable forwarder', async () => {
-    postRpcMock.mockResolvedValueOnce([
-      { identity: { identifier: 'h@x.com', scheme: 'email' }, source: 'originator' },
-    ]);
+    postRpcMock.mockResolvedValueOnce('Ada Lovelace');
 
     const adapter = buildAdapter();
-    expect(typeof adapter.getActorCandidates).toBe('function');
+    expect(typeof adapter.describeOpaqueId).toBe('function');
 
-    const event = { pipelineInputId: 'pi', adapterType: 'remote-email', triggerType: 'webhook', payload: null };
-    const result = await adapter.getActorCandidates!({ event: event as never });
-    expect(result).toEqual([
-      { identity: { identifier: 'h@x.com', scheme: 'email' }, source: 'originator' },
-    ]);
-    expect(postRpcMock).toHaveBeenCalledWith(
-      expect.objectContaining({ method: 'getActorCandidates', params: { event } }),
-    );
+    const params = { fieldPath: 'owner', value: 'wm-1' };
+    const result = await adapter.describeOpaqueId!(params);
+    expect(result).toBe('Ada Lovelace');
+    expect(postRpcMock).toHaveBeenCalledWith(expect.objectContaining({ method: 'describeOpaqueId', params }));
   });
 
   it('omits iterateRelated when neither paging method is advertised', () => {
     const adapter = buildAdapter(['listEntryPoints', 'describe']);
     expect(adapter.iterateRelated).toBeUndefined();
-  });
-
-  it('forwards extractActor over the wire when advertised', async () => {
-    postRpcMock.mockResolvedValueOnce({ identifier: 'wm-1', scheme: 'opaque', adapterType: 'attio', label: 'wm-1' });
-    const adapter = buildAdapter();
-    expect(typeof adapter.extractActor).toBe('function');
-
-    const event = { pipelineInputId: 'pi', adapterType: 'remote-email', triggerType: 'webhook', payload: null };
-    const result = await adapter.extractActor!({ event: event as never });
-    expect(result).toEqual({ identifier: 'wm-1', scheme: 'opaque', adapterType: 'attio', label: 'wm-1' });
-    expect(postRpcMock).toHaveBeenCalledWith(
-      expect.objectContaining({ method: 'extractActor', params: { event } }),
-    );
   });
 
   it('forwards invokeFieldFunction over the wire when advertised', async () => {
@@ -563,13 +542,13 @@ describe('RemoteAdapter manifest gating', () => {
     );
   });
 
-  it('prunes extractActor / invokeFieldFunction when not advertised', () => {
+  it('prunes describeOpaqueId / invokeFieldFunction when not advertised', () => {
     const adapter = buildAdapter(
       ALL_METHODS.filter(
-        (m) => m !== 'extractActor' && m !== 'invokeFieldFunction',
+        (m) => m !== 'describeOpaqueId' && m !== 'invokeFieldFunction',
       ),
     );
-    expect(adapter.extractActor).toBeUndefined();
+    expect(adapter.describeOpaqueId).toBeUndefined();
     expect(adapter.invokeFieldFunction).toBeUndefined();
   });
 });

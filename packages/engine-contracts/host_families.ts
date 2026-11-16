@@ -138,8 +138,6 @@ export const ADAPTER_METHODS = [
   'readRecord',
   'translateFilter',
   'getDedupRules',
-  'getActorCandidates',
-  'extractActor',
   'describeOpaqueId',
   'invokeFieldFunction',
 ] as const satisfies readonly MethodName[];
@@ -264,21 +262,6 @@ export interface HostIds {
   mint(input: Scoped<{ count: number }>): Promise<string[]>;
 }
 
-/** Who an event acts as: an opaque reference the host mints, never a row the
- *  engine reads, and how a person would see it named. */
-export interface PrincipalReference {
-  id: string;
-  display?: string;
-}
-
-/** What `lookup.resolveActingUser` answers (`@user_id`, `@user_name`,
- *  `@user_email`). `email` is supplied only by a host whose principals have
- *  one; without it `@user_email` reads as absent. */
-export interface ActingPrincipal {
-  principal: PrincipalReference;
-  email?: string;
-}
-
 // ── The manifest ────────────────────────────────────────────────────────────
 
 /**
@@ -314,7 +297,6 @@ export const HOST_FAMILIES = {
   'park.bindings': { methods: ['record', 'findBoundCounterpart', 'delete'] },
   'control.cancel': { methods: ['cancelled', 'cancelledNow'] },
   files: { methods: ['resolveFileText', 'render'] },
-  lookup: { methods: ['resolveActingUser'] },
   locks: { methods: ['acquire', 'release'] },
   trace: { optional: true, methods: ['append'] },
   clock: { methods: ['now'] },
