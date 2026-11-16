@@ -195,6 +195,7 @@ impl Scan<'_> {
                 self.visit_expression(expression, scope);
                 self.visit_expression(index, scope);
             }
+            Expression::Field { expression, .. } => self.visit_expression(expression, scope),
             Expression::Llm { prompt_expression: Some(prompt), .. } => self.visit_expression(prompt, scope),
             _ => {}
         }

@@ -2381,6 +2381,10 @@ const transformOutputKindSchema = z.discriminatedUnion('kind', [
   z.object({
     kind: z.literal('record'),
     fields: z.record(z.string(), transformOutputFieldSchema),
+    /** `{ … } | null`: the plugin may answer no record at all (a lookup that
+     *  found nobody). Read downstream as `record | absent`, so a field is
+     *  read off it with `?.`. */
+    optional: z.boolean().optional(),
   }),
   z.object({
     kind: z.literal('records'),

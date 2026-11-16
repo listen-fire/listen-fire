@@ -91,6 +91,7 @@ listen to slack-[m:Messages WHERE m.Channel == "C0DEALS" AND m.\`User Email\` !=
 
 - Which functions exist is the host's choice. The platform's \`@lf-platform/team\` offers \`isMember(claim)\` and \`userFor(claim)\`; \`listen-fire\` alone offers none.
 - A function takes the claim it matches. Plain text where a claim is wanted is refused, so a \`From\` line cannot be passed to \`isMember\`.
+- A function may answer a record, or none. Read its field with \`?.\`: \`m.\`User Email\` != null AND team.userFor(m.\`User Email\`)?.Level == "admin"\`. Without the \`?\` it is refused, since the answer may be none.
 - Write the checks that need no host first. The host is called only for a sender the cheaper terms let through, and each answer is kept.
 - When the host cannot be reached, the arrival waits unjudged and nothing runs until it is judged.
 - To keep a listen off the app's own posts, add \`AND NOT m.\`Sent By This App\`\` (Slack).
@@ -114,6 +115,20 @@ function intake(m: <slack-[:Message]->>) {
 }
 
 listen to slack-[ch:Channels WHERE ch.Name == "dealflow"]->-[m:Messages WHERE NOT m.\`Sent By This App\` AND m.\`User Email\` != null AND team.isMember(m.\`User Email\`)]-> fire intake
+`,
+    },
+    {
+      construct: "a field of a host function's record answer in a listen's filter (team.userFor(…)?.Level)",
+      status: 'runs',
+      probe: `
+import { \`@lf-platform/team\` as team } from plugins
+slack = connect \`@lf/slack\` using team_workspace
+
+function intake(m: <slack-[:Message]->>) {
+  write m-[:Reactions]-> { Emoji: "eyes" }
+}
+
+listen to slack-[ch:Channels WHERE ch.Name == "dealflow"]->-[m:Messages WHERE m.\`User Email\` != null AND team.userFor(m.\`User Email\`)?.Level == "admin"]-> fire intake
 `,
     },
     {

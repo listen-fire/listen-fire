@@ -154,3 +154,16 @@ fn a_bare_import_of_a_shared_name_is_refused_naming_both_packages() {
     let diagnostics = check_two("import { render } from plugins\n\nfunction go(t: <text>) {\n  x = render(t)\n}\n");
     assert!(diagnostics.iter().any(|d| d.message.contains("served by more than one package (@lf/pdf, @lf/web)")), "{diagnostics:?}");
 }
+
+const WRITABLE_CRM_WITH_WEB: &str = r#"{"adapters":{"crm":{"canFire":false,"constructionArgs":[],"schemas":{"":{"positions":{"Company":{"properties":{"Name":"text"},"edges":{}}},"collections":{"Companies":{"target":"Company"}},"writableRoots":{"Company":{"fields":{"Name":"text"},"requiredFields":[],"resultShape":{"externalId":"text"}}}}}}},"credentials":{},"plugins":{
+  "fetch_url":{"args":["url"],"priced":false,"requiredArgs":["url"],"argTypes":{"url":"text"},"effects":{},"output":{"kind":"value","type":"text"},"package":"@lf/web"}
+}}"#;
+
+#[test]
+fn a_package_member_call_in_a_write_field_is_still_the_package_member() {
+    let catalog = CatalogSnapshot::load(WRITABLE_CRM_WITH_WEB).unwrap();
+    let options = CheckOptions { upgrading_from: None, limiting_function: None, zones: &movement_checker::host::native::NativeZones };
+    let source = format!("{HEAD}import {{ crm }} from adapters\nc = connect crm\nfunction go(u: <text>) {{\n  write c-[:Companies]-> {{ Name: web.fetchUrl(u) }}\n}}\n");
+    let found: Vec<Diagnostic> = check_source(&source, &catalog, options).unwrap().into_iter().filter(|d| d.is_error()).collect();
+    assert_eq!(found, Vec::<Diagnostic>::new());
+}

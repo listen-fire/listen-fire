@@ -1,5 +1,5 @@
-//! The shared `Expression` (packages/movement-lang/expression/types.ts): its 28
-//! kinds, the four traversal steps and the list spread — 33 shapes, field
+//! The shared `Expression` (packages/movement-lang/expression/types.ts): its 29
+//! kinds, the four traversal steps and the list spread — 34 shapes, field
 //! names and `type` literals exactly as types.ts spells them.
 //!
 //! Unlike the parser's trees these are written WITHOUT sorting: each struct
@@ -131,6 +131,18 @@ pub enum Expression {
     },
     #[serde(rename = "at")]
     At { expression: Box<Expression>, index: Box<Expression> },
+    /// `team.userFor(e)?.Level`: a field of the record a value is, where the
+    /// value has no name to root a read at (a pure plugin's answer, read in
+    /// a listen's filter or a wait's WHERE, where nothing is bound first).
+    /// Absent when the record is.
+    #[serde(rename = "field")]
+    Field {
+        expression: Box<Expression>,
+        field: String,
+        /// `?.`: as `traverse.optional`, only the checker tells it apart.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        optional: bool,
+    },
     #[serde(rename = "aggregate")]
     Aggregate {
         #[serde(rename = "fn")]

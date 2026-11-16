@@ -699,7 +699,7 @@ pub fn host_calls(plan: &ListenPlan) -> usize {
                 ListElement::Expression(e) => e,
                 ListElement::Spread(spread) => &spread.expression,
             })),
-            Expression::Not { expression } | Expression::Negate { expression } | Expression::Traverse { expression, .. } => count(expression),
+            Expression::Not { expression } | Expression::Negate { expression } | Expression::Traverse { expression, .. } | Expression::Field { expression, .. } => count(expression),
             _ => 0,
         }
     }
@@ -725,7 +725,7 @@ fn host_call_in(expr: &Expression) -> Option<&str> {
             ListElement::Expression(e) => e,
             ListElement::Spread(spread) => &spread.expression,
         })),
-        Expression::Not { expression } | Expression::Negate { expression } | Expression::Traverse { expression, .. } => host_call_in(expression),
+        Expression::Not { expression } | Expression::Negate { expression } | Expression::Traverse { expression, .. } | Expression::Field { expression, .. } => host_call_in(expression),
         _ => None,
     }
 }
@@ -983,6 +983,29 @@ mod tests {
         let member = explain(&message("C1", "ann", "a@acme.com"), &answered("a@acme.com", PluginAnswer::Value(json!(true))));
         assert_eq!(member, Explanation { verdict: Verdict::Fires, first_failed: None });
         assert_eq!(serde_json::to_value(&bot).unwrap(), json!({ "verdict": { "skips": 0 }, "firstFailed": "m.Name != \"bot\"" }));
+    }
+
+    const USER_FOR: &str = "@lf-platform/team/userFor";
+
+    fn user_answer(level: Option<&str>) -> PluginAnswers {
+        let mut answers = PluginAnswers::default();
+        let value = level.map_or(Json::Null, |level| json!({ "Id": "U1", "Email": "a@acme.com", "Name": "Ann", "Level": level }));
+        answers.insert(&PluginQuestion { plugin: USER_FOR.into(), args: vec![json!("a@acme.com")] }, PluginAnswer::Value(value));
+        answers
+    }
+
+    #[test]
+    fn a_field_of_a_record_answer_decides_the_verdict() {
+        let ann = message("C1", "ann", "a@acme.com");
+        assert_eq!(judged("admins", &ann, &PluginAnswers::default()), Verdict::Asks(vec![PluginQuestion { plugin: USER_FOR.into(), args: vec![json!("a@acme.com")] }]));
+        assert_eq!(judged("admins", &ann, &user_answer(Some("admin"))), Verdict::Fires);
+        assert_eq!(judged("admins", &ann, &user_answer(Some("read"))), Verdict::Skips { hop: 0, reason: None });
+        assert_eq!(judged("admins", &ann, &user_answer(None)), Verdict::Skips { hop: 0, reason: None }, "no record: its field is absent, and absent is not \"admin\"");
+        // A local term that fails asks nothing.
+        assert_eq!(judged("admins", &message("C2", "ann", "a@acme.com"), &PluginAnswers::default()), Verdict::Skips { hop: 0, reason: None });
+        assert_eq!(host_calls(&plan_named("admins")), 1);
+        let explained = explain_arrival(&plan_named("admins"), &ann, Judging { now_ms: 0.0, answers: &user_answer(Some("read")) });
+        assert_eq!(explained.first_failed.as_deref(), Some(format!("{USER_FOR}(m.`User Email`)?.Level == \"admin\"").as_str()));
     }
 
     /// A host call on a hop the host resolves by listing is refused by the

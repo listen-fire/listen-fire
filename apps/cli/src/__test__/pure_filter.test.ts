@@ -398,3 +398,43 @@ test("a module's own error answering a wait's WHERE fails the run", async () => 
     await serving.stop();
   }
 });
+
+const ADMINS_ONLY = `function intake(m: <c-[:Messages]->>) {
+  return m.Id
+}
+
+listen to c-[m:Messages WHERE m.\`User Email\` != null AND team.userFor(m.\`User Email\`)?.Level == "admin"]-> fire intake
+`;
+
+test("a listen reads a field of a pure plugin's record answer: an admin fires, a reader and a stranger skip", async () => {
+  const dir = teamProject(ADMINS_ONLY, ['ann@acme.com', 'bob@acme.com']);
+  writeFileSync(join(dir, 'externals/team/admins.json'), JSON.stringify(['ann@acme.com']));
+  const checked = lf(dir, 'check');
+  assert.equal(checked.code, 0, checked.out);
+  const serving = await served(dir, [], { LF_UNJUDGED_RETRY_MS: RETRY_MS });
+  try {
+    await push(serving, [message('m1', 'ann', 'ann@acme.com')]);
+    await until(() => returnedBy(dir, 'intake').length === 1, serving.lines);
+    // A reader's record and a stranger's none each skip, and keep nothing.
+    await push(serving, [message('m2', 'bob', 'bob@acme.com')]);
+    await push(serving, [message('m3', 'eve', 'eve@evil.com')]);
+    await until(() => asked(dir).length === 3, serving.lines);
+    await sleep(LANDED_LONG_ENOUGH);
+    assert.deepEqual(returnedBy(dir, 'intake'), ['m1']);
+    assert.deepEqual(unjudged(dir), []);
+    assert.deepEqual(asked(dir), [{ userFor: 'ann@acme.com' }, { userFor: 'bob@acme.com' }, { userFor: 'eve@evil.com' }]);
+    // The kept answer serves ann again, no question asked.
+    await push(serving, [message('m4', 'ann', 'ann@acme.com')]);
+    await until(() => returnedBy(dir, 'intake').length === 2, serving.lines);
+    assert.equal(asked(dir).length, 3);
+  } finally {
+    await serving.stop();
+  }
+});
+
+test("a field read off a pure plugin's answer that may be none, without ?., is refused by the check", () => {
+  const dir = teamProject(ADMINS_ONLY.replace('?.Level', '.Level'), ['ann@acme.com']);
+  const checked = lf(dir, 'check');
+  assert.notEqual(checked.code, 0);
+  assert.match(checked.out, /MOV_ABSENT_REQUIRED/);
+});

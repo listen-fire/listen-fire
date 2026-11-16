@@ -287,6 +287,12 @@ async fn predicate_in_place<'p>(expr: &'p Expression, read: &'p dyn Fn(&str) -> 
             let index = eval(index).await?.to_number();
             at_index(&value, index)
         }
+        // A field of a call's answer (`team.userFor(e)?.Level`): absent
+        // where the answer is none.
+        Expression::Field { expression, field, .. } => match read_on(eval(expression).await?, &[field.as_str()]) {
+            value if value.is_nullish() => Js::Null,
+            value => value,
+        },
         Expression::Function { fn_, args } if crate::stdlib::is_builtin(fn_) => builtin(fn_, args, &eval).await?,
         Expression::Function { fn_, args } => {
             let Some(call) = options.call else {
@@ -377,6 +383,7 @@ fn leaf_reads<'e>(expr: &'e Expression, into: &mut Vec<&'e Expression>, calls: b
         Expression::Not { expression } | Expression::Negate { expression } => leaf_reads(expression, into),
         Expression::At { expression, index } => leaf_reads(expression, into) && leaf_reads(index, into),
         Expression::Function { args, .. } if calls => all(args, into),
+        Expression::Field { expression, .. } if calls => leaf_reads(expression, into),
         _ => false,
     }
 }

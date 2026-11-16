@@ -1194,7 +1194,7 @@ pub fn sub_expressions(expr: &Expression) -> Vec<&Expression> {
             Some(key) => vec![&**expression, &**key],
             None => vec![&**expression],
         },
-        Expression::Not { expression } | Expression::Negate { expression } => vec![&**expression],
+        Expression::Not { expression } | Expression::Negate { expression } | Expression::Field { expression, .. } => vec![&**expression],
         Expression::At { expression, index } => vec![&**expression, &**index],
         Expression::Arithmetic { left, right, .. } | Expression::Compare { left, right, .. } => vec![&**left, &**right],
         Expression::Logical { operands, .. } => operands.iter().collect(),

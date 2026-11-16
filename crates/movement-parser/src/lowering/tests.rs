@@ -449,6 +449,19 @@ fn a_call_off_a_name_that_is_no_namespace_calls_a_package_member() {
     assert_eq!(refused("web.fetchUrl(url: x)"), "a named argument (url: …) is a movement call's, not an expression's");
 }
 
+/// A field read off a member's answer is a `field` of the call: the call
+/// has no name to root a read at.
+#[test]
+fn a_field_of_a_package_member_s_answer_is_read_off_the_call() {
+    let call = serde_json::json!({ "type": "function", "fn": "team.userFor", "args": [{ "type": "property", "propertyTypeId": "e" }] });
+    assert_eq!(value("team.userFor(e)?.Level"), serde_json::json!({ "type": "field", "expression": call, "field": "Level", "optional": true }));
+    assert_eq!(value("team.userFor(e).`Display Name`"), serde_json::json!({ "type": "field", "expression": call, "field": "Display Name" }));
+    assert_eq!(value("team.userFor(e)?.Manager?.Name")["expression"]["type"], "field");
+    assert!(refused("team.userFor(e).Level(x)").contains("read its answer's fields"), "{}", refused("team.userFor(e).Level(x)"));
+    // A built-in's answer has no fields to read here, as before.
+    assert!(refused("Text.lower(e).Name").contains("Unexpected '.'"), "{}", refused("Text.lower(e).Name"));
+}
+
 // ── A built-in call's static shape (BridgeError) ──
 
 #[test]

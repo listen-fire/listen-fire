@@ -246,8 +246,19 @@ fn spec_of(running: &RunningExternal, declared: &str) -> Option<PluginSpec> {
 }
 
 /// A plugin's value in its answer, as a run reads it: `data.value`, or the
-/// text it answered (first, for a plugin declaring a text value).
+/// text it answered (first, for a plugin declaring a text value). A record
+/// is its text (as `text`) and `data`'s entries; none of them is no record.
 fn value_of(answer: &Js, spec: &PluginSpec) -> Json {
+    if let Some(PluginOutput::Record { .. }) = &spec.output {
+        let mut record = serde_json::Map::new();
+        if let Some(text) = answer.get("text").and_then(Js::as_str) {
+            record.insert("text".into(), Json::String(text.to_string()));
+        }
+        if let Some(Json::Object(data)) = answer.get("data").map(crate::wire::json_of_js) {
+            record.extend(data);
+        }
+        return if record.is_empty() { Json::Null } else { Json::Object(record) };
+    }
     let data_value = answer.get("data").and_then(|data| data.get("value")).filter(|value| !matches!(value, Js::Null)).map(crate::wire::json_of_js);
     let text = answer.get("text").and_then(Js::as_str).map(|text| Json::String(text.to_string()));
     let declares_text = matches!(&spec.output, Some(PluginOutput::Value { type_: FieldType::Scalar(Scalar::Text) }));
@@ -306,6 +317,20 @@ mod tests {
 
     fn missing(cache: &mut AnswerCache, questions: &[PluginQuestion], now: Instant) -> Vec<PluginQuestion> {
         cache.asks(questions, now).missing
+    }
+
+    #[test]
+    fn a_record_answer_is_its_fields_and_none_answered_is_no_record() {
+        let spec: PluginSpec = serde_json::from_value(serde_json::json!({
+            "args": ["e"], "priced": false, "pure": true,
+            "output": { "kind": "record", "fields": { "Level": { "kind": "enum", "options": ["read", "admin"] } }, "maybeAbsent": true }
+        }))
+        .unwrap();
+        let answer = |json: Json| value_of(&crate::wire::js_of_json(&json), &spec);
+        assert_eq!(answer(serde_json::json!({ "data": { "Id": "U1", "Level": "admin" } })), serde_json::json!({ "Id": "U1", "Level": "admin" }));
+        assert_eq!(answer(serde_json::json!({ "data": null })), Json::Null);
+        assert_eq!(answer(serde_json::json!({})), Json::Null);
+        assert_eq!(answer(serde_json::json!({ "data": {} })), Json::Null);
     }
 
     #[test]

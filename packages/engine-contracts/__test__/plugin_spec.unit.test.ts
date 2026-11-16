@@ -98,3 +98,55 @@ describe('a TypeScript plugin declaration may ask for a brand', () => {
     expect(refused[0].message).toContain('text & Brand<"claim:email/address"> | text & Brand<"claim:phone/e164">');
   });
 });
+
+describe('a TypeScript plugin declaration may answer a typed record', () => {
+  const userFor = (optional?: boolean): PluginDeclaration =>
+    declaration({
+      pure: true,
+      signature: {
+        ...declaration().signature,
+        name: 'user-for',
+        params: [{ name: 'claim', type: { kind: 'string' }, required: true, description: 'The claim.' }],
+        output: {
+          kind: 'record',
+          fields: {
+            Id: { type: { kind: 'string' } },
+            Email: { type: { kind: 'branded', of: { kind: 'string' }, brands: ['claim:email/address'] } },
+            Name: { type: { kind: 'string' }, optional: true },
+            Level: { type: { kind: 'enum', values: ['read', 'write', 'admin'] } },
+          },
+          ...(optional === undefined ? {} : { optional }),
+        },
+      },
+    });
+
+  it('a record output that may answer none projects to the catalog record type, maybe absent', () => {
+    const spec = pluginSpecOf(userFor(true));
+    expect(spec.output).toEqual({
+      kind: 'record',
+      fields: {
+        Id: 'text',
+        Email: { kind: 'branded', of: 'text', brands: ['claim:email/address'] },
+        Name: { kind: 'maybeAbsent', of: 'text' },
+        Level: { kind: 'enum', options: ['read', 'write', 'admin'] },
+      },
+      maybeAbsent: true,
+    });
+    expect(WirePluginSpec.safeParse(spec).success).toBe(true);
+  });
+
+  it('a record output that always answers one says nothing of absence', () => {
+    expect(pluginSpecOf(userFor()).output).not.toHaveProperty('maybeAbsent');
+    expect(pluginSpecOf(userFor(false)).output).not.toHaveProperty('maybeAbsent');
+  });
+
+  it('the Rust checker reads its fields, and a field of an answer that may be none only with ?.', () => {
+    const plugins = pluginSpecsOf([userFor(true)]);
+    const snapshot = { adapters: {}, credentials: {}, plugins: { user_for: { ...plugins.user_for, package: '@lf-platform/team' } } } as unknown as CatalogSnapshot;
+    const check = (read: string) =>
+      checkSourceInRust(`import { \`@lf-platform/team\` as t } from plugins\nfunction go() {\n  u = t.userFor("a@x.com")\n  level = ${read}\n  return level\n}\n`, snapshot, { languageVersion: LANGUAGE_VERSION }).map((d) => d.code);
+    expect(check('u.Level')).toContain('MOV_ABSENT_REQUIRED');
+    expect(check('u?.Level')).toEqual([]);
+    expect(check('u?.Rank')).toContain('MOV_UNKNOWN_PROPERTY');
+  });
+});

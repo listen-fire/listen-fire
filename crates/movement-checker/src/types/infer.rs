@@ -977,6 +977,37 @@ impl<'a> Typing<'a> {
         }
     }
 
+    /// `team.userFor(e)?.Level`: a field of the record a call answers, as
+    /// TypeScript reads `f(x)?.level`. Where the answer may be none, `.`
+    /// is refused and `?.` reads it, absent then: a call's answer is never
+    /// narrowed, each call answering anew.
+    fn read_answer_field(&mut self, answer: &Expression, ty: Option<&Ty>, field: &str, optional: bool) -> Option<Ty> {
+        let ty = ty?;
+        let spelled = match answer {
+            Expression::Function { fn_, .. } => format!("{fn_}(…)"),
+            _ => "this value".to_string(),
+        };
+        let quoted = crate::families::values::quote_name(field);
+        let fields = match strip_absent(ty) {
+            Ty::Record(Some(record)) => (**record).clone(),
+            Ty::HeldRecord(held) => held.position.clone(),
+            other => {
+                let message = format!("'{spelled}' answers {}, which has no field '{field}'", crate::types::field::spell_type(other));
+                self.report(codes::UNKNOWN_PROPERTY, message);
+                return None;
+            }
+        };
+        let may_be_none = is_maybe_absent(Some(ty));
+        if may_be_none && !optional {
+            let message = format!(
+                "'{spelled}' may answer no record, and '{spelled}.{quoted}' reads through it. Read it with `{spelled}?.{quoted}` (absent when it answers none)."
+            );
+            self.report(codes::ABSENT_REQUIRED, message);
+        }
+        let read = self.read_property(Some(&fields), field)?;
+        Some(if may_be_none { maybe_absent(read) } else { read })
+    }
+
     /// A name holding what a `record` field holds (`r = c.Current`).
     fn held_by_name(&self, root: &str) -> Option<(Rc<HeldRecord>, bool)> {
         if self.root_type(root).is_some() {
@@ -1305,6 +1336,10 @@ impl<'a> Typing<'a> {
                     return (None, vec![inner, index_ty]);
                 }
                 (self.at_type(inner.as_ref(), index, index_ty.as_ref()), vec![inner, index_ty])
+            }
+            Expression::Field { expression: answer, field, optional } => {
+                let inner = self.infer_at(answer, position);
+                (self.read_answer_field(answer, inner.as_ref(), field, *optional), vec![inner])
             }
             Expression::Aggregate { fn_, expression, .. } => {
                 if *fn_ == AggregationFunction::Llm {

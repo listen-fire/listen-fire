@@ -38,7 +38,8 @@ const CATALOG: &str = r#"{
     "lookup": { "args": ["q"], "requiredArgs": ["q"], "priced": false, "output": { "kind": "value", "type": "text" } },
     "weigh": { "args": ["q"], "requiredArgs": ["q"], "argTypes": { "q": "text" }, "priced": false, "output": { "kind": "value", "type": "number" } },
     "tags": { "args": ["q"], "requiredArgs": ["q"], "argTypes": { "q": "text" }, "priced": false, "output": { "kind": "value", "type": { "kind": "list", "of": "text" } } },
-    "@guild/roll/isSlayer": { "args": ["q"], "requiredArgs": ["q"], "argTypes": { "q": "text" }, "priced": false, "output": { "kind": "value", "type": "boolean" }, "package": "@guild/roll", "name": "isSlayer", "pure": true }
+    "@guild/roll/isSlayer": { "args": ["q"], "requiredArgs": ["q"], "argTypes": { "q": "text" }, "priced": false, "output": { "kind": "value", "type": "boolean" }, "package": "@guild/roll", "name": "isSlayer", "pure": true },
+    "@guild/roll/slayerNamed": { "args": ["q"], "requiredArgs": ["q"], "argTypes": { "q": "text" }, "priced": false, "output": { "kind": "record", "fields": { "Name": "text", "Rank": { "kind": "enum", "options": ["novice", "master"] } }, "maybeAbsent": true }, "package": "@guild/roll", "name": "slayerNamed", "pure": true }
   },
   "models": ["claude-haiku-4-5", "claude-sonnet-4-5", "claude-opus-4-5"]
 }"#;
@@ -1049,6 +1050,64 @@ fn a_wait_s_where_asks_a_pure_plugin_of_each_arrival() {
     assert_eq!(titles(&world), vec!["Ada"]);
     assert_eq!(roll.asked, vec![Data::map([("q", Data::text("Bob"))]), Data::map([("q", Data::text("Ada"))])]);
     assert_eq!(parks.waits[0].noted, vec![("reply-1".to_string(), false), ("reply-2".to_string(), true)]);
+}
+
+/// A plugin that answers the slayer of the guild's roll a name is, as a
+/// record, and no record for a name not on it.
+struct Ranks {
+    asked: Vec<Data>,
+}
+
+impl Modules for Ranks {
+    fn invoke(&mut self, call: PluginCall) -> HostFuture<PluginReply> {
+        let rank = match call.config.get("q").and_then(Data::as_text) {
+            Some("Ada") => Some("master"),
+            Some("Bob") => Some("novice"),
+            _ => None,
+        };
+        let name = call.config.get("q").and_then(Data::as_text).unwrap_or_default().to_string();
+        self.asked.push(call.config);
+        let data = rank.map(|rank| Data::map([("Name", Data::text(&name)), ("Rank", Data::text(rank))]));
+        ready(Ok(PluginReply { data, ..PluginReply::default() }))
+    }
+}
+
+/// A wait's WHERE may read a field of a pure plugin's record answer: no
+/// record leaves the field absent, so the arrival is not the one waited for.
+#[test]
+fn a_wait_s_where_reads_a_field_of_a_pure_plugin_s_record_answer() {
+    let body = "  t = write game-[:tickets]-> { Subject: monster.Name }
+  r = await new t-[r:Reply WHERE roll.slayerNamed(r.Body)?.Rank == \"master\"]->
+  write game-[:notes]-> { Title: r.Body }
+";
+    let source = movement("import { `@guild/roll` as roll } from plugins\n", body);
+    assert_eq!(errors(&source), vec![]);
+    let (mut world, mut parks) = (World::default(), Parks::default());
+    parks.landing_as_it_opens.push(("reply-1".into(), "Cy".into()));
+    parks.landing_as_it_opens.push(("reply-2".into(), "Bob".into()));
+    parks.landing_as_it_opens.push(("reply-3".into(), "Ada".into()));
+    let mut ranks = Ranks { asked: Vec::new() };
+    let ran = finished(block_on(run(&mut Hosts::new().adapters(&mut world).store(&mut parks).modules(&mut ranks), &input(&source))));
+    assert_eq!(ran.parked_address, None);
+    assert_eq!(titles(&world), vec!["Ada"]);
+    assert_eq!(ranks.asked.len(), 3);
+    assert_eq!(parks.waits[0].noted, vec![("reply-1".to_string(), false), ("reply-2".to_string(), false), ("reply-3".to_string(), true)]);
+}
+
+/// A record answer that may be none, bound to a name: absent when the
+/// plugin answers none, read with `?.`.
+#[test]
+fn a_bound_record_answer_that_may_be_none_is_absent_when_none_is_answered() {
+    let body = "  s = roll.slayerNamed(monster.Name)
+  write game-[:notes]-> { Title: coalesce(s?.Rank, \"none\") }
+  write game-[:notes]-> { Title: s == null ? \"nobody\" : \"somebody\" }
+";
+    let source = movement("import { `@guild/roll` as roll } from plugins\n", body);
+    assert_eq!(errors(&source), vec![]);
+    let (mut world, mut parks) = (World::default(), Parks::default());
+    let mut ranks = Ranks { asked: Vec::new() };
+    finished(block_on(run(&mut Hosts::new().adapters(&mut world).store(&mut parks).modules(&mut ranks), &input(&source))));
+    assert_eq!(titles(&world), vec!["none", "nobody"]);
 }
 
 #[test]

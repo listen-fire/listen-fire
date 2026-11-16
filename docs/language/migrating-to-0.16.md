@@ -48,6 +48,7 @@ A listen's filter, and a wait's `WHERE`, may call a pure function: a built-in th
 | a host's registered-member gate | `` m.`User Email` != null AND team.isMember(m.`User Email`) `` in the filter |
 
 - A value that may be missing is narrowed first, as above. `` team.isMember(m.`User Email`) `` alone is refused (`MOV_ABSENT_REQUIRED`).
+- A function may answer a record, or none. Its field is read with `?.`: `` m.`User Email` != null AND team.userFor(m.`User Email`)?.Level == "admin" ``. `.Level` without the `?` is refused (`MOV_ABSENT_REQUIRED`).
 - Terms that need no host are written first. The host is called only for a sender they let through, and each answer is kept.
 - A host that cannot be reached leaves the arrival unjudged; nothing runs until it is judged.
 - Any other call in a filter is refused, naming why (`MOV_LISTEN_IMPURE_WHERE`, `MOV_AWAIT_IMPURE_WHERE`). `fail(…)` is impure there.

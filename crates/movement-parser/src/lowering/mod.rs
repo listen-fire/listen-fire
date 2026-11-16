@@ -281,6 +281,15 @@ fn is_package_member_call(root: &Name, member: &Name) -> bool {
     !root.quoted && !member.quoted && !standard
 }
 
+/// `team.userFor(e)?.Level`: the fields read off a package member's answer,
+/// one after another. A call or a walk off an answer is no read of it.
+fn answer_fields(call: Expression, after: &[Segment], member: &str) -> Lowered<Expression> {
+    after.iter().try_fold(call, |answer, segment| match segment {
+        Segment::Member(field, optional) => Ok(Expression::Field { expression: Box::new(answer), field: field.text.clone(), optional: *optional }),
+        Segment::Call(_) | Segment::Hops(_) => refuse(format!("Unexpected call or walk after the call {member}(…) — read its answer's fields with '.' or '?.'")),
+    })
+}
+
 /// `/^[A-Za-z_][A-Za-z0-9_]*$/`.
 fn plain_identifier(text: &str) -> bool {
     let b = text.as_bytes();
@@ -663,10 +672,11 @@ impl Lowering {
                     }
                     return Ok(Expression::EdgeProperty { property_type_id: property.text.clone(), field_only: false });
                 }
-                if let ([Segment::Call(args)], false) = (rest, *optional)
+                if let (Some((Segment::Call(args), after)), false) = (rest.split_first(), *optional)
                     && is_package_member_call(name, property)
                 {
-                    return self.package_member_call(name, property, args, ctx);
+                    let call = self.package_member_call(name, property, args, ctx)?;
+                    return answer_fields(call, after, &property.text);
                 }
                 let expression = self.lower_name(property, rest, ctx, true)?;
                 match self.fold_namespace(Some(name.text.clone()), Vec::new(), expression)? {

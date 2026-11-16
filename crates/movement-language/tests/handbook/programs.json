@@ -326,6 +326,11 @@
   },
   {
     "chapter": "listeners",
+    "construct": "a field of a host function's record answer in a listen's filter (team.userFor(…)?.Level)",
+    "source": "\nimport { `@lf-platform/team` as team } from plugins\nslack = connect `@lf/slack` using team_workspace\n\nfunction intake(m: <slack-[:Message]->>) {\n  write m-[:Reactions]-> { Emoji: \"eyes\" }\n}\n\nlisten to slack-[ch:Channels WHERE ch.Name == \"dealflow\"]->-[m:Messages WHERE m.`User Email` != null AND team.userFor(m.`User Email`)?.Level == \"admin\"]-> fire intake\n"
+  },
+  {
+    "chapter": "listeners",
     "construct": "a domain test off a claim with Text.regexExtract in a listen's filter",
     "source": "\nslack = connect `@lf/slack` using team_workspace\n\nfunction intake(m: <slack-[:Message]->>) {\n  write m-[:Reactions]-> { Emoji: \"eyes\" }\n}\n\nlisten to slack-[ch:Channels WHERE ch.Name == \"dealflow\"]->-[m:Messages WHERE Text.regexExtract(m.`User Email`, \"@([^@]+)$\", 1) == \"acme.com\"]-> fire intake\n"
   },

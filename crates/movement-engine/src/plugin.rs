@@ -179,16 +179,13 @@ impl Run<'_> {
                 let handed_back = !matches!(value, Js::Null);
                 (Binding::Value(ValueBinding { value, trail: Some(trail), many: false }), handed_back)
             }
+            // A record that may be none, and none was answered: absent, as
+            // the checker typed it.
+            Some(PluginOutput::Record { maybe_absent: true, .. }) if record_fields(&result).entries().is_empty() => {
+                (Binding::Value(ValueBinding { value: Js::Null, trail: Some(trail), many: false }), false)
+            }
             Some(PluginOutput::Record { .. }) => {
-                let mut fields = JsObject::new();
-                if let Some(text) = result.text() {
-                    fields.set(FETCHED_TEXT_FIELD.into(), Js::str(text));
-                }
-                if let Some(Js::Object(data)) = &result.data {
-                    for (key, value) in data.entries() {
-                        fields.set(key.clone(), value.clone());
-                    }
-                }
+                let fields = record_fields(&result);
                 let field_order: Vec<String> = fields.entries().iter().map(|(k, _)| k.clone()).collect();
                 let handed_back = !field_order.is_empty();
                 let field_provenance = field_order.iter().map(|name| (name.clone(), trail.clone())).collect();
@@ -235,8 +232,8 @@ impl Run<'_> {
     /// A plugin called inside an expression (a pure one, in a wait's WHERE,
     /// judged once per arrival): `args` by position, bound to its parameters
     /// in the order it declares them, and its value as it declares it. Timed
-    /// and traced as a plain call is. Only a plugin whose output is a value
-    /// is called so; a record's fields are read only off a bound name.
+    /// and traced as a plain call is. A plugin whose output is a value or one
+    /// record is called so; a list of records is read only off a bound name.
     ///
     /// A pure plugin on a host that keeps answers (`llm.transforms.answer`)
     /// is asked through it instead, as a listen's filter is: a host that
@@ -247,8 +244,11 @@ impl Run<'_> {
         let Some(spec) = self.plugin_spec(&registered) else {
             return Err(Failure::engine("MOVENG_RUNTIME", format!("'{written}' is no plugin the catalog holds — the checker should have caught this")));
         };
-        let Some(PluginOutput::Value { type_ }) = spec.output.clone() else {
-            return Err(Failure::unsupported(&format!("'{written}' inside an expression"), "a plugin called inside an expression hands back a value; bind a record it answers first"));
+        let output = match spec.output.clone() {
+            Some(output @ (PluginOutput::Value { .. } | PluginOutput::Record { .. })) => output,
+            Some(PluginOutput::Records { .. }) | None => {
+                return Err(Failure::unsupported(&format!("'{written}' inside an expression"), "a plugin called inside an expression hands back a value or one record; bind the records it answers first"));
+            }
         };
         let mut values = Vec::with_capacity(args.len());
         for value in args {
@@ -266,11 +266,14 @@ impl Run<'_> {
                     config.set(name.to_string(), value);
                 }
                 let result = self.invoke(&registered, &config, &JsObject::new()).await?;
-                (declared_value(&result, &type_), Some(result))
+                (expression_value(&result, &output), Some(result))
             }
         };
         let duration = self.clock_now().await? - started;
-        let value = if matches!(answered, Js::Null) || fits(&answered, &type_) { answered } else { text_as(&answered, &type_).unwrap_or(Js::Null) };
+        let value = match &output {
+            PluginOutput::Value { type_ } if !matches!(answered, Js::Null) && !fits(&answered, type_) => text_as(&answered, type_).unwrap_or(Js::Null),
+            _ => answered,
+        };
         let mut entry = Members::default();
         entry.set("plugin", Js::str(registered.clone()));
         entry.set("durationMs", Js::Number(duration));
@@ -321,6 +324,38 @@ fn declared_value(result: &crate::extract::run::PluginResult, declared: &FieldTy
     let text = result.text().map(Js::str);
     let first = if matches!(declared, FieldType::Scalar(Scalar::Text)) { text.or(data_value) } else { data_value.or(text) };
     first.unwrap_or(Js::Null)
+}
+
+/// A record a plugin answered: its text (under `text`), then `data`'s
+/// entries. None answered is no field at all.
+fn record_fields(result: &crate::extract::run::PluginResult) -> JsObject {
+    let mut fields = JsObject::new();
+    if let Some(text) = result.text() {
+        fields.set(FETCHED_TEXT_FIELD.into(), Js::str(text));
+    }
+    if let Some(Js::Object(data)) = &result.data {
+        for (key, value) in data.entries() {
+            fields.set(key.clone(), value.clone());
+        }
+    }
+    fields
+}
+
+/// What a plugin called inside an expression answers, as its output declares
+/// it: a value, or a record's fields as a map (`null` where none was
+/// answered), which a field read reads on.
+fn expression_value(result: &crate::extract::run::PluginResult, output: &PluginOutput) -> Js {
+    match output {
+        PluginOutput::Value { type_ } => {
+            let answered = declared_value(result, type_);
+            if matches!(answered, Js::Null) || fits(&answered, type_) { answered } else { text_as(&answered, type_).unwrap_or(Js::Null) }
+        }
+        PluginOutput::Record { .. } => match record_fields(result) {
+            fields if fields.entries().is_empty() => Js::Null,
+            fields => Js::object(fields),
+        },
+        PluginOutput::Records { .. } => unreachable!("expression_call refuses a records output before it invokes"),
+    }
 }
 
 /// Whether a plugin's value is of the type it declares, as the checker

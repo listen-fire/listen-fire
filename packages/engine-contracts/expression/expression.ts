@@ -138,6 +138,12 @@ function expressionSchemaCalling(functionName: z.ZodType<string>): z.ZodTypeAny 
         expression: _expressionSchema,
         index: _expressionSchema,
       }),
+      z.object({
+        type: z.literal('field'),
+        expression: _expressionSchema,
+        field: z.string(),
+        optional: z.boolean().optional(),
+      }),
       // Aggregation
       z.object({
         type: z.literal('aggregate'),

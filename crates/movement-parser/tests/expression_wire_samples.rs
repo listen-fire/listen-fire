@@ -29,7 +29,7 @@ macro_rules! kinds {
 
 kinds!(
     Property, EdgeProperty, Static, Llm, Meta, ParentResult, ActionResult, Resource, LinkedObject, ExtractValue, AliasRef, List, Object, Traverse, ResourceTraverse, Exists, Arithmetic, Compare, Logical, Not, Negate,
-    Concat, Conditional, At, Aggregate, Function, KgExists, KgValue,
+    Concat, Conditional, At, Field, Aggregate, Function, KgExists, KgValue,
 );
 
 /// Exhaustive on purpose: no wildcard, so a variant added to `Expression`
@@ -60,6 +60,7 @@ fn kind_of(expression: &Expression) -> Kind {
         Expression::Concat { .. } => Kind::Concat,
         Expression::Conditional { .. } => Kind::Conditional,
         Expression::At { .. } => Kind::At,
+        Expression::Field { .. } => Kind::Field,
         Expression::Aggregate { .. } => Kind::Aggregate,
         Expression::Function { .. } => Kind::Function,
         Expression::KgExists { .. } => Kind::KgExists,
@@ -146,6 +147,12 @@ fn sample(kind: Kind) -> Expression {
         Kind::Concat => Expression::Concat { parts: vec![text("a"), field("B")] },
         Kind::Conditional => Expression::Conditional { condition: boxed(field("A")), then: boxed(text("y")), else_: boxed(text("n")) },
         Kind::At => Expression::At { expression: boxed(field("Items")), index: boxed(Expression::Static { value: StaticValue::Number(JsNumber(0.0)) }) },
+        Kind::Field => Expression::Field {
+            // The shape only: the persisted schema's function list holds no plugin key.
+            expression: boxed(Expression::Function { fn_: "coalesce".into(), args: vec![field("Owner")] }),
+            field: "Level".into(),
+            optional: true,
+        },
         Kind::Aggregate => Expression::Aggregate {
             fn_: AggregationFunction::Join,
             expression: boxed(field("Name")),

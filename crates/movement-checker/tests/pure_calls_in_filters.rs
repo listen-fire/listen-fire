@@ -39,6 +39,12 @@ fn catalog() -> CatalogSnapshot {
         },
         "writableRoots": {}
     });
+    let user = json!({
+        "Id": "text",
+        "Email": email.clone(),
+        "Name": { "kind": "maybeAbsent", "of": "text" },
+        "Level": { "kind": "enum", "options": ["read", "write", "admin"] }
+    });
     let catalog = json!({
         "adapters": { "slack": { "canFire": true, "constructionArgs": [], "schemas": { "": schema } } },
         "credentials": {},
@@ -47,6 +53,16 @@ fn catalog() -> CatalogSnapshot {
                 "args": ["e"], "priced": false, "requiredArgs": ["e"], "argTypes": { "e": email }, "effects": {},
                 "output": { "kind": "value", "type": "boolean" }, "package": "@lf-platform/team", "name": "isMember",
                 "pure": true, "maxAgeSeconds": 300
+            },
+            "@lf-platform/team/userFor": {
+                "args": ["e"], "priced": false, "requiredArgs": ["e"], "argTypes": { "e": email }, "effects": {},
+                "output": { "kind": "record", "fields": user.clone(), "maybeAbsent": true },
+                "package": "@lf-platform/team", "name": "userFor", "pure": true
+            },
+            "@lf-platform/team/ownerOf": {
+                "args": ["e"], "priced": false, "requiredArgs": ["e"], "argTypes": { "e": email }, "effects": {},
+                "output": { "kind": "record", "fields": user },
+                "package": "@lf-platform/team", "name": "ownerOf", "pure": true
             },
             "@lf-platform/team/isGuest": {
                 "args": ["e"], "priced": false, "requiredArgs": ["e"], "argTypes": { "e": email }, "effects": {},
@@ -258,4 +274,68 @@ fn a_call_is_never_taken_by_the_module() {
     assert_eq!(spelled(&hop.taken), ["m.Channel == \"C1\""]);
     assert_eq!(spelled(&hop.checked), ["Text.lower(m.Name) == \"ann\"", "@lf-platform/team/isMember(m.`User Email`)"]);
     assert!(hop.asks_host);
+}
+
+#[test]
+fn a_field_of_a_pure_answer_is_read_with_optional_chaining() {
+    let found = listen("m.`User Email` != null AND t.userFor(m.`User Email`)?.Level == \"admin\"");
+    assert_eq!(codes(&found), Vec::<&str>::new(), "{found:#?}");
+    let found = wait("t.userFor(x.`User Email`)?.Level == \"admin\"");
+    assert_eq!(codes(&found), Vec::<&str>::new(), "{found:#?}");
+    // The field's own absence carries through, as any read's does.
+    let found = listen("t.userFor(m.`User Email`)?.Name == \"Ann\"");
+    assert_eq!(codes(&found), Vec::<&str>::new(), "{found:#?}");
+    // The value it is compared with is held to the field's type.
+    let found = listen("t.userFor(m.`User Email`)?.Level == \"owner\"");
+    assert_eq!(codes(&found), ["MOV_ENUM_UNKNOWN_VALUE"], "{found:#?}");
+}
+
+#[test]
+fn a_field_of_a_pure_answer_that_may_be_none_needs_optional_chaining() {
+    let found = listen("t.userFor(m.`User Email`).Level == \"admin\"");
+    assert_eq!(codes(&found), ["MOV_ABSENT_REQUIRED"], "{found:#?}");
+    assert!(found[0].message.contains("t.userFor(…)?.Level"), "{}", found[0].message);
+    assert_eq!(codes(&wait("t.userFor(x.`User Email`).Level == \"admin\"")), ["MOV_ABSENT_REQUIRED"]);
+    // An answer that is always a record is read with `.` or `?.`.
+    assert_eq!(codes(&listen("t.ownerOf(m.`User Email`).Level == \"admin\"")), Vec::<&str>::new());
+    assert_eq!(codes(&listen("t.ownerOf(m.`User Email`)?.Level == \"admin\"")), Vec::<&str>::new());
+}
+
+#[test]
+fn a_field_a_pure_answer_does_not_have_is_refused() {
+    let found = listen("t.userFor(m.`User Email`)?.Rank == \"admin\"");
+    assert_eq!(codes(&found), ["MOV_UNKNOWN_PROPERTY"], "{found:#?}");
+    assert!(found[0].message.contains("Rank"), "{}", found[0].message);
+    assert_eq!(codes(&wait("t.ownerOf(x.`User Email`).Rank == \"admin\"")), ["MOV_UNKNOWN_PROPERTY"]);
+    // A value that is no record has no fields.
+    let found = listen("t.isMember(m.`User Email`).Level == \"admin\"");
+    assert_eq!(codes(&found), ["MOV_UNKNOWN_PROPERTY"], "{found:#?}");
+}
+
+#[test]
+fn a_field_of_an_answer_is_judged_as_the_call_is() {
+    // The read is the call's: an impure plugin stays refused.
+    let found = errors_of("listen to s-[m:Messages WHERE t.isGuest(m.`User Email`) == true AND t.userFor(m.`User Email`)?.Level == \"admin\"]-> fire f\n");
+    assert_eq!(codes(&found), ["MOV_LISTEN_IMPURE_WHERE"], "{found:#?}");
+    // A run's walk still binds a call first.
+    let found = errors_of("function go() {\n  xs = s-[m:Messages WHERE t.userFor(m.`User Email`)?.Level == \"admin\"]->\n  return xs\n}\n");
+    assert_eq!(codes(&found), ["MOV_CALL_NESTED"], "{found:#?}");
+    // The plan names the plugin by its key and reads the field off its answer.
+    let plans = plans_of("m.`User Email` != null AND t.userFor(m.`User Email`)?.Level == \"admin\"");
+    let hop = &plans[0].hops[0];
+    assert!(hop.asks_host, "{hop:#?}");
+    assert_eq!(terms(hop.checked.as_ref().unwrap()), ["exists(m.`User Email`)", "@lf-platform/team/userFor(m.`User Email`)?.Level == \"admin\""]);
+}
+
+#[test]
+fn a_bound_answer_that_may_be_none_is_read_as_any_value_that_may_be_absent() {
+    let body = |read: &str| errors_of(&format!("function go(e: <text & Brand<\"claim:email/address\">>) {{\n  u = t.userFor(e)\n  x = {read}\n  return x\n}}\n"));
+    assert_eq!(codes(&body("u.Level")), ["MOV_ABSENT_REQUIRED"]);
+    assert_eq!(codes(&body("u?.Level")), Vec::<&str>::new());
+    assert_eq!(codes(&body("u?.Rank")), ["MOV_UNKNOWN_PROPERTY"]);
+    // Read off the call in a run's value, the call is run first, as before.
+    assert_eq!(codes(&body("t.userFor(e)?.Level")), Vec::<&str>::new());
+    assert_eq!(codes(&body("t.userFor(e).Level")), ["MOV_ABSENT_REQUIRED"]);
+    let found = errors_of("function go(e: <text & Brand<\"claim:email/address\">>) {\n  u = t.userFor(e)\n  if (u != null) {\n    return u.Level\n  }\n  return \"none\"\n}\n");
+    assert_eq!(codes(&found), Vec::<&str>::new(), "{found:#?}");
 }

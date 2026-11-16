@@ -468,6 +468,7 @@ pub fn spell(expr: &Expression, alias: Option<&str>) -> String {
             let args: Vec<String> = args.iter().map(|a| spell(a, alias)).collect();
             format!("{}({})", movement_parser::surface::table::spell(fn_), args.join(", "))
         }
+        Expression::Field { expression, field, optional } => format!("{}{}{}", spell(expression, alias), if *optional { "?." } else { "." }, spell_name(field)),
         _ => "…".to_string(),
     }
 }

@@ -476,7 +476,8 @@ export function findPlugin(
  */
 export type PluginOutput =
   | { kind: 'value'; type: SchemaFieldType }
-  | { kind: 'record'; fields: Record<string, SchemaFieldType> }
+  // `maybeAbsent`: `{ … } | null`, a plugin that may answer no record at all.
+  | { kind: 'record'; fields: Record<string, SchemaFieldType>; maybeAbsent?: true }
   | { kind: 'records'; fields: Record<string, SchemaFieldType> };
 
 

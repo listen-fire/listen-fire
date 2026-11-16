@@ -122,7 +122,7 @@ const TEAM_PLUGINS: CatalogSnapshot['plugins'] = {
     argTypes: { claim: EMAIL_CLAIM },
     priced: false,
     effects: {},
-    output: { kind: 'record', fields: { Id: 'text', Name: 'text', Level: 'text' } },
+    output: { kind: 'record', fields: { Id: 'text', Email: EMAIL_CLAIM, Name: 'text', Level: { kind: 'enum', options: ['read', 'write', 'admin'] } }, maybeAbsent: true },
     package: '@lf-platform/team',
     name: 'userFor',
     pure: true,

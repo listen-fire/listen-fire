@@ -67,7 +67,7 @@ fn name_plugins_by_key(filter: &mut Expression, key_of: &dyn Fn(&str) -> Option<
             }
             args.iter_mut().for_each(each);
         }
-        Expression::Traverse { expression, .. } | Expression::Not { expression } | Expression::Negate { expression } => each(expression),
+        Expression::Traverse { expression, .. } | Expression::Not { expression } | Expression::Negate { expression } | Expression::Field { expression, .. } => each(expression),
         Expression::Compare { left, right, .. } | Expression::Arithmetic { left, right, .. } => {
             each(left);
             each(right);

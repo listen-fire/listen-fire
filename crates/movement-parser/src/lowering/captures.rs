@@ -302,6 +302,9 @@ impl Analysis<'_> {
             Expression::At { expression, index } => {
                 Expression::At { expression: self.boxed(expression, ctx, &mut reads), index: self.boxed(index, ctx, &mut reads) }
             }
+            Expression::Field { expression, field, optional } => {
+                Expression::Field { expression: self.boxed(expression, ctx, &mut reads), field: field.clone(), optional: *optional }
+            }
             Expression::Aggregate { fn_, expression, separator, prompt, order_by, order_direction, written } => {
                 // A model's summary is a call out, made at every check.
                 if *fn_ == AggregationFunction::Llm {
@@ -445,6 +448,7 @@ fn map_parts(e: &Expression, f: &dyn Fn(&Expression) -> Expression) -> Expressio
             Expression::Conditional { condition: boxed(condition), then: boxed(then), else_: boxed(else_) }
         }
         Expression::At { expression, index } => Expression::At { expression: boxed(expression), index: boxed(index) },
+        Expression::Field { expression, field, optional } => Expression::Field { expression: boxed(expression), field: field.clone(), optional: *optional },
         Expression::Aggregate { fn_, expression, separator, prompt, order_by, order_direction, written } => Expression::Aggregate {
             fn_: *fn_,
             expression: boxed(expression),
@@ -499,6 +503,7 @@ fn parts(e: &Expression) -> Vec<&Expression> {
         Expression::Concat { parts } => parts.iter().collect(),
         Expression::Conditional { condition, then, else_ } => vec![condition, then, else_],
         Expression::At { expression, index } => vec![expression, index],
+        Expression::Field { expression, .. } => vec![expression],
         Expression::Aggregate { expression, order_by, .. } => std::iter::once(expression.as_ref()).chain(order_by.as_deref()).collect(),
         Expression::Function { args, .. } => args.iter().collect(),
         Expression::KgExists { params, .. } | Expression::KgValue { params, .. } => params.iter().collect(),

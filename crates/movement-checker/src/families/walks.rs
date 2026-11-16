@@ -1336,6 +1336,8 @@ fn predicate_of(expr: &Expression, call: &dyn Fn(&Expression) -> bool) -> bool {
         Expression::Concat { parts } => parts.iter().all(each),
         Expression::Conditional { condition, then, else_ } => each(condition) && each(then) && each(else_),
         Expression::At { expression, index } => each(expression) && each(index),
+        // A field of a call's answer is judged as the call is.
+        Expression::Field { expression, .. } => each(expression),
         Expression::Function { .. } => call(expr),
         _ => false,
     }

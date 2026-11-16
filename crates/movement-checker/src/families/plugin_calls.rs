@@ -37,6 +37,13 @@ fn found(callee: &str, fields: &movement_parser::catalog::types::JsMap<SchemaFie
     })
 }
 
+/// The record a plugin answers, or none (`{ … } | null`): its fields as a
+/// value, as TypeScript's `T | undefined` of a plain object type, since it
+/// has no identity to walk from.
+fn answered_or_none(callee: &str, fields: &movement_parser::catalog::types::JsMap<SchemaFieldType>) -> Ty {
+    crate::types::field::maybe_absent(Ty::HeldRecord(std::rc::Rc::new(crate::types::field::HeldRecord { position: found(callee, fields), live_edge: None })))
+}
+
 /// A plugin called inside an expression, which only a listen's filter and a
 /// wait's WHERE admit (`team.isMember(m.Email)`): each argument fills the
 /// parameter at its place and is held to its declared type, a brand and its
@@ -77,7 +84,8 @@ pub fn type_plugin_call(typing: &mut crate::types::infer::Typing, callee: &str, 
     }
     match spec.output.as_ref()? {
         PluginOutput::Value { type_ } => Some(Ty::from_schema(type_)),
-        PluginOutput::Record { fields } => Some(Ty::record(Some(found(callee, fields)))),
+        PluginOutput::Record { fields, maybe_absent: false } => Some(Ty::record(Some(found(callee, fields)))),
+        PluginOutput::Record { fields, maybe_absent: true } => Some(answered_or_none(callee, fields)),
         PluginOutput::Records { fields } => Some(list_of(Ty::record(Some(found(callee, fields))), CollectionOrder::Ordered)),
     }
 }
@@ -120,7 +128,10 @@ impl Checker<'_> {
         let Some(output) = spec.output.as_ref() else { return ReturnShape::default() };
         let plane = match output {
             PluginOutput::Value { type_ } => PlaneType { field: Some(Ty::from_schema(type_)), pos: None },
-            PluginOutput::Record { fields } => PlaneType { pos: Some(Box::new(found(&call.callee, fields))), field: None },
+            PluginOutput::Record { fields, maybe_absent: false } => PlaneType { pos: Some(Box::new(found(&call.callee, fields))), field: None },
+            // A record that may be none is a value that may be absent, read
+            // with `?.` until it is tested.
+            PluginOutput::Record { fields, maybe_absent: true } => PlaneType { field: Some(answered_or_none(&call.callee, fields)), pos: None },
             // One record per thing found, in the order the plugin found them.
             PluginOutput::Records { fields } => {
                 PlaneType { field: Some(list_of(Ty::record(Some(found(&call.callee, fields))), CollectionOrder::Ordered)), pos: None }

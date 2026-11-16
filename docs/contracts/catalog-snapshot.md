@@ -107,6 +107,8 @@ interface PluginSpec {
 
 **A plugin's arguments by position.** A call passes the plugin's required inputs by position, then its other inputs in one settings record (`fetchUrl(u)`, `research(n, { context: s })`). The positions are the spec's required `fedArgs`, then its `requiredArgs` in `args` order; a `through [ … ]` stage, which is never fed by its author, takes only the `requiredArgs`. The spec keeps a plugin's fed inputs apart from its author's, so it does not say how the two interleave in the manifest; every plugin declares its fed input first, so fed-then-author is the manifest's declared order. A settings key is an input's name exactly as `args` (or, on a plain call, `fedArgs`) spells it. The call is bound to the named config before the plugin is invoked, so the wire is unchanged: the plugin is handed `{ url: … }` as before. One binding does this in each language (Rust `PluginSpec::bind_args`, TypeScript `bindPluginArgs`); both checkers and both engines use it.
 
+**A plugin's output that is one record, or none.** A `record` output with `maybeAbsent` is `record | absent`: a lookup that may find nobody (`team.userFor(e)`). Its fields are read with `?.` (`team.userFor(e)?.Level`), absent when it answered none. A host hands back no record as an answer with no fields: no `data` object (or an empty one) and no text. `maybeAbsent` is optional and additive, so the version stays 1. A TypeScript declaration spells it `output: { kind: 'record', fields: { … }, optional: true }`.
+
 **A plugin's output that is one file.** A `value` output of type `file` is the file the host put at the answer's `data.value`, not the fetched text (a PDF: `pdf.render(text)`).
 
 **A plugin package.** A spec's `package` is a tag (`@lf/web`), compared exactly and never parsed. An import from `plugins` whose name equals some spec's `package` imports that package: ``import { `@lf/web` as web } from plugins``. Its members are the specs that declare that tag, each called by its key in camelCase after the package's local name (`fetch_url` → `web.fetchUrl(u)`, `through [web.linkedinEnrichment]`). A member call is an ordinary plugin call: it binds by position as above, and the plugin is invoked by its catalog key with the named config. The platform's catalog lists two: `@lf/web` and `@lf/pdf` (`pdf.render(text)`). A package's plugin is keyed by module and name (`@lf/pdf/render`, `@lf/web/render`), so two modules can each serve a `render`; the spec's `name` is what a program writes. A bare import (`import { fetch_url } from plugins`, as the older language wrote it) finds the one plugin of that name, and is refused, naming the packages, when several have it. The key is compared, never parsed. `name` is optional and additive, so the version stays 1. The member is optional and additive, both readers carry it, so the version stays 1.
@@ -114,7 +116,7 @@ interface PluginSpec {
 ```ts
 type PluginOutput =
   | { kind: 'value'; type: SchemaFieldType }
-  | { kind: 'record'; fields: Record<string, SchemaFieldType> }
+  | { kind: 'record'; fields: Record<string, SchemaFieldType>; maybeAbsent?: true }   // maybeAbsent: `{ … } | null`, it may answer no record
   | { kind: 'records'; fields: Record<string, SchemaFieldType> };
 
 type PluginArgType = SchemaFieldType | { kind: 'union'; of: PluginArgType[] };   // an argument takes one of several types (a union of brands); a schema's field never does

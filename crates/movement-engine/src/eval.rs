@@ -497,6 +497,12 @@ impl<'a> Evaluator<'a> {
                 let inner = self.eval(expression).await?;
                 Ok(Evaluated { value: Js::Number(-inner.value.to_number()), prov: self.union(&[&inner.prov]) })
             }
+            // A field of a call's answer: absent past anything that is no record.
+            Expression::Field { expression, field, .. } => {
+                let inner = self.eval(expression).await?;
+                let value = crate::filter::read_on(inner.value, &[field.as_str()]);
+                Ok(Evaluated { value: if value.is_nullish() { Js::Null } else { value }, prov: self.union(&[&inner.prov]) })
+            }
             Expression::Arithmetic { op, left, right } => {
                 let l = self.eval(left).await?;
                 let r = self.eval(right).await?;

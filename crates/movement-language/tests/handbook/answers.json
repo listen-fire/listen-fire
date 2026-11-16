@@ -2009,6 +2009,26 @@
 {"at":{"character":139,"line":8},"codeActions":[],"complete":{"items":160,"word":{"end":{"character":139,"line":8},"start":{"character":139,"line":8}}}},
 {"at":{"character":150,"line":8},"codeActions":[],"complete":{"items":101,"word":{"end":{"character":150,"line":8},"start":{"character":150,"line":8}}}}
 ]},
+{"construct": "a field of a host function's record answer in a listen's filter (team.userFor(…)?.Level)",
+"probes": [
+{"at":{"character":0,"line":1},"definition":null,"hover":null},
+{"at":{"character":9,"line":1},"codeActions":[],"complete":{"items":66,"word":{"end":{"character":9,"line":1},"start":{"character":9,"line":1}}}},
+{"at":{"character":0,"line":2},"definition":{"file":null,"range":{"end":{"character":5,"line":2},"start":{"character":0,"line":2}}},"hover":{"contents":"```movement\nslack = connect slack\n```\nYour slack account, signed in with the credential team_workspace.\n\nHolds: Action, Channel, File, Interaction, Message, Reaction, User\n\nListen to: Messages, Interactions, Reactions, Replies\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":5,"line":2},"start":{"character":0,"line":2}}}},
+{"at":{"character":34,"line":2},"codeActions":[],"complete":{"items":10,"word":{"end":{"character":34,"line":2},"start":{"character":34,"line":2}}}},
+{"at":{"character":0,"line":4},"definition":null,"hover":null},
+{"at":{"character":27,"line":4},"codeActions":[],"complete":{"items":157,"word":{"end":{"character":27,"line":4},"start":{"character":27,"line":4}}}},
+{"at":{"character":2,"line":5},"definition":null,"hover":null},
+{"at":{"character":11,"line":5},"codeActions":[],"complete":{"items":16,"word":{"end":{"character":11,"line":5},"start":{"character":11,"line":5}}}},
+{"at":{"character":27,"line":5},"codeActions":[],"complete":{"items":158,"word":{"end":{"character":27,"line":5},"start":{"character":27,"line":5}}}},
+{"at":{"character":0,"line":8},"definition":null,"hover":null},
+{"at":{"character":17,"line":8},"codeActions":[],"complete":{"items":11,"word":{"end":{"character":17,"line":8},"start":{"character":17,"line":8}}}},
+{"at":{"character":38,"line":8},"codeActions":[],"complete":{"items":12,"word":{"end":{"character":38,"line":8},"start":{"character":38,"line":8}}}},
+{"at":{"character":61,"line":8},"codeActions":[],"complete":{"items":159,"word":{"end":{"character":61,"line":8},"start":{"character":61,"line":8}}}},
+{"at":{"character":80,"line":8},"codeActions":[],"complete":{"items":101,"word":{"end":{"character":80,"line":8},"start":{"character":80,"line":8}}}},
+{"at":{"character":110,"line":8},"codeActions":[],"complete":{"items":160,"word":{"end":{"character":110,"line":8},"start":{"character":110,"line":8}}}},
+{"at":{"character":120,"line":8},"codeActions":[],"complete":{"items":101,"word":{"end":{"character":120,"line":8},"start":{"character":120,"line":8}}}},
+{"at":{"character":135,"line":8},"codeActions":[],"complete":{"items":2,"word":{"end":{"character":135,"line":8},"start":{"character":135,"line":8}}}}
+]},
 {"construct": "a domain test off a claim with Text.regexExtract in a listen's filter",
 "probes": [
 {"at":{"character":0,"line":1},"definition":{"file":null,"range":{"end":{"character":5,"line":1},"start":{"character":0,"line":1}}},"hover":{"contents":"```movement\nslack = connect slack\n```\nYour slack account, signed in with the credential team_workspace.\n\nHolds: Action, Channel, File, Interaction, Message, Reaction, User\n\nListen to: Messages, Interactions, Reactions, Replies\n\n[Docs](<docs>/anatomy#constructions)","range":{"end":{"character":5,"line":1},"start":{"character":0,"line":1}}}},

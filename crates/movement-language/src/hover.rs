@@ -257,7 +257,8 @@ fn plugin_signature(written: &str, spec: &PluginSpec) -> String {
         .collect();
     let gives = match &spec.output {
         Some(PluginOutput::Value { type_ }) => format!(" → {}", written_type(&Ty::from_schema(type_)).spell()),
-        Some(PluginOutput::Record { .. }) => " → a record".to_string(),
+        Some(PluginOutput::Record { maybe_absent: false, .. }) => " → a record".to_string(),
+        Some(PluginOutput::Record { maybe_absent: true, .. }) => " → a record, or none".to_string(),
         Some(PluginOutput::Records { .. }) => " → records".to_string(),
         None => String::new(),
     };

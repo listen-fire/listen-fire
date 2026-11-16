@@ -8888,9 +8888,24 @@
         "kind": "record",
         "fields": {
           "Id": "text",
+          "Email": {
+            "kind": "branded",
+            "of": "text",
+            "brands": [
+              "claim:email/address"
+            ]
+          },
           "Name": "text",
-          "Level": "text"
-        }
+          "Level": {
+            "kind": "enum",
+            "options": [
+              "read",
+              "write",
+              "admin"
+            ]
+          }
+        },
+        "maybeAbsent": true
       },
       "package": "@lf-platform/team",
       "name": "userFor",

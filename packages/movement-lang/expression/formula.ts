@@ -352,6 +352,9 @@ export function serialize(
     case 'at': {
       return `AT(${ser(expr.expression)}, ${ser(expr.index)})`;
     }
+    case 'field': {
+      return `${ser(expr.expression)}${expr.optional === true ? '?.' : '.'}${quoteName(expr.field)}`;
+    }
   }
 
   // Shorthand for recursive calls that threads resolveStaticValue/resolveEdgeInfo through

@@ -993,6 +993,10 @@ pub enum PluginOutput {
     },
     Record {
         fields: JsMap<SchemaFieldType>,
+        /// `{ … } | null`: the plugin may answer no record at all (a lookup
+        /// that found nobody), so its answer is `record | absent`.
+        #[serde(rename = "maybeAbsent", default, skip_serializing_if = "std::ops::Not::not")]
+        maybe_absent: bool,
     },
     Records {
         fields: JsMap<SchemaFieldType>,

@@ -126,7 +126,7 @@ function pluginOutputOf(output: TransformOutputKind): PluginOutput {
     case 'value':
       return { kind: 'value', type: outputFieldType(output) };
     case 'record':
-      return { kind: 'record', fields: outputFieldTypes(output.fields) };
+      return { kind: 'record', fields: outputFieldTypes(output.fields), ...(output.optional === true ? { maybeAbsent: true as const } : {}) };
     case 'records':
       return { kind: 'records', fields: outputFieldTypes(output.fields) };
     default:
