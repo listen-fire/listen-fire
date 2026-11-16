@@ -14,7 +14,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use movement_parser::catalog::plugin_args::{EXTRACTED_RECORD_PARAM, PluginCallSite};
-use movement_parser::catalog::types::{Composite, FieldType, JsMap, PluginOutput, PluginSpec, Scalar};
+use movement_parser::catalog::types::{Composite, FieldType, JsMap, PluginOutput, PluginSpec, Scalar, SchemaFieldType};
 
 use crate::bindings::{Binding, Node, Scope};
 use crate::env::{Trail, ValueBinding};
@@ -181,16 +181,17 @@ impl Run<'_> {
             }
             // A record that may be none, and none was answered: absent, as
             // the checker typed it.
-            Some(PluginOutput::Record { maybe_absent: true, .. }) if record_fields(&result).entries().is_empty() => {
-                (Binding::Value(ValueBinding { value: Js::Null, trail: Some(trail), many: false }), false)
-            }
+            Some(PluginOutput::Record { fields, maybe_absent: true }) => match maybe_absent_record(&result, &fields, &registered).map_err(Stop::Thrown)? {
+                None => (Binding::Value(ValueBinding { value: Js::Null, trail: Some(trail), many: false }), false),
+                Some(fields) => {
+                    let handed_back = !fields.entries().is_empty();
+                    (Binding::Node(Rc::new(RefCell::new(record_node(fields, &trail)))), handed_back)
+                }
+            },
             Some(PluginOutput::Record { .. }) => {
                 let fields = record_fields(&result);
-                let field_order: Vec<String> = fields.entries().iter().map(|(k, _)| k.clone()).collect();
-                let handed_back = !field_order.is_empty();
-                let field_provenance = field_order.iter().map(|name| (name.clone(), trail.clone())).collect();
-                let node = Node { fields, field_order, field_provenance, landed_on: None, edges: Vec::new(), resources: Vec::new() };
-                (Binding::Node(Rc::new(RefCell::new(node))), handed_back)
+                let handed_back = !fields.entries().is_empty();
+                (Binding::Node(Rc::new(RefCell::new(record_node(fields, &trail)))), handed_back)
             }
             // One record per thing the plugin found, in its order: the
             // landings a hop would give, so FIRST, MAP and a field read work
@@ -266,7 +267,7 @@ impl Run<'_> {
                     config.set(name.to_string(), value);
                 }
                 let result = self.invoke(&registered, &config, &JsObject::new()).await?;
-                (expression_value(&result, &output), Some(result))
+                (expression_value(&result, &output, &registered)?, Some(result))
             }
         };
         let duration = self.clock_now().await? - started;
@@ -341,19 +342,40 @@ fn record_fields(result: &crate::extract::run::PluginResult) -> JsObject {
     fields
 }
 
+fn record_node(fields: JsObject, trail: &Trail) -> Node {
+    let field_order: Vec<String> = fields.entries().iter().map(|(k, _)| k.clone()).collect();
+    let field_provenance = field_order.iter().map(|name| (name.clone(), trail.clone())).collect();
+    Node { fields, field_order, field_provenance, landed_on: None, edges: Vec::new(), resources: Vec::new() }
+}
+
+/// A record that may be none, as the plugin answered it: none is an answer
+/// with no `data`; `data: {}` is a record whose fields are each absent,
+/// which only a record whose fields may all be absent can be (otherwise the
+/// answer is malformed, never silently none).
+fn maybe_absent_record(result: &crate::extract::run::PluginResult, declared: &JsMap<SchemaFieldType>, plugin: &str) -> Result<Option<JsObject>, Failure> {
+    let Some(Js::Object(data)) = &result.data else { return Ok(None) };
+    if data.entries().is_empty() {
+        if let Some((name, _)) = declared.iter().find(|(_, type_)| !type_.admits_absent()) {
+            return Err(Failure::engine(
+                "MOVENG_RUNTIME",
+                format!("{plugin} answered an empty `data` for a record whose field {name} is required: the host answered something malformed (none is an answer with no `data`)"),
+            ));
+        }
+    }
+    Ok(Some(record_fields(result)))
+}
+
 /// What a plugin called inside an expression answers, as its output declares
 /// it: a value, or a record's fields as a map (`null` where none was
 /// answered), which a field read reads on.
-fn expression_value(result: &crate::extract::run::PluginResult, output: &PluginOutput) -> Js {
+fn expression_value(result: &crate::extract::run::PluginResult, output: &PluginOutput, registered: &str) -> Result<Js, Failure> {
     match output {
         PluginOutput::Value { type_ } => {
             let answered = declared_value(result, type_);
-            if matches!(answered, Js::Null) || fits(&answered, type_) { answered } else { text_as(&answered, type_).unwrap_or(Js::Null) }
+            Ok(if matches!(answered, Js::Null) || fits(&answered, type_) { answered } else { text_as(&answered, type_).unwrap_or(Js::Null) })
         }
-        PluginOutput::Record { .. } => match record_fields(result) {
-            fields if fields.entries().is_empty() => Js::Null,
-            fields => Js::object(fields),
-        },
+        PluginOutput::Record { fields, maybe_absent: true } => maybe_absent_record(result, fields, registered).map(|record| record.map_or(Js::Null, Js::object)),
+        PluginOutput::Record { .. } => Ok(Js::object(record_fields(result))),
         PluginOutput::Records { .. } => unreachable!("expression_call refuses a records output before it invokes"),
     }
 }

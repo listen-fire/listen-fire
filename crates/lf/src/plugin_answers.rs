@@ -225,7 +225,10 @@ impl HostFunctions<'_> {
         let credential = crate::secrets::credential_for(self.credentials, &running.external.manifest.name);
         let call = ModuleCall { credentials: self.credentials, credential, tenant: self.tenant, method: "invokePlugin", params, settings: None };
         match crate::externals::rpc_reaching(running, call).await {
-            Ok(answer) => Ok(PluginAnswer::Value(value_of(&answer, &spec))),
+            Ok(answer) => match value_of(&answer, &spec) {
+                Ok(value) => Ok(PluginAnswer::Value(value)),
+                Err(why) => refused(why),
+            },
             Err(Unanswered::Unreachable(why)) => Ok(PluginAnswer::Unreachable(why)),
             Err(Unanswered::Refused(why)) => refused(why),
         }
@@ -247,23 +250,36 @@ fn spec_of(running: &RunningExternal, declared: &str) -> Option<PluginSpec> {
 
 /// A plugin's value in its answer, as a run reads it: `data.value`, or the
 /// text it answered (first, for a plugin declaring a text value). A record
-/// is its text (as `text`) and `data`'s entries; none of them is no record.
-fn value_of(answer: &Js, spec: &PluginSpec) -> Json {
-    if let Some(PluginOutput::Record { .. }) = &spec.output {
+/// is its text (as `text`) plus `data`'s entries. A record that may be none
+/// is none when the answer has no `data`; `data: {}` is a record whose
+/// fields are each absent, which only a record whose fields may all be
+/// absent can be: otherwise the answer is malformed.
+fn value_of(answer: &Js, spec: &PluginSpec) -> Result<Json, String> {
+    if let Some(PluginOutput::Record { fields, maybe_absent }) = &spec.output {
+        let data = match answer.get("data").map(crate::wire::json_of_js) {
+            Some(Json::Object(data)) => Some(data),
+            _ if *maybe_absent => return Ok(Json::Null),
+            _ => None,
+        };
         let mut record = serde_json::Map::new();
         if let Some(text) = answer.get("text").and_then(Js::as_str) {
             record.insert("text".into(), Json::String(text.to_string()));
         }
-        if let Some(Json::Object(data)) = answer.get("data").map(crate::wire::json_of_js) {
+        if let Some(data) = data {
+            if data.is_empty() && *maybe_absent {
+                if let Some((name, _)) = fields.iter().find(|(_, type_)| !type_.admits_absent()) {
+                    return Err(format!("it answered an empty `data` for a record whose field {name} is required; none is an answer with no `data`"));
+                }
+            }
             record.extend(data);
         }
-        return if record.is_empty() { Json::Null } else { Json::Object(record) };
+        return Ok(Json::Object(record));
     }
     let data_value = answer.get("data").and_then(|data| data.get("value")).filter(|value| !matches!(value, Js::Null)).map(crate::wire::json_of_js);
     let text = answer.get("text").and_then(Js::as_str).map(|text| Json::String(text.to_string()));
     let declares_text = matches!(&spec.output, Some(PluginOutput::Value { type_: FieldType::Scalar(Scalar::Text) }));
     let first = if declares_text { text.or(data_value) } else { data_value.or(text) };
-    first.unwrap_or(Json::Null)
+    Ok(first.unwrap_or(Json::Null))
 }
 
 /// The path segment of the door a module invalidates through
@@ -326,11 +342,24 @@ mod tests {
             "output": { "kind": "record", "fields": { "Level": { "kind": "enum", "options": ["read", "admin"] } }, "maybeAbsent": true }
         }))
         .unwrap();
-        let answer = |json: Json| value_of(&crate::wire::js_of_json(&json), &spec);
+        let answer = |json: Json| value_of(&crate::wire::js_of_json(&json), &spec).unwrap();
         assert_eq!(answer(serde_json::json!({ "data": { "Id": "U1", "Level": "admin" } })), serde_json::json!({ "Id": "U1", "Level": "admin" }));
         assert_eq!(answer(serde_json::json!({ "data": null })), Json::Null);
         assert_eq!(answer(serde_json::json!({})), Json::Null);
-        assert_eq!(answer(serde_json::json!({ "data": {} })), Json::Null);
+        assert_eq!(answer(serde_json::json!({ "text": "ignored" })), Json::Null);
+    }
+
+    #[test]
+    fn an_empty_data_is_a_record_of_absent_fields_or_malformed() {
+        let spec = |fields: Json| -> PluginSpec {
+            serde_json::from_value(serde_json::json!({ "args": ["e"], "priced": false, "pure": true, "output": { "kind": "record", "fields": fields, "maybeAbsent": true } })).unwrap()
+        };
+        let empty = crate::wire::js_of_json(&serde_json::json!({ "data": {} }));
+        let optional = spec(serde_json::json!({ "Nickname": { "kind": "maybeAbsent", "of": "text" } }));
+        assert_eq!(value_of(&empty, &optional), Ok(serde_json::json!({})));
+        let required = spec(serde_json::json!({ "Level": "text" }));
+        let why = value_of(&empty, &required).unwrap_err();
+        assert!(why.contains("empty `data`") && why.contains("Level"), "{why}");
     }
 
     #[test]

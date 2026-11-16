@@ -6,7 +6,7 @@ import path from 'node:path';
 
 import { EMPTY_CATALOG_SNAPSHOT, LANGUAGE_VERSION, mockCatalogSnapshot } from 'movement-lang';
 
-import { fileValue, isFileValue } from 'engine-contracts';
+import { fileValue, isFileValue, servedHostMethods } from 'engine-contracts';
 
 import { RunCostCapExceeded } from '../../../lib/run_cost';
 import { containerAssociation, type Adapter } from '../../translation_graph/adapter';
@@ -404,6 +404,39 @@ describe('the Rust engine shim', () => {
     await expect(
       run([request(1, 'adapters', 'call', inSegment(segmentId, { instance: 'i', method: 'manifest', args: {}, wire: true }))]),
     ).rejects.toThrow('adapters.call method "manifest" is not an adapter method');
+  });
+
+  it("serves a pure plugin's kept answer to a host that has one, and declares it served only then", async () => {
+    const asked: unknown[] = [];
+    const answering = await hostWith({
+      llm: {
+        transforms: {
+          invoke: async () => ({ cost: [] }),
+          answer: async (input) => {
+            asked.push(input);
+            return { value: { Level: 'admin' } };
+          },
+        },
+      },
+    });
+    const plain = await hostWith({});
+    expect(servedHostMethods(answering.host)).toContain('llm.transforms.answer');
+    expect(servedHostMethods(plain.host)).not.toContain('llm.transforms.answer');
+    const segmentId = answering.context.segmentId;
+    const { engine, answers } = scriptedEngine((seen) =>
+      seen.length === 0
+        ? { pending: [request(1, 'llm.transforms', 'answer', inSegment(segmentId, { plugin: '@lf-platform/team/userFor', args: ['a@acme.com'] }))] }
+        : { done: { ok: true } },
+    );
+    await driveEngine(engine, {}, answering);
+    expect(asked).toEqual([{ plugin: '@lf-platform/team/userFor', args: ['a@acme.com'], segmentId }]);
+    expect(answers).toEqual([{ id: 1, answer: { value: { value: { Level: 'admin' } } } }]);
+    const unserved = scriptedEngine((seen) =>
+      seen.length === 0
+        ? { pending: [request(1, 'llm.transforms', 'answer', inSegment(plain.context.segmentId, { plugin: 'p', args: [] }))] }
+        : { done: null },
+    ).engine;
+    await expect(driveEngine(unserved, {}, plain)).rejects.toThrow('the engine asked llm.transforms.answer of a host that does not serve it');
   });
 
   it("charges a priced call's cost to the run as its answer passes, so a later shim fault loses none of it", async () => {

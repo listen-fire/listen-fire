@@ -11,8 +11,8 @@
 //! own executor instead.
 
 use listen_fire::engine::embed::{
-    self, AdapterCall, AdapterInstance, AdapterReply, AdapterRequest, Adapters, ArrivedRecord, Catalog, Clock, Data, Event, HostFuture, HostResult, Hosts, ListenVerdict,
-    Outcome, ParkedState, PlanArrival, RunInput, Store, TimerPark, Trace, ready,
+    self, AdapterCall, AdapterInstance, AdapterReply, AdapterRequest, Adapters, ArrivedRecord, Catalog, Clock, Data, Event, HostFuture, HostResult, Hosts, Judging, ListenVerdict,
+    Outcome, ParkedState, PlanArrival, PluginAnswers, RunInput, Store, TimerPark, Trace, ready,
 };
 
 /// The movement the game ships with, as a level designer would write it.
@@ -230,10 +230,11 @@ impl Game {
         let now_ms = self.clock.epoch_ms();
         let mut functions = Vec::new();
         for listen in self.listens.iter().filter(|l| l.adapter == "world" && l.edge == "Slain") {
-            match listen.judge(&arrival, now_ms) {
+            match listen.judge(&arrival, Judging { now_ms, answers: &PluginAnswers::default() }) {
                 ListenVerdict::Fires => functions.push(listen.function.clone()),
                 ListenVerdict::Skips { .. } => {}
                 ListenVerdict::Undecided { reason } => self.failures.push(format!("{} not judged: {reason}", listen.function)),
+                ListenVerdict::Asks(_) => self.failures.push(format!("{} asks a plugin, and this game serves none", listen.function)),
             }
         }
         let event = Event::new("world", Data::map([("Name", Data::text(&monster)), ("Slayer", Data::text(&by))])).of_type("monster.slain").about("Monster", monster);

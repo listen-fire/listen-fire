@@ -239,6 +239,17 @@ pub struct OpenEnum {
 }
 
 impl FieldType {
+    /// Whether a value of this type may be absent.
+    pub fn admits_absent(&self) -> bool {
+        match self {
+            FieldType::Scalar(scalar) => matches!(scalar, Scalar::Absent),
+            FieldType::Composite(Composite::MaybeAbsent { .. }) => true,
+            FieldType::Composite(Composite::Union { of }) => of.iter().any(FieldType::admits_absent),
+            FieldType::Composite(Composite::Branded { of, .. }) => of.admits_absent(),
+            FieldType::Composite(_) => false,
+        }
+    }
+
     /// Whether an adapter surface could declare this (`SchemaFieldType`).
     pub fn is_schema(&self) -> bool {
         match self {

@@ -303,6 +303,20 @@ const ROUTES: Record<string, Route> = {
     const typed = 'error' in answer ? answer : withDeclaredFiles(answer, output);
     return new Plain(wired(wire, typed, 'llm.transforms.invoke'));
   },
+  /** A pure plugin's kept answer inside an expression, asked only of a host
+   *  that serves it (the engine otherwise invokes the plugin). Plain JSON
+   *  both ways, by position, as the listen judge asks. */
+  async 'llm.transforms.answer'(request, { host }) {
+    const { answer } = host.llm.transforms;
+    if (answer === undefined) throw notServed('llm.transforms.answer');
+    if (!Array.isArray(request.args)) throw new RustShimError('llm.transforms.answer args is a list');
+    const answered = await answer.call(host.llm.transforms, {
+      plugin: string(request.plugin, 'llm.transforms.answer plugin'),
+      args: request.args,
+      segmentId: segmentOf(request),
+    });
+    return plainJson(answered, 'llm.transforms.answer');
+  },
   /** A source file's text, a priced call: the descriptor on the eval wire. */
   async 'files.resolveFileText'(request, { host, context, wire }) {
     if (request.wire !== true) throw new RustShimError('files.resolveFileText carries its file on the eval wire');
