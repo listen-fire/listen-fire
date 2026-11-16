@@ -300,6 +300,17 @@ The manifest file registers your server with a team:
   event, which it then only chooses by, a value its `values` do not spell,
   an `absentField` with no `absent`), or a `fieldChange` past the path or on a
   key the mapping also maps, in the mapping or any `byEvent` one, is refused when the module is described. A listen with a key you do not map is left for its author.
+- `listensLimitedBefore` (optional): the release before which a host may have
+  let only some senders set a listen on your module off (`"0.16.0"`, Slack's:
+  the hosted platform let only registered team members set one off). From it
+  only a listen's filter decides. An upgrade from an older compatibility key
+  tells each listen on your module whose filter calls no limiting function
+  (`MOV_LISTEN_NOW_OPEN`). Omitted: no host ever limited your listens.
+- `retiredSettings` (optional): connection settings your module no longer
+  reads, `[{ "name", "instead" }]`. A host refuses a connection that still
+  holds one, with `instead` in the message (Slack's `drop_own_messages`:
+  ``NOT m.`Sent By This App` `` on each listen). Why: a setting is kept with
+  the connection, outside any movement, so no upgrade can rewrite it.
 - Optional fields: `handbookSection` (`{ title, content }`, prose the authoring
   handbook shows about your system), `vocabulary` (an icon and event phrasing),
   `webhookEventTypeId`.
@@ -860,12 +871,9 @@ From adapter protocol 2.6 an arrival may say more, for the listens on its edge
   instant is refused, naming its place and edge. From 2.7 the run the
   arrival fires is stamped with it, so its writes say when the change they
   follow happened, not when the host took it.
-- **`actor`** (adapter protocol 2.7): who acted, where your provider says:
-  `{ "identifier", "scheme", "email"?, "name"?, "label"? }`
-  ([Who acted](#who-acted)).
 
 A run an arrival fires is handed the arrival's landing, its `parents`, its
-`about` and its `actor` (2.7), and nothing else: there is no raw event
+`about`, and nothing else: there is no raw event
 after the door. Put on the landing every field its record type's edges
 read (the record as your provider sent it, with your named fields over it),
 so an edge walked from the fired record reads what it would read from a
@@ -881,21 +889,14 @@ a signed request. Name the field for whose it is (the sender, the presser),
 and normalise its value (an address in lower case, a phone as digits with
 the country code first, after a `+`).
 
-An arrival may also say who acted on it (`actor`): the member who posted,
-the sender of a mail, the owner of a meeting. It rides on the run's trigger
-as it came; no host reads it to decide anything.
-
 ```json
 { "edge": "Messages", "key": "C0DEALS", "identity": "C0DEALS:1730541600.000100",
-  "landing": { "recordId": "C0DEALS:1730541600.000100", "recordType": "Message", "fields": { "user": "U001", "text": "Acme wants a term sheet" } },
-  "actor": { "identifier": "U001", "scheme": "opaque", "label": "U001" } }
+  "landing": { "recordId": "C0DEALS:1730541600.000100", "recordType": "Message", "fields": { "user": "U001", "text": "Acme wants a term sheet" } } }
 ```
 
-- `identifier` is your system's id for them; `scheme` says what it is:
-  `email` (the address is `email`, or the identifier), `phone`, or
-  `opaque` (a provider id).
-- From 2.10 a host never asks `getActorCandidates` or `extractActor`, and
-  an identity's `proven` (2.9) is gone: a claim is the vouching.
+- From 2.10 a host never asks `getActorCandidates` or `extractActor`, an
+  identity's `proven` (2.9) is gone, and an arrival's `actor` (2.7) is
+  ignored: a claim is the vouching.
 
 ```json
 { "edge": "Company", "identity": "company-1",
@@ -2145,7 +2146,7 @@ from `apps/cli`.
 
 ## Changes
 
-- **Adapter protocol 2.10: a host keeps a pure plugin's answers, and asks no module who acted** (within version 2; listen-fire 0.16.0). A plugin may declare itself pure (`pure: true`, `maxAgeSeconds`, members of its spec), a listen's filter and a wait's `WHERE` may call one, and the host keeps each answer by its plugin and arguments ([Pure plugins and their answers](#pure-plugins-and-their-answers)). A module says an answer changed with `plugins.invalidate`, the first method a module calls at its host to name a minor: an older host keeps no answers and serves no plugins door, and the kits read its refusal as nothing to forget, so a module states no minor for it. Why: a host function (`team.isMember(m.\`User Email\`)`) is asked on each arrival a listen judges; keeping its answers makes a repeated sender cost no call, and invalidation keeps a kept answer from outliving the fact behind it. A host keeps no answer longer than five minutes, whatever its spec declares: an invalidation reaches only the process that started the module. In the same minor, hosts stop calling `getActorCandidates` and `extractActor`, and an actor identity's `proven` (2.9) is gone. Why: 0.16 retires `@user_*`, `@actor_*` and listen-fire's `Actor` field; who acted is a claim on the landing ([Who acted](#who-acted)), which a module publishes only when it vouches for it. A module that still offers the methods is never asked them, and a `proven` it sends is dropped, so no module breaks.
+- **Adapter protocol 2.10: a host keeps a pure plugin's answers, and asks no module who acted** (within version 2; listen-fire 0.16.0). A plugin may declare itself pure (`pure: true`, `maxAgeSeconds`, members of its spec), a listen's filter and a wait's `WHERE` may call one, and the host keeps each answer by its plugin and arguments ([Pure plugins and their answers](#pure-plugins-and-their-answers)). A module says an answer changed with `plugins.invalidate`, the first method a module calls at its host to name a minor: an older host keeps no answers and serves no plugins door, and the kits read its refusal as nothing to forget, so a module states no minor for it. Why: a host function (`team.isMember(m.\`User Email\`)`) is asked on each arrival a listen judges; keeping its answers makes a repeated sender cost no call, and invalidation keeps a kept answer from outliving the fact behind it. A host keeps no answer longer than five minutes, whatever its spec declares: an invalidation reaches only the process that started the module. In the same minor, hosts stop calling `getActorCandidates` and `extractActor`, and an actor identity's `proven` (2.9) is gone. Why: 0.16 retires `@user_*`, `@actor_*` and listen-fire's `Actor` field; who acted is a claim on the landing ([Who acted](#who-acted)), which a module publishes only when it vouches for it. The arrival's `actor` (2.7) goes too: nothing reads it, so a host ignores one a module still sends. A module that still offers the methods is never asked them, and a `proven` or `actor` it sends is dropped, so no module breaks.
 - **Adapter protocol 2.9: an actor identity may say it is proven** (within version 2; listen-fire 0.15.3; additive; gone from 2.10). `ActorIdentity` gains `proven`, true when the module checked that the source system vouches for the identity. Why: a host that offers who acted as a field on what lands (listen-fire's `Actor` field, until 0.16) lets a movement compare an address, and a comparison is only worth trusting when the module says the address was checked. A host behaviour, as 2.7 and 2.8 were: an older host ignores the member and reads the identity as not proven, so a module states no minor for it.
 - **Adapter protocol 2.8: a slot request says which release sent it** (within version 2; listen-fire 0.15.2; additive). Every request `listen-fire` sends a slot module it fills (store, movements, secrets) carries `hostRelease`, its core version ([The envelope](#the-envelope)). A request without it did not state its sender's release: a runner before 0.15.2, or a host or module that does not set it (requests to the browser slot come from modules and carry none; a TypeScript host can state its own through `SlotClient`'s optional `hostRelease`). Why: a hosted product serves a team's own runners on two releases at once (0.12 and 0.15 during a move between them), whose store methods differ, and some kept their names while their meaning changed (`waits.sweep`, `inbound.keepDelivery`'s mark, [store-slot.md](store-slot.md#changes)); with only the protocol's major on a request, it could not tell the two apart. A host behaviour, as 2.7 was: an older module ignores the member, so a module states no minor for it.
 - **A webhook several runners share** (within version 2; a host behaviour; listen-fire 0.15.2; nothing for a module to do). Runners on one secrets module keep who holds each subscription in the credential's `webhook_holders`; a registration never replaces an identical webhook or narrows it, and the last holder to leave removes it ([A webhook several runners share](#a-webhook-several-runners-share)). A lone runner behaves as before. Why: people may move to `listen-fire serve` as separate processes, perhaps of several versions at once, and each removed what its own listens did not want.

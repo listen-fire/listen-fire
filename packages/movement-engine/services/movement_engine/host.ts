@@ -189,6 +189,10 @@ export interface HostExtractCallClient {
  *  catalog snapshot's (`plugins`); invoking it is the host's. */
 export interface HostTransformInvoker {
   invoke(input: Priced<Scoped<TransformInvokeInput>>): Promise<PricedAnswer<TransformInvocationResult>>;
+  /** A pure plugin's answer inside an expression, from the answers the host
+   *  keeps. Absent ⇒ the engine invokes the plugin for each arrival it
+   *  judges. */
+  answer?(input: Scoped<{ plugin: string; args: unknown[] }>): Promise<{ value: unknown } | { unreachable: string }>;
 }
 
 /** One write's identity question: which of its search's candidates the

@@ -16,7 +16,6 @@
 import { convert as htmlToText } from 'html-to-text';
 
 import type {
-  ActorIdentity,
   Adapter,
   EdgesFromResult,
   FileRef,
@@ -508,49 +507,10 @@ function emailAttachmentFileRef(att: Partial<EmailAttachment>): FileRef | null {
  */
 
 /**
- * Extract the friendly display name from an RFC 5322 address field.
- * `"Ada Okafor" <ada@example.com>` → `Ada Okafor`. Returns null
- * when the input is a bare address (no angle-bracket form).
- */
-function parseDisplayName(raw: string | undefined | null): string | null {
-  if (!raw) return null;
-  const trimmed = raw.trim();
-  const angle = trimmed.indexOf('<');
-  if (angle <= 0) return null;
-  const leading = trimmed.slice(0, angle).trim();
-  if (!leading) return null;
-  return leading.replace(/^["']|["']$/g, '').trim() || null;
-}
-
-/**
  * Read a header from the raw mailgun payload by name (case-insensitive).
  * The webhook body carries some headers as top-level keys and others
  * inside the `message-headers` stringified tuple list — we check both.
  */
-/** Who sent an email, as the door names them on its arrival: the bare
- *  address of its sender (else its `From` header), with the display name when
- *  there is one. None when the message names no address. */
-export function emailActorOf(email: Record<string, unknown>): ActorIdentity | undefined {
-  const raw = senderOf(email);
-  const address = parseEmailAddress(raw);
-  if (!address) return undefined;
-  const displayName = parseDisplayName(raw);
-  return {
-    identifier: address,
-    scheme: 'email',
-    adapterType: EMAIL_ADAPTER_TYPE,
-    email: address,
-    ...(displayName !== null ? { name: displayName } : {}),
-    label: displayName ?? address,
-  };
-}
-
-/** Who sent an email: its envelope sender, else its `From` header. */
-function senderOf(email: Record<string, unknown>): string | undefined {
-  const sender = email['sender'];
-  return typeof sender === 'string' && sender.length > 0 ? sender : readHeader(email, 'From');
-}
-
 function readHeader(
   payload: Record<string, unknown>,
   name: string,

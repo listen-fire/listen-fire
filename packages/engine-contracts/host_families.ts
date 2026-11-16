@@ -268,14 +268,15 @@ export interface HostIds {
  * The host's families and their methods: the contract docs/contracts/host-families.md
  * documents family by family, and the set the seam guard proves crosses as
  * JSON. `optional` marks a family an embedder may leave out (the engine takes
- * its no-substrate path) or, within `park.sink`, a method it may.
+ * its no-substrate path) or, within `park.sink`, a method it may; `optionalMethods` marks the
+ * methods of a required family an embedder may leave out.
  */
 export const HOST_FAMILIES = {
   segment: { methods: ['open', 'close'] },
   adapters: { methods: ['resolve', 'call'] },
   'llm.client': { methods: ['call'] },
   'llm.extractCall': { methods: ['call'] },
-  'llm.transforms': { methods: ['invoke'] },
+  'llm.transforms': { methods: ['invoke', 'answer'], optionalMethods: ['answer'] },
   llm: { methods: ['arbitrateEntities'] },
   'park.sink': {
     optional: true,
@@ -301,7 +302,7 @@ export const HOST_FAMILIES = {
   trace: { optional: true, methods: ['append'] },
   clock: { methods: ['now'] },
   ids: { methods: ['mint'] },
-} as const satisfies Record<string, { optional?: true; methods: readonly string[] }>;
+} as const satisfies Record<string, { optional?: true; methods: readonly string[]; optionalMethods?: readonly string[] }>;
 
 type Manifest = typeof HOST_FAMILIES;
 
@@ -333,11 +334,13 @@ export function hostMethodPaths(): string[] {
 }
 
 /** Every method a host must serve: each method of every family the manifest
- *  does not mark optional. */
+ *  does not mark optional, less the methods it marks optional within one. */
 export function requiredHostMethodPaths(): string[] {
-  return Object.entries(HOST_FAMILIES).flatMap(([family, spec]) =>
-    'optional' in spec ? [] : spec.methods.map((method) => `${family}.${method}`),
-  );
+  return Object.entries(HOST_FAMILIES).flatMap(([family, spec]) => {
+    if ('optional' in spec) return [];
+    const skipped: readonly string[] = 'optionalMethods' in spec ? spec.optionalMethods : [];
+    return spec.methods.filter((method) => !skipped.includes(method)).map((method) => `${family}.${method}`);
+  });
 }
 
 /** The required methods `host` does not serve, by path: an engine refuses a

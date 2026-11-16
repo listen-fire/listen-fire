@@ -322,7 +322,7 @@ type AdapterMethod =
   | 'iterateRelatedPage' | 'preprocessInbound' | 'listEventTypes' | 'createRecord' | 'updateRecord'
   | 'deleteRecord' | 'linkRecords' | 'unlinkRecords' | 'ensureEventSubscription' | 'removeEventSubscription'
   | 'awaitKeys' | 'readRecord' | 'translateFilter' | 'getDedupRules'
-  | 'getActorCandidates' | 'extractActor' | 'describeOpaqueId' | 'invokeFieldFunction';
+  | 'describeOpaqueId' | 'invokeFieldFunction';
 
 request: { segmentId: string; instance: string; method: AdapterMethod; args: object }
 answer:

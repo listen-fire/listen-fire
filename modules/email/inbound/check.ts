@@ -19,7 +19,7 @@ import { accepted, inboundRequest, refused, type InboundRequest } from 'module-k
 import type { Arrival } from 'engine-contracts';
 import type { InboundCheck, InboundCheckInput } from 'movement-engine/public/adapter';
 
-import { emailActorOf, forwardedThrough, normalisedBody, normaliseInboundEmailPayload } from '../adapter';
+import { forwardedThrough, normalisedBody, normaliseInboundEmailPayload } from '../adapter';
 import { inboxKeyOf } from '../address';
 import { DEFAULT_API_BASE_URL } from '../resend';
 import { fetchResendEmailPayload } from '../resend_inbound';
@@ -42,13 +42,11 @@ export interface EmailInboundSources {
 function emailArrival(payload: Record<string, unknown>, deliveryId?: string): Arrival {
   const messageId = typeof payload['messageId'] === 'string' && payload['messageId'].length > 0 ? payload['messageId'] : undefined;
   const recipient = typeof payload['recipient'] === 'string' ? payload['recipient'] : undefined;
-  const actor = emailActorOf(payload);
   return {
     edge: EMAILS_EDGE,
     // Both providers redeliver on anything but a 2xx: one email, one run.
     identity: messageId ?? deliveryId ?? randomUUID(),
     landing: { recordType: 'Email', fields: { ...payload, content: normalisedBody(payload), [EMAIL_FORWARDED_THROUGH_FIELD]: forwardedThrough(payload), [EMAIL_KEY_FIELD]: inboxKeyOf(recipient) } },
-    ...(actor !== undefined ? { actor } : {}),
   };
 }
 

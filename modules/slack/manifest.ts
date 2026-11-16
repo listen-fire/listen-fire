@@ -76,6 +76,7 @@ export const SLACK_MANIFEST: AdapterManifest = {
   // The hosted platform let only registered team members set a Slack listen
   // off until 0.16; from it, only the listen's filter decides.
   listensLimitedBefore: '0.16.0',
+  retiredSettings: [{ name: 'drop_own_messages', instead: 'NOT m.`Sent By This App` on each listen' }],
   handbookSection: SLACK_HANDBOOK_SECTION,
   supportedTriggers: ['webhook'],
   // A 0.12 `listen to chat { channels, events }` heard messages and mentions,

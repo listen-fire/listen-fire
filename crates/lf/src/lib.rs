@@ -42,9 +42,9 @@
 //!               listen to inbox-[:message]-> fire seen\n";
 //! assert!(embed::check(source, &catalog, embed::LANGUAGE_VERSION).iter().all(|p| p.severity != Severity::Error));
 //!
-//! // What arrived on the listen's edge, and who sent it.
+//! // What arrived on the listen's edge.
 //! let landing = Landing::new("message", Data::map([("subject", Data::text("Hello"))])).id("m1");
-//! let arrival = Arrival::new("email", "message", landing).by(Actor::new("ada@acme.example", ActorScheme::Email));
+//! let arrival = Arrival::new("email", "message", landing);
 //! let input = RunInput::new(source, arrival, "2026-10-17T12:00:00.000Z").function("seen").catalog(catalog);
 //! let mut inbox = Inbox;
 //! let mut hosts = Hosts::new().adapters(&mut inbox);

@@ -366,7 +366,7 @@ export const WireTriggerEvent = z.object({
    *  made this one (`WireDiscriminableEvent.idempotencyKey`). */
   idempotencyKey: z.string().optional(),
   /** What fired a listen on a traversal (`triggerType: 'arrival'`, 2.6),
-   *  what it is about and who acted (2.7). */
+   *  what it is about (2.7). */
   arrival: z
     .object({
       adapterType: z.string(),
@@ -374,7 +374,6 @@ export const WireTriggerEvent = z.object({
       landing: WireTriggerLanding,
       parents: z.array(WireTriggerLanding.nullable()).optional(),
       about: z.object({ recordType: z.string(), externalId: z.string() }).optional(),
-      actor: z.lazy(() => WireActorIdentity).optional(),
     })
     .optional(),
 });
@@ -503,16 +502,6 @@ export const WireRelatedResult = z.object({
   edgeId: z.string().optional(),
 });
 export type WireRelatedResultShape = z.infer<typeof WireRelatedResult>;
-
-/** Mirror of `ActorIdentity`. */
-export const WireActorIdentity = z.object({
-  identifier: z.string(),
-  scheme: z.enum(['email', 'phone', 'opaque']),
-  adapterType: z.string().optional(),
-  email: z.string().optional(),
-  name: z.string().optional(),
-  label: z.string().optional(),
-});
 
 // ── Schema-introspection DTOs ────────────────────────────────────────────────
 // Mirror `SchemaEntryPoint` / `SchemaTypeDescriptor` structurally. Field /
@@ -802,6 +791,8 @@ export const WireListenDeclarations = z.object({
   /** The release before which a host may have let only registered senders
    *  set a listen on this module off (`AdapterManifest.listensLimitedBefore`). */
   listensLimitedBefore: z.string().regex(/^\d+\.\d+\.\d+$/, 'listensLimitedBefore: expected a release (0.16.0)').optional(),
+  /** Settings the module no longer reads (`AdapterManifest.retiredSettings`). */
+  retiredSettings: z.array(z.object({ name: z.string().min(1), instead: z.string().min(1) })).optional(),
 });
 
 // ── Module declarations (within version 2: all optional) ─────────────────────
@@ -1310,8 +1301,6 @@ export const WireArrival = z.union([
     notFor: z.string().min(1).optional(),
     takenApplied: z.boolean().optional(),
     occurredAt: z.string().min(1).optional(),
-    /** Who acted (2.7), carried on the run's trigger as it came. */
-    actor: WireActorIdentity.optional(),
   }),
   z.object({ edge: z.string().min(1), key: z.string().min(1), gone: z.literal(true) }),
 ]);

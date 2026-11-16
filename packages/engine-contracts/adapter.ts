@@ -30,33 +30,6 @@ export { fileDescriptorOf, fileHandle, fileValue, fileValueOf, filesAtType, isFi
 export type { EarlierFileSource, FileRef, FileSource, FileValue } from './file_ref';
 export type { ExternalRecordRef, Fact, FieldEvidence, Resource, ResourceProvenance } from './records';
 
-/**
- * Who acted on an arrival, as its module says at the door (adapter protocol
- * 2.7, `WireArrival.actor`): the sender of an email, the Slack member who
- * posted. Carried on the run's trigger as it came. A filter or a run reads
- * who acted from a claim on the landing instead: a field whose type carries
- * a brand (`text & Brand<"claim:email/address">`), which the module
- * publishes only when it vouches for it.
- */
-export interface ActorIdentity {
-  /** Primary key in the source system (email address, phone number,
-   *  Slack user id, Attio actor id, etc.). */
-  identifier: string;
-  /** What `identifier` is: an email address, a phone number, or a provider's
-   *  own id (`'opaque'`). */
-  scheme: 'email' | 'phone' | 'opaque';
-  /** Which adapter sourced this identity. */
-  adapterType?: string;
-  /** Email address when the source carries one (every email event; Slack
-   *  messages don't have this without an API call). */
-  email?: string;
-  /** Display name (the friendly part of `"Ada" <h@x>`; Slack display
-   *  name; etc.). */
-  name?: string;
-  /** Fallback display label when `name` isn't available. */
-  label?: string;
-}
-
 // ── Adapter manifest ────────────────────────────────────────────────────────
 
 /**
@@ -241,6 +214,13 @@ export interface AdapterManifest {
    * Omitted: no host ever limited this module's listens.
    */
   listensLimitedBefore?: string;
+  /**
+   * Connection settings this module no longer reads. A host refuses a
+   * connection that still holds one, with `instead` in the message: a
+   * setting is kept with the connection, outside any movement, so no
+   * upgrade can rewrite it.
+   */
+  retiredSettings?: Array<{ name: string; instead: string }>;
   /** True when this adapter's schema comes from LIVE introspection of the
    *  connected workspace (attio, airtable, sheets, affinity) — a
    *  describeInstance costs upstream API calls, so callers should scope with

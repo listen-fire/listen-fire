@@ -468,9 +468,6 @@ pub fn arrival_trigger_of(pipeline_input_id: &str, adapter_type: &str, arrival: 
     if let Some(about) = &arrival.about {
         landed.insert("about".into(), about.clone());
     }
-    if let Some(actor) = &arrival.actor {
-        landed.insert("actor".into(), actor.clone());
-    }
     let occurred = arrival.occurred_at.as_deref().and_then(crate::units::ms_of).map(crate::units::iso_of);
     let mut out = Obj::new();
     out.insert("pipelineInputId".into(), Js::str(pipeline_input_id));

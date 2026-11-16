@@ -257,7 +257,6 @@ mod tests {
             not_for: None,
             taken_applied: false,
             occurred_at: occurred_at.map(str::to_string),
-            actor: None,
         }
     }
 

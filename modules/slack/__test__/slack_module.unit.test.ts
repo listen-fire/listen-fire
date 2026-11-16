@@ -398,6 +398,10 @@ describe('@lf/slack', () => {
       expect(manifest).not.toHaveProperty('settings');
     });
 
+    it('retires drop_own_messages, naming what replaces it', () => {
+      expect(slackModule.manifest.retiredSettings).toEqual([{ name: 'drop_own_messages', instead: 'NOT m.`Sent By This App` on each listen' }]);
+    });
+
     it('declares no actor identity methods and no registered sender gate', () => {
       expect(slackModule.manifest.methods).not.toContain('getActorCandidates');
       expect(slackModule.manifest.methods).not.toContain('extractActor');

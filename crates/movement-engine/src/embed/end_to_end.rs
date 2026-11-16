@@ -1577,7 +1577,6 @@ fn a_run_built_from_an_arrival_reads_its_landing() {
     let source = movement("", "  write game-[:notes]-> { Title: \"${monster.Name} by ${monster.Name}\" }\n");
     assert_eq!(errors(&source), vec![]);
     let arrival = Arrival::new("world", "Monster", Landing::new("Monster", Data::map([("Name", Data::text("Dragon"))])).id("m1"))
-        .by(Actor::new("U1", ActorScheme::Opaque).name("Ada"))
         .occurred_at("2026-03-01T09:00:00+00:00");
     let input = RunInput::new(source, arrival, NOW).function("m").catalog(Catalog::from_json(CATALOG).unwrap());
     let mut world = World::default();

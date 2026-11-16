@@ -194,17 +194,6 @@ fn write_result() -> S {
     extend(external_record_ref(), vec![opt("events", arr(S::Unknown))], Some(true))
 }
 
-fn actor_identity() -> S {
-    obj(vec![
-        req("identifier", S::Str),
-        req("scheme", S::Enum(&["email", "phone", "opaque"])),
-        opt("adapterType", S::Str),
-        opt("email", S::Str),
-        opt("name", S::Str),
-        opt("label", S::Str),
-    ])
-}
-
 fn await_landing() -> S {
     obj(vec![opt("recordId", S::Str), opt("recordType", S::Str), req("fields", record(S::Unknown)), opt("unknown", arr(S::NonEmptyStr))])
 }
@@ -226,7 +215,8 @@ fn arrival() -> S {
             opt("notFor", S::NonEmptyStr),
             opt("takenApplied", S::Bool),
             opt("occurredAt", S::NonEmptyStr),
-            opt("actor", actor_identity()),
+            // 2.7 through 2.9 modules still say who acted; from 2.10 a host reads none of it.
+            opt("actor", S::Unknown),
         ]),
         obj(vec![req("edge", S::NonEmptyStr), req("key", S::NonEmptyStr), req("gone", S::LiteralTrue)]),
     ])
@@ -567,12 +557,9 @@ mod tests {
     }
 
     #[test]
-    fn a_2_7_arrival_may_say_who_acted() {
+    fn an_arrival_from_a_2_9_module_may_still_say_who_acted() {
         let arrival = r#"{"edge":"Messages","key":"C1","identity":"C1:1.0","landing":{"fields":{}},"actor":{"identifier":"U1","scheme":"opaque","label":"U1"}}"#;
-        let read = check("preprocessInbound", "slack", &js(&format!(r#"{{"events":[],"arrivals":[{arrival}]}}"#))).unwrap();
-        assert_eq!(read.get("arrivals").map(Js::to_json), Some(format!("[{arrival}]")));
-        let unschemed = r#"{"edge":"Messages","identity":"m","landing":{"fields":{}},"actor":{"identifier":"U1"}}"#;
-        assert!(check("preprocessInbound", "slack", &js(&format!(r#"{{"events":[],"arrivals":[{unschemed}]}}"#))).is_err(), "an actor states its scheme");
+        assert!(check("preprocessInbound", "slack", &js(&format!(r#"{{"events":[],"arrivals":[{arrival}]}}"#))).is_ok());
     }
 
     #[test]

@@ -534,22 +534,20 @@ pub fn needed_externals(externals: Vec<External>, files: &[std::rc::Rc<Parsed>],
         .collect()
 }
 
-/// A connection setting 0.16 retired, by the module it was the setting of:
-/// what replaces it. A setting is kept with the connection here, in
-/// listen-fire's own configuration, not in a movement's text, so no upgrade
-/// can rewrite it: listen-fire refuses the connection until the author has
-/// written the replacement and removed the setting.
-const RETIRED_SETTINGS: &[(&str, &str, &str)] = &[(
-    "slack",
-    "drop_own_messages",
-    "a listen hears the app's own messages unless its filter says otherwise. Add `NOT m.`Sent By This App`` to the WHERE of each Slack listen that should not hear them (`m`, the message or reaction's alias), then remove the setting from the connection",
-)];
-
-/// Why `external`'s install cannot be used: it holds a setting 0.16 retired.
-fn retired_setting_refusal(external: &str, install: Option<&Credential>) -> Option<String> {
+/// Why `install` cannot be used: it holds a setting its module's manifest
+/// retires (`retiredSettings`), refused with the module's own `instead`. A
+/// setting is kept with the connection, in listen-fire's own configuration,
+/// not in a movement's text, so no upgrade can rewrite it: listen-fire
+/// refuses the connection until the author has written the replacement and
+/// removed the setting.
+fn retired_setting_refusal(listen: &Obj, install: Option<&Credential>) -> Option<String> {
     let install = install?;
-    let (_, setting, instead) = RETIRED_SETTINGS.iter().find(|(module, setting, _)| *module == external && install.fields.contains_key(*setting))?;
-    Some(format!("{}: the setting `{setting}` is retired in 0.16: {instead}", install.name))
+    let retired = listen.get("retiredSettings")?.as_array()?;
+    retired.iter().find_map(|entry| {
+        let name = entry.get("name")?.as_str()?;
+        let instead = entry.get("instead")?.as_str()?;
+        install.fields.contains_key(name).then(|| format!("{}: the setting `{name}` is retired: {instead}", install.name))
+    })
 }
 
 /// Read every external's manifest, its process started on that first call
@@ -557,9 +555,6 @@ fn retired_setting_refusal(external: &str, install: Option<&Credential>) -> Opti
 /// project's start is its slowest module's, not the sum of them.
 pub async fn start_externals(project: &Project, externals: &[External], credentials: &Credentials, tenant: &str) -> Result<Vec<RunningExternal>, String> {
     crate::module_hosts::configure(project.module_idle_timeout, project.call_timeout);
-    if let Some(refusal) = externals.iter().find_map(|external| retired_setting_refusal(&external.manifest.name, install_of(credentials, &external.manifest.name))) {
-        return Err(refusal);
-    }
     // Every process registered before any starts, so the shared host
     // starts once with all its modules.
     let mut reaches = Vec::new();
@@ -610,6 +605,9 @@ async fn start_external(external: &External, reach: Reach, credentials: &Credent
     }
     let credential_declarations = with_install_endpoints(declarations_of(&raw).map_err(|expected| shape_error("manifest", name, &raw, &expected))?, install);
     let limits = crate::limiter::module_limits_of(&raw).map_err(|expected| shape_error("manifest", name, &raw, &expected))?;
+    if let Some(refusal) = retired_setting_refusal(&manifest.listen, install) {
+        return Err(refusal);
+    }
     if external.manifest.kind == "plugin" && manifest.plugins.is_none() {
         return Err(format!("external \"{name}\" is a plugin external, but its manifest declares no plugins"));
     }
@@ -783,6 +781,18 @@ fn listen_declarations(raw: &Js) -> Result<Obj, String> {
         let release = value.as_str().filter(|release| movement_parser::version::compatibility_key(release).is_ok());
         let release = release.ok_or("listensLimitedBefore: expected a release (0.16.0)")?;
         out.insert("listensLimitedBefore".into(), Js::str(release));
+    }
+    if let Some(value) = raw.get("retiredSettings") {
+        let entries = value.as_array().ok_or("retiredSettings: expected an array")?;
+        let named = |entry: &Js, key: &str| entry.get(key).and_then(Js::as_str).filter(|text| !text.is_empty()).map(str::to_string);
+        let mut retired = Vec::new();
+        for entry in entries {
+            let (Some(name), Some(instead)) = (named(entry, "name"), named(entry, "instead")) else {
+                return Err("retiredSettings: expected { name, instead } entries".into());
+            };
+            retired.push(Js::Obj(Obj::from([("name".to_string(), Js::str(name)), ("instead".to_string(), Js::str(instead))])));
+        }
+        out.insert("retiredSettings".into(), Js::Arr(retired));
     }
     Ok(out)
 }
@@ -1006,22 +1016,24 @@ mod tests {
 
     #[test]
     fn drop_own_messages_is_refused_with_its_replacement() {
-        let install = |external: &str, fields: &[(&str, &str)]| Credential {
-            name: format!("{external}_install"),
-            external: external.into(),
+        let install = |fields: &[(&str, &str)]| Credential {
+            name: "slack_install".into(),
+            external: "slack".into(),
             binding: crate::secrets::Binding::Install,
             fields: fields.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
             origin: Default::default(),
         };
-        let configured = install("slack", &[("bot_token", "xoxb"), ("drop_own_messages", "on")]);
-        let refusal = retired_setting_refusal("slack", Some(&configured)).expect("refused");
+        let manifest = Js::parse(br#"{"retiredSettings":[{"name":"drop_own_messages","instead":"NOT m.`Sent By This App` on each listen"}]}"#).unwrap();
+        let retiring = listen_declarations(&manifest).unwrap();
+        let configured = install(&[("bot_token", "xoxb"), ("drop_own_messages", "on")]);
         assert_eq!(
-            refusal,
-            "slack_install: the setting `drop_own_messages` is retired in 0.16: a listen hears the app's own messages unless its filter says otherwise. Add `NOT m.`Sent By This App`` to the WHERE of each Slack listen that should not hear them (`m`, the message or reaction's alias), then remove the setting from the connection"
+            retired_setting_refusal(&retiring, Some(&configured)).as_deref(),
+            Some("slack_install: the setting `drop_own_messages` is retired: NOT m.`Sent By This App` on each listen")
         );
-        assert_eq!(retired_setting_refusal("slack", Some(&install("slack", &[("bot_token", "xoxb")]))), None);
-        assert_eq!(retired_setting_refusal("slack", None), None);
-        assert_eq!(retired_setting_refusal("acme", Some(&install("acme", &[("drop_own_messages", "on")]))), None, "only Slack's setting retired");
+        assert_eq!(retired_setting_refusal(&retiring, Some(&install(&[("bot_token", "xoxb")]))), None);
+        assert_eq!(retired_setting_refusal(&retiring, None), None);
+        assert_eq!(retired_setting_refusal(&Obj::new(), Some(&configured)), None, "a module that retires nothing refuses nothing");
+        assert!(listen_declarations(&Js::parse(br#"{"retiredSettings":[{"name":"x"}]}"#).unwrap()).is_err());
     }
 
     #[test]

@@ -339,7 +339,6 @@ export function arrivalTriggerOf(input: { pipelineInputId: string; adapterType: 
       landing: arrival.landing,
       ...(arrival.parents !== undefined && arrival.parents.length > 0 ? { parents: arrival.parents } : {}),
       ...(arrival.about !== undefined ? { about: arrival.about } : {}),
-      ...(arrival.actor !== undefined ? { actor: arrival.actor } : {}),
     },
     occurredAt: occurredAt.toISOString(),
   };

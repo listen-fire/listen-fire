@@ -462,65 +462,9 @@ impl Landing {
     }
 }
 
-/// How who acted resolves to a user of the host: by email, by phone, or not
-/// at all (a provider's own id).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ActorScheme {
-    Email,
-    Phone,
-    Opaque,
-}
-
-/// Who acted on an arrival, as its module says at the door (adapter protocol
-/// 2.7): carried on the run's trigger as it came. A filter or a run reads who
-/// acted from a claim on the landing instead (a branded field).
-#[derive(Debug, Clone, PartialEq)]
-pub struct Actor {
-    /// The provider's id for them (an address, a phone number, a member id).
-    pub identifier: String,
-    pub scheme: ActorScheme,
-    pub email: Option<String>,
-    pub name: Option<String>,
-    pub label: Option<String>,
-}
-
-impl Actor {
-    pub fn new(identifier: impl Into<String>, scheme: ActorScheme) -> Actor {
-        Actor { identifier: identifier.into(), scheme, email: None, name: None, label: None }
-    }
-    pub fn email(mut self, email: impl Into<String>) -> Actor {
-        self.email = Some(email.into());
-        self
-    }
-    pub fn name(mut self, name: impl Into<String>) -> Actor {
-        self.name = Some(name.into());
-        self
-    }
-    pub fn label(mut self, label: impl Into<String>) -> Actor {
-        self.label = Some(label.into());
-        self
-    }
-
-    fn to_data(&self) -> Data {
-        let scheme = match self.scheme {
-            ActorScheme::Email => "email",
-            ActorScheme::Phone => "phone",
-            ActorScheme::Opaque => "opaque",
-        };
-        let mut out = vec![("identifier".to_string(), Data::text(self.identifier.clone())), ("scheme".into(), Data::text(scheme))];
-        for (key, value) in [("email", &self.email), ("name", &self.name), ("label", &self.label)] {
-            if let Some(value) = value {
-                out.push((key.into(), Data::text(value.clone())));
-            }
-        }
-        Data::Map(out)
-    }
-}
-
 /// What landed on a listen's last edge, as its module reports it (adapter
-/// protocol 2.6; who acted, 2.7): the run it fires binds the function's
-/// parameter to the landing, carries the actor on its trigger, and stamps its
-/// writes with when it happened.
+/// protocol 2.6): the run it fires binds the function's parameter to the
+/// landing and stamps its writes with when it happened.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Arrival {
     /// The adapter it arrived from (the listened instance's).
@@ -533,14 +477,13 @@ pub struct Arrival {
     pub parents: Vec<Option<Landing>>,
     /// The record it is about, when that is not its landing: its type and id.
     pub about: Option<(String, String)>,
-    pub actor: Option<Actor>,
     /// When it happened at its provider, ISO 8601; None: the run's `now`.
     pub occurred_at: Option<String>,
 }
 
 impl Arrival {
     pub fn new(adapter_type: impl Into<String>, edge: impl Into<String>, landing: Landing) -> Arrival {
-        Arrival { adapter_type: adapter_type.into(), edge: edge.into(), landing, parents: Vec::new(), about: None, actor: None, occurred_at: None }
+        Arrival { adapter_type: adapter_type.into(), edge: edge.into(), landing, parents: Vec::new(), about: None, occurred_at: None }
     }
     pub fn parents(mut self, parents: Vec<Option<Landing>>) -> Arrival {
         self.parents = parents;
@@ -549,10 +492,6 @@ impl Arrival {
     /// The record it is about.
     pub fn about(mut self, record_type: impl Into<String>, external_id: impl Into<String>) -> Arrival {
         self.about = Some((record_type.into(), external_id.into()));
-        self
-    }
-    pub fn by(mut self, actor: Actor) -> Arrival {
-        self.actor = Some(actor);
         self
     }
     pub fn occurred_at(mut self, at: impl Into<String>) -> Arrival {
@@ -573,9 +512,6 @@ impl Arrival {
         }
         if let Some((record_type, external_id)) = &self.about {
             arrival.push(("about".into(), Data::map([("recordType", Data::text(record_type.clone())), ("externalId", Data::text(external_id.clone()))])));
-        }
-        if let Some(actor) = &self.actor {
-            arrival.push(("actor".into(), actor.to_data()));
         }
         let occurred = self.occurred_at.as_deref().and_then(crate::js_date::parse).map(crate::js_date::to_iso_string);
         Data::Map(vec![

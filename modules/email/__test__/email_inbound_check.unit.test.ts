@@ -137,8 +137,8 @@ describe('@lf/email checks its own inbound', () => {
     const forwarded = await fired(request({ body: mailgunForm(MAILGUN_KEY, { 'X-Forwarded-For': 'dealflow@fund.example' }), secret: MAILGUN_KEY }));
     const body = JSON.stringify({ type: 'email.received', data: { email_id: 'em_1', from: 'Ada <ada@example.com>', to: ['in+k@lf.test'] } });
     const sent = await fired(request({ body, headers: resendDelivery(body), secret: RESEND_SECRET }));
-    expect(sent.arrival?.actor).toEqual({ identifier: 'ada@example.com', scheme: 'email', adapterType: 'email', email: 'ada@example.com', name: 'Ada', label: 'Ada' });
-    expect(forwarded.arrival?.actor).toEqual({ identifier: 'ada@example.com', scheme: 'email', adapterType: 'email', email: 'ada@example.com', label: 'ada@example.com' });
+    expect(sent.arrival).not.toHaveProperty('actor');
+    expect(forwarded.arrival).not.toHaveProperty('actor');
     // Hosts no longer ask a module who acted (adapter protocol 2.10).
     expect('extractActor' in adapter).toBe(false);
     expect('getActorCandidates' in adapter).toBe(false);
