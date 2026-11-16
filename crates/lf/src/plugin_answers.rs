@@ -251,16 +251,24 @@ fn spec_of(running: &RunningExternal, declared: &str) -> Option<PluginSpec> {
 /// A plugin's value in its answer, as a run reads it: `data.value`, or the
 /// text it answered (first, for a plugin declaring a text value). A record
 /// is its text (as `text`) plus `data`'s entries. A record that may be none
-/// is none when the answer has no `data`; `data: {}` is a record whose
+/// is none when the answer has no `data` and no text (text alone, or a
+/// `data` that is not an object, is malformed); `data: {}` is a record whose
 /// fields are each absent, which only a record whose fields may all be
 /// absent can be: otherwise the answer is malformed.
 fn value_of(answer: &Js, spec: &PluginSpec) -> Result<Json, String> {
     if let Some(PluginOutput::Record { fields, maybe_absent }) = &spec.output {
         let data = match answer.get("data").map(crate::wire::json_of_js) {
             Some(Json::Object(data)) => Some(data),
-            _ if *maybe_absent => return Ok(Json::Null),
-            _ => None,
+            Some(Json::Null) | None => None,
+            Some(other) if *maybe_absent => return Err(format!("it answered a `data` that is not an object ({other}); a record is an object, and none is an answer with no `data`")),
+            Some(_) => None,
         };
+        if *maybe_absent && data.is_none() {
+            if answer.get("text").and_then(Js::as_str).is_some() {
+                return Err("it answered text without `data`; a record is its `data` object, and none is an answer with neither `data` nor text".into());
+            }
+            return Ok(Json::Null);
+        }
         let mut record = serde_json::Map::new();
         if let Some(text) = answer.get("text").and_then(Js::as_str) {
             record.insert("text".into(), Json::String(text.to_string()));
@@ -346,7 +354,25 @@ mod tests {
         assert_eq!(answer(serde_json::json!({ "data": { "Id": "U1", "Level": "admin" } })), serde_json::json!({ "Id": "U1", "Level": "admin" }));
         assert_eq!(answer(serde_json::json!({ "data": null })), Json::Null);
         assert_eq!(answer(serde_json::json!({})), Json::Null);
-        assert_eq!(answer(serde_json::json!({ "text": "ignored" })), Json::Null);
+    }
+
+    #[test]
+    fn a_text_only_or_non_object_data_answer_for_a_record_that_may_be_none_is_malformed() {
+        let spec: PluginSpec = serde_json::from_value(serde_json::json!({
+            "args": ["e"], "priced": false, "pure": true,
+            "output": { "kind": "record", "fields": { "Level": { "kind": "enum", "options": ["read", "admin"] } }, "maybeAbsent": true }
+        }))
+        .unwrap();
+        for malformed in [
+            serde_json::json!({ "text": "ignored" }),
+            serde_json::json!({ "data": "admin" }),
+            serde_json::json!({ "data": 3 }),
+            serde_json::json!({ "data": ["admin"] }),
+            serde_json::json!({ "data": null, "text": "ignored" }),
+        ] {
+            let why = value_of(&crate::wire::js_of_json(&malformed), &spec).unwrap_err();
+            assert!(why.contains("malformed") || why.contains("text") || why.contains("object"), "{malformed}: {why}");
+        }
     }
 
     #[test]

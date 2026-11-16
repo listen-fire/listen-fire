@@ -349,11 +349,19 @@ fn record_node(fields: JsObject, trail: &Trail) -> Node {
 }
 
 /// A record that may be none, as the plugin answered it: none is an answer
-/// with no `data`; `data: {}` is a record whose fields are each absent,
+/// with no `data` and no text (text alone is malformed); `data: {}` is a record whose fields are each absent,
 /// which only a record whose fields may all be absent can be (otherwise the
 /// answer is malformed, never silently none).
 fn maybe_absent_record(result: &crate::extract::run::PluginResult, declared: &JsMap<SchemaFieldType>, plugin: &str) -> Result<Option<JsObject>, Failure> {
-    let Some(Js::Object(data)) = &result.data else { return Ok(None) };
+    let Some(Js::Object(data)) = &result.data else {
+        if result.text().is_some() {
+            return Err(Failure::engine(
+                "MOVENG_RUNTIME",
+                format!("{plugin} answered text without `data` for a record that may be none: the host answered something malformed (a record is its `data` object; none is an answer with neither `data` nor text)"),
+            ));
+        }
+        return Ok(None);
+    };
     if data.entries().is_empty() {
         if let Some((name, _)) = declared.iter().find(|(_, type_)| !type_.admits_absent()) {
             return Err(Failure::engine(

@@ -1074,7 +1074,9 @@ impl Modules for Ranks {
             (None, "Zed") => Some(Data::map(Vec::<(&str, Data)>::new())),
             (None, _) => None,
         };
-        ready(Ok(PluginReply { data, ..PluginReply::default() }))
+        // Text alone is no answer to a record output: not none, not a record.
+        let text = (name == "Txt").then(|| "some prose".to_string());
+        ready(Ok(PluginReply { data, text, ..PluginReply::default() }))
     }
 }
 
@@ -1144,6 +1146,20 @@ fn an_empty_data_for_a_record_with_a_required_field_is_refused_as_malformed() {
         let outcome = block_on(run(&mut Hosts::new().adapters(&mut world).store(&mut parks).modules(&mut ranks), &input(&source))).unwrap();
         let Outcome::Failed(failure) = outcome else { panic!("{outcome:?}") };
         assert!(failure.message.contains("empty `data`") && failure.message.contains("field Name"), "{}", failure.message);
+        assert_eq!(titles(&world), Vec::<&str>::new());
+    }
+}
+
+#[test]
+fn a_text_only_answer_for_a_record_that_may_be_none_is_refused_as_malformed() {
+    for body in ["  s = roll.slayerNamed(\"Txt\")\n  write game-[:notes]-> { Title: coalesce(s?.Rank, \"none\") }\n", "  write game-[:notes]-> { Title: coalesce(roll.slayerNamed(\"Txt\")?.Rank, \"none\") }\n"] {
+        let source = movement("import { `@guild/roll` as roll } from plugins\n", body);
+        assert_eq!(errors(&source), vec![]);
+        let (mut world, mut parks) = (World::default(), Parks::default());
+        let mut ranks = Ranks { asked: Vec::new() };
+        let outcome = block_on(run(&mut Hosts::new().adapters(&mut world).store(&mut parks).modules(&mut ranks), &input(&source))).unwrap();
+        let Outcome::Failed(failure) = outcome else { panic!("{outcome:?}") };
+        assert!(failure.message.contains("@guild/roll/slayerNamed") && failure.message.contains("text"), "{}", failure.message);
         assert_eq!(titles(&world), Vec::<&str>::new());
     }
 }
