@@ -1637,11 +1637,13 @@ impl RunHostStore for PgStore {
             iso!("noted_at"),
             ", attempt, adapter, landing::text, waiting from lf.arrival_unjudged where team_id = $1::text::uuid and ($2::text is null or pipeline = $2::text) and (not $4::bool or waiting)"
         );
-        const ORDER: &str = "order by noted_at, pipeline, arrival, attempt limit $3::int8";
+        // Ties in the order kept, as the state file's (crate::store::Store::unjudged_arrivals).
+        const ORDER: &str = "order by noted_at, kept_order limit $3::int8";
+        const AFTER: &str = "and (noted_at, kept_order) > ($5::text::timestamptz, coalesce((select kept_order from lf.arrival_unjudged where team_id = $1::text::uuid and pipeline = $6::text and arrival = $7::text and attempt = $8::int4), 0))";
         let rows = match &page.after {
             None => self.query(&format!("{COLUMNS} {ORDER}"), &[&self.tenant, &page.pipeline, &page.limit, &page.waiting])?,
             Some(after) => self.query(
-                &format!("{COLUMNS} and (noted_at, pipeline, arrival, attempt) > ($5::text::timestamptz, $6::text, $7::text, $8::int4) {ORDER}"),
+                &format!("{COLUMNS} {AFTER} {ORDER}"),
                 &[&self.tenant, &page.pipeline, &page.limit, &page.waiting, &after.at, &after.pipeline, &after.arrival, &i32::try_from(after.attempt).unwrap_or(i32::MAX)],
             )?,
         };

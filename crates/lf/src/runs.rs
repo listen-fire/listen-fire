@@ -1097,9 +1097,20 @@ impl Session {
     /// arrival's other listens are judged as usual. Kept as long as a
     /// delivery is (`deliveries.retainDays`).
     pub(crate) fn note_unjudged(&self, set: &FileSet, adapter: &str, listen: &Listen, arrival: &ArrivalIn, delivered: &Delivered<'_>, why: &Unjudgement) -> Result<(), String> {
-        let fact = self.unjudged_fact(set, adapter, listen, arrival, delivered, why)?;
+        self.keep_unjudged(&self.unjudged_fact(set, adapter, listen, arrival, delivered, why)?)
+    }
+
+    /// Keep `fact` as `note_unjudged` keeps one. One its listen waits on has
+    /// its listen's `judge_waiting` row queued first, so no waiting fact is
+    /// ever kept with nothing to judge it again.
+    pub(crate) fn keep_unjudged(&self, fact: &crate::records_door::UnjudgedArrival) -> Result<(), String> {
+        if fact.waiting {
+            let row = crate::listen_replay::judging_row(&fact.pipeline);
+            self.store.enqueue(&row.kind, &row.key, &row.payload, row.due_at.as_deref(), None).map_err(|e| format!("queueing {}: {e}", row.key))?;
+            crate::wake::queued_rows(std::slice::from_ref(&row));
+        }
         let retain_ms = i64::from(self.project.delivery_retain_days) * 86_400_000;
-        self.store.note_unjudged(&fact, &iso(-retain_ms)).map_err(|e| format!("keeping that {}:{} could not judge an arrival on {}: {e}", fact.file, fact.movement, fact.edge))?;
+        self.store.note_unjudged(fact, &iso(-retain_ms)).map_err(|e| format!("keeping that {}:{} could not judge an arrival on {}: {e}", fact.file, fact.movement, fact.edge))?;
         Ok(())
     }
 
@@ -1453,13 +1464,21 @@ impl Session {
                 crate::doors::queued_by(&mut waits, &row.key);
                 let delivered = Delivered { id: Some(&receipt.id), ..Delivered::default() };
                 let facts = unjudged.iter().map(|one| self.unjudged_fact(set, &key.adapter, &doors.listens[one.listen], &landed[one.arrival], &delivered, &one.why)).collect::<Result<Vec<_>, _>>()?;
+                // Each listen that now waits is judged again on its own row.
+                let mut rows = vec![row.clone()];
+                for fact in facts.iter().filter(|fact| fact.waiting) {
+                    let judging = crate::listen_replay::judging_row(&fact.pipeline);
+                    if !rows.iter().any(|kept| kept.key == judging.key) {
+                        rows.push(judging);
+                    }
+                }
                 // The page, its runs, what no listen could judge and the cursor: one write.
                 let kept = self
                     .store
-                    .keep_delivery(subscription, Some(&checkpoint), &receipt, std::slice::from_ref(&row), Some(&log), &waits, &facts)
+                    .keep_delivery(subscription, Some(&checkpoint), &receipt, &rows, Some(&log), &waits, &facts)
                     .map_err(|e| e.to_string())?
                     .ok_or("a poll's delivery was taken for a duplicate")?;
-                crate::wake::queued_rows(std::slice::from_ref(&row));
+                crate::wake::queued_rows(&rows);
                 crate::wake::queued_rows(&kept.wakes);
                 // As the store keeps it, for a caller that runs it.
                 if let Js::Obj(payload) = &mut row.payload {
@@ -2140,6 +2159,7 @@ impl Session {
                 Ok(self.drive_parked_run(set, &run_id, Drain::OwedRaces).await?.row_next())
             }
             EDGE_POLL_WORK_KIND => self.poll_edge_row(set, &text("subscription")?).await,
+            crate::listen_replay::JUDGE_WAITING_WORK_KIND => self.judge_waiting_row(text("pipeline")?).await,
             crate::resolve::RESOLVE_WORK_KIND => self.resolve_row(set, &text("pipeline")?).await,
             crate::subscriptions::REFRESH_WORK_KIND => Ok((
                 match crate::subscriptions::refresh_row(self, payload).await? {
@@ -2150,6 +2170,25 @@ impl Session {
             )),
             other => Err(format!("not a work kind: {other}")),
         }
+    }
+}
+
+impl Session {
+    /// What a listen waits on, judged again; still waiting, a retry later.
+    /// Its future holds a replay's whole run: made and boxed here, never in
+    /// the frame every other row's work runs in.
+    fn judge_waiting_row(&self, pipeline: String) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(Next, Vec<RunOutcome>), String>> + '_>> {
+        Box::pin(async move {
+            let rejudged = crate::listen_replay::judge_waiting(self, &pipeline).await?;
+            for line in &rejudged.said {
+                eprintln!("listen-fire: {line}");
+            }
+            let next = match rejudged.waits {
+                true => Next::DueAt(iso(i64::try_from(crate::listen_replay::retry_every().as_millis()).unwrap_or(i64::MAX))),
+                false => Next::Done,
+            };
+            Ok((next, rejudged.outcomes))
+        })
     }
 }
 

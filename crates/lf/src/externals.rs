@@ -424,11 +424,40 @@ pub enum Unanswered {
     Refused(String),
 }
 
-/// `rpc`, saying whether a failure is the module's own answer or no answer
-/// at all.
-pub async fn rpc_reaching(running: &RunningExternal, credentials: &Credentials, tenant: &str, method: &str, params: serde_json::Value) -> Result<Js, Unanswered> {
-    use crate::credential_calls::SendError;
-    use crate::protocol::RpcError;
+impl Unanswered {
+    /// A send's failure: one that reached nothing is out of reach, any other refused.
+    pub fn of(error: crate::credential_calls::SendError) -> Unanswered {
+        use crate::credential_calls::SendError;
+        use crate::protocol::RpcError;
+        match error {
+            SendError::Rpc(error @ (RpcError::Unreachable(_) | RpcError::Transport { .. })) => Unanswered::Unreachable(error.message()),
+            other => Unanswered::Refused(String::from(other)),
+        }
+    }
+}
+
+impl From<Unanswered> for String {
+    fn from(unanswered: Unanswered) -> String {
+        match unanswered {
+            Unanswered::Unreachable(message) | Unanswered::Refused(message) => message,
+        }
+    }
+}
+
+/// One call to a module: as `credential` (one connection's, or none), the
+/// construction's position args (`settings`) carried on it.
+pub struct ModuleCall<'c> {
+    pub credentials: &'c Credentials,
+    pub credential: Option<&'c Credential>,
+    pub tenant: &'c str,
+    pub method: &'c str,
+    pub params: serde_json::Value,
+    pub settings: Option<serde_json::Value>,
+}
+
+/// `call` to a running module, saying whether a failure is the module's
+/// own answer or no answer at all.
+pub async fn rpc_reaching(running: &RunningExternal, call: ModuleCall<'_>) -> Result<Js, Unanswered> {
     let lease = running.reach.lease().await.map_err(Unanswered::Unreachable)?;
     let target = Target {
         external: &running.external,
@@ -439,12 +468,7 @@ pub async fn rpc_reaching(running: &RunningExternal, credentials: &Credentials, 
         limits: &running.limits,
         inbound_url: running.inbound_url.as_deref(),
     };
-    let credential = credential_for(credentials, &running.external.manifest.name);
-    let signer = signer_of(credentials, &target.external.manifest.name, credential);
-    send(&target, credentials, credential, signer, Sending { tenant, method, cache_scope_id: "<none>", params, settings: None }).await.map_err(|error| match error {
-        SendError::Rpc(error @ (RpcError::Unreachable(_) | RpcError::Transport { .. })) => Unanswered::Unreachable(error.message()),
-        other => Unanswered::Refused(String::from(other)),
-    })
+    call_reaching(&target, call).await
 }
 
 /// A position arg's source text as its value: a quoted string loses its quotes.
@@ -463,26 +487,18 @@ pub async fn rpc_as(running: &RunningExternal, credentials: &Credentials, creden
 
 /// `rpc_as`, with the construction's position args (`settings`) carried on the call.
 pub async fn rpc_in(running: &RunningExternal, credentials: &Credentials, credential: Option<&Credential>, tenant: &str, method: &str, params: serde_json::Value, settings: Option<serde_json::Value>) -> Result<Js, String> {
-    let lease = running.reach.lease().await?;
-    let target = Target {
-        external: &running.external,
-        base_url: &lease.address,
-        declarations: &running.credential_declarations,
-        methods: &running.methods,
-        settings: &running.settings,
-        limits: &running.limits,
-        inbound_url: running.inbound_url.as_deref(),
-    };
-    call_as(&target, credentials, credential, tenant, method, params, settings).await
+    Ok(rpc_reaching(running, ModuleCall { credentials, credential, tenant, method, params, settings }).await?)
 }
 
 async fn call(target: &Target<'_>, credentials: &Credentials, tenant: &str, method: &str, params: serde_json::Value) -> Result<Js, String> {
-    call_as(target, credentials, credential_for(credentials, &target.external.manifest.name), tenant, method, params, None).await
+    let credential = credential_for(credentials, &target.external.manifest.name);
+    Ok(call_reaching(target, ModuleCall { credentials, credential, tenant, method, params, settings: None }).await?)
 }
 
-async fn call_as(target: &Target<'_>, credentials: &Credentials, credential: Option<&Credential>, tenant: &str, method: &str, params: serde_json::Value, settings: Option<serde_json::Value>) -> Result<Js, String> {
+async fn call_reaching(target: &Target<'_>, call: ModuleCall<'_>) -> Result<Js, Unanswered> {
+    let ModuleCall { credentials, credential, tenant, method, params, settings } = call;
     let signer = signer_of(credentials, &target.external.manifest.name, credential);
-    Ok(send(target, credentials, credential, signer, Sending { tenant, method, cache_scope_id: "<none>", params, settings }).await?)
+    send(target, credentials, credential, signer, Sending { tenant, method, cache_scope_id: "<none>", params, settings }).await.map_err(Unanswered::of)
 }
 
 /// The externals the files connect or import (`from adapters`, `from

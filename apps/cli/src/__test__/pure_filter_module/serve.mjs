@@ -1,9 +1,18 @@
 // A module whose `Messages` carry their sender's email as a claim
 // (`User Email`, branded `claim:email/address`): pushed to the host's wake
-// door, as are a message's `Replies`, which a run may wait on. Listens where
-// listen-fire says (`PORT`).
+// door, as are a message's `Replies`, which a run may wait on, or posted to
+// its webhook (`preprocessInbound` reads the `arrivals` posted). While a
+// file `down` is beside it the module is out of reach: it will not start,
+// and a webhook it is asked to read ends the process. While a file `refuse`
+// is there it refuses to read a webhook. Listens where listen-fire says
+// (`PORT`).
 
+import { existsSync } from 'node:fs';
 import { createServer } from 'node:http';
+
+const DOWN = new URL('down', import.meta.url);
+const REFUSE = new URL('refuse', import.meta.url);
+if (existsSync(DOWN)) process.exit(1);
 
 const MESSAGE = 'Message';
 const field = (name, more = {}) => ({ fieldId: name, displayName: name, kind: 'string', writable: false, required: false, ...more });
@@ -30,6 +39,11 @@ const METHODS = {
   getFieldValue: ({ position, fieldId }) => position?.identity?.data?.[fieldId] ?? null,
   getRelated: () => [],
   awaitKeys: ({ heads }) => heads.map(({ recordId }) => ({ key: `replies:${recordId}` })),
+  preprocessInbound: ({ raw }) => {
+    if (existsSync(DOWN)) process.exit(1);
+    if (existsSync(REFUSE)) throw new Error('talk no longer reads this request');
+    return { events: [], arrivals: raw.arrivals };
+  },
 };
 
 const server = createServer((req, res) => {

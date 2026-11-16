@@ -18,7 +18,7 @@ use movement_parser::catalog::plugin_args::PluginCallSite;
 use movement_parser::catalog::types::{FieldType, PluginOutput, PluginSpec, Scalar};
 use serde_json::Value as Json;
 
-use crate::externals::{RunningExternal, Unanswered};
+use crate::externals::{ModuleCall, RunningExternal, Unanswered};
 use crate::json::Js;
 use crate::secrets::Credentials;
 
@@ -32,6 +32,20 @@ pub struct AnswerCache {
     /// Each plugin asked, by its module and the name it declares it under,
     /// to its catalog key: what the module names when it invalidates.
     served: HashMap<(String, String), String>,
+    /// How often each plugin's answers were invalidated, by catalog key.
+    invalidations: HashMap<String, u64>,
+}
+
+/// A judgement's questions as their asks begin: those no live answer is
+/// kept for, and how often each plugin had been invalidated then. An
+/// answer that comes back across an invalidation of its plugin may be the
+/// one its module just said changed: it answers the judgement that asked,
+/// and is not kept.
+pub struct Asks {
+    questions: Vec<PluginQuestion>,
+    /// The questions to ask their modules, in order, each once.
+    pub missing: Vec<PluginQuestion>,
+    invalidations: HashMap<String, u64>,
 }
 
 struct Kept {
@@ -49,23 +63,24 @@ impl AnswerCache {
         };
     }
 
-    /// The questions of `questions` no live answer is kept for, in order,
-    /// each once.
-    pub fn missing(&mut self, questions: &[PluginQuestion], now: Instant) -> Vec<PluginQuestion> {
+    /// `questions` as their asks begin (`Asks`).
+    pub fn asks(&mut self, questions: &[PluginQuestion], now: Instant) -> Asks {
         let mut missing: Vec<PluginQuestion> = Vec::new();
         for question in questions {
             if self.live(question, now).is_none() && !missing.contains(question) {
                 missing.push(question.clone());
             }
         }
-        missing
+        let invalidations = questions.iter().map(|question| (question.plugin.clone(), self.invalidations_of(&question.plugin))).collect();
+        Asks { questions: questions.to_vec(), missing, invalidations }
     }
 
-    /// An answer to each question: the one kept, else what `ask` answers,
-    /// kept when it is a value.
-    pub fn answers(&mut self, questions: &[PluginQuestion], mut ask: impl FnMut(&PluginQuestion) -> PluginAnswer, now: Instant) -> PluginAnswers {
+    /// An answer to each of `asks`' questions: the one kept, else what `ask`
+    /// answers, kept when it is a value and its plugin was not invalidated
+    /// since the asks began.
+    pub fn answers(&mut self, asks: &Asks, mut ask: impl FnMut(&PluginQuestion) -> PluginAnswer, now: Instant) -> PluginAnswers {
         let mut answers = PluginAnswers::default();
-        for question in questions {
+        for question in &asks.questions {
             if answers.get(question).is_some() {
                 continue;
             }
@@ -73,7 +88,10 @@ impl AnswerCache {
                 Some(value) => PluginAnswer::Value(value),
                 None => {
                     let answer = ask(question);
-                    if let PluginAnswer::Value(value) = &answer {
+                    let unchanged = asks.invalidations.get(&question.plugin).is_some_and(|then| *then == self.invalidations_of(&question.plugin));
+                    if let PluginAnswer::Value(value) = &answer
+                        && unchanged
+                    {
                         let until = self.max_ages.get(&question.plugin).map(|age| now + *age);
                         self.kept.insert(question.key(), Kept { plugin: question.plugin.clone(), value: value.clone(), until });
                     }
@@ -83,6 +101,10 @@ impl AnswerCache {
             answers.insert(question, answer);
         }
         answers
+    }
+
+    fn invalidations_of(&self, plugin: &str) -> u64 {
+        self.invalidations.get(plugin).copied().unwrap_or_default()
     }
 
     /// `plugin` is served by `module`, which declares it as `declared`.
@@ -101,6 +123,7 @@ impl AnswerCache {
     /// Forget `plugin`'s answer for `args`, or every answer of it when
     /// `args` is None.
     pub fn invalidate(&mut self, plugin: &str, args: Option<&[Json]>) {
+        *self.invalidations.entry(plugin.to_string()).or_default() += 1;
         match args {
             Some(args) => {
                 self.kept.remove(&PluginQuestion { plugin: plugin.to_string(), args: args.to_vec() }.key());
@@ -160,21 +183,19 @@ impl AnswersHost for HostFunctions<'_> {
     /// error is no answer: nothing is kept for it.
     async fn answer(&self, questions: &[PluginQuestion]) -> Result<PluginAnswers, Refused> {
         let now = Instant::now();
-        let missing = with_cache(|cache| {
+        let asks = with_cache(|cache| {
             for question in questions {
                 let Some((running, declared, spec)) = self.target(&question.plugin) else { continue };
                 cache.served_as(&question.plugin, &running.external.manifest.name, &declared);
                 cache.keep_for(&question.plugin, spec.max_age_seconds.map(|seconds| Duration::from_secs(u64::from(seconds))));
             }
-            cache.missing(questions, now)
+            cache.asks(questions, now)
         });
         let mut fetched: HashMap<String, PluginAnswer> = HashMap::new();
-        for question in &missing {
+        for question in &asks.missing {
             fetched.insert(question.key(), self.ask(question).await?);
         }
-        Ok(with_cache(|cache| {
-            cache.answers(questions, |question| fetched.remove(&question.key()).unwrap_or_else(|| PluginAnswer::Unreachable("it was not asked".into())), now)
-        }))
+        Ok(with_cache(|cache| cache.answers(&asks, |question| fetched.remove(&question.key()).unwrap_or_else(|| PluginAnswer::Unreachable("it was not asked".into())), now)))
     }
 }
 
@@ -194,7 +215,9 @@ impl HostFunctions<'_> {
         };
         let config: serde_json::Map<String, Json> = spec.as_called().positional_params(PluginCallSite::Plain).into_iter().map(str::to_string).zip(question.args.iter().cloned()).collect();
         let params = serde_json::json!({ "name": declared, "config": config, "extractedContext": {} });
-        match crate::externals::rpc_reaching(running, self.credentials, self.tenant, "invokePlugin", params).await {
+        let credential = crate::secrets::credential_for(self.credentials, &running.external.manifest.name);
+        let call = ModuleCall { credentials: self.credentials, credential, tenant: self.tenant, method: "invokePlugin", params, settings: None };
+        match crate::externals::rpc_reaching(running, call).await {
             Ok(answer) => Ok(PluginAnswer::Value(value_of(&answer, &spec))),
             Err(Unanswered::Unreachable(why)) => Ok(PluginAnswer::Unreachable(why)),
             Err(Unanswered::Refused(why)) => refused(why),
@@ -268,21 +291,31 @@ mod tests {
         }
     }
 
+    /// `questions` answered at `now`, asked and answered with nothing between.
+    fn answered(cache: &mut AnswerCache, questions: &[PluginQuestion], ask: impl FnMut(&PluginQuestion) -> PluginAnswer, now: Instant) -> PluginAnswers {
+        let asks = cache.asks(questions, now);
+        cache.answers(&asks, ask, now)
+    }
+
+    fn missing(cache: &mut AnswerCache, questions: &[PluginQuestion], now: Instant) -> Vec<PluginQuestion> {
+        cache.asks(questions, now).missing
+    }
+
     #[test]
     fn a_cached_answer_asks_no_plugin() {
         let mut cache = AnswerCache::default();
         let asked = RefCell::new(Vec::new());
         let now = Instant::now();
-        let first = cache.answers(&[member("a@acme.com")], counting(&asked), now);
+        let first = answered(&mut cache, &[member("a@acme.com")], counting(&asked), now);
         assert_eq!(first.get(&member("a@acme.com")), Some(&PluginAnswer::Value(Json::Bool(true))));
-        let again = cache.answers(&[member("a@acme.com")], counting(&asked), now + Duration::from_secs(3600));
+        let again = answered(&mut cache, &[member("a@acme.com")], counting(&asked), now + Duration::from_secs(3600));
         assert_eq!(again.get(&member("a@acme.com")), Some(&PluginAnswer::Value(Json::Bool(true))));
         assert_eq!(asked.borrow().len(), 1, "the second judgement read the kept answer");
-        assert_eq!(cache.missing(&[member("a@acme.com"), member("b@acme.com")], now), [member("b@acme.com")]);
+        assert_eq!(missing(&mut cache, &[member("a@acme.com"), member("b@acme.com")], now), [member("b@acme.com")]);
         // An answer the host could not get is never kept.
-        let unreachable = cache.answers(&[member("b@acme.com")], |_| PluginAnswer::Unreachable("connection refused".into()), now);
+        let unreachable = answered(&mut cache, &[member("b@acme.com")], |_| PluginAnswer::Unreachable("connection refused".into()), now);
         assert_eq!(unreachable.get(&member("b@acme.com")), Some(&PluginAnswer::Unreachable("connection refused".into())));
-        assert_eq!(cache.missing(&[member("b@acme.com")], now), [member("b@acme.com")], "asked again next time");
+        assert_eq!(missing(&mut cache, &[member("b@acme.com")], now), [member("b@acme.com")], "asked again next time");
     }
 
     #[test]
@@ -291,10 +324,10 @@ mod tests {
         cache.keep_for("@lf-platform/team/isMember", Some(Duration::from_secs(60)));
         let asked = RefCell::new(Vec::new());
         let now = Instant::now();
-        cache.answers(&[member("a@acme.com")], counting(&asked), now);
-        cache.answers(&[member("a@acme.com")], counting(&asked), now + Duration::from_secs(59));
+        answered(&mut cache, &[member("a@acme.com")], counting(&asked), now);
+        answered(&mut cache, &[member("a@acme.com")], counting(&asked), now + Duration::from_secs(59));
         assert_eq!(asked.borrow().len(), 1, "within its age");
-        cache.answers(&[member("a@acme.com")], counting(&asked), now + Duration::from_secs(60));
+        answered(&mut cache, &[member("a@acme.com")], counting(&asked), now + Duration::from_secs(60));
         assert_eq!(asked.borrow().len(), 2, "asked again once its age passed");
     }
 
@@ -305,18 +338,37 @@ mod tests {
         let now = Instant::now();
         let other = PluginQuestion { plugin: "@lf-platform/team/userFor".into(), args: vec![Json::String("a@acme.com".into())] };
         let all = [member("a@acme.com"), member("b@acme.com"), other.clone()];
-        cache.answers(&all, counting(&asked), now);
+        answered(&mut cache, &all, counting(&asked), now);
         cache.invalidate("@lf-platform/team/isMember", Some(&[Json::String("a@acme.com".into())]));
-        assert_eq!(cache.missing(&all, now), [member("a@acme.com")], "one argument's answer");
-        cache.answers(&all, counting(&asked), now);
+        assert_eq!(missing(&mut cache, &all, now), [member("a@acme.com")], "one argument's answer");
+        answered(&mut cache, &all, counting(&asked), now);
         cache.invalidate("@lf-platform/team/isMember", None);
-        assert_eq!(cache.missing(&all, now), [member("a@acme.com"), member("b@acme.com")], "every answer of the plugin, and no other plugin's");
+        assert_eq!(missing(&mut cache, &all, now), [member("a@acme.com"), member("b@acme.com")], "every answer of the plugin, and no other plugin's");
         // As a module names it: by the name it declares.
-        cache.answers(&all, counting(&asked), now);
+        answered(&mut cache, &all, counting(&asked), now);
         cache.served_as("@lf-platform/team/isMember", "team", "isMember");
         cache.invalidate_declared("team", "isMember", Some(&[Json::String("b@acme.com".into())]));
         cache.invalidate_declared("other", "isMember", None);
-        assert_eq!(cache.missing(&all, now), [member("b@acme.com")], "another module's plugin of the name is not this one");
+        assert_eq!(missing(&mut cache, &all, now), [member("b@acme.com")], "another module's plugin of the name is not this one");
+    }
+
+    /// A module says its answers changed while a question of it is being
+    /// asked: the answer that comes back may be the one it said changed, so
+    /// it is not kept, and the next judgement asks again.
+    #[test]
+    fn an_answer_asked_across_an_invalidation_is_not_kept() {
+        let mut cache = AnswerCache::default();
+        let now = Instant::now();
+        let questions = [member("a@acme.com")];
+        let asks = cache.asks(&questions, now);
+        assert_eq!(asks.missing, questions);
+        cache.invalidate("@lf-platform/team/isMember", None);
+        let answers = cache.answers(&asks, |_| PluginAnswer::Value(Json::Bool(true)), now);
+        assert_eq!(answers.get(&member("a@acme.com")), Some(&PluginAnswer::Value(Json::Bool(true))), "it answers the judgement that asked");
+        assert_eq!(missing(&mut cache, &questions, now), questions, "and is not kept");
+        // Asked again with nothing between, it is kept.
+        answered(&mut cache, &questions, |_| PluginAnswer::Value(Json::Bool(true)), now);
+        assert!(missing(&mut cache, &questions, now).is_empty(), "kept");
     }
 
     #[test]

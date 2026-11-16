@@ -10,13 +10,16 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
+import { createHmac } from 'node:crypto';
+import { createInterface } from 'node:readline';
 import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { parse, stringify } from 'yaml';
 import { until } from './attio_fixture';
-import { lf, project, served, type Served } from './example';
+import { lf, lfCommand, project, served, type Served } from './example';
 
 const REPO = resolve(__dirname, '../../../..');
 const MODULE_KIT = join(REPO, 'packages/module-kit');
@@ -125,6 +128,61 @@ function unjudged(dir: string): Array<{ arrival: string; reason: string; waiting
   }
 }
 
+/** Every fact kept of the arrivals no listen could judge, each listen's
+ *  attempts as well, in the order the store reads them. */
+function facts(dir: string): Array<{ movement: string; arrival: string; attempt: number; reason: string; waiting: number }> {
+  const db = new DatabaseSync(join(dir, '.lf', 'state.db'));
+  try {
+    return db.prepare('select movement, arrival, attempt, reason, waiting from arrival_unjudged order by noted_at, kept_order').all() as Array<{
+      movement: string;
+      arrival: string;
+      attempt: number;
+      reason: string;
+      waiting: number;
+    }>;
+  } finally {
+    db.close();
+  }
+}
+
+/** The work rows that judge again what a listen waits on, by key. */
+function judgeRows(dir: string): string[] {
+  const db = new DatabaseSync(join(dir, '.lf', 'state.db'));
+  try {
+    return (db.prepare("select key from work where kind = 'judge_waiting' order by key").all() as Array<{ key: string }>).map((row) => row.key);
+  } finally {
+    db.close();
+  }
+}
+
+/** `listen-fire drain` until stopped, its output collected. A drain that
+ *  runs until stopped ends at once on a signal, leaving the modules it
+ *  started: they are stopped with it, as its process group. */
+function draining(dir: string, env: Record<string, string>): { lines: string[]; stop(): Promise<void> } {
+  const worker = spawn(...lfCommand(['drain']), { cwd: dir, env: { ...process.env, NODE_NO_WARNINGS: '1', ...env }, stdio: ['ignore', 'pipe', 'pipe'], detached: true });
+  const lines: string[] = [];
+  for (const output of [worker.stdout!, worker.stderr!]) createInterface({ input: output }).on('line', (line) => lines.push(line));
+  const exited = new Promise<void>((done) => worker.once('exit', () => done()));
+  return {
+    lines,
+    stop: async () => {
+      process.kill(-worker.pid!, 'SIGTERM');
+      await exited;
+    },
+  };
+}
+
+/** A delivery to talk's webhook, signed as talk's connection signs one. */
+async function deliver(serving: Served, arrivals: unknown[]): Promise<void> {
+  const body = JSON.stringify({ arrivals });
+  const response = await fetch(`http://127.0.0.1:${serving.port}/hooks/talk/talk_key`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-listen-fire-signature': createHmac('sha256', 'dev-talk-webhook-secret').update(body).digest('hex') },
+    body,
+  });
+  assert.ok(response.ok, await response.clone().text());
+}
+
 const LANDED_LONG_ENOUGH = 1_500;
 
 test('a listen that calls a pure plugin checks', () => {
@@ -208,6 +266,84 @@ test("a module's own error leaves its arrival unjudged, and holds nothing behind
     await push(serving, [message('m2', 'ann', 'ann@acme.com')]);
     await until(() => returnedBy(dir, 'heard').length === 1, serving.lines);
     assert.deepEqual(returnedBy(dir, 'heard'), ['m2']);
+  } finally {
+    await serving.stop();
+  }
+});
+
+const BOTH = `function heard(m: <c-[:Messages]->>) {
+  return m.Id
+}
+
+function echoed(m: <c-[:Messages]->>) {
+  return m.Id
+}
+
+listen to c-[m:Messages WHERE m.Name != "bot" AND team.isMember(m.\`User Email\`)]-> fire heard
+listen to c-[m:Messages WHERE team.isMember(m.\`User Email\`)]-> fire echoed
+`;
+
+test('behind serve --doors-only, a drain judges again what each listen waits on, each listen on a row of its own', async () => {
+  const dir = teamProject(BOTH, ['ann@acme.com', 'bob@acme.com']);
+  const env = { LF_UNJUDGED_RETRY_MS: RETRY_MS };
+  const doors = await served(dir, ['--doors-only'], env);
+  const worker = draining(dir, env);
+  const seen = () => [...doors.lines, ...worker.lines];
+  try {
+    await push(doors, [message('m1', 'ann', 'ann@acme.com')]);
+    await until(() => returnedBy(dir, 'heard').length === 1 && returnedBy(dir, 'echoed').length === 1, seen());
+
+    // Bob is not asked yet: his message waits for the module, and ann's
+    // after it waits behind it, for each listen.
+    setDown(dir, true);
+    await push(doors, [message('m2', 'bob', 'bob@acme.com')]);
+    await push(doors, [message('m3', 'ann', 'ann@acme.com')]);
+    await until(() => unjudged(dir).length === 4, seen());
+    assert.ok(unjudged(dir).every(({ waiting }) => waiting === 1));
+    assert.equal(judgeRows(dir).length, 2, 'each listen is judged again on a row of its own');
+
+    setDown(dir, false);
+    await until(() => returnedBy(dir, 'heard').length === 3 && returnedBy(dir, 'echoed').length === 3, seen());
+    assert.deepEqual(returnedBy(dir, 'heard'), ['m1', 'm2', 'm3']);
+    assert.deepEqual(returnedBy(dir, 'echoed'), ['m1', 'm2', 'm3']);
+    assert.ok(unjudged(dir).every(({ waiting }) => waiting === 0), 'judged, none waits');
+    await until(() => judgeRows(dir).length === 0, seen());
+  } finally {
+    await worker.stop();
+    await doors.stop();
+  }
+});
+
+test('a delivery its module cannot read again waits while the module is out of reach, and is let go once it refuses', async () => {
+  const dir = teamProject(HEARD, ['ann@acme.com', 'bob@acme.com']);
+  const serving = await served(dir, [], { LF_UNJUDGED_RETRY_MS: RETRY_MS });
+  const talk = (file: string, there: boolean) => (there ? writeFileSync(join(dir, 'externals/talk', file), '') : rmSync(join(dir, 'externals/talk', file), { force: true }));
+  try {
+    setDown(dir, true);
+    await deliver(serving, [message('m1', 'bob', 'bob@acme.com')]);
+    await push(serving, [message('m2', 'ann', 'ann@acme.com')]);
+    await until(() => unjudged(dir).length === 2, serving.lines);
+
+    // The team answers again, but talk cannot be reached to read m1's request again: it still waits.
+    talk('down', true);
+    setDown(dir, false);
+    await serving.waitFor(/the arrival Messages::m1: still waits: .*talk/);
+    assert.deepEqual(returnedBy(dir, 'heard'), [], 'nothing runs past it');
+
+    // Talk refuses to read it: it is let go, said with the reason, and the one behind it runs.
+    talk('down', false);
+    talk('refuse', true);
+    await until(() => returnedBy(dir, 'heard').length === 1, serving.lines);
+    assert.deepEqual(returnedBy(dir, 'heard'), ['m2']);
+    const m1 = facts(dir).filter(({ arrival }) => arrival === 'Messages::m1:');
+    assert.deepEqual(
+      m1.map(({ attempt, waiting }) => [attempt, waiting]),
+      [
+        [0, 0],
+        [1, 0],
+      ],
+    );
+    assert.match(m1[1]!.reason, /talk no longer reads this request/);
   } finally {
     await serving.stop();
   }

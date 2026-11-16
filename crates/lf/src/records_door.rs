@@ -454,7 +454,8 @@ impl Store {
     pub(crate) fn insert_unjudged_in(db: &rusqlite::Connection, fact: &UnjudgedArrival) -> Result<bool> {
         let at = crate::store::canonical_iso(&fact.at)?;
         Ok(db.execute(
-            "insert into arrival_unjudged (pipeline, arrival, file, movement, delivery_id, edge, adapter, record_id, landing, reason, cause, noted_at, attempt, waiting) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) on conflict do nothing",
+            "insert into arrival_unjudged (pipeline, arrival, file, movement, delivery_id, edge, adapter, record_id, landing, reason, cause, noted_at, attempt, waiting, kept_order)
+             values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, (select coalesce(max(kept_order), 0) + 1 from arrival_unjudged)) on conflict do nothing",
             rusqlite::params![fact.pipeline, fact.arrival, fact.file, fact.movement, fact.delivery_id, fact.edge, fact.adapter, fact.record_id, fact.landing.as_ref().map(Js::to_json), fact.reason, fact.cause, at, fact.attempt, fact.waiting],
         )? == 1)
     }
@@ -465,11 +466,14 @@ impl Store {
         Ok(())
     }
 
-    /// The unjudged arrivals of `page`, oldest first (ties by listen, then
-    /// arrival, then attempt).
+    /// The unjudged arrivals of `page`, oldest first, those found in one
+    /// instant in the order they were kept (arrivals waiting behind another
+    /// ask nothing, so are found together: their order is their receipt's).
+    /// A page after a fact no longer kept reads on from that fact's instant.
     pub fn unjudged_arrivals(&self, page: &UnjudgedPage<'_>) -> Result<Vec<UnjudgedArrival>> {
         const COLUMNS: &str = "select pipeline, arrival, file, movement, delivery_id, edge, adapter, record_id, landing, reason, cause, noted_at, attempt, waiting from arrival_unjudged where (?1 is null or pipeline = ?1) and (?7 = 0 or waiting = 1)";
-        const ORDER: &str = "order by noted_at, pipeline, arrival, attempt limit ?2";
+        const ORDER: &str = "order by noted_at, kept_order limit ?2";
+        const AFTER: &str = "and (noted_at, kept_order) > (?3, coalesce((select kept_order from arrival_unjudged where pipeline = ?4 and arrival = ?5 and attempt = ?6), 0))";
         let row = |r: &rusqlite::Row<'_>| {
             Ok(UnjudgedArrival {
                 pipeline: r.get(0)?,
@@ -499,7 +503,7 @@ impl Store {
                 .collect::<rusqlite::Result<Vec<_>>>()?,
             Some(after) => self
                 .db
-                .prepare(&format!("{COLUMNS} and (noted_at, pipeline, arrival, attempt) > (?3, ?4, ?5, ?6) {ORDER}"))?
+                .prepare(&format!("{COLUMNS} {AFTER} {ORDER}"))?
                 .query_map(rusqlite::params![page.pipeline, page.limit, crate::store::canonical_iso(after.at)?, after.pipeline, after.arrival, after.attempt, page.waiting], row)?
                 .collect::<rusqlite::Result<Vec<_>>>()?,
         })
@@ -693,6 +697,46 @@ mod tests {
         // Kept as long as a delivery is: a later note forgets an older one.
         assert!(store.note_unjudged(&unjudged(&format!("listen:chat:late:{t0}"), "x", t0 + 20, None), &iso_at(t0 + 15)).unwrap());
         assert_eq!(read(Js::Null).iter().filter_map(|r| r.get("pipeline").and_then(Js::as_str)).collect::<Vec<_>>(), [format!("listen:chat:late:{t0}")]);
+    }
+
+    /// Arrivals behind a waiting one ask nothing, so they are found unjudged
+    /// in one instant: they are read back in the order they were kept, never
+    /// by their receipt keys as text (`m10` before `m9`), page by page too.
+    fn facts_kept_in_one_instant_are_read_in_the_order_kept(store: Rc<dyn RunHostStore>) {
+        let t0 = t0();
+        let pipeline = format!("listen:chat:waits:{t0}");
+        let kept: Vec<UnjudgedArrival> =
+            ["Messages::m9:", "Messages::m10:", "Messages::m11:"].into_iter().map(|arrival| UnjudgedArrival { waiting: true, ..unjudged(&pipeline, arrival, t0, None) }).collect();
+        for fact in &kept {
+            assert!(store.note_unjudged(fact, &iso_at(t0 - 1000)).unwrap());
+        }
+        let arrivals = |page: &[UnjudgedArrival]| page.iter().map(|fact| fact.arrival.clone()).collect::<Vec<_>>();
+        let order = ["Messages::m9:", "Messages::m10:", "Messages::m11:"];
+        for waiting in [false, true] {
+            assert_eq!(arrivals(&store.unjudged_arrivals(&UnjudgedPage { after: None, pipeline: Some(&pipeline), waiting, limit: 10 }).unwrap()), order, "waiting: {waiting}");
+        }
+        let mut paged: Vec<UnjudgedArrival> = Vec::new();
+        loop {
+            let after = paged.last().map(|last| UnjudgedAfter { at: &last.at, pipeline: &last.pipeline, arrival: &last.arrival, attempt: last.attempt });
+            let page = store.unjudged_arrivals(&UnjudgedPage { after, pipeline: Some(&pipeline), waiting: true, limit: 1 }).unwrap();
+            if page.is_empty() {
+                break;
+            }
+            paged.extend(page);
+        }
+        assert_eq!(arrivals(&paged), order, "one at a time");
+    }
+
+    #[test]
+    fn facts_kept_in_one_instant_are_read_in_order_in_the_state_file() {
+        facts_kept_in_one_instant_are_read_in_the_order_kept(state_file());
+    }
+
+    #[cfg(feature = "postgres")]
+    #[test]
+    fn facts_kept_in_one_instant_are_read_in_order_over_postgres() {
+        let Some(store) = postgres() else { return };
+        facts_kept_in_one_instant_are_read_in_the_order_kept(store);
     }
 
     /// A delivery keeps the arrivals no listen could judge in its own write:

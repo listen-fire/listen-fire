@@ -171,9 +171,6 @@ pub async fn run(project: Project, serving: Serving<'_>) -> Result<i32, String> 
     // the workers resolve (a drain follows them as it drains).
     let drain = if doors_only { tokio::task::spawn_local(follow_heads_forever(session.clone())) } else { tokio::task::spawn_local(drain_forever(session.clone(), poke.clone())) };
     let renewing = tokio::task::spawn_local(renew_forever(session.clone()));
-    // What a listen waits on for its host runs here once judged: never in a
-    // process that runs nothing.
-    let retrying = (!doors_only).then(|| tokio::task::spawn_local(retry_forever(session.clone())));
     let stop = stopped();
     println!("listen-fire serving on http://127.0.0.1:{port}/hooks/<external>/<install>");
     for line in hook_urls(&session, &format!("http://127.0.0.1:{port}")) {
@@ -184,7 +181,7 @@ pub async fn run(project: Project, serving: Serving<'_>) -> Result<i32, String> 
     }
 
     stop.await;
-    for task in [doors, watching, drain, renewing].into_iter().chain(retrying) {
+    for task in [doors, watching, drain, renewing] {
         task.abort();
         let _ = task.await;
     }
@@ -346,21 +343,6 @@ async fn renew_forever(session: Rc<Session>) {
         tick.tick().await;
         for line in crate::subscriptions::hold(&session).await {
             eprintln!("listen-fire: {line}");
-        }
-    }
-}
-
-/// What each listen waits on for its host, judged again on a timer of its
-/// own (crate::listen_replay::retry_waiting), oldest first.
-async fn retry_forever(session: Rc<Session>) {
-    let every = crate::listen_replay::retry_every();
-    let mut tick = tokio::time::interval_at(tokio::time::Instant::now() + every, every);
-    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-    loop {
-        tick.tick().await;
-        match crate::listen_replay::retry_waiting(&session).await {
-            Ok(lines) => lines.iter().for_each(|line| println!("{line}")),
-            Err(message) => println!("judging again what the listens wait on failed: {message}"),
         }
     }
 }

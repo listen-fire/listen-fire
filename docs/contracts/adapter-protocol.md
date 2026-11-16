@@ -1703,8 +1703,9 @@ it once for each new argument and keeps the answer (adapter protocol 2.10).
 - **What waits, and in what order.** A listen that calls a pure plugin takes
   its arrivals in the order they came: while one waits for its module, every
   later arrival of that listen that would fire waits behind it (`waiting
-  behind an earlier arrival`), and `listen-fire serve` judges the waiting ones
-  again, oldest first, every 30 seconds. A wait's arrival its module could not
+  behind an earlier arrival`), and whatever drains the host's work
+  (`listen-fire serve`, or a `listen-fire drain` behind `serve --doors-only`)
+  judges the waiting ones again, oldest first, every 30 seconds. A wait's arrival its module could not
   answer is left unjudged with the ones after it, the run stays parked, and it
   is woken to judge them again on the same cadence.
 - **`plugins.invalidate`** (module → host). When an answer changes (a member

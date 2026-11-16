@@ -31,7 +31,7 @@ use rusqlite::{OptionalExtension, params};
 
 use crate::check::LOCAL_TENANT;
 use crate::credential_calls::{Sending, Target, send};
-use crate::externals::RunningExternal;
+use crate::externals::{RunningExternal, Unanswered};
 use crate::inbound::{
     Answer, Declaration, Delivery, Extraction, InboundStore, Intercept, Kept, PushAuth, PushCaller, PushStore, RawRequest, Scheme, Source, Subscription, answer_delivery,
     same_secret,
@@ -131,11 +131,13 @@ fn served_in(running: &RunningExternal, resend_window_ms: i64) -> Served {
 pub trait Reader {
     /// Whether the external reads deliveries (`preprocessInbound`).
     fn reads_deliveries(&self, external: &str) -> bool;
-    async fn preprocess(&self, external: &str, install: &Credential, raw: &Js, checkpoint: Option<&Js>) -> Result<Extraction, String>;
+    /// The external's reading of a delivery (`preprocessInbound`); a failure
+    /// says whether the external was reached.
+    async fn preprocess(&self, external: &str, install: &Credential, raw: &Js, checkpoint: Option<&Js>) -> Result<Extraction, Unanswered>;
     /// The external's own check of a raw request (`checkInbound`): `request`
     /// is the wire's `WireInboundRequest`; `replayed` says the host is
     /// re-running a request it kept (the call's `replayed`, adapter protocol 2.6).
-    async fn check_inbound(&self, external: &str, install: &Credential, request: &Js, replayed: bool, secret: Option<&str>, checkpoint: Option<&Js>) -> Result<Js, String>;
+    async fn check_inbound(&self, external: &str, install: &Credential, request: &Js, replayed: bool, secret: Option<&str>, checkpoint: Option<&Js>) -> Result<Js, Unanswered>;
     /// The external's `awaitKeys` of `heads` on `edge`: one `{ key }` or
     /// `{ gone: true }` per head, called as `install` (none for a module
     /// that takes no credential). None when it offers no `awaitKeys`: a run
@@ -517,13 +519,13 @@ impl<R: Reader> InboundStore for LfDoors<'_, R> {
         LfDoors::with_actors(self, &source.adapter_type, self.install(&source.install), arrivals).await
     }
 
-    async fn preprocess(&self, source: &Source, raw: &Js, checkpoint: Option<&Js>) -> Result<Extraction, String> {
-        let install = self.install(&source.install).ok_or_else(|| format!("no install {}", source.install))?;
+    async fn preprocess(&self, source: &Source, raw: &Js, checkpoint: Option<&Js>) -> Result<Extraction, Unanswered> {
+        let install = self.install(&source.install).ok_or_else(|| Unanswered::Refused(format!("no install {}", source.install)))?;
         self.reader.preprocess(&source.adapter_type, install, raw, checkpoint).await
     }
 
-    async fn check_inbound(&self, source: &Source, request: &RawRequest<'_>, secret: Option<&str>, checkpoint: Option<&Js>) -> Result<Js, String> {
-        let install = self.install(&source.install).ok_or_else(|| format!("no install {}", source.install))?;
+    async fn check_inbound(&self, source: &Source, request: &RawRequest<'_>, secret: Option<&str>, checkpoint: Option<&Js>) -> Result<Js, Unanswered> {
+        let install = self.install(&source.install).ok_or_else(|| Unanswered::Refused(format!("no install {}", source.install)))?;
         self.reader.check_inbound(&source.adapter_type, install, &request.wire(), request.replayed, secret, checkpoint).await
     }
 
@@ -723,9 +725,9 @@ impl<'a> SessionReader<'a> {
 }
 
 impl SessionReader<'_> {
-    async fn call(&self, external: &str, install: Option<&Credential>, method: &str, params: serde_json::Value) -> Result<Js, String> {
+    async fn call(&self, external: &str, install: Option<&Credential>, method: &str, params: serde_json::Value) -> Result<Js, Unanswered> {
         let set = self.session.file_set();
-        let running = set.running.iter().find(|r| r.external.manifest.name == external).ok_or_else(|| format!("no external {external}"))?;
+        let running = set.running.iter().find(|r| r.external.manifest.name == external).ok_or_else(|| Unanswered::Refused(format!("no external {external}")))?;
         // As the user credential the door names, as the platform reads a
         // delivery as its subscription's credential: a source that is pulled
         // on a ping (Airtable's payload feed) reads with it. A door that names
@@ -733,7 +735,7 @@ impl SessionReader<'_> {
         let secrets = self.session.secrets();
         let credentials = secrets.credentials();
         let carried = install.filter(|install| matches!(install.binding, Binding::Credential(_)));
-        let lease = running.reach.lease().await?;
+        let lease = running.reach.lease().await.map_err(Unanswered::Unreachable)?;
         let target = Target {
             external: &running.external,
             base_url: &lease.address,
@@ -744,8 +746,8 @@ impl SessionReader<'_> {
             inbound_url: running.inbound_url.as_deref(),
         };
         let sending = Sending { tenant: LOCAL_TENANT, method, cache_scope_id: "<none>", params, settings: None };
-        let raw = send(&target, credentials, carried, signer_of(credentials, external, carried).or(install), sending).await?;
-        module_wire::results::check(method, external, &raw)
+        let raw = send(&target, credentials, carried, signer_of(credentials, external, carried).or(install), sending).await.map_err(Unanswered::of)?;
+        module_wire::results::check(method, external, &raw).map_err(Unanswered::Refused)
     }
 
     fn lists(&self, external: &str, method: &str) -> bool {
@@ -767,7 +769,7 @@ impl Reader for SessionReader<'_> {
             return Ok(None);
         }
         let params = serde_json::json!({ "edge": edge, "heads": crate::wire::json_of_js(&heads) });
-        self.call(external, install, "awaitKeys", params).await.map(Some)
+        Ok(Some(self.call(external, install, "awaitKeys", params).await?))
     }
 
     async fn actor_candidates(&self, external: &str, install: Option<&Credential>, event: &Js) -> Result<Option<Js>, String> {
@@ -775,7 +777,7 @@ impl Reader for SessionReader<'_> {
             return Ok(None);
         }
         let params = serde_json::json!({ "event": crate::wire::json_of_js(event) });
-        self.call(external, install, "getActorCandidates", params).await.map(Some)
+        Ok(Some(self.call(external, install, "getActorCandidates", params).await?))
     }
 
     fn needs_actor_lookup(&self) -> bool {
@@ -787,7 +789,7 @@ impl Reader for SessionReader<'_> {
         set.schemas_of(external).is_some_and(|schemas| crate::actor::declares_own_actor(schemas, install.map(|install| install.name.as_str()), record_type))
     }
 
-    async fn preprocess(&self, external: &str, install: &Credential, raw: &Js, checkpoint: Option<&Js>) -> Result<Extraction, String> {
+    async fn preprocess(&self, external: &str, install: &Credential, raw: &Js, checkpoint: Option<&Js>) -> Result<Extraction, Unanswered> {
         let mut params = serde_json::json!({ "raw": crate::wire::json_of_js(raw) });
         if let Some(checkpoint) = checkpoint {
             params["checkpoint"] = crate::wire::json_of_js(checkpoint);
@@ -795,16 +797,16 @@ impl Reader for SessionReader<'_> {
         let read = self.call(external, Some(install), "preprocessInbound", params).await?;
         Ok(Extraction {
             events: read.get("events").and_then(Js::as_array).map(<[Js]>::to_vec).unwrap_or_default(),
-            arrivals: arrivals_of(&read).map_err(|e| format!("preprocessInbound for adapter {external}: {e}"))?,
+            arrivals: arrivals_of(&read).map_err(|e| Unanswered::Refused(format!("preprocessInbound for adapter {external}: {e}")))?,
             checkpoint: read.get("checkpoint").cloned(),
         })
     }
 
-    async fn check_inbound(&self, external: &str, install: &Credential, request: &Js, replayed: bool, secret: Option<&str>, checkpoint: Option<&Js>) -> Result<Js, String> {
+    async fn check_inbound(&self, external: &str, install: &Credential, request: &Js, replayed: bool, secret: Option<&str>, checkpoint: Option<&Js>) -> Result<Js, Unanswered> {
         let set = self.session.file_set();
-        let running = set.running.iter().find(|r| r.external.manifest.name == external).ok_or_else(|| format!("no external {external}"))?;
+        let running = set.running.iter().find(|r| r.external.manifest.name == external).ok_or_else(|| Unanswered::Refused(format!("no external {external}")))?;
         if !running.methods.iter().any(|m| m == "checkInbound") {
-            return Err(format!("external \"{external}\" declares that it checks its own inbound but does not list checkInbound"));
+            return Err(Unanswered::Refused(format!("external \"{external}\" declares that it checks its own inbound but does not list checkInbound")));
         }
         let mut params = serde_json::json!({ "request": crate::wire::json_of_js(request) });
         // Present only on a replay, and only here: the field is the host's
@@ -823,7 +825,7 @@ impl Reader for SessionReader<'_> {
         let secrets = self.session.secrets();
         let credentials = secrets.credentials();
         let carried = carried_credential(credentials, external, install);
-        let lease = running.reach.lease().await?;
+        let lease = running.reach.lease().await.map_err(Unanswered::Unreachable)?;
         let target = Target {
             external: &running.external,
             base_url: &lease.address,
@@ -834,8 +836,8 @@ impl Reader for SessionReader<'_> {
             inbound_url: running.inbound_url.as_deref(),
         };
         let sending = Sending { tenant: LOCAL_TENANT, method: "checkInbound", cache_scope_id: "<none>", params, settings: None };
-        let raw = send(&target, credentials, carried, signer_of(credentials, external, carried).or(Some(install)), sending).await?;
-        module_wire::results::check("checkInbound", external, &raw)
+        let raw = send(&target, credentials, carried, signer_of(credentials, external, carried).or(Some(install)), sending).await.map_err(Unanswered::of)?;
+        module_wire::results::check("checkInbound", external, &raw).map_err(Unanswered::Refused)
     }
 }
 
@@ -1596,11 +1598,11 @@ pub(crate) mod tests {
         fn reads_deliveries(&self, _external: &str) -> bool {
             false
         }
-        async fn preprocess(&self, _: &str, _: &Credential, _: &Js, _: Option<&Js>) -> Result<Extraction, String> {
-            Err("no deliveries".into())
+        async fn preprocess(&self, _: &str, _: &Credential, _: &Js, _: Option<&Js>) -> Result<Extraction, Unanswered> {
+            Err(Unanswered::Refused("no deliveries".into()))
         }
-        async fn check_inbound(&self, _: &str, _: &Credential, _: &Js, _: bool, _: Option<&str>, _: Option<&Js>) -> Result<Js, String> {
-            Err("no deliveries".into())
+        async fn check_inbound(&self, _: &str, _: &Credential, _: &Js, _: bool, _: Option<&str>, _: Option<&Js>) -> Result<Js, Unanswered> {
+            Err(Unanswered::Refused("no deliveries".into()))
         }
     }
 
@@ -1686,11 +1688,11 @@ pub(crate) mod tests {
         fn reads_deliveries(&self, _external: &str) -> bool {
             true
         }
-        async fn preprocess(&self, _: &str, _: &Credential, _: &Js, _: Option<&Js>) -> Result<Extraction, String> {
+        async fn preprocess(&self, _: &str, _: &Credential, _: &Js, _: Option<&Js>) -> Result<Extraction, Unanswered> {
             Ok(Extraction { events: Vec::new(), arrivals: self.0.clone(), checkpoint: None })
         }
-        async fn check_inbound(&self, _: &str, _: &Credential, _: &Js, _: bool, _: Option<&str>, _: Option<&Js>) -> Result<Js, String> {
-            Err("checks no inbound".into())
+        async fn check_inbound(&self, _: &str, _: &Credential, _: &Js, _: bool, _: Option<&str>, _: Option<&Js>) -> Result<Js, Unanswered> {
+            Err(Unanswered::Refused("checks no inbound".into()))
         }
     }
 

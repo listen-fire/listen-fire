@@ -41,7 +41,7 @@ The store slot's envelope ([store-slot.md](store-slot.md#the-envelope)): adapter
 - **Answer once the wake is arranged, not once the work ran.** listen-fire waits for the answer before it goes on (the request that queued the work waits too), so a module hands the wake to its queue and answers.
 - **`wake.now`**: start a worker soon. listen-fire may say it many times in a row, and while a worker is already draining. A module may start one worker for several.
 - **`wake.at`**: start a worker at `at`, never before. An `at` already past is `wake.now`.
-- **`kind`** is the work row's kind: `fire_event`, `wake_await`, `resume_timer`, `poll_edge`, `resolve_listen`, `refresh_subscription` or `settle_race`. A module may start a worker for that kind's pool (`listen-fire drain --kinds <kind>`), or ignore it.
+- **`kind`** is the work row's kind: `fire_event`, `wake_await`, `resume_timer`, `poll_edge`, `resolve_listen`, `refresh_subscription`, `settle_race` or `judge_waiting`. A module may start a worker for that kind's pool (`listen-fire drain --kinds <kind>`), or ignore it.
 - **A refusal**: `bad_request` for an `at` that is not an instant, or a request without its `kind`.
 - **"Start a worker"** means run `listen-fire drain --until-idle` against the same store (a job, a container, a function). It claims every due row, so it needs nothing from the wake but the start.
 
