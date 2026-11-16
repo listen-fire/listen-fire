@@ -1,5 +1,16 @@
 # @listen-fire/engine-contracts
 
+## 0.16.0
+
+### Minor Changes
+
+- Release 0.16.0, a new compatibility key: brands, pure host functions in a listen's filter and a wait's `WHERE`, the judge asking the host for their answers, and who acted as a claim in place of `Actor`. The language's changelog (`CHANGELOG.md`) carries the entry and `docs/language/migrating-to-0.16.md` the guide from 0.15.
+
+### Patch Changes
+
+- Updated dependencies
+  - @listen-fire/movement-lang@0.16.0
+
 ## 0.15.3
 
 ### Patch Changes

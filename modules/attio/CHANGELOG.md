@@ -5,6 +5,7 @@
 ### Minor Changes
 
 - Claims: A record's change type gains `Changed By`: the workspace member who made the change, by their Attio member id, a `claim:attio/user_id` Attio vouches for; null for a change by an api token, the system, or no named actor. The module no longer declares `getActorCandidates` or `extractActor`, and its arrivals carry no `actor` nor the raw `actor` field.
+- `Changed By` is declared `text & Brand<"claim:attio/user_id"> | null`, so a filter tests it for null before a host function takes it.
 
 ## 0.13.2
 

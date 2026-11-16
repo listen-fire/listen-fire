@@ -31,7 +31,7 @@ A module's field can carry a brand: `text & Brand<"claim:email/address">`. The b
 | `e.Actor?.Phone` | `` m.`Sender Phone` `` (WhatsApp) |
 | `e.Actor?.Id` | `` c.`Changed By` `` (Attio) |
 | `e.Actor?.Id` on a Slack event | no claim carries Slack's member id; it is the plain `User` field on a message and `Reactor` on a reaction |
-| `e.Actor?.Name` | no claim carries a name; a host function answers it (`` team.userFor(m.`User Email`)?.Name `` with the platform's package) |
+| `e.Actor?.Name` | no claim carries a name; a host function answers it (`` m.`User Email` != null AND team.userFor(m.`User Email`)?.Name `` with the platform's package) |
 | `e.Actor?.Proven` | none: a branded field is the module's word |
 
 The fields and their forms are in [`contracts/claims.md`](../contracts/claims.md). Email publishes none: its `From` is plain text, and a function that asks for a claim refuses it.
@@ -60,7 +60,7 @@ A listen's filter, and a wait's `WHERE`, may call a pure function: a built-in th
 | `m.Actor?.Email` on a record that declares no `Actor` | refused (`MOV_ACTOR_RETIRED`), naming the claims that record has |
 | `@user_email`, `@user_name`, `@user_id`, `@actor_email`, `@actor_name`, `@actor_id` | refused (`MOV_ACTING_USER_RETIRED`), naming claims and host functions |
 
-Neither has a rewrite: the old values have no exact replacement. Read the claim off the event, and when the run needs the person, ask a host function (`` team.userFor(m.`User Email`)?.Level == "admin" ``). A module's own field called `Actor` reads as before.
+Neither has a rewrite: the old values have no exact replacement. Read the claim off the event, and when the run needs the person, ask a host function (`` m.`User Email` != null AND team.userFor(m.`User Email`)?.Level == "admin" ``). A module's own field called `Actor` reads as before.
 
 A host serves host families version 3, which has no `lookup.resolveActingUser`. Adapter protocol 2.10: hosts stop calling `getActorCandidates` and `extractActor`, and a module's arrivals carry no `actor`.
 

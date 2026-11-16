@@ -537,7 +537,17 @@
                     "Team"
                   ]
                 },
-                "Record": "text"
+                "Record": "text",
+                "Changed By": {
+                  "kind": "maybeAbsent",
+                  "of": {
+                    "kind": "branded",
+                    "of": "text",
+                    "brands": [
+                      "claim:attio/user_id"
+                    ]
+                  }
+                }
               },
               "edges": {
                 "Company": {
@@ -551,7 +561,8 @@
                 "Id": "Names the change: the same on every redelivery of it.",
                 "Kind": "What happened to the company.",
                 "Field": "On an update, the attribute that changed, by its title (`Stage`).",
-                "Record": "The company's record id."
+                "Record": "The company's record id.",
+                "Changed By": "The workspace member who made the change, by their Attio member id; null for a change by an api token or Attio itself. A claim Attio vouches for: a plugin function that accepts `claim:attio/user_id` takes it where it refuses plain text."
               }
             },
             "PersonChange": {
@@ -574,7 +585,17 @@
                     "Company"
                   ]
                 },
-                "Record": "text"
+                "Record": "text",
+                "Changed By": {
+                  "kind": "maybeAbsent",
+                  "of": {
+                    "kind": "branded",
+                    "of": "text",
+                    "brands": [
+                      "claim:attio/user_id"
+                    ]
+                  }
+                }
               },
               "edges": {
                 "Person": {
@@ -588,7 +609,8 @@
                 "Id": "Names the change: the same on every redelivery of it.",
                 "Kind": "What happened to the person.",
                 "Field": "On an update, the attribute that changed, by its title (`Stage`).",
-                "Record": "The person's record id."
+                "Record": "The person's record id.",
+                "Changed By": "The workspace member who made the change, by their Attio member id; null for a change by an api token or Attio itself. A claim Attio vouches for: a plugin function that accepts `claim:attio/user_id` takes it where it refuses plain text."
               }
             },
             "DealChange": {
@@ -611,7 +633,17 @@
                     "Company"
                   ]
                 },
-                "Record": "text"
+                "Record": "text",
+                "Changed By": {
+                  "kind": "maybeAbsent",
+                  "of": {
+                    "kind": "branded",
+                    "of": "text",
+                    "brands": [
+                      "claim:attio/user_id"
+                    ]
+                  }
+                }
               },
               "edges": {
                 "Deal": {
@@ -625,7 +657,8 @@
                 "Id": "Names the change: the same on every redelivery of it.",
                 "Kind": "What happened to the deal.",
                 "Field": "On an update, the attribute that changed, by its title (`Stage`).",
-                "Record": "The deal's record id."
+                "Record": "The deal's record id.",
+                "Changed By": "The workspace member who made the change, by their Attio member id; null for a change by an api token or Attio itself. A claim Attio vouches for: a plugin function that accepts `claim:attio/user_id` takes it where it refuses plain text."
               }
             },
             "FundChange": {
@@ -648,7 +681,17 @@
                     "Advisors"
                   ]
                 },
-                "Record": "text"
+                "Record": "text",
+                "Changed By": {
+                  "kind": "maybeAbsent",
+                  "of": {
+                    "kind": "branded",
+                    "of": "text",
+                    "brands": [
+                      "claim:attio/user_id"
+                    ]
+                  }
+                }
               },
               "edges": {
                 "Fund": {
@@ -662,7 +705,8 @@
                 "Id": "Names the change: the same on every redelivery of it.",
                 "Kind": "What happened to the fund.",
                 "Field": "On an update, the attribute that changed, by its title (`Stage`).",
-                "Record": "The fund's record id."
+                "Record": "The fund's record id.",
+                "Changed By": "The workspace member who made the change, by their Attio member id; null for a change by an api token or Attio itself. A claim Attio vouches for: a plugin function that accepts `claim:attio/user_id` takes it where it refuses plain text."
               }
             }
           },
@@ -1489,7 +1533,17 @@
                     "Team"
                   ]
                 },
-                "Record": "text"
+                "Record": "text",
+                "Changed By": {
+                  "kind": "maybeAbsent",
+                  "of": {
+                    "kind": "branded",
+                    "of": "text",
+                    "brands": [
+                      "claim:attio/user_id"
+                    ]
+                  }
+                }
               },
               "edges": {
                 "Company": {
@@ -1503,7 +1557,8 @@
                 "Id": "Names the change: the same on every redelivery of it.",
                 "Kind": "What happened to the company.",
                 "Field": "On an update, the attribute that changed, by its title (`Stage`).",
-                "Record": "The company's record id."
+                "Record": "The company's record id.",
+                "Changed By": "The workspace member who made the change, by their Attio member id; null for a change by an api token or Attio itself. A claim Attio vouches for: a plugin function that accepts `claim:attio/user_id` takes it where it refuses plain text."
               }
             },
             "PersonChange": {
@@ -1526,7 +1581,17 @@
                     "Company"
                   ]
                 },
-                "Record": "text"
+                "Record": "text",
+                "Changed By": {
+                  "kind": "maybeAbsent",
+                  "of": {
+                    "kind": "branded",
+                    "of": "text",
+                    "brands": [
+                      "claim:attio/user_id"
+                    ]
+                  }
+                }
               },
               "edges": {
                 "Person": {
@@ -1540,7 +1605,8 @@
                 "Id": "Names the change: the same on every redelivery of it.",
                 "Kind": "What happened to the person.",
                 "Field": "On an update, the attribute that changed, by its title (`Stage`).",
-                "Record": "The person's record id."
+                "Record": "The person's record id.",
+                "Changed By": "The workspace member who made the change, by their Attio member id; null for a change by an api token or Attio itself. A claim Attio vouches for: a plugin function that accepts `claim:attio/user_id` takes it where it refuses plain text."
               }
             },
             "DealChange": {
@@ -1563,7 +1629,17 @@
                     "Company"
                   ]
                 },
-                "Record": "text"
+                "Record": "text",
+                "Changed By": {
+                  "kind": "maybeAbsent",
+                  "of": {
+                    "kind": "branded",
+                    "of": "text",
+                    "brands": [
+                      "claim:attio/user_id"
+                    ]
+                  }
+                }
               },
               "edges": {
                 "Deal": {
@@ -1577,7 +1653,8 @@
                 "Id": "Names the change: the same on every redelivery of it.",
                 "Kind": "What happened to the deal.",
                 "Field": "On an update, the attribute that changed, by its title (`Stage`).",
-                "Record": "The deal's record id."
+                "Record": "The deal's record id.",
+                "Changed By": "The workspace member who made the change, by their Attio member id; null for a change by an api token or Attio itself. A claim Attio vouches for: a plugin function that accepts `claim:attio/user_id` takes it where it refuses plain text."
               }
             },
             "FundChange": {
@@ -1600,7 +1677,17 @@
                     "Advisors"
                   ]
                 },
-                "Record": "text"
+                "Record": "text",
+                "Changed By": {
+                  "kind": "maybeAbsent",
+                  "of": {
+                    "kind": "branded",
+                    "of": "text",
+                    "brands": [
+                      "claim:attio/user_id"
+                    ]
+                  }
+                }
               },
               "edges": {
                 "Fund": {
@@ -1614,7 +1701,8 @@
                 "Id": "Names the change: the same on every redelivery of it.",
                 "Kind": "What happened to the fund.",
                 "Field": "On an update, the attribute that changed, by its title (`Stage`).",
-                "Record": "The fund's record id."
+                "Record": "The fund's record id.",
+                "Changed By": "The workspace member who made the change, by their Attio member id; null for a change by an api token or Attio itself. A claim Attio vouches for: a plugin function that accepts `claim:attio/user_id` takes it where it refuses plain text."
               }
             }
           },
@@ -2441,7 +2529,17 @@
                     "Team"
                   ]
                 },
-                "Record": "text"
+                "Record": "text",
+                "Changed By": {
+                  "kind": "maybeAbsent",
+                  "of": {
+                    "kind": "branded",
+                    "of": "text",
+                    "brands": [
+                      "claim:attio/user_id"
+                    ]
+                  }
+                }
               },
               "edges": {
                 "Company": {
@@ -2455,7 +2553,8 @@
                 "Id": "Names the change: the same on every redelivery of it.",
                 "Kind": "What happened to the company.",
                 "Field": "On an update, the attribute that changed, by its title (`Stage`).",
-                "Record": "The company's record id."
+                "Record": "The company's record id.",
+                "Changed By": "The workspace member who made the change, by their Attio member id; null for a change by an api token or Attio itself. A claim Attio vouches for: a plugin function that accepts `claim:attio/user_id` takes it where it refuses plain text."
               }
             },
             "PersonChange": {
@@ -2478,7 +2577,17 @@
                     "Company"
                   ]
                 },
-                "Record": "text"
+                "Record": "text",
+                "Changed By": {
+                  "kind": "maybeAbsent",
+                  "of": {
+                    "kind": "branded",
+                    "of": "text",
+                    "brands": [
+                      "claim:attio/user_id"
+                    ]
+                  }
+                }
               },
               "edges": {
                 "Person": {
@@ -2492,7 +2601,8 @@
                 "Id": "Names the change: the same on every redelivery of it.",
                 "Kind": "What happened to the person.",
                 "Field": "On an update, the attribute that changed, by its title (`Stage`).",
-                "Record": "The person's record id."
+                "Record": "The person's record id.",
+                "Changed By": "The workspace member who made the change, by their Attio member id; null for a change by an api token or Attio itself. A claim Attio vouches for: a plugin function that accepts `claim:attio/user_id` takes it where it refuses plain text."
               }
             },
             "DealChange": {
@@ -2515,7 +2625,17 @@
                     "Company"
                   ]
                 },
-                "Record": "text"
+                "Record": "text",
+                "Changed By": {
+                  "kind": "maybeAbsent",
+                  "of": {
+                    "kind": "branded",
+                    "of": "text",
+                    "brands": [
+                      "claim:attio/user_id"
+                    ]
+                  }
+                }
               },
               "edges": {
                 "Deal": {
@@ -2529,7 +2649,8 @@
                 "Id": "Names the change: the same on every redelivery of it.",
                 "Kind": "What happened to the deal.",
                 "Field": "On an update, the attribute that changed, by its title (`Stage`).",
-                "Record": "The deal's record id."
+                "Record": "The deal's record id.",
+                "Changed By": "The workspace member who made the change, by their Attio member id; null for a change by an api token or Attio itself. A claim Attio vouches for: a plugin function that accepts `claim:attio/user_id` takes it where it refuses plain text."
               }
             },
             "FundChange": {
@@ -2552,7 +2673,17 @@
                     "Advisors"
                   ]
                 },
-                "Record": "text"
+                "Record": "text",
+                "Changed By": {
+                  "kind": "maybeAbsent",
+                  "of": {
+                    "kind": "branded",
+                    "of": "text",
+                    "brands": [
+                      "claim:attio/user_id"
+                    ]
+                  }
+                }
               },
               "edges": {
                 "Fund": {
@@ -2566,7 +2697,8 @@
                 "Id": "Names the change: the same on every redelivery of it.",
                 "Kind": "What happened to the fund.",
                 "Field": "On an update, the attribute that changed, by its title (`Stage`).",
-                "Record": "The fund's record id."
+                "Record": "The fund's record id.",
+                "Changed By": "The workspace member who made the change, by their Attio member id; null for a change by an api token or Attio itself. A claim Attio vouches for: a plugin function that accepts `claim:attio/user_id` takes it where it refuses plain text."
               }
             }
           },
@@ -3113,7 +3245,10 @@
                   "sequenced": "chronological",
                   "writable": true,
                   "listenable": true,
-                  "cursor": false
+                  "cursor": false,
+                  "carries": [
+                    "Channels"
+                  ]
                 },
                 "Interactions": {
                   "target": "Interaction",
@@ -3423,6 +3558,17 @@
                 "Timestamp": "date",
                 "Topic": "text",
                 "Mentions App": "boolean",
+                "User Email": {
+                  "kind": "maybeAbsent",
+                  "of": {
+                    "kind": "branded",
+                    "of": "text",
+                    "brands": [
+                      "claim:email/address"
+                    ]
+                  }
+                },
+                "Sent By This App": "boolean",
                 "File": "file",
                 "Blocks": {
                   "kind": "list",
@@ -3443,7 +3589,10 @@
                   "sequenced": "chronological",
                   "writable": true,
                   "listenable": true,
-                  "cursor": false
+                  "cursor": false,
+                  "carries": [
+                    "Channels"
+                  ]
                 },
                 "Interactions": {
                   "target": "Interaction",
@@ -3530,7 +3679,18 @@
                 "url": "text",
                 "Emoji": "text",
                 "Channel": "text",
-                "Reactor": "text"
+                "Reactor": "text",
+                "User Email": {
+                  "kind": "maybeAbsent",
+                  "of": {
+                    "kind": "branded",
+                    "of": "text",
+                    "brands": [
+                      "claim:email/address"
+                    ]
+                  }
+                },
+                "Sent By This App": "boolean"
               },
               "edges": {
                 "Message": {
@@ -3586,7 +3746,10 @@
                   "sequenced": "chronological",
                   "writable": true,
                   "listenable": true,
-                  "cursor": false
+                  "cursor": false,
+                  "carries": [
+                    "Channels"
+                  ]
                 },
                 "Interactions": {
                   "target": "Interaction",
@@ -3896,6 +4059,17 @@
                 "Timestamp": "date",
                 "Topic": "text",
                 "Mentions App": "boolean",
+                "User Email": {
+                  "kind": "maybeAbsent",
+                  "of": {
+                    "kind": "branded",
+                    "of": "text",
+                    "brands": [
+                      "claim:email/address"
+                    ]
+                  }
+                },
+                "Sent By This App": "boolean",
                 "File": "file",
                 "Blocks": {
                   "kind": "list",
@@ -3916,7 +4090,10 @@
                   "sequenced": "chronological",
                   "writable": true,
                   "listenable": true,
-                  "cursor": false
+                  "cursor": false,
+                  "carries": [
+                    "Channels"
+                  ]
                 },
                 "Interactions": {
                   "target": "Interaction",
@@ -4003,7 +4180,18 @@
                 "url": "text",
                 "Emoji": "text",
                 "Channel": "text",
-                "Reactor": "text"
+                "Reactor": "text",
+                "User Email": {
+                  "kind": "maybeAbsent",
+                  "of": {
+                    "kind": "branded",
+                    "of": "text",
+                    "brands": [
+                      "claim:email/address"
+                    ]
+                  }
+                },
+                "Sent By This App": "boolean"
               },
               "edges": {
                 "Message": {
@@ -4059,7 +4247,10 @@
                   "sequenced": "chronological",
                   "writable": true,
                   "listenable": true,
-                  "cursor": false
+                  "cursor": false,
+                  "carries": [
+                    "Channels"
+                  ]
                 },
                 "Interactions": {
                   "target": "Interaction",
@@ -4369,6 +4560,17 @@
                 "Timestamp": "date",
                 "Topic": "text",
                 "Mentions App": "boolean",
+                "User Email": {
+                  "kind": "maybeAbsent",
+                  "of": {
+                    "kind": "branded",
+                    "of": "text",
+                    "brands": [
+                      "claim:email/address"
+                    ]
+                  }
+                },
+                "Sent By This App": "boolean",
                 "File": "file",
                 "Blocks": {
                   "kind": "list",
@@ -4389,7 +4591,10 @@
                   "sequenced": "chronological",
                   "writable": true,
                   "listenable": true,
-                  "cursor": false
+                  "cursor": false,
+                  "carries": [
+                    "Channels"
+                  ]
                 },
                 "Interactions": {
                   "target": "Interaction",
@@ -4476,7 +4681,18 @@
                 "url": "text",
                 "Emoji": "text",
                 "Channel": "text",
-                "Reactor": "text"
+                "Reactor": "text",
+                "User Email": {
+                  "kind": "maybeAbsent",
+                  "of": {
+                    "kind": "branded",
+                    "of": "text",
+                    "brands": [
+                      "claim:email/address"
+                    ]
+                  }
+                },
+                "Sent By This App": "boolean"
               },
               "edges": {
                 "Message": {
@@ -4532,7 +4748,10 @@
                   "sequenced": "chronological",
                   "writable": true,
                   "listenable": true,
-                  "cursor": false
+                  "cursor": false,
+                  "carries": [
+                    "Channels"
+                  ]
                 },
                 "Interactions": {
                   "target": "Interaction",
@@ -4842,6 +5061,17 @@
                 "Timestamp": "date",
                 "Topic": "text",
                 "Mentions App": "boolean",
+                "User Email": {
+                  "kind": "maybeAbsent",
+                  "of": {
+                    "kind": "branded",
+                    "of": "text",
+                    "brands": [
+                      "claim:email/address"
+                    ]
+                  }
+                },
+                "Sent By This App": "boolean",
                 "File": "file",
                 "Blocks": {
                   "kind": "list",
@@ -4862,7 +5092,10 @@
                   "sequenced": "chronological",
                   "writable": true,
                   "listenable": true,
-                  "cursor": false
+                  "cursor": false,
+                  "carries": [
+                    "Channels"
+                  ]
                 },
                 "Interactions": {
                   "target": "Interaction",
@@ -4949,7 +5182,18 @@
                 "url": "text",
                 "Emoji": "text",
                 "Channel": "text",
-                "Reactor": "text"
+                "Reactor": "text",
+                "User Email": {
+                  "kind": "maybeAbsent",
+                  "of": {
+                    "kind": "branded",
+                    "of": "text",
+                    "brands": [
+                      "claim:email/address"
+                    ]
+                  }
+                },
+                "Sent By This App": "boolean"
               },
               "edges": {
                 "Message": {
@@ -5900,6 +6144,16 @@
                 "Sender Id": "text",
                 "Sender Username": "text",
                 "Sender First Name": "text",
+                "Sender Email": {
+                  "kind": "maybeAbsent",
+                  "of": {
+                    "kind": "branded",
+                    "of": "text",
+                    "brands": [
+                      "claim:email/address"
+                    ]
+                  }
+                },
                 "Date": "text"
               },
               "edges": {
@@ -5932,6 +6186,7 @@
                 "Sender Id": "The numeric id of the user who sent the message.",
                 "Sender Username": "The @username of the sender, when set.",
                 "Sender First Name": "The sender's first name.",
+                "Sender Email": "The address the sender bound to their Telegram account by the link handshake, lower case; null for a sender who has not linked. A claim Telegram vouches for: a plugin function such as a team check accepts it where it refuses plain text.",
                 "Date": "When the message was sent (ISO-8601)."
               },
               "fieldIds": {
@@ -5943,6 +6198,7 @@
                 "Sender Id": "sender_id",
                 "Sender Username": "sender_username",
                 "Sender First Name": "sender_first_name",
+                "Sender Email": "sender_email",
                 "Date": "date"
               }
             },
@@ -6023,6 +6279,16 @@
                 "Sender Id": "text",
                 "Sender Username": "text",
                 "Sender First Name": "text",
+                "Sender Email": {
+                  "kind": "maybeAbsent",
+                  "of": {
+                    "kind": "branded",
+                    "of": "text",
+                    "brands": [
+                      "claim:email/address"
+                    ]
+                  }
+                },
                 "Date": "text",
                 "Reply Markup": "json"
               },
@@ -6114,6 +6380,16 @@
               "properties": {
                 "Message Id": "text",
                 "From": "text",
+                "Sender Phone": {
+                  "kind": "maybeAbsent",
+                  "of": {
+                    "kind": "branded",
+                    "of": "text",
+                    "brands": [
+                      "claim:phone/e164"
+                    ]
+                  }
+                },
                 "To": "text",
                 "Body": "text",
                 "WhatsApp Id": "text",
@@ -6153,6 +6429,7 @@
               "fieldDocs": {
                 "Message Id": "The WhatsApp message id — the value a reply or reaction addresses.",
                 "From": "The sender's phone number, digits with the country code first and no plus (`447700900001`): the conversation a message is in, so a listen narrows to one by it.",
+                "Sender Phone": "The sender's number with its plus (`+447700900001`), a claim WhatsApp vouches for: Meta signs the delivery. A plugin function that accepts `claim:phone/e164` takes it where it refuses plain text.",
                 "To": "Inbound: the team's own WhatsApp business number (the message's recipient). On a send: the other party's phone number, derived from the message the write is anchored on (an inbound parent's From, a sent parent's To) — read-only either way.",
                 "Body": "The message text. Empty for media-only messages. At least one of Body / File on a send (the Body captions the file).",
                 "File": "A file to send (image / PDF / audio / video, routed by content type). At least one of Body / File. Send-side only: a received message's media is on its Attachments edge — read `msg-[:Attachments]->.File`.",
@@ -6164,6 +6441,7 @@
               "fieldIds": {
                 "Message Id": "messageId",
                 "From": "from",
+                "Sender Phone": "senderPhone",
                 "To": "to",
                 "Body": "body",
                 "WhatsApp Id": "waId",
@@ -6192,6 +6470,16 @@
                 "Reacted Message Id": "text",
                 "Message Id": "text",
                 "From": "text",
+                "Sender Phone": {
+                  "kind": "maybeAbsent",
+                  "of": {
+                    "kind": "branded",
+                    "of": "text",
+                    "brands": [
+                      "claim:phone/e164"
+                    ]
+                  }
+                },
                 "Profile Name": "text",
                 "Timestamp": "text"
               },
@@ -6201,13 +6489,15 @@
                 "Emoji": "The reaction emoji. Inbound: empty when the reaction was removed. On a write along msg-[:Reactions]->: the single emoji to react with — required.",
                 "Reacted Message Id": "The message the reaction is on.",
                 "Message Id": "The reaction event's own id.",
-                "From": "The reactor's phone number."
+                "From": "The reactor's phone number.",
+                "Sender Phone": "The reactor's number with its plus (`+447700900001`), a claim WhatsApp vouches for: Meta signs the delivery. A plugin function that accepts `claim:phone/e164` takes it where it refuses plain text."
               },
               "fieldIds": {
                 "Emoji": "emoji",
                 "Reacted Message Id": "reactedMessageId",
                 "Message Id": "messageId",
                 "From": "from",
+                "Sender Phone": "senderPhone",
                 "Profile Name": "profileName",
                 "Timestamp": "timestamp"
               }
@@ -6220,13 +6510,24 @@
                 "Address": "text",
                 "Message Id": "text",
                 "From": "text",
+                "Sender Phone": {
+                  "kind": "maybeAbsent",
+                  "of": {
+                    "kind": "branded",
+                    "of": "text",
+                    "brands": [
+                      "claim:phone/e164"
+                    ]
+                  }
+                },
                 "Profile Name": "text",
                 "Timestamp": "text"
               },
               "edges": {},
               "description": "Someone shared a location with the team number. What a listen on `Locations` delivers.",
               "fieldDocs": {
-                "Name": "The place name, when the sender picked one."
+                "Name": "The place name, when the sender picked one.",
+                "Sender Phone": "The sender's number with its plus (`+447700900001`), a claim WhatsApp vouches for: Meta signs the delivery. A plugin function that accepts `claim:phone/e164` takes it where it refuses plain text."
               },
               "fieldIds": {
                 "Latitude": "latitude",
@@ -6235,6 +6536,7 @@
                 "Address": "address",
                 "Message Id": "messageId",
                 "From": "from",
+                "Sender Phone": "senderPhone",
                 "Profile Name": "profileName",
                 "Timestamp": "timestamp"
               }
@@ -6282,6 +6584,16 @@
                 "url": "text",
                 "Message Id": "text",
                 "From": "text",
+                "Sender Phone": {
+                  "kind": "maybeAbsent",
+                  "of": {
+                    "kind": "branded",
+                    "of": "text",
+                    "brands": [
+                      "claim:phone/e164"
+                    ]
+                  }
+                },
                 "To": "text",
                 "Body": "text",
                 "WhatsApp Id": "text",
@@ -6332,6 +6644,16 @@
                 "Reacted Message Id": "text",
                 "Message Id": "text",
                 "From": "text",
+                "Sender Phone": {
+                  "kind": "maybeAbsent",
+                  "of": {
+                    "kind": "branded",
+                    "of": "text",
+                    "brands": [
+                      "claim:phone/e164"
+                    ]
+                  }
+                },
                 "Profile Name": "text",
                 "Timestamp": "text"
               },
