@@ -326,7 +326,7 @@ describe('@lf/slack', () => {
       const { adapter } = load({ credential: credential({}) });
       for (const type of ['Message', 'Reaction']) {
         const field = (await adapter.describe(type))?.fields.find((f) => f.displayName === 'User Email');
-        expect(field).toMatchObject({ kind: 'string', brands: ['claim:email/address'], required: false, writable: false });
+        expect(field).toMatchObject({ kind: 'string', brands: ['claim:email/address'], mayBeAbsent: true, required: false, writable: false });
       }
       const landing = await landed({ user: 'U1' });
       expect(landing.fields['User Email']).toBe('ada@example.com');
@@ -703,7 +703,7 @@ describe('@lf/slack', () => {
     it('the presser\'s claim is on the press, branded, normalised', async () => {
       const { adapter } = load({ credential: credential({}) });
       const field = (await adapter.describe('Interaction'))?.fields.find((f) => f.displayName === 'Pressed By Email');
-      expect(field).toMatchObject({ kind: 'string', brands: ['claim:email/address'], required: false, writable: false });
+      expect(field).toMatchObject({ kind: 'string', brands: ['claim:email/address'], mayBeAbsent: true, required: false, writable: false });
       const landing = await landed('U1');
       expect(landing.fields['Pressed By Email']).toBe('ada@example.com');
       expect(landing.unknown).toBeUndefined();

@@ -208,7 +208,7 @@ describe('@lf/whatsapp', () => {
       const { adapter } = load({ credential: credential(OWN) });
       for (const type of ['Message', 'Reaction', 'Location']) {
         const field = (await adapter.describe(type))?.fields.find((f) => f.displayName === 'Sender Phone');
-        expect(field).toMatchObject({ kind: 'string', brands: ['claim:phone/e164'], required: false, writable: false });
+        expect(field).toMatchObject({ kind: 'string', brands: ['claim:phone/e164'], mayBeAbsent: true, required: false, writable: false });
       }
       const arrivals = await arrived([TEXT, REACTION, LOCATION]);
       const phones = arrivals.map((arrival) => ('landing' in arrival ? arrival.landing.fields['Sender Phone'] : undefined));

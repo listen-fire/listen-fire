@@ -975,7 +975,7 @@ describe('AttioAdapter — a record’s Changes', () => {
   it('the sender\'s claim is on the event, branded: the workspace member who made a change is its Changed By', async () => {
     const adapter = makeChangesAdapter('team-changes-actor', { 'deal-1': deal });
     const changed = (await adapter.describe('DealChange'))?.fields.find((f) => f.displayName === 'Changed By');
-    expect(changed).toMatchObject({ kind: 'string', brands: ['claim:attio/user_id'], required: false, writable: false });
+    expect(changed).toMatchObject({ kind: 'string', brands: ['claim:attio/user_id'], mayBeAbsent: true, required: false, writable: false });
     const { arrivals } = await adapter.preprocessInbound({ raw: delivery({ event_type: 'record.updated', object_id: 'deals-uuid', record_id: 'deal-1', attribute_id: 'stage-attr' }) });
     const [arrival] = arrivals;
     if (arrival === undefined) throw new Error('no change arrived');

@@ -322,7 +322,7 @@
   {
     "chapter": "listeners",
     "construct": "a host function in a listen's filter (a claim passed to team.isMember), the app's own posts left out",
-    "source": "\nimport { `@lf-platform/team` as team } from plugins\nslack = connect `@lf/slack` using team_workspace\n\nfunction intake(m: <slack-[:Message]->>) {\n  write m-[:Reactions]-> { Emoji: \"eyes\" }\n}\n\nlisten to slack-[ch:Channels WHERE ch.Name == \"dealflow\"]->-[m:Messages WHERE NOT m.`Sent By This App` AND team.isMember(m.`User Email`)]-> fire intake\n"
+    "source": "\nimport { `@lf-platform/team` as team } from plugins\nslack = connect `@lf/slack` using team_workspace\n\nfunction intake(m: <slack-[:Message]->>) {\n  write m-[:Reactions]-> { Emoji: \"eyes\" }\n}\n\nlisten to slack-[ch:Channels WHERE ch.Name == \"dealflow\"]->-[m:Messages WHERE NOT m.`Sent By This App` AND m.`User Email` != null AND team.isMember(m.`User Email`)]-> fire intake\n"
   },
   {
     "chapter": "listeners",

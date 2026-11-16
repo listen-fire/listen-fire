@@ -76,7 +76,7 @@ A module publishes who acted as a **claim**: a field of what landed whose type c
 - Telegram: \`Sender Email\`. WhatsApp: \`Sender Phone\` (\`+447700900123\`). Granola: \`Note Owner Email\`. Attio: \`Changed By\`, a workspace member's id.
 - Email publishes none. Its \`From\` is plain text anyone can forge.
 
-What a claim means to the team is a **host function**'s answer. A host offers functions as a plugin package, imported like any plugin, and a listen's filter may call one that is pure:
+What a claim means to the team is a **host function**'s answer. A host offers functions as a plugin package, imported like any plugin, and a listen's filter may call one that is pure. This example uses one host's package, the platform's \`@lf-platform/team\`:
 
 \`\`\`
 import { \`@lf-platform/team\` as team } from plugins
@@ -86,7 +86,7 @@ function intake(m: <slack-[:Message]->>) {
   write m-[:Reactions]-> { Emoji: "eyes" }
 }
 
-listen to slack-[m:Messages WHERE m.Channel == "C0DEALS" AND team.isMember(m.\`User Email\`)]-> fire intake
+listen to slack-[m:Messages WHERE m.Channel == "C0DEALS" AND m.\`User Email\` != null AND team.isMember(m.\`User Email\`)]-> fire intake
 \`\`\`
 
 - Which functions exist is the host's choice. The platform's \`@lf-platform/team\` offers \`isMember(claim)\` and \`userFor(claim)\`; \`listen-fire\` alone offers none.
@@ -96,7 +96,7 @@ listen to slack-[m:Messages WHERE m.Channel == "C0DEALS" AND team.isMember(m.\`U
 - To keep a listen off the app's own posts, add \`AND NOT m.\`Sent By This App\`\` (Slack).
 - To limit by domain, read it off a claim: \`Text.regexExtract(m.\`User Email\`, "@([^@]+)$", 1) == "acme.com"\`. The match is exact (\`acme.com.evil.com\` is not \`acme.com\`).
 
-A claim not yet narrowed (one that may be missing) is checked first: \`m.\`User Email\` != null AND team.isMember(m.\`User Email\`)\`.
+A claim can be missing (a bot, a member with no address), so test it for null before passing it on, as above. \`team.isMember(m.\`User Email\`)\` alone is refused.
 
 ### inbound-mail
 
@@ -113,7 +113,7 @@ function intake(m: <slack-[:Message]->>) {
   write m-[:Reactions]-> { Emoji: "eyes" }
 }
 
-listen to slack-[ch:Channels WHERE ch.Name == "dealflow"]->-[m:Messages WHERE NOT m.\`Sent By This App\` AND team.isMember(m.\`User Email\`)]-> fire intake
+listen to slack-[ch:Channels WHERE ch.Name == "dealflow"]->-[m:Messages WHERE NOT m.\`Sent By This App\` AND m.\`User Email\` != null AND team.isMember(m.\`User Email\`)]-> fire intake
 `,
     },
     {

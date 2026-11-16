@@ -93,7 +93,7 @@ Types **always** wear angle brackets; positions, scalar values, and handles **ne
 \`\`\`
 company = write crm-[:Companies]-> {
   Name:      msg.Subject      # plain — overwrites every run
-  Owner   ?: c.Owner          # set-if-empty — leaves an existing value alone
+  Owner   ?: msg.From         # set-if-empty — leaves an existing value alone
   Tags    +: ["inbound"]      # append to a multi-value field (duplicates allowed)
   Sources +?:["email"]        # append only what's missing (set-union)
   ?...e                       # every field of e (extracted, <Decl>-typed, or a graph), set-if-empty; \`...e\`: plain

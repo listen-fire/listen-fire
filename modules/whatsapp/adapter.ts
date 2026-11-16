@@ -279,7 +279,7 @@ export class WhatsappAdapter extends BaseAdapter implements Adapter {
         fields: [
           { fieldId: 'messageId', displayName: 'Message Id', kind: 'string', writable: false, required: true, description: 'The WhatsApp message id — the value a reply or reaction addresses.' },
           { fieldId: 'from', displayName: 'From', kind: 'string', writable: false, required: true, description: 'The sender\'s phone number, digits with the country code first and no plus (`447700900001`): the conversation a message is in, so a listen narrows to one by it.' },
-          { fieldId: 'senderPhone', displayName: 'Sender Phone', kind: 'string', brands: ['claim:phone/e164'], writable: false, required: false, description: 'The sender\'s number with its plus (`+447700900001`), a claim WhatsApp vouches for: Meta signs the delivery. A plugin function that accepts `claim:phone/e164` takes it where it refuses plain text.' },
+          { fieldId: 'senderPhone', displayName: 'Sender Phone', kind: 'string', brands: ['claim:phone/e164'], mayBeAbsent: true, writable: false, required: false, description: 'The sender\'s number with its plus (`+447700900001`), a claim WhatsApp vouches for: Meta signs the delivery. A plugin function that accepts `claim:phone/e164` takes it where it refuses plain text.' },
           { fieldId: 'to', displayName: 'To', kind: 'string', writable: false, required: false, description: 'Inbound: the team\'s own WhatsApp business number (the message\'s recipient). On a send: the other party\'s phone number, derived from the message the write is anchored on (an inbound parent\'s From, a sent parent\'s To) — read-only either way.' },
           { fieldId: 'body', displayName: 'Body', kind: 'string', writable: true, required: false, description: 'The message text. Empty for media-only messages. At least one of Body / File on a send (the Body captions the file).' },
           // Send-side only (`readable: false`): outbound media rides the send;
@@ -415,7 +415,7 @@ export class WhatsappAdapter extends BaseAdapter implements Adapter {
           { fieldId: 'reactedMessageId', displayName: 'Reacted Message Id', kind: 'string', writable: false, required: true, description: 'The message the reaction is on.' },
           { fieldId: 'messageId', displayName: 'Message Id', kind: 'string', writable: false, required: true, description: 'The reaction event\'s own id.' },
           { fieldId: 'from', displayName: 'From', kind: 'string', writable: false, required: true, description: 'The reactor\'s phone number.' },
-          { fieldId: 'senderPhone', displayName: 'Sender Phone', kind: 'string', brands: ['claim:phone/e164'], writable: false, required: false, description: 'The reactor\'s number with its plus (`+447700900001`), a claim WhatsApp vouches for: Meta signs the delivery. A plugin function that accepts `claim:phone/e164` takes it where it refuses plain text.' },
+          { fieldId: 'senderPhone', displayName: 'Sender Phone', kind: 'string', brands: ['claim:phone/e164'], mayBeAbsent: true, writable: false, required: false, description: 'The reactor\'s number with its plus (`+447700900001`), a claim WhatsApp vouches for: Meta signs the delivery. A plugin function that accepts `claim:phone/e164` takes it where it refuses plain text.' },
           { fieldId: 'profileName', displayName: 'Profile Name', kind: 'string', writable: false, required: false },
           { fieldId: 'timestamp', displayName: 'Timestamp', kind: 'string', writable: false, required: false },
         ],
@@ -436,7 +436,7 @@ export class WhatsappAdapter extends BaseAdapter implements Adapter {
           { fieldId: 'address', displayName: 'Address', kind: 'string', writable: false, required: false },
           { fieldId: 'messageId', displayName: 'Message Id', kind: 'string', writable: false, required: true },
           { fieldId: 'from', displayName: 'From', kind: 'string', writable: false, required: true },
-          { fieldId: 'senderPhone', displayName: 'Sender Phone', kind: 'string', brands: ['claim:phone/e164'], writable: false, required: false, description: 'The sender\'s number with its plus (`+447700900001`), a claim WhatsApp vouches for: Meta signs the delivery. A plugin function that accepts `claim:phone/e164` takes it where it refuses plain text.' },
+          { fieldId: 'senderPhone', displayName: 'Sender Phone', kind: 'string', brands: ['claim:phone/e164'], mayBeAbsent: true, writable: false, required: false, description: 'The sender\'s number with its plus (`+447700900001`), a claim WhatsApp vouches for: Meta signs the delivery. A plugin function that accepts `claim:phone/e164` takes it where it refuses plain text.' },
           { fieldId: 'profileName', displayName: 'Profile Name', kind: 'string', writable: false, required: false },
           { fieldId: 'timestamp', displayName: 'Timestamp', kind: 'string', writable: false, required: false },
         ],

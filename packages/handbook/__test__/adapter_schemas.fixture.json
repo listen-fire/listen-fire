@@ -1472,11 +1472,14 @@
             "Topic": "text",
             "Mentions App": "boolean",
             "User Email": {
-              "kind": "branded",
-              "of": "text",
-              "brands": [
-                "claim:email/address"
-              ]
+              "kind": "maybeAbsent",
+              "of": {
+                "kind": "branded",
+                "of": "text",
+                "brands": [
+                  "claim:email/address"
+                ]
+              }
             },
             "Sent By This App": "boolean"
           },
@@ -1601,11 +1604,14 @@
             "Id": "text",
             "At": "date",
             "Pressed By Email": {
-              "kind": "branded",
-              "of": "text",
-              "brands": [
-                "claim:email/address"
-              ]
+              "kind": "maybeAbsent",
+              "of": {
+                "kind": "branded",
+                "of": "text",
+                "brands": [
+                  "claim:email/address"
+                ]
+              }
             }
           },
           "edges": {
@@ -1626,7 +1632,8 @@
           "description": "Someone pressing a button (or using another control) on a message — what `await msg-[:Interactions]->` binds, and what a listen on a message's `Interactions` runs on. `Actions` are the controls used, `By` the member who pressed, `Message` the message pressed.",
           "fieldDocs": {
             "Id": "Names this press (Slack's trigger id).",
-            "At": "When the press was made."
+            "At": "When the press was made.",
+            "Pressed By Email": "The address Slack holds for the member who pressed, lower case; null for a member with none. A claim Slack vouches for: a plugin function such as a team check accepts it where it refuses plain text."
           },
           "fieldIds": {
             "Id": "id",
@@ -1656,11 +1663,14 @@
             "Channel": "text",
             "Reactor": "text",
             "User Email": {
-              "kind": "branded",
-              "of": "text",
-              "brands": [
-                "claim:email/address"
-              ]
+              "kind": "maybeAbsent",
+              "of": {
+                "kind": "branded",
+                "of": "text",
+                "brands": [
+                  "claim:email/address"
+                ]
+              }
             },
             "Sent By This App": "boolean"
           },

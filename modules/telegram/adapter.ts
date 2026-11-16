@@ -250,6 +250,7 @@ export class TelegramAdapter extends BaseAdapter implements Adapter {
             displayName: 'Sender Email',
             kind: 'string',
             brands: ['claim:email/address'],
+            mayBeAbsent: true,
             writable: false,
             required: false,
             description: 'The address the sender bound to their Telegram account by the link handshake, lower case; null for a sender who has not linked. A claim Telegram vouches for: a plugin function such as a team check accepts it where it refuses plain text.',

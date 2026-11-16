@@ -362,6 +362,7 @@ function senderClaimFields(subject: string): SchemaTypeDescriptor['fields'] {
       displayName: 'User Email',
       kind: 'string',
       brands: [SLACK_EMAIL_CLAIM],
+      mayBeAbsent: true,
       writable: false,
       required: false,
       description:
@@ -845,6 +846,7 @@ export class SlackAdapter extends BaseAdapter {
             displayName: 'Pressed By Email',
             kind: 'string',
             brands: [SLACK_EMAIL_CLAIM],
+            mayBeAbsent: true,
             writable: false,
             required: false,
             description:

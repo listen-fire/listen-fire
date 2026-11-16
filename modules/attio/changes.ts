@@ -109,6 +109,7 @@ export function describeChange(object: ChangedObject, attributes: readonly Attio
       field('Record', 'string', { required: true, description: `The ${noun}'s record id.` }),
       field('Changed By', 'string', {
         brands: [ATTIO_USER_CLAIM],
+        mayBeAbsent: true,
         description: `The workspace member who made the change, by their Attio member id; null for a change by an api token or Attio itself. A claim Attio vouches for: a plugin function that accepts \`${ATTIO_USER_CLAIM}\` takes it where it refuses plain text.`,
       }),
     ],

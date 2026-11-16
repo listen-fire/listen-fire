@@ -30,19 +30,24 @@ A module's field can carry a brand: `text & Brand<"claim:email/address">`. The b
 | `e.Actor?.Email` | `` m.`User Email` `` (Slack), `` m.`Sender Email` `` (Telegram), `` n.`Note Owner Email` `` (Granola) |
 | `e.Actor?.Phone` | `` m.`Sender Phone` `` (WhatsApp) |
 | `e.Actor?.Id` | `` c.`Changed By` `` (Attio) |
+| `e.Actor?.Id` on a Slack event | no claim carries Slack's member id; it is the plain `User` field on a message and `Reactor` on a reaction |
+| `e.Actor?.Name` | no claim carries a name; a host function answers it (`` team.userFor(m.`User Email`)?.Name `` with the platform's package) |
+| `e.Actor?.Proven` | none: a branded field is the module's word |
 
 The fields and their forms are in [`contracts/claims.md`](../contracts/claims.md). Email publishes none: its `From` is plain text, and a function that asks for a claim refuses it.
 
+A claim that can be null (a bot, a member with no address, an API token, a malformed number) has the type `text & Brand<"claim:email/address"> | null`: Slack's `User Email` and `Pressed By Email`, Telegram's `Sender Email`, WhatsApp's `Sender Phone` and Attio's `Changed By`. Granola's `Note Owner Email` is never null. A host function takes it only after the filter has tested it for null (section 3).
+
 ## 3. Host functions in a filter
 
-A listen's filter, and a wait's `WHERE`, may call a pure function: a built-in that reads no clock, model or source, or a function a plugin package declares pure. A host offers its functions as a plugin package, imported like any plugin. Which it offers is its own choice; the platform's `@lf-platform/team` offers `isMember` and `userFor`.
+A listen's filter, and a wait's `WHERE`, may call a pure function: a built-in that reads no clock, model or source, or a function a plugin package declares pure. A host offers its functions as a plugin package, imported like any plugin. Which it offers is its own choice. The examples below use one host's package, the platform's `@lf-platform/team`, which offers `isMember` and `userFor`.
 
 | 0.15 | 0.16 |
 |---|---|
 | `e.Actor?.Domain == "acme.test"` | `` Text.regexExtract(m.`User Email`, "@([^@]+)$", 1) == "acme.test" `` |
-| a host's registered-member gate | `` team.isMember(m.`User Email`) `` in the filter |
+| a host's registered-member gate | `` m.`User Email` != null AND team.isMember(m.`User Email`) `` in the filter |
 
-- A value that may be missing is narrowed first: `` m.`User Email` != null AND team.isMember(m.`User Email`) ``.
+- A value that may be missing is narrowed first, as above. `` team.isMember(m.`User Email`) `` alone is refused (`MOV_ABSENT_REQUIRED`).
 - Terms that need no host are written first. The host is called only for a sender they let through, and each answer is kept.
 - A host that cannot be reached leaves the arrival unjudged; nothing runs until it is judged.
 - Any other call in a filter is refused, naming why (`MOV_LISTEN_IMPURE_WHERE`, `MOV_AWAIT_IMPURE_WHERE`). `fail(…)` is impure there.
@@ -65,7 +70,7 @@ The `drop_own_messages` connection setting is refused (it lived in the connectio
 
 | 0.15 | 0.16 |
 |---|---|
-| `drop_own_messages: true` on the connection | `` WHERE NOT m.`Sent By This App` `` on each listen |
+| `drop_own_messages: on` on the connection | `` WHERE NOT m.`Sent By This App` `` on each listen |
 
 `Sent By This App` is false when Slack does not say who the app is.
 
@@ -75,13 +80,13 @@ Before 0.16 a host may have let only registered team members set a Slack listen 
 
 | 0.15, team limited by the host | 0.16 |
 |---|---|
-| `` listen to slack-[m:Messages WHERE m.Channel == "C0DEALS"]-> fire intake `` | `` … WHERE m.Channel == "C0DEALS" AND team.isMember(m.`User Email`) `` with `import { `@lf-platform/team` as team } from plugins` |
+| `` listen to slack-[m:Messages WHERE m.Channel == "C0DEALS"]-> fire intake `` | `` … WHERE m.Channel == "C0DEALS" AND m.`User Email` != null AND team.isMember(m.`User Email`) `` with `import { `@lf-platform/team` as team } from plugins` (one host's package; yours offers its own) |
 
 If anyone may set it off, the listen stays as it is and `--all` accepts it. A host that knows its limiting function passes it to the check, and the warning then carries a fix to review; nothing is inserted unasked. A file written under 0.16 is told nothing.
 
 ## 7. A whole program
 
-A Slack intake only the team can set off, leaving out the app's own posts:
+A Slack intake only the team can set off, leaving out the app's own posts. It uses one host's package, the platform's `@lf-platform/team`; another host offers its own:
 
 ```
 import { `@lf-platform/team` as team } from plugins
@@ -91,7 +96,7 @@ function intake(m: <slack-[:Message]->>) {
   write m-[:Reactions]-> { Emoji: "eyes" }
 }
 
-listen to slack-[ch:Channels WHERE ch.Name == "dealflow"]->-[m:Messages WHERE NOT m.`Sent By This App` AND team.isMember(m.`User Email`)]-> fire intake
+listen to slack-[ch:Channels WHERE ch.Name == "dealflow"]->-[m:Messages WHERE NOT m.`Sent By This App` AND m.`User Email` != null AND team.isMember(m.`User Email`)]-> fire intake
 ```
 
 ## 8. Diagnostic code index
@@ -107,3 +112,4 @@ Codes keep their names across releases; only their texts change.
 | `MOV_LISTEN_IMPURE_WHERE`, `MOV_AWAIT_IMPURE_WHERE` | a call in a filter or a wait's `WHERE` that is not pure |
 | `MOV_ABSENT_REQUIRED` | a claim that may be missing, passed unnarrowed |
 | `MOV_FUNCTION_UNKNOWN` | a dotted call off a name that is no package or namespace |
+| (no code) | `listen-fire` refuses a Slack connection that still holds `drop_own_messages`, naming `` NOT m.`Sent By This App` `` |

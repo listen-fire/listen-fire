@@ -883,7 +883,7 @@ listed one.
 
 Who acted is a claim on the landing: a field whose type carries a brand
 (`text & Brand<"claim:email/address">`, Slack's `User Email`), which a
-filter reads and passes to a host function (`team.isMember(m.\`User Email\`)`).
+filter reads and passes to a host function (`m.\`User Email\` != null AND team.isMember(m.\`User Email\`)`).
 Publish a claim only when your module vouches for it: a verified address,
 a signed request. Name the field for whose it is (the sender, the presser),
 and normalise its value (an address in lower case, a phone as digits with

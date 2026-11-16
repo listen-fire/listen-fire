@@ -22,7 +22,7 @@ A module normalises the value before it publishes it.
 
 ## Publishing is vouching
 
-A module publishes a claim only for a value its source vouches for, and leaves the field null when it cannot. There is no `proven` flag: a branded field is the module's word.
+A module publishes a claim only for a value its source vouches for, and leaves the field null when it cannot. A field that can be null is declared so: its type is `text & Brand<"claim:email/address"> | null`. There is no `proven` flag: a branded field is the module's word.
 
 - A lookup that failed leaves the field in the arrival's `unknown` list, so a filter is never judged on a guess.
 - A value Slack or Attio does not name as a person (a bot, an API token) is null, not a claim.
@@ -35,7 +35,7 @@ A module publishes a claim only for a value its source vouches for, and leaves t
 | Slack | `Pressed By Email` | Interaction (a press) | `claim:email/address` |
 | Telegram | `Sender Email` | Message | `claim:email/address` |
 | WhatsApp | `Sender Phone` | Message, Reaction, Location | `claim:phone/e164` |
-| Granola | `Note Owner Email` | Note | `claim:email/address` |
+| Granola | `Note Owner Email` | Note | `claim:email/address` (never null) |
 | Attio | `Changed By` | each object's change type | `claim:attio/user_id` (workspace members only) |
 
 Slack also publishes `Sent By This App`, a plain boolean (not a claim): true on a message or reaction the app itself sent.
@@ -44,10 +44,19 @@ Email publishes none. Nothing in a message vouches for its `From` line, so `From
 
 ## What a claim is used for
 
-A host offers functions that take claims, as a plugin package a program imports. `listen-fire` offers none; a host chooses its own (the platform's `@lf-platform/team` offers `isMember` and `userFor`). A pure one may be called in a listen's filter:
+A host offers functions that take claims, as a plugin package a program imports. `listen-fire` offers none; a host chooses its own (the platform's `@lf-platform/team` offers `isMember` and `userFor`). A pure one may be called in a listen's filter. This example uses one host's package, the platform's; another host offers its own:
 
 ```
-listen to slack-[m:Messages WHERE team.isMember(m.`User Email`)]-> fire intake
+import { `@lf-platform/team` as team } from plugins
+slack = connect `@lf/slack` using team_workspace
+
+function intake(m: <slack-[:Message]->>) {
+  write m-[:Reactions]-> { Emoji: "eyes" }
+}
+
+listen to slack-[m:Messages WHERE m.`User Email` != null AND team.isMember(m.`User Email`)]-> fire intake
 ```
+
+A claim that can be null is tested first, as above, because a function refuses a value that may be missing.
 
 See the handbook's listeners chapter, and [`migrating-to-0.16.md`](../language/migrating-to-0.16.md).

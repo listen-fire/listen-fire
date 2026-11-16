@@ -104,7 +104,7 @@ describe('@lf/telegram', () => {
     const users = await adapter.getRelated({ position: makeMetaPosition('telegram'), fieldId: 'Linked Users', direction: 'outgoing' });
     expect(users.map((u) => u.position.identity.data)).toEqual([{ chat_id: '777', email: 'Ada@Example.com ', linked_at: '2026-06-01T12:00:00.000Z' }]);
     const field = (await adapter.describe('Message'))?.fields.find((f) => f.displayName === 'Sender Email');
-    expect(field).toMatchObject({ kind: 'string', brands: ['claim:email/address'], required: false, writable: false });
+    expect(field).toMatchObject({ kind: 'string', brands: ['claim:email/address'], mayBeAbsent: true, required: false, writable: false });
     // The address they bound, trimmed and lower case, under the schema's name and the payload's.
     const bound = landing((await delivered(adapter, messageFrom({ id: 777, username: 'adas' }))).arrivals[0]);
     expect(bound.landing.fields).toMatchObject({ 'Sender Email': 'ada@example.com', sender_email: 'ada@example.com' });

@@ -96,7 +96,7 @@ const CAPTURED_PACKAGES: Record<string, string> = {
   gmail: '@lf/gmail',
 };
 
-const EMAIL_CLAIM = { kind: 'branded', of: 'text', brands: ['claim:email/address'] } as const;
+const EMAIL_CLAIM: { kind: 'branded'; of: 'text'; brands: string[] } = { kind: 'branded', of: 'text', brands: ['claim:email/address'] };
 
 /**
  * A host's functions, as the examples meet them: the team a platform serves
