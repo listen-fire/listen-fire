@@ -1,5 +1,11 @@
 # @listen-fire/web
 
+## 0.13.0
+
+### Minor Changes
+
+- Hosts from 0.16 no longer ask a module who acted (adapter protocol 2.10), so the module's in-process context carries `host`; the DocSend, BriefLink and Papermark email-required messages no longer point at `@user_email`.
+
 ## 0.12.11
 
 ### Patch Changes

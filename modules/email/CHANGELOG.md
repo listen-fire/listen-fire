@@ -9,7 +9,6 @@
 ### Patch Changes
 
 - Updated dependencies
-- Updated dependencies
   - @listen-fire/module-kit@0.15.0
 
 ## 0.13.2

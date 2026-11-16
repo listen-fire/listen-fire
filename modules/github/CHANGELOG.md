@@ -1,5 +1,11 @@
 # @listen-fire/github
 
+## 0.14.0
+
+### Minor Changes
+
+- Hosts from 0.16 no longer ask a module who acted (adapter protocol 2.10); the module's context carries `host` and nothing else of its behaviour changes.
+
 ## 0.13.3
 
 ### Patch Changes
