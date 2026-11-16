@@ -120,6 +120,7 @@ create table if not exists arrival_unjudged (
   cause text,
   noted_at text not null,
   attempt integer not null,
+  waiting integer not null default 0,
   primary key (pipeline, arrival, attempt)
 );
 create index if not exists arrival_unjudged_at on arrival_unjudged (noted_at, pipeline, arrival, attempt);
@@ -778,6 +779,10 @@ impl Store {
             if !unjudged_columns.iter().any(|c| c == column) {
                 db.execute_batch(&format!("alter table arrival_unjudged add column {column} text"))?;
             }
+        }
+        // Added to a state file written before an arrival could wait for its host (0.16.0).
+        if !unjudged_columns.iter().any(|c| c == "waiting") {
+            db.execute_batch("alter table arrival_unjudged add column waiting integer not null default 0")?;
         }
         // Callbacks and the waits keyed by a correlation retired at 0.13: a
         // run parked on one cannot resume on this release, and the work rows

@@ -20,7 +20,9 @@ use crate::bindings::{Binding, Node, Scope};
 use crate::env::{Trail, ValueBinding};
 use crate::js::{Js, JsObject};
 use movement_parser::ast::CallArg;
+use serde_json::Value as Json;
 
+use crate::host;
 use crate::run::{Address, Failure, Run, Stop};
 use crate::trace::{Members, TraceEntry};
 
@@ -235,6 +237,11 @@ impl Run<'_> {
     /// in the order it declares them, and its value as it declares it. Timed
     /// and traced as a plain call is. Only a plugin whose output is a value
     /// is called so; a record's fields are read only off a bound name.
+    ///
+    /// A pure plugin on a host that keeps answers (`llm.transforms.answer`)
+    /// is asked through it instead, as a listen's filter is: a host that
+    /// could not ask it fails the evaluation `MOVENG_HOST_UNREACHABLE`,
+    /// which a wait reads as an arrival it cannot judge yet.
     pub(crate) async fn expression_call(&self, written: &str, args: Vec<Js>, scope: &Scope) -> Result<Js, Failure> {
         let registered = self.registered_plugin(written, scope);
         let Some(spec) = self.plugin_spec(&registered) else {
@@ -243,26 +250,64 @@ impl Run<'_> {
         let Some(PluginOutput::Value { type_ }) = spec.output.clone() else {
             return Err(Failure::unsupported(&format!("'{written}' inside an expression"), "a plugin called inside an expression hands back a value; bind a record it answers first"));
         };
-        let mut config = JsObject::new();
-        for (name, value) in spec.as_called().positional_params(PluginCallSite::Plain).into_iter().zip(args) {
-            let value = match crate::record::binding_of(&value) {
+        let mut values = Vec::with_capacity(args.len());
+        for value in args {
+            values.push(match crate::record::binding_of(&value) {
                 Some(record) => Js::object(crate::record::fields_of(&record).map_err(|e| Failure::of_eval(e, ""))?),
                 None => value,
-            };
-            config.set(name.to_string(), value);
+            });
         }
         let started = self.clock_now().await?;
-        let result = self.invoke(&registered, &config, &JsObject::new()).await?;
+        let (answered, result) = match spec.pure() && self.serves(KEPT_ANSWERS) {
+            true => (self.kept_answer(&registered, &values).await?, None),
+            false => {
+                let mut config = JsObject::new();
+                for (name, value) in spec.as_called().positional_params(PluginCallSite::Plain).into_iter().zip(values) {
+                    config.set(name.to_string(), value);
+                }
+                let result = self.invoke(&registered, &config, &JsObject::new()).await?;
+                (declared_value(&result, &type_), Some(result))
+            }
+        };
         let duration = self.clock_now().await? - started;
-        let answered = declared_value(&result, &type_);
         let value = if matches!(answered, Js::Null) || fits(&answered, &type_) { answered } else { text_as(&answered, &type_).unwrap_or(Js::Null) };
         let mut entry = Members::default();
         entry.set("plugin", Js::str(registered.clone()));
         entry.set("durationMs", Js::Number(duration));
-        result.trace_into(&mut entry);
+        if let Some(result) = &result {
+            result.trace_into(&mut entry);
+        }
         entry.set("returned", Js::str(if matches!(value, Js::Null) { "absent" } else { "value" }));
         self.trace(TraceEntry::Plugin(entry));
         Ok(value)
+    }
+
+    /// A pure plugin's value for `args`, as its host keeps it.
+    async fn kept_answer(&self, registered: &str, args: &[Js]) -> Result<Js, Failure> {
+        let args = Json::Array(args.iter().map(crate::env::json_of_js).collect());
+        let answer = self.ask(host::llm::transforms_answer(self.segment(), registered, args)).await?;
+        match answer.as_ref().and_then(Json::as_object) {
+            Some(answered) if answered.contains_key("value") => Ok(crate::env::js_of_json(&answered["value"])),
+            Some(answered) if answered.get("unreachable").is_some_and(Json::is_string) => Err(Failure::engine(
+                HOST_UNREACHABLE,
+                format!("the host could not answer {registered} ({})", answered["unreachable"].as_str().unwrap_or_default()),
+            )),
+            _ => Err(Failure::host_answer("llm.transforms.answer", "{ value } or { unreachable }", &answer.as_ref().map_or(Js::Undefined, crate::env::js_of_json))),
+        }
+    }
+}
+
+/// The host method that keeps pure plugins' answers.
+const KEPT_ANSWERS: &str = "llm.transforms.answer";
+
+/// The code a plugin's answer the host could not get fails an evaluation
+/// with: a wait leaves the arrival it was judging for later.
+pub(crate) const HOST_UNREACHABLE: &str = "MOVENG_HOST_UNREACHABLE";
+
+impl Run<'_> {
+    /// Whether `failure` is a pure plugin's answer its host could not get.
+    pub(crate) fn host_unreachable(failure: &Failure) -> bool {
+        matches!(failure, Failure::Engine { class: crate::eval::ErrorClass::Engine(code), .. } if *code == HOST_UNREACHABLE)
     }
 }
 

@@ -414,6 +414,39 @@ pub async fn rpc(running: &RunningExternal, credentials: &Credentials, tenant: &
     rpc_as(running, credentials, credential_for(credentials, &running.external.manifest.name), tenant, method, params).await
 }
 
+/// Why a call to a module got no answer of its own.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Unanswered {
+    /// Nothing answered: the module did not start, the connection failed,
+    /// or something in between answered an HTTP error.
+    Unreachable(String),
+    /// The module answered, with an error of its own (or a malformed answer).
+    Refused(String),
+}
+
+/// `rpc`, saying whether a failure is the module's own answer or no answer
+/// at all.
+pub async fn rpc_reaching(running: &RunningExternal, credentials: &Credentials, tenant: &str, method: &str, params: serde_json::Value) -> Result<Js, Unanswered> {
+    use crate::credential_calls::SendError;
+    use crate::protocol::RpcError;
+    let lease = running.reach.lease().await.map_err(Unanswered::Unreachable)?;
+    let target = Target {
+        external: &running.external,
+        base_url: &lease.address,
+        declarations: &running.credential_declarations,
+        methods: &running.methods,
+        settings: &running.settings,
+        limits: &running.limits,
+        inbound_url: running.inbound_url.as_deref(),
+    };
+    let credential = credential_for(credentials, &running.external.manifest.name);
+    let signer = signer_of(credentials, &target.external.manifest.name, credential);
+    send(&target, credentials, credential, signer, Sending { tenant, method, cache_scope_id: "<none>", params, settings: None }).await.map_err(|error| match error {
+        SendError::Rpc(error @ (RpcError::Unreachable(_) | RpcError::Transport { .. })) => Unanswered::Unreachable(error.message()),
+        other => Unanswered::Refused(String::from(other)),
+    })
+}
+
 /// A position arg's source text as its value: a quoted string loses its quotes.
 fn unquoted(raw: &str) -> String {
     let trimmed = raw.trim();

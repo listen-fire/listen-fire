@@ -37,7 +37,7 @@ pub const STORE_METHODS: &[&str] = &[
     "processes.swap", "events.claim", "events.startRun", "runs.lapsed", "parks.commit", "work.bury", "inbound.keepDelivery",
     "inbound.deliveries", "inbound.delivery", "inbound.sweepDeliveries", "inbound.forgetDeliveryId", "work.enqueueIfAbsent", "work.completeKey",
     "runs.rerun", "waits.mark", "waits.log", "waits.open", "waits.arrivals", "waits.note", "waits.sweep", "waits.stranded",
-    "runs.failed", "releases.note", "releases.list", "unjudged.note", "unjudged.list",
+    "runs.failed", "releases.note", "releases.list", "unjudged.note", "unjudged.list", "unjudged.judged",
 ];
 
 pub async fn serve(spec: &StoreSpec, listen: Listen) -> Result<(), String> {
@@ -561,8 +561,13 @@ fn dispatch(store: &dyn RunHostStore, method: &str, p: &Params) -> Result<Js, Fa
                     Js::Num(n) => n.as_u64().and_then(|n| u32::try_from(n).ok()).ok_or_else(|| Failure::Params("attempt: expected a whole number".into()))?,
                     _ => return Err(Failure::Params("attempt: expected a whole number".into())),
                 },
+                waiting: p.flag("waiting"),
             };
             Ok(Js::Bool(store.note_unjudged(&fact, p.str("forgetBefore")?)?))
+        }
+        "unjudged.judged" => {
+            store.judged_unjudged(p.str("pipeline")?, p.str("arrival")?)?;
+            Ok(Js::Null)
         }
         "unjudged.list" => {
             let after = p.value("after");
@@ -570,7 +575,7 @@ fn dispatch(store: &dyn RunHostStore, method: &str, p: &Params) -> Result<Js, Fa
                 Js::Null => None,
                 after => Some(crate::records_door::UnjudgedAfter::from_js(after).ok_or_else(|| Failure::Params("after: expected { at, pipeline, arrival, attempt? }".into()))?),
             };
-            let page = crate::records_door::UnjudgedPage { after, pipeline: p.opt_str("pipeline")?, limit: p.int("limit")? };
+            let page = crate::records_door::UnjudgedPage { after, pipeline: p.opt_str("pipeline")?, waiting: p.flag("waiting"), limit: p.int("limit")? };
             Ok(Js::Arr(store.unjudged_arrivals(&page)?.iter().map(crate::records_door::UnjudgedArrival::to_js).collect()))
         }
 

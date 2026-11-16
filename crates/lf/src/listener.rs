@@ -76,11 +76,12 @@ pub async fn open_models_door(credentials: &crate::secrets::Credentials) -> Resu
                     Some([_, "models"]) => return models_door(&credentials, &request).await,
                     Some([_, "ocr"]) => return ocr_door(&request).await,
                     Some([_, crate::records_door::DOOR_VERB]) => return records_door(&request),
+                    Some([module, crate::plugin_answers::DOOR_VERB]) => return plugins_door(module, &request),
                     Some([module, crate::limits_door::DOOR_VERB]) => return limits_door(module, &request),
                     _ => {}
                 }
             }
-            Response::json(404, &Js::Obj(obj! { "error" => Js::str("not_found"), "message" => Js::str("outside listen-fire serve, listen-fire serves only the models, OCR and limits doors") }))
+            Response::json(404, &Js::Obj(obj! { "error" => Js::str("not_found"), "message" => Js::str("outside listen-fire serve, listen-fire serves only the models, OCR, records, plugins and limits doors") }))
         }
     }));
     Ok(())
@@ -170,6 +171,9 @@ pub async fn run(project: Project, serving: Serving<'_>) -> Result<i32, String> 
     // the workers resolve (a drain follows them as it drains).
     let drain = if doors_only { tokio::task::spawn_local(follow_heads_forever(session.clone())) } else { tokio::task::spawn_local(drain_forever(session.clone(), poke.clone())) };
     let renewing = tokio::task::spawn_local(renew_forever(session.clone()));
+    // What a listen waits on for its host runs here once judged: never in a
+    // process that runs nothing.
+    let retrying = (!doors_only).then(|| tokio::task::spawn_local(retry_forever(session.clone())));
     let stop = stopped();
     println!("listen-fire serving on http://127.0.0.1:{port}/hooks/<external>/<install>");
     for line in hook_urls(&session, &format!("http://127.0.0.1:{port}")) {
@@ -180,7 +184,7 @@ pub async fn run(project: Project, serving: Serving<'_>) -> Result<i32, String> 
     }
 
     stop.await;
-    for task in [doors, watching, drain, renewing] {
+    for task in [doors, watching, drain, renewing].into_iter().chain(retrying) {
         task.abort();
         let _ = task.await;
     }
@@ -346,6 +350,21 @@ async fn renew_forever(session: Rc<Session>) {
     }
 }
 
+/// What each listen waits on for its host, judged again on a timer of its
+/// own (crate::listen_replay::retry_waiting), oldest first.
+async fn retry_forever(session: Rc<Session>) {
+    let every = crate::listen_replay::retry_every();
+    let mut tick = tokio::time::interval_at(tokio::time::Instant::now() + every, every);
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    loop {
+        tick.tick().await;
+        match crate::listen_replay::retry_waiting(&session).await {
+            Ok(lines) => lines.iter().for_each(|line| println!("{line}")),
+            Err(message) => println!("judging again what the listens wait on failed: {message}"),
+        }
+    }
+}
+
 /// Each run an entry stepped, as `listen-fire serve` logs it.
 fn log_runs(outcomes: &[RunOutcome]) {
     let mut out = std::io::stdout();
@@ -441,6 +460,7 @@ async fn route(listening: &Listening, request: Request) -> Result<Response, Stri
         Some([_, "models"]) => return Ok(models_door(session.secrets().credentials(), &request).await),
         Some([_, "ocr"]) => return Ok(ocr_door(&request).await),
         Some([_, crate::records_door::DOOR_VERB]) => return Ok(records_door(&request)),
+        Some([module, crate::plugin_answers::DOOR_VERB]) => return Ok(plugins_door(module, &request)),
         _ => {}
     }
 
@@ -562,6 +582,22 @@ fn records_door(request: &Request) -> Response {
         Err(e) => return Response::json(400, &Js::Obj(obj! { "error" => Js::str("bad_request"), "message" => Js::Str(e) })),
     };
     let (status, answer) = crate::records_door::answer(&body);
+    Response::json(status, &answer)
+}
+
+/// The plugins door: a module saying its pure plugins' answers changed
+/// (`plugins.invalidate`, crate::plugin_answers).
+fn plugins_door(module: &str, request: &Request) -> Response {
+    let presented = request.headers.iter().find(|(k, _)| k == "authorization").map(|(_, v)| v.as_str());
+    let expected = host_token().map(|t| format!("Bearer {t}"));
+    if expected.is_none() || presented != expected.as_deref() {
+        return Response::json(401, &Js::Obj(obj! { "error" => Js::str("unauthorized") }));
+    }
+    let (module, body) = match (decoded(module), Js::parse(&request.body)) {
+        (Ok(module), Ok(body)) => (module, body),
+        (Err(message), _) | (_, Err(message)) => return Response::json(400, &Js::Obj(obj! { "error" => Js::str("bad_request"), "message" => Js::Str(message) })),
+    };
+    let (status, answer) = crate::plugin_answers::answer(&module, &body);
     Response::json(status, &answer)
 }
 

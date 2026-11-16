@@ -102,6 +102,12 @@ pub struct UnjudgedArrival {
     /// Which judging of the arrival by the listen: 0 as it was delivered,
     /// one more for each replay of it (`listen-fire listens replay`).
     pub attempt: u32,
+    /// The listen waits on it: the host could not answer a function its
+    /// filter calls, or an earlier arrival waits so. The listen judges its
+    /// waiting arrivals again in the order they came, and takes no later
+    /// one before them; judged, none of its facts waits any more
+    /// (`unjudged.judged`).
+    pub waiting: bool,
 }
 
 /// Where a page of unjudged arrivals left off: its last one.
@@ -117,6 +123,8 @@ pub struct UnjudgedPage<'a> {
     pub after: Option<UnjudgedAfter<'a>>,
     /// Only this listen's, by its pipeline.
     pub pipeline: Option<&'a str>,
+    /// Only those its listen waits on.
+    pub waiting: bool,
     pub limit: i64,
 }
 
@@ -138,6 +146,7 @@ impl UnjudgedArrival {
             "cause" => opt(&self.cause),
             "at" => Js::str(&self.at),
             "attempt" => Js::Num(self.attempt.into()),
+            "waiting" => Js::Bool(self.waiting),
         })
     }
 
@@ -171,6 +180,12 @@ impl UnjudgedArrival {
             attempt: match value.get("attempt") {
                 Some(Js::Num(n)) => u32::try_from(n.as_u64()?).ok()?,
                 _ => return None,
+            },
+            // A store written before arrivals waited for their host keeps none waiting.
+            waiting: match value.get("waiting") {
+                None | Some(Js::Null) => false,
+                Some(Js::Bool(waiting)) => *waiting,
+                Some(_) => return None,
             },
         })
     }
@@ -382,7 +397,7 @@ fn unjudged_arrivals(store: &dyn RunHostStore, kept_ms: i64, params: &Js) -> std
         Some(after) => Some(UnjudgedAfter::from_js(after).ok_or_else(|| Failure::Params("after: expected { at, pipeline, arrival, attempt? }".into()))?),
     };
     let mut rows = Vec::new();
-    for fact in store.unjudged_arrivals(&UnjudgedPage { after, pipeline: None, limit: limit_of(params)? })? {
+    for fact in store.unjudged_arrivals(&UnjudgedPage { after, pipeline: None, waiting: false, limit: limit_of(params)? })? {
         if let Some(cause) = &fact.cause
             && let Some((_, facts)) = facts_of(store, cause)?
         {
@@ -439,15 +454,21 @@ impl Store {
     pub(crate) fn insert_unjudged_in(db: &rusqlite::Connection, fact: &UnjudgedArrival) -> Result<bool> {
         let at = crate::store::canonical_iso(&fact.at)?;
         Ok(db.execute(
-            "insert into arrival_unjudged (pipeline, arrival, file, movement, delivery_id, edge, adapter, record_id, landing, reason, cause, noted_at, attempt) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) on conflict do nothing",
-            rusqlite::params![fact.pipeline, fact.arrival, fact.file, fact.movement, fact.delivery_id, fact.edge, fact.adapter, fact.record_id, fact.landing.as_ref().map(Js::to_json), fact.reason, fact.cause, at, fact.attempt],
+            "insert into arrival_unjudged (pipeline, arrival, file, movement, delivery_id, edge, adapter, record_id, landing, reason, cause, noted_at, attempt, waiting) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) on conflict do nothing",
+            rusqlite::params![fact.pipeline, fact.arrival, fact.file, fact.movement, fact.delivery_id, fact.edge, fact.adapter, fact.record_id, fact.landing.as_ref().map(Js::to_json), fact.reason, fact.cause, at, fact.attempt, fact.waiting],
         )? == 1)
+    }
+
+    /// The listen `pipeline` judged `arrival`: none of its facts waits any more.
+    pub fn judged_unjudged(&self, pipeline: &str, arrival: &str) -> Result<()> {
+        self.db.execute("update arrival_unjudged set waiting = 0 where pipeline = ? and arrival = ? and waiting = 1", rusqlite::params![pipeline, arrival])?;
+        Ok(())
     }
 
     /// The unjudged arrivals of `page`, oldest first (ties by listen, then
     /// arrival, then attempt).
     pub fn unjudged_arrivals(&self, page: &UnjudgedPage<'_>) -> Result<Vec<UnjudgedArrival>> {
-        const COLUMNS: &str = "select pipeline, arrival, file, movement, delivery_id, edge, adapter, record_id, landing, reason, cause, noted_at, attempt from arrival_unjudged where (?1 is null or pipeline = ?1)";
+        const COLUMNS: &str = "select pipeline, arrival, file, movement, delivery_id, edge, adapter, record_id, landing, reason, cause, noted_at, attempt, waiting from arrival_unjudged where (?1 is null or pipeline = ?1) and (?7 = 0 or waiting = 1)";
         const ORDER: &str = "order by noted_at, pipeline, arrival, attempt limit ?2";
         let row = |r: &rusqlite::Row<'_>| {
             Ok(UnjudgedArrival {
@@ -467,14 +488,19 @@ impl Store {
                 cause: r.get(10)?,
                 at: r.get(11)?,
                 attempt: r.get(12)?,
+                waiting: r.get(13)?,
             })
         };
         Ok(match &page.after {
-            None => self.db.prepare(&format!("{COLUMNS} {ORDER}"))?.query_map(rusqlite::params![page.pipeline, page.limit], row)?.collect::<rusqlite::Result<Vec<_>>>()?,
+            None => self
+                .db
+                .prepare(&format!("{COLUMNS} {ORDER}"))?
+                .query_map(rusqlite::params![page.pipeline, page.limit, None::<String>, None::<String>, None::<String>, None::<u32>, page.waiting], row)?
+                .collect::<rusqlite::Result<Vec<_>>>()?,
             Some(after) => self
                 .db
                 .prepare(&format!("{COLUMNS} and (noted_at, pipeline, arrival, attempt) > (?3, ?4, ?5, ?6) {ORDER}"))?
-                .query_map(rusqlite::params![page.pipeline, page.limit, crate::store::canonical_iso(after.at)?, after.pipeline, after.arrival, after.attempt], row)?
+                .query_map(rusqlite::params![page.pipeline, page.limit, crate::store::canonical_iso(after.at)?, after.pipeline, after.arrival, after.attempt, page.waiting], row)?
                 .collect::<rusqlite::Result<Vec<_>>>()?,
         })
     }
@@ -630,6 +656,7 @@ mod tests {
             cause: cause.map(str::to_string),
             at: iso_at(at),
             attempt: 0,
+            waiting: false,
         }
     }
 
@@ -645,10 +672,10 @@ mod tests {
         let replayed = UnjudgedArrival { at: iso_at(t0 + 12), attempt: 1, ..first.clone() };
         assert!(store.note_unjudged(&replayed, &iso_at(t0 - 1000)).unwrap(), "a replay's attempt is its own");
         assert!(!store.note_unjudged(&replayed, &iso_at(t0 - 1000)).unwrap(), "once per attempt");
-        let listed = store.unjudged_arrivals(&UnjudgedPage { after: None, pipeline: Some(&one), limit: 10 }).unwrap();
+        let listed = store.unjudged_arrivals(&UnjudgedPage { after: None, pipeline: Some(&one), waiting: false, limit: 10 }).unwrap();
         assert_eq!(listed, [first.clone(), replayed.clone()], "one listen's, its attempts in order");
         let after = UnjudgedAfter { at: &first.at, pipeline: &one, arrival: &first.arrival, attempt: 0 };
-        assert_eq!(store.unjudged_arrivals(&UnjudgedPage { after: Some(after), pipeline: Some(&one), limit: 10 }).unwrap(), [replayed.clone()]);
+        assert_eq!(store.unjudged_arrivals(&UnjudgedPage { after: Some(after), pipeline: Some(&one), waiting: false, limit: 10 }).unwrap(), [replayed.clone()]);
         assert_eq!(replayed.event_id(), format!("arrival_not_judged:{one}:Messages:C1:C1:1700.1::1"));
         // Only this case's: a database a case ran over before holds others.
         let read = |after: Js| -> Vec<Js> {
@@ -685,7 +712,7 @@ mod tests {
         };
         let fact = UnjudgedArrival { delivery_id: Some(delivery.id.clone()), ..unjudged(&format!("listen:chat:kept:{t0}"), "Messages:C1:C1:1700.2:", t0, None) };
         assert!(store.keep_delivery(&subscription, Some(&Js::Null), &delivery, &[], None, &[], std::slice::from_ref(&fact)).unwrap().is_some());
-        let of = |pipeline: &str| store.unjudged_arrivals(&UnjudgedPage { after: None, pipeline: Some(pipeline), limit: 10 }).unwrap();
+        let of = |pipeline: &str| store.unjudged_arrivals(&UnjudgedPage { after: None, pipeline: Some(pipeline), waiting: false, limit: 10 }).unwrap();
         assert_eq!(of(&fact.pipeline), [fact.clone()]);
         let again = crate::store::NewDelivery { id: uuid::Uuid::new_v4().to_string(), ..delivery };
         let other = UnjudgedArrival { pipeline: format!("listen:chat:again:{t0}"), ..fact };
@@ -728,7 +755,7 @@ mod tests {
             )
             .unwrap();
         let store: Rc<dyn RunHostStore> = Rc::new(Store::open(&path).unwrap());
-        let read = |pipeline: &str| store.unjudged_arrivals(&UnjudgedPage { after: None, pipeline: Some(pipeline), limit: 10 }).unwrap();
+        let read = |pipeline: &str| store.unjudged_arrivals(&UnjudgedPage { after: None, pipeline: Some(pipeline), waiting: false, limit: 10 }).unwrap();
         let old = read("listen:old");
         assert_eq!((old.len(), old[0].adapter.as_deref(), old[0].landing.as_ref()), (1, None, None));
         let new = unjudged("listen:new", "Messages:C1:C1:2:", t0(), None);

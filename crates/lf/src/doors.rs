@@ -39,8 +39,11 @@ use crate::inbound::{
 use crate::arrivals::{ArrivalIn, arrivals_of, log_and_wake, logged};
 use crate::json::Js;
 use crate::obj;
-use crate::routing::Listen;
+use crate::listen_replay::{Judgement, Unjudgement, WaitingLines};
+use crate::plugin_answers::{AnswersHost, Refused};
+use crate::routing::{Asking, Listen};
 use crate::runs::{Delivered, Fired, Session};
+use movement_engine::listen_judge::{PluginAnswer, PluginAnswers, PluginQuestion};
 use crate::secrets::{Binding, Credential, Credentials, install_of, signer_of};
 use crate::subscriptions::{has_scoped, scoped_secret};
 use crate::backend::RunHostStore;
@@ -149,6 +152,24 @@ pub trait Reader {
     fn declares_own_actor(&self, _external: &str, _install: Option<&Credential>, _record_type: &str) -> bool {
         false
     }
+    /// The answers its host functions give `questions` (crate::plugin_answers).
+    /// A reader that serves none can reach none.
+    async fn answer_host(&self, questions: &[PluginQuestion]) -> Result<PluginAnswers, Refused> {
+        let mut answers = PluginAnswers::default();
+        for question in questions {
+            answers.insert(question, PluginAnswer::Unreachable("this host serves no host function".into()));
+        }
+        Ok(answers)
+    }
+}
+
+/// A reader as the host a judgement asks.
+pub(crate) struct ReaderHost<'r, R>(pub &'r R);
+
+impl<R: Reader> AnswersHost for ReaderHost<'_, R> {
+    async fn answer(&self, questions: &[PluginQuestion]) -> Result<PluginAnswers, Refused> {
+        self.0.answer_host(questions).await
+    }
 }
 
 /// Where a verified event goes.
@@ -184,6 +205,10 @@ pub struct LfDoors<'a, R: Reader> {
     pub notify: &'a dyn Fn(),
     /// The listens a delivery's events would reach, as the doors were opened.
     pub listens: Vec<Listen>,
+    /// What is judged is a kept arrival put through its listen again (a
+    /// replay, or a retry of one waiting for its host): judged as it
+    /// stands, never behind another waiting arrival.
+    pub replaying: bool,
 }
 
 impl<'a> LfDoors<'a, SessionReader<'a>> {
@@ -202,6 +227,7 @@ impl<'a> LfDoors<'a, SessionReader<'a>> {
             sink,
             notify,
             listens: session.file_set().listens.clone(),
+            replaying: false,
         }
     }
 }
@@ -258,18 +284,18 @@ impl<R: Reader> LfDoors<'_, R> {
         };
         let mut minted = Vec::new();
         let mut unjudged = Vec::new();
-        let now_ms = crate::limiter::now_ms() as f64;
+        let asking = Asking { now_ms: crate::limiter::now_ms() as f64, host: &ReaderHost(&self.reader) };
+        let mut lines = WaitingLines::new(self.store, !self.replaying);
         for (index, arrival) in landed.iter().enumerate() {
             let identity = arrival.identity.as_deref().unwrap_or_default();
             for (at, listen) in self.listens.iter().enumerate().filter(|(_, l)| l.is_on(adapter_type, &arrival.edge) && l.hears(credential)) {
-                match listen.fires(arrival, credential, now_ms) {
-                    Some(movement_engine::listen_judge::Verdict::Fires) => {}
-                    Some(verdict @ (movement_engine::listen_judge::Verdict::Undecided { .. } | movement_engine::listen_judge::Verdict::Asks(_))) => {
-                        let reason = crate::routing::unjudged_reason(&verdict).unwrap_or_default();
-                        unjudged.push(Unjudged { listen: at, arrival: index, reason });
+                match lines.judge(listen, arrival, credential, asking).await? {
+                    Some(Judgement::Fires) => {}
+                    Some(Judgement::Unjudged(why)) => {
+                        unjudged.push(Unjudged { listen: at, arrival: index, why });
                         continue;
                     }
-                    Some(movement_engine::listen_judge::Verdict::Skips { .. }) | None => continue,
+                    Some(Judgement::Skips { .. }) | None => continue,
                 }
                 let run_id = uuid::Uuid::new_v4().to_string();
                 let receipt = crate::arrivals::arrival_receipt_key(&arrival.edge, arrival.key.as_deref(), identity, arrival.version.as_deref());
@@ -595,7 +621,7 @@ impl<R: Reader> InboundStore for LfDoors<'_, R> {
         let now_ms = crate::limiter::now_ms() as f64;
         let mut lines = Vec::new();
         for arrival in arrivals.iter().filter(|a| !a.gone) {
-            let of_another_type = |l: &Listen| matches!(l.fires(arrival, credential, now_ms), Some(movement_engine::listen_judge::Verdict::Skips { reason: Some(_), .. }));
+            let of_another_type = |l: &Listen| matches!(l.verdict(arrival, credential, now_ms), Some(movement_engine::listen_judge::Verdict::Skips { reason: Some(_), .. }));
             let reached: Vec<&Listen> = self.listens.iter().filter(|l| l.is_on(&source.adapter_type, &arrival.edge) && l.hears(credential) && !of_another_type(l)).collect();
             if reached.is_empty() || reached.iter().any(|l| l.misfits(arrival).is_empty()) {
                 continue;
@@ -732,6 +758,10 @@ impl Reader for SessionReader<'_> {
         self.lists(external, "preprocessInbound")
     }
 
+    async fn answer_host(&self, questions: &[PluginQuestion]) -> Result<PluginAnswers, Refused> {
+        self.session.answer(questions).await
+    }
+
     async fn await_keys(&self, external: &str, install: Option<&Credential>, edge: &str, heads: Js) -> Result<Option<Js>, String> {
         if !self.lists(external, "awaitKeys") {
             return Ok(None);
@@ -825,7 +855,7 @@ pub(crate) struct Minted {
 pub(crate) struct Unjudged {
     pub listen: usize,
     pub arrival: usize,
-    pub reason: String,
+    pub why: Unjudgement,
 }
 
 pub fn subscription_of(id: &str) -> (&str, Option<&str>) {
@@ -1544,6 +1574,7 @@ pub(crate) mod tests {
             sink: EventSink::Queue,
             notify: &|| {},
             listens: Vec::new(),
+            replaying: false,
         }
     }
 
@@ -1696,6 +1727,7 @@ pub(crate) mod tests {
             sink: EventSink::Queue,
             notify: &|| {},
             listens: Vec::new(),
+            replaying: false,
         };
         in_local(async {
             let body = br#"{}"#;

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- `PROTOCOL_MINOR` is 10: adapter protocol 2.10, a host keeps a pure plugin's answers, and a module says they changed with `plugins.invalidate` at its host's plugins door. `PROTOCOL_MINORS` gains its row, the first that names a method a module calls at its host.
+
 ## 0.12.10 - 2026-11-11
 
 - `PROTOCOL_MINOR` is 9: adapter protocol 2.9, an actor identity may carry `proven`. The results check takes it (a boolean). 2.9 is a host behaviour and names no method, so `PROTOCOL_MINORS` gains no row.

@@ -39,7 +39,7 @@ export const MANIFEST_PROTOCOL_VERSION = 2;
 
 /** The highest minor of version 2 this release speaks: a host reads 2.0 to
  *  2.`PROTOCOL_MINOR` (docs/contracts/adapter-protocol.md "Minors of version 2"). */
-export const PROTOCOL_MINOR = 9;
+export const PROTOCOL_MINOR = 10;
 
 /** The method that names a minor's feature, by name or by its ending
  *  (`<slot>.watch`). Data, so the Rust twin (module-wire
@@ -49,7 +49,9 @@ export type ProtocolMinorUse = { method: string } | { methodEndingWith: string }
 /** Each minor of version 2 whose hosts speak a method, and that method. A host
  *  speaking the minor may call it; a module offering it needs nothing of an
  *  older host, which never calls it, so offering one never raises the minor
- *  a module states. A minor that names no method has no row: 2.0, 2.3
+ *  a module states. 2.10's is a method a module calls at its host
+ *  (`plugins.invalidate`): an older host keeps no answers, so it has none to
+ *  forget. A minor that names no method has no row: 2.0, 2.3
  *  (labelled poll events), 2.7 (`pollAgainAt`), 2.8 (`hostRelease` on a
  *  slot request) and 2.9 (`proven` on an actor identity), each a host
  *  behaviour. */
@@ -59,6 +61,7 @@ export const PROTOCOL_MINORS: readonly { minor: number; feature: string; uses: P
   { minor: 4, feature: 'refreshEventSubscription', uses: { method: 'refreshEventSubscription' } },
   { minor: 5, feature: 'awaitKeys', uses: { method: 'awaitKeys' } },
   { minor: 5, feature: 'waits.log', uses: { method: 'waits.log' } },
+  { minor: 10, feature: 'plugins.invalidate', uses: { method: 'plugins.invalidate' } },
 ];
 
 /** The minor a manifest states: what it needs its host to speak. That is 0

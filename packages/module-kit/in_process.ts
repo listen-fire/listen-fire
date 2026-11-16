@@ -24,6 +24,7 @@ import type {
   ModuleLog,
   ModuleModels,
   ModuleOcr,
+  ModulePluginAnswers,
   ModuleRecords,
   PluginAnswer,
   PluginInvocation,
@@ -32,6 +33,7 @@ import type {
   PollEdgeInput,
 } from './define';
 
+import { keepingNoAnswers } from './host_plugins';
 import { refusingRecords } from './host_records';
 import { moduleManifest, type LoadedModule } from './manifest';
 
@@ -56,6 +58,8 @@ export interface ModuleHost {
   ocr?: ModuleOcr;
   /** Default: refused by name (a host that serves no records door). */
   records?: ModuleRecords;
+  /** The answers the host keeps of the module's pure plugins. Default: none kept. */
+  pluginAnswers?: ModulePluginAnswers;
   baseUrlOverride?: string;
   constructionArgs?: Readonly<Record<string, string>>;
   credentialRef?: string;
@@ -90,6 +94,7 @@ export function moduleContext(host: ModuleHost): ModuleContext {
     browser: host.browser ?? emptyBrowserSlot('this host has no browser to lend its modules'),
     ocr: host.ocr ?? emptyOcrSlot('this host has no OCR to lend its modules'),
     records: host.records ?? refusingRecords('this host serves no records door to its modules'),
+    host: host.pluginAnswers ?? keepingNoAnswers,
     config: {
       tenant: host.tenant,
       ...(host.baseUrlOverride !== undefined ? { baseUrlOverride: host.baseUrlOverride } : {}),

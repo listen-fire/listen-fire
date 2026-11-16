@@ -681,6 +681,31 @@ impl Judge<'_> {
     }
 }
 
+/// How many host function calls `plan`'s filters hold, over every member:
+/// the judge asks one host term per judgement, so a host that answers each
+/// question it is asked reaches a verdict within one judgement more than this.
+pub fn host_calls(plan: &ListenPlan) -> usize {
+    use movement_parser::lowering::expression::ListElement;
+    fn count(expr: &Expression) -> usize {
+        let all = |items: &mut dyn Iterator<Item = &Expression>| items.map(count).sum::<usize>();
+        match expr {
+            Expression::Function { fn_, args } => usize::from(!crate::stdlib::is_builtin(fn_)) + all(&mut args.iter()),
+            Expression::Compare { left, right, .. } | Expression::Arithmetic { left, right, .. } => count(left) + count(right),
+            Expression::At { expression, index } => count(expression) + count(index),
+            Expression::Logical { operands, .. } => all(&mut operands.iter()),
+            Expression::Concat { parts } => all(&mut parts.iter()),
+            Expression::Conditional { condition, then, else_ } => count(condition) + count(then) + count(else_),
+            Expression::List { elements } => all(&mut elements.iter().map(|element| match element {
+                ListElement::Expression(e) => e,
+                ListElement::Spread(spread) => &spread.expression,
+            })),
+            Expression::Not { expression } | Expression::Negate { expression } | Expression::Traverse { expression, .. } => count(expression),
+            _ => 0,
+        }
+    }
+    plan.member_plans().iter().flat_map(|member| member.hops.clone()).flat_map(|hop| [hop.taken, hop.checked]).flatten().map(|filter| count(&filter)).sum()
+}
+
 /// The first host function `expr` calls, by its catalog key: any call that
 /// is no built-in's.
 fn host_call_in(expr: &Expression) -> Option<&str> {
@@ -921,6 +946,13 @@ mod tests {
         // A local term that fails still decides, and asks nothing.
         let bot = judged("insiders", &message("C1", "bot", "a@acme.com"), &answered("a@acme.com", PluginAnswer::Unreachable("connection refused".into())));
         assert_eq!(bot, Verdict::Skips { hop: 0, reason: None });
+    }
+
+    #[test]
+    fn a_plan_counts_its_host_calls_and_no_built_in() {
+        assert_eq!(host_calls(&plan_named("insiders")), 1);
+        assert_eq!(host_calls(&plan_named("insider_or_ann")), 1);
+        assert_eq!(host_calls(&plan_named("domain")), 0, "a built-in is no host call");
     }
 
     #[test]

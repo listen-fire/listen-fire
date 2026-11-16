@@ -118,6 +118,15 @@ export interface ModuleRecords {
   read(method: string, params?: Record<string, unknown>): Promise<unknown>;
 }
 
+/** What the host keeps of a pure plugin's answers (adapter protocol 2.10):
+ *  the module says when one changed, and the host asks it again. */
+export interface ModulePluginAnswers {
+  /** Forget `plugin`'s kept answer for `args` (as a call passes them, by
+   *  position), or every answer of it without `args`. `plugin` is the name
+   *  the module declares (`isMember`). */
+  invalidatePluginAnswers(input: { plugin: string; args?: unknown[] }): Promise<void>;
+}
+
 /** Someone who linked their account on the provider to a user of the host
  *  (the platform's Telegram `/start` handshake): the provider's id for them,
  *  the host user's email as linked, and when. */
@@ -204,6 +213,9 @@ export interface ModuleContext {
   ocr: ModuleOcr;
   /** The host's records door. Refuses by name on a host that serves none. */
   records: ModuleRecords;
+  /** What the host asks of the module beyond a call: that a pure plugin's
+   *  kept answers changed. A host that keeps none has none to forget. */
+  host: ModulePluginAnswers;
   config: ModuleConfig;
 }
 

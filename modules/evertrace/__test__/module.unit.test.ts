@@ -1,7 +1,7 @@
 // The module's seams with its host: how the context's credential becomes a
 // client, and what the module declares.
 
-import { emptyOcrSlot, refusingRecords, type CredentialFields, type ModuleContext } from 'module-kit';
+import { emptyOcrSlot, keepingNoAnswers, refusingRecords, type CredentialFields, type ModuleContext } from 'module-kit';
 import { emptyBrowserSlot } from 'movement-engine/public/browser';
 
 import { EVERTRACE_API_VERSION } from '../api_client';
@@ -32,6 +32,7 @@ function contextOver(fields: () => CredentialFields, config: { baseUrlOverride?:
     browser: emptyBrowserSlot('none'),
     ocr: emptyOcrSlot('none'),
     records: refusingRecords('none'),
+    host: keepingNoAnswers,
     config: { tenant: 'team-1', constructionArgs: {}, ...config },
   };
   return { ctx, seen };

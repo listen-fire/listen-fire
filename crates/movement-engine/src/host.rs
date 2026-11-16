@@ -344,6 +344,14 @@ pub mod llm {
         }
     }
 
+    /// A pure plugin's answer for `args` (`llm.transforms.answer`), which
+    /// the host may keep as it keeps the answers a listen's filter asks:
+    /// `{value}`, or `{unreachable}` naming why the host could not ask it.
+    /// The arguments are plain JSON, by position, as the listen judge asks.
+    pub fn transforms_answer(segment: &str, plugin: &str, args: Json) -> Request {
+        Request { family: Family::LlmTransforms, method: "answer".into(), args: in_segment(segment, json!({ "plugin": plugin, "args": args })) }
+    }
+
     /// What the judge is asked.
     pub struct Arbitration<'a> {
         pub asserted: Json,

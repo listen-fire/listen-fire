@@ -235,7 +235,7 @@ Every entry answers the segment's result (`MovementRunResult`, `movement_engine/
 | `adapters` | `resolve`, `call` | no |
 | `llm.client` | `call` | no (may throw, if the embedder's programs never call a model) |
 | `llm.extractCall` | `call` | same as `llm.client` |
-| `llm.transforms` | `invoke` | same as `llm.client` |
+| `llm.transforms` | `invoke`, `answer` | same as `llm.client`; `answer` is optional: absent, a pure plugin is invoked as any other |
 | `llm` | `arbitrateEntities` | same as `llm.client` |
 | `park.sink` | `recordJoin`, `commitTimerPark`, `commitAwaitPark`, `decrementJoin`, `persistBranchExport`, `collectBranchExports`, `cancelSubtrees`, `commitSuspension`, `commitLimitPause` | yes: absent, a run that reaches a park fails (a dry run) |
 | `park` | `wake` | no (may throw, if `park.sink` is absent: only an await park asks for a wake) |
@@ -431,6 +431,22 @@ answer: PricedAnswer<{
 - The engine refuses a plugin the snapshot marks `priced` before it starts once the run's cap is spent, without calling the host.
 - **Persist:** whatever the plugin stores (fetched documents go to the document store and come back as descriptors).
 - **Retry:** the plugin's own.
+
+#### `llm.transforms.answer`
+
+```ts
+request: {
+  segmentId: string;
+  plugin: string;      // its catalog key (`@lf-platform/team/is_member`)
+  args: unknown[];     // plain JSON, by position, as the listen judge asks
+}
+answer: { value: unknown } | { unreachable: string }
+```
+
+- A pure plugin's answer (its spec says `pure: true`) called inside an expression: a wait's `WHERE`. The host answers it as it answers a listen's filter, from the answers it keeps by plugin and arguments (adapter protocol 2.10, [Pure plugins and their answers](adapter-protocol.md#pure-plugins-and-their-answers)), asking the plugin's module only for one it does not keep.
+- **`unreachable`:** the host could not ask the module (it did not start, or the connection failed). The engine leaves the arrival it was judging unjudged and unnoted, and the arrivals after it with it; the run parks on its wait, and the host wakes it to judge them again once its module may answer (`listen-fire` a retry later, as a listen's waiting arrivals are).
+- An error the module answers itself is no answer: the host fails the call, and the run fails, as any plugin call's error fails it.
+- Optional: an engine asks only a host that serves it, and otherwise invokes the plugin (`llm.transforms.invoke`) for each arrival it judges.
 
 ### `llm`
 

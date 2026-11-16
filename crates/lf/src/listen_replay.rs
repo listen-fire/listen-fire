@@ -18,7 +18,13 @@
 //! it again under a receipt of its own. A listen that still cannot judge the
 //! arrival is reported again, as the next attempt, and the command exits 1:
 //! the way back is not yet open.
+//!
+//! An arrival a listen could not judge because the host could not answer a
+//! function its filter calls waits, and so does every later arrival of that
+//! listen (`WaitingLines`): `listen-fire serve` judges them again in the
+//! order they came (`retry_waiting`), on a timer, until its host answers.
 
+use std::collections::HashMap;
 use std::io::Write;
 
 use crate::arrivals::{ArrivalIn, arrival_receipt_key};
@@ -27,7 +33,10 @@ use crate::doors::{EventSink, LfDoors, SessionReader, fire_arrivals_work, queued
 use crate::inbound::{Captured, Page};
 use crate::json::Js;
 use crate::records_door::{UnjudgedAfter, UnjudgedArrival, UnjudgedPage};
-use crate::routing::Listen;
+use movement_engine::listen_judge::{UndecidedReason, Verdict};
+use crate::backend::RunHostStore;
+use crate::plugin_answers::AnswersHost;
+use crate::routing::{Asking, Listen};
 use crate::runs::{Delivered, FileSet, Replay, Session};
 use crate::store::{DeliveryRow, DeliverySource, NewDelivery, iso};
 use crate::waits::DeliveryArrivals;
@@ -125,7 +134,7 @@ fn facts_of(session: &Session, pipeline: Option<&str>) -> Result<Vec<UnjudgedArr
     let mut facts: Vec<UnjudgedArrival> = Vec::new();
     loop {
         let after = facts.last().map(|last| UnjudgedAfter { at: &last.at, pipeline: &last.pipeline, arrival: &last.arrival, attempt: last.attempt });
-        let page = session.store.unjudged_arrivals(&UnjudgedPage { after, pipeline, limit: PAGE }).map_err(|e| e.to_string())?;
+        let page = session.store.unjudged_arrivals(&UnjudgedPage { after, pipeline, waiting: false, limit: PAGE }).map_err(|e| e.to_string())?;
         let done = page.len() < usize::try_from(PAGE).unwrap_or(usize::MAX);
         facts.extend(page);
         if done {
@@ -208,6 +217,7 @@ async fn replay_through(session: &Session, set: &FileSet, listen: &Listen, row: 
     let credential = reread.credential.as_deref();
     let mut doors = LfDoors::of_session(session, EventSink::Queue, &|| {});
     doors.listens = vec![listen.clone()];
+    doors.replaying = true;
     let landed: Vec<ArrivalIn> = doors.landed_for_listens(adapter, credential, &reread.arrivals).into_iter().filter(|arrival| listen.is_on(adapter, &arrival.edge)).collect();
     if landed.is_empty() {
         writeln!(out, "{named}: delivery {} brought nothing it hears: nothing to replay", row.id).map_err(io)?;
@@ -224,9 +234,9 @@ async fn replay_through(session: &Session, set: &FileSet, listen: &Listen, row: 
     let unjudged_in = Delivered { id: Some(&row.id), credential, replay: Some(replay), ..Delivered::default() };
     for one in &minted.unjudged {
         let arrival = &landed[one.arrival];
-        session.note_unjudged(set, adapter, listen, arrival, &unjudged_in, &one.reason)?;
+        session.note_unjudged(set, adapter, listen, arrival, &unjudged_in, &one.why)?;
         let identity = arrival.identity.as_deref().unwrap_or_default();
-        writeln!(out, "{named}: the arrival {identity} on {} still cannot be judged ({}): reported again, attempt {}", arrival.edge, one.reason, replay.attempt).map_err(io)?;
+        writeln!(out, "{named}: the arrival {identity} on {} still cannot be judged ({}): reported again, attempt {}", arrival.edge, one.why.reason, replay.attempt).map_err(io)?;
     }
     let undecided = i32::from(!minted.unjudged.is_empty());
     if minted.runs.as_array().is_none_or(<[Js]>::is_empty) {
@@ -314,4 +324,304 @@ async fn fire_replay(session: &Session, doors: &LfDoors<'_, SessionReader<'_>>, 
         eprintln!("listen-fire: the row of the replay {} was not completed ({error}): a drain runs it again a run lease from now, and it starts no run twice", receipt.id);
     }
     Ok(fired)
+}
+
+/// What a listen made of an arrival.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum Judgement {
+    Fires,
+    /// It fails the filter of hop `hop`, or (with a reason) is of another record type there.
+    Skips { hop: usize, reason: Option<String> },
+    Unjudged(Unjudgement),
+}
+
+/// Why a listen could not judge an arrival, and whether it waits on it.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct Unjudgement {
+    pub reason: String,
+    /// The host could not answer a function its filter calls, or an earlier
+    /// arrival waits so: it is judged again once the host answers.
+    pub waiting: bool,
+}
+
+/// The reason an arrival gives that waits behind one its host could not answer.
+pub(crate) const WAITING_BEHIND: &str = "waiting behind an earlier arrival";
+
+impl Judgement {
+    fn of(verdict: Verdict) -> Judgement {
+        match verdict {
+            Verdict::Fires => Judgement::Fires,
+            Verdict::Skips { hop, reason } => Judgement::Skips { hop, reason },
+            Verdict::Undecided { reason: UndecidedReason::HostUnreachable { message, .. } } => Judgement::Unjudged(Unjudgement { reason: message, waiting: true }),
+            Verdict::Undecided { reason: UndecidedReason::Unjudgeable(reason) } => Judgement::Unjudged(Unjudgement { reason, waiting: false }),
+            // Only a judgement no host answers ends asking.
+            Verdict::Asks(questions) => {
+                let asked: Vec<&str> = questions.iter().map(|question| question.plugin.as_str()).collect();
+                Judgement::Unjudged(Unjudgement { reason: format!("this listen's filter calls {}, which no host answered", asked.join(", ")), waiting: false })
+            }
+        }
+    }
+}
+
+/// The arrivals each listen that calls a host function waits on, oldest
+/// first, as the store keeps them (read once per listen) and as this
+/// judging adds to them and takes from them.
+pub(crate) struct WaitingLines<'s> {
+    store: &'s dyn RunHostStore,
+    /// By pipeline, each arrival by its receipt key.
+    lines: HashMap<String, Vec<String>>,
+    /// An arrival waits behind the first in line. False for a kept one put
+    /// through its listen again: the retry takes them in order itself, and a
+    /// replay is its operator's to order.
+    in_turn: bool,
+}
+
+impl<'s> WaitingLines<'s> {
+    pub fn new(store: &'s dyn RunHostStore, in_turn: bool) -> WaitingLines<'s> {
+        WaitingLines { store, lines: HashMap::new(), in_turn }
+    }
+
+    /// What `listen` makes of `arrival`, delivered for `credential`; None
+    /// when it is not the listen's to judge. A listen that calls a host
+    /// function takes an arrival in its turn: one that would fire, or that
+    /// asks the host, waits while an earlier arrival does; the arrival first
+    /// in line is judged, and leaves the line once it is.
+    pub async fn judge(&mut self, listen: &Listen, arrival: &ArrivalIn, credential: Option<&str>, asking: Asking<'_, impl AnswersHost>) -> Result<Option<Judgement>, String> {
+        let Some(first) = listen.verdict(arrival, credential, asking.now_ms) else { return Ok(None) };
+        if !listen.asks_host() {
+            return Ok(Some(Judgement::of(first)));
+        }
+        let pipeline = listen.pipeline();
+        let receipt = arrival_receipt_key(&arrival.edge, arrival.key.as_deref(), arrival.identity.as_deref().unwrap_or_default(), arrival.version.as_deref());
+        // One that skips or cannot be judged before anything is asked runs
+        // nothing, so there is no order for it to keep.
+        let in_turn = self.in_turn && matches!(first, Verdict::Fires | Verdict::Asks(_));
+        let line = self.line(&pipeline)?;
+        if in_turn && line.first().is_some_and(|head| *head != receipt) {
+            if !line.contains(&receipt) {
+                line.push(receipt);
+            }
+            return Ok(Some(Judgement::Unjudged(Unjudgement { reason: WAITING_BEHIND.into(), waiting: true })));
+        }
+        let judgement = match first {
+            Verdict::Asks(_) => Judgement::of(listen.fires(arrival, credential, asking).await.unwrap_or(first)),
+            decided => Judgement::of(decided),
+        };
+        let line = self.line(&pipeline)?;
+        match &judgement {
+            Judgement::Unjudged(Unjudgement { waiting: true, .. }) => {
+                if !line.contains(&receipt) {
+                    line.push(receipt);
+                }
+            }
+            _ => {
+                if let Some(at) = line.iter().position(|kept| *kept == receipt) {
+                    line.remove(at);
+                    self.store.judged_unjudged(&pipeline, &receipt).map_err(|e| e.to_string())?;
+                }
+            }
+        }
+        Ok(Some(judgement))
+    }
+
+    fn line(&mut self, pipeline: &str) -> Result<&mut Vec<String>, String> {
+        if !self.lines.contains_key(pipeline) {
+            let line = waiting_of(self.store, Some(pipeline))?.remove(pipeline).unwrap_or_default().into_iter().map(|(arrival, _)| arrival).collect();
+            self.lines.insert(pipeline.to_string(), line);
+        }
+        Ok(self.lines.get_mut(pipeline).expect("read just now"))
+    }
+}
+
+/// The arrivals each listen waits on (for `pipeline` alone when it names
+/// one), oldest first, each once, with the kept delivery it came in.
+fn waiting_of(store: &dyn RunHostStore, pipeline: Option<&str>) -> Result<HashMap<String, Vec<(String, Option<String>)>>, String> {
+    const PAGE: i64 = 500;
+    let mut lines: HashMap<String, Vec<(String, Option<String>)>> = HashMap::new();
+    let mut last: Option<UnjudgedArrival> = None;
+    loop {
+        let after = last.as_ref().map(|last| UnjudgedAfter { at: &last.at, pipeline: &last.pipeline, arrival: &last.arrival, attempt: last.attempt });
+        let page = store.unjudged_arrivals(&UnjudgedPage { after, pipeline, waiting: true, limit: PAGE }).map_err(|e| e.to_string())?;
+        let done = page.len() < usize::try_from(PAGE).unwrap_or(usize::MAX);
+        for fact in &page {
+            let line = lines.entry(fact.pipeline.clone()).or_default();
+            if !line.iter().any(|(arrival, _)| *arrival == fact.arrival) {
+                line.push((fact.arrival.clone(), fact.delivery_id.clone()));
+            }
+        }
+        last = page.into_iter().last();
+        if done {
+            return Ok(lines);
+        }
+    }
+}
+
+/// How often `listen-fire serve` judges again what its listens wait on
+/// (`LF_UNJUDGED_RETRY_MS`, else 30 seconds).
+pub fn retry_every() -> std::time::Duration {
+    let ms = std::env::var("LF_UNJUDGED_RETRY_MS").ok().and_then(|v| v.trim().parse::<u64>().ok()).filter(|ms| *ms > 0).unwrap_or(30_000);
+    std::time::Duration::from_millis(ms)
+}
+
+/// Judge again what each listen waits on, oldest first: each arrival its
+/// host now answers is judged (a run it fires runs here, as a replay's
+/// does), and the listen's next is judged after it; the first its host
+/// still cannot answer ends the listen's turn, the rest waiting behind it.
+/// One that can no longer be judged again (its delivery forgotten) is let
+/// go, so the arrivals behind it are not held for ever. A line for each
+/// arrival judged or let go.
+pub async fn retry_waiting(session: &Session) -> Result<Vec<String>, String> {
+    let set = session.file_set();
+    let mut said = Vec::new();
+    let mut lines: Vec<(String, Vec<(String, Option<String>)>)> = waiting_of(&*session.store, None)?.into_iter().collect();
+    lines.sort();
+    for (pipeline, line) in lines {
+        // A listen edited since keeps its facts under the pipeline it had:
+        // they are left to be forgotten with their deliveries.
+        let Some(listen) = set.listens.iter().find(|listen| listen.pipeline() == pipeline) else { continue };
+        for (arrival, delivery) in line {
+            match retry_one(session, &set, listen, &arrival, delivery.as_deref()).await? {
+                Retried::Waiting => break,
+                Retried::Judged(line) => said.push(line),
+            }
+        }
+    }
+    Ok(said)
+}
+
+/// What judging one waiting arrival again came to.
+enum Retried {
+    /// Its host still cannot answer: it waits, and so does what is behind it.
+    Waiting,
+    /// Judged, or let go: what is said of it.
+    Judged(String),
+}
+
+async fn retry_one(session: &Session, set: &FileSet, listen: &Listen, arrival: &str, delivery: Option<&str>) -> Result<Retried, String> {
+    let named = format!("{}:{}", listen.file, listen.movement_name);
+    let let_go = |why: String| -> Result<Retried, String> {
+        session.store.judged_unjudged(&listen.pipeline(), arrival).map_err(|e| e.to_string())?;
+        Ok(Retried::Judged(format!("{named}: the arrival {arrival} waited for its host and {why}: it is let go, and runs nothing")))
+    };
+    let Some(delivery_id) = delivery else { return let_go("names no kept delivery".into()) };
+    let Some(row) = session.store.delivery(delivery_id).map_err(|e| e.to_string())? else { return let_go(format!("its delivery {delivery_id} is no longer kept")) };
+    let capture = match capture_of(session, &row) {
+        Ok(capture) => capture,
+        Err(why) => return let_go(why),
+    };
+    let doors = LfDoors::of_session(session, EventSink::Queue, &|| {});
+    // Its module's inbound handling is asked again: one out of reach leaves it waiting.
+    let reread = match reread(&doors, &row, capture).await {
+        Ok(reread) => reread,
+        Err(_) => return Ok(Retried::Waiting),
+    };
+    let receipt_of = |a: &ArrivalIn| arrival_receipt_key(&a.edge, a.key.as_deref(), a.identity.as_deref().unwrap_or_default(), a.version.as_deref());
+    let mut doors = LfDoors::of_session(session, EventSink::Queue, &|| {});
+    doors.listens = vec![listen.clone()];
+    doors.replaying = true;
+    let landed: Vec<ArrivalIn> = doors.landed_for_listens(&reread.adapter, reread.credential.as_deref(), &reread.arrivals).into_iter().filter(|a| listen.is_on(&reread.adapter, &a.edge) && receipt_of(a) == arrival).collect();
+    if landed.is_empty() {
+        return let_go(format!("delivery {delivery_id} no longer brings it"));
+    }
+    let replay = Replay { of: &row.id, attempt: next_attempt(session, listen, &landed)?, again: false };
+    let minted = doors.mint_runs(&reread.adapter, reread.install.as_deref(), reread.credential.as_deref(), &landed).await?;
+    if minted.unjudged.iter().any(|one| one.why.waiting) {
+        return Ok(Retried::Waiting);
+    }
+    let delivered = Delivered { id: Some(&row.id), credential: reread.credential.as_deref(), replay: Some(replay), ..Delivered::default() };
+    if let Some(one) = minted.unjudged.first() {
+        session.note_unjudged(set, &reread.adapter, listen, &landed[one.arrival], &delivered, &one.why)?;
+        return Ok(Retried::Judged(format!("{named}: the arrival {arrival} waited for its host, and still cannot be judged ({}): reported again, attempt {}", one.why.reason, replay.attempt)));
+    }
+    if minted.runs.as_array().is_none_or(<[Js]>::is_empty) {
+        return Ok(Retried::Judged(format!("{named}: the arrival {arrival} waited for its host, and its filter does not take it: it runs nothing")));
+    }
+    let came_for = Delivered { minted: Some(&minted.runs), ..delivered };
+    let fired = fire_replay(session, &doors, ReplayRun { adapter: &reread.adapter, row: &row, landed: &landed, came_for, waits: minted.waits }).await?;
+    let ran: Vec<String> = fired.outcomes.iter().map(|o| format!("run {} {}", o.run_id, o.status)).collect();
+    Ok(Retried::Judged(match ran.is_empty() {
+        true => format!("{named}: the arrival {arrival} waited for its host, and had run before: nothing ran again"),
+        false => format!("{named}: the arrival {arrival} waited for its host, and is judged now: {}", ran.join(", ")),
+    }))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::rc::Rc;
+
+    use super::*;
+    use crate::routing::tests::{Team, said_as, team_listen};
+
+    fn judged(lines: &mut WaitingLines<'_>, listen: &Listen, arrival: &ArrivalIn, team: &Team) -> Judgement {
+        let runtime = tokio::runtime::Builder::new_current_thread().build().unwrap();
+        runtime.block_on(lines.judge(listen, arrival, None, Asking { now_ms: 0.0, host: team })).unwrap().unwrap()
+    }
+
+    /// Kept as a delivery's judging keeps what it could not judge.
+    fn noted(store: &dyn RunHostStore, listen: &Listen, arrival: &ArrivalIn, why: &Unjudgement, at: i64) {
+        let fact = UnjudgedArrival {
+            pipeline: listen.pipeline(),
+            arrival: arrival_receipt_key(&arrival.edge, arrival.key.as_deref(), arrival.identity.as_deref().unwrap_or_default(), arrival.version.as_deref()),
+            file: listen.file.clone(),
+            movement: listen.movement_name.clone(),
+            delivery_id: Some(format!("delivery-{at}")),
+            edge: arrival.edge.clone(),
+            adapter: Some("talk".into()),
+            record_id: None,
+            landing: arrival.landing.clone(),
+            reason: why.reason.clone(),
+            cause: None,
+            at: crate::store::iso_at(at),
+            attempt: 0,
+            waiting: why.waiting,
+        };
+        assert!(store.note_unjudged(&fact, "2026-01-01T00:00:00.000Z").unwrap());
+    }
+
+    fn waiting(why: Judgement) -> Unjudgement {
+        match why {
+            Judgement::Unjudged(why @ Unjudgement { waiting: true, .. }) => why,
+            other => panic!("expected it to wait, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn later_arrivals_wait_behind_an_unjudged_one() {
+        let dir = std::env::temp_dir().join(format!("lf-waiting-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let store: Rc<dyn RunHostStore> = Rc::new(crate::store::Store::open(&dir.join("state.db")).unwrap());
+        let listen = team_listen();
+        let (first, second, third) = (said_as("m1", "ann", "ann@acme.com"), said_as("m2", "bob", "bob@acme.com"), said_as("m3", "ann", "ann@acme.com"));
+        let t0 = crate::limiter::now_ms();
+
+        // The host is out of reach: the first waits for it, and the two
+        // after it wait behind it, asking nothing.
+        let down = Team { down: true, ..Team::default() };
+        let mut lines = WaitingLines::new(&*store, true);
+        let why = waiting(judged(&mut lines, &listen, &first, &down));
+        assert_ne!(why.reason, WAITING_BEHIND);
+        noted(&*store, &listen, &first, &why, t0);
+        for (at, arrival) in [(t0 + 1, &second), (t0 + 2, &third)] {
+            let why = waiting(judged(&mut lines, &listen, arrival, &down));
+            assert_eq!(why.reason, WAITING_BEHIND);
+            noted(&*store, &listen, arrival, &why, at);
+        }
+        assert_eq!(down.asked.borrow().len(), 1, "only the first asked its host");
+        // One its local terms skip runs nothing, so it keeps no order.
+        assert_eq!(judged(&mut lines, &listen, &said_as("m4", "bot", "ann@acme.com"), &down), Judgement::Skips { hop: 0, reason: None });
+
+        // Another process, the host back: still in their turn.
+        let up = Team { members: vec!["ann@acme.com", "bob@acme.com"], ..Team::default() };
+        let mut lines = WaitingLines::new(&*store, true);
+        assert_eq!(waiting(judged(&mut lines, &listen, &second, &up)).reason, WAITING_BEHIND, "the second is not judged before the first");
+        assert_eq!(waiting(judged(&mut lines, &listen, &said_as("m5", "ann", "ann@acme.com"), &up)).reason, WAITING_BEHIND, "nor is a new one");
+        let order: Vec<String> = waiting_of(&*store, None).unwrap().remove(&listen.pipeline()).unwrap().into_iter().map(|(arrival, _)| arrival).collect();
+        assert_eq!(order, ["Messages::m1:", "Messages::m2:", "Messages::m3:"], "kept in the order they came");
+        for arrival in [&first, &second, &third] {
+            assert_eq!(judged(&mut lines, &listen, arrival, &up), Judgement::Fires);
+        }
+        let left = waiting_of(&*store, None).unwrap();
+        assert!(left.get(&listen.pipeline()).is_none(), "judged, none waits: {left:?}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
 }

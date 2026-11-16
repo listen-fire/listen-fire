@@ -114,6 +114,7 @@ mod listener {
         Ok(())
     }
 }
+mod plugin_answers;
 mod refinements;
 mod schema_view;
 mod lsp;

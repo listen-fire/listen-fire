@@ -299,12 +299,17 @@ impl Run<'_> {
     }
 
     /// The wait's arrivals in log order, each judged and noted: the first
-    /// that counts.
+    /// that counts. One whose WHERE asks a pure plugin its host could not
+    /// answer is left unjudged, unnoted, and the arrivals after it with it:
+    /// the run parks, and judges them again in order when it is woken.
     async fn judge_arrivals(&self, judge: &Judge<'_>) -> Result<Option<Binding>, Stop> {
         let logged = self.wait_arrivals(judge.wait_id).await.map_err(Stop::Thrown)?;
         for arrival in &logged.arrivals {
             let landing = arrival_landing(judge, &arrival.landing);
-            let matched = self.arrival_matches(judge, &landing).await?;
+            let matched = match self.arrival_matches(judge, &landing).await {
+                Err(Stop::Thrown(failure)) if Run::host_unreachable(&failure) => return Ok(None),
+                judged => judged?,
+            };
             if self.note_arrival(judge.wait_id, &arrival.identity, arrival.version.as_deref(), matched).await.map_err(Stop::Thrown)? {
                 return Ok(Some(landing));
             }
@@ -313,12 +318,17 @@ impl Run<'_> {
     }
 
     /// Whether an arrival the WHERE takes landed. Noted by the resume, not
-    /// here.
+    /// here. One its host could not answer wakes nothing: its host's retry does.
     async fn arrived_while_parking(&self, judge: &Judge<'_>) -> Result<bool, Stop> {
         let logged = self.wait_arrivals(judge.wait_id).await.map_err(Stop::Thrown)?;
         for arrival in &logged.arrivals {
-            if self.arrival_matches(judge, &arrival_landing(judge, &arrival.landing)).await? {
-                return Ok(true);
+            match self.arrival_matches(judge, &arrival_landing(judge, &arrival.landing)).await {
+                Err(Stop::Thrown(failure)) if Run::host_unreachable(&failure) => return Ok(false),
+                judged => {
+                    if judged? {
+                        return Ok(true);
+                    }
+                }
             }
         }
         Ok(false)

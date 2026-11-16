@@ -24,8 +24,10 @@ use crate::project::Project;
 use movement_parser::version::{LANGUAGE_VERSION, Standing, standing};
 use crate::remote::{Externals, SegmentAdapters};
 use crate::arrivals::{ArrivalIn, arrival_receipt_key};
-use crate::routing::{Listen, arrival_trigger_of};
-use movement_engine::listen_judge::Verdict;
+use crate::listen_replay::{Judgement, Unjudgement};
+use crate::plugin_answers::{AnswersHost, HostFunctions, Refused};
+use crate::routing::{Asking, Listen, arrival_trigger_of};
+use movement_engine::listen_judge::{PluginAnswers, PluginQuestion, Verdict};
 use crate::run_host::{
     BUSY_RETRY_MS, CANCELLED_BY_OPERATOR, FailedWork, Lease, Settled, StepOutcome, StepRequest, Stepper, WORKER_LOST, after_step, arm_timer_wake,
     clear_if_quiescent, drain_due_timers, drain_run, fail_lost_runs, give_up_work, next_timer_wake, past_cap, run_complete_without, run_quiescent,
@@ -286,6 +288,14 @@ impl Drop for Session {
         if let Some(dir) = &self.ephemeral_dir {
             let _ = std::fs::remove_dir_all(dir);
         }
+    }
+}
+
+impl AnswersHost for Session {
+    /// Through the process's plugin modules, as the set has them now.
+    async fn answer(&self, questions: &[PluginQuestion]) -> Result<PluginAnswers, Refused> {
+        let (set, secrets) = (self.file_set(), self.secrets());
+        HostFunctions { running: &set.running, credentials: secrets.credentials(), tenant: LOCAL_TENANT }.answer(questions).await
     }
 }
 
@@ -923,6 +933,8 @@ impl Session {
         };
         let mut started = BTreeSet::new();
         let mut paused: HashMap<String, bool> = HashMap::new();
+        let mut lines = crate::listen_replay::WaitingLines::new(&*self.store, delivered.replay.is_none());
+        let asking = Asking { now_ms, host: self };
         // A poll's page lists again what an earlier one did: that a listen
         // has taken it before is said only under LF_LOG=debug there.
         let polled = matches!(judged_by, JudgedBy::Minted(_));
@@ -944,13 +956,13 @@ impl Session {
                     crate::log::debug(|| format!("{named}: the arrival {identity} on {} is under no record it watches: it runs nothing", arrival.edge));
                     continue;
                 }
-                let Some(verdict) = listen.fires(arrival, delivered.credential, now_ms) else { continue };
-                match verdict {
-                    Verdict::Fires => {}
+                let Some(judgement) = lines.judge(listen, arrival, delivered.credential, asking).await? else { continue };
+                match judgement {
+                    Judgement::Fires => {}
                     // Said only under LF_LOG=debug: one line per arrival and
                     // listen would flood a busy edge's output with lines that
                     // say nothing went wrong.
-                    Verdict::Skips { hop, reason } => {
+                    Judgement::Skips { hop, reason } => {
                         crate::log::debug(|| match &reason {
                             Some(reason) => format!("{named}: the arrival {identity} on {} is not this listen's at hop {}: {reason}: nothing is owed, and it runs nothing", arrival.edge, hop + 1),
                             None => format!("{named}: the arrival {identity} on {} does not match the WHERE of hop {}: nothing is owed, and it runs nothing", arrival.edge, hop + 1),
@@ -958,11 +970,13 @@ impl Session {
                         skipped.push(listen);
                         continue;
                     }
-                    Verdict::Undecided { .. } | Verdict::Asks(_) => {
+                    Judgement::Unjudged(why) => {
                         taken = true;
-                        let reason = crate::routing::unjudged_reason(&verdict).unwrap_or_default();
-                        self.note_unjudged(set, adapter, listen, arrival, &delivered, &reason)?;
-                        let line = format!("{named}: an arrival on {} cannot be judged ({reason}): it runs nothing", arrival.edge);
+                        self.note_unjudged(set, adapter, listen, arrival, &delivered, &why)?;
+                        let line = match why.waiting {
+                            true => format!("{named}: an arrival on {} waits ({}): it runs once its host answers", arrival.edge, why.reason),
+                            false => format!("{named}: an arrival on {} cannot be judged ({}): it runs nothing", arrival.edge, why.reason),
+                        };
                         if !fired.redelivered.contains(&line) {
                             fired.redelivered.push(line);
                         }
@@ -1082,15 +1096,15 @@ impl Session {
     /// `Arrival Not Judged`. It fails this listen alone; the
     /// arrival's other listens are judged as usual. Kept as long as a
     /// delivery is (`deliveries.retainDays`).
-    pub(crate) fn note_unjudged(&self, set: &FileSet, adapter: &str, listen: &Listen, arrival: &ArrivalIn, delivered: &Delivered<'_>, reason: &str) -> Result<(), String> {
-        let fact = self.unjudged_fact(set, adapter, listen, arrival, delivered, reason)?;
+    pub(crate) fn note_unjudged(&self, set: &FileSet, adapter: &str, listen: &Listen, arrival: &ArrivalIn, delivered: &Delivered<'_>, why: &Unjudgement) -> Result<(), String> {
+        let fact = self.unjudged_fact(set, adapter, listen, arrival, delivered, why)?;
         let retain_ms = i64::from(self.project.delivery_retain_days) * 86_400_000;
         self.store.note_unjudged(&fact, &iso(-retain_ms)).map_err(|e| format!("keeping that {}:{} could not judge an arrival on {}: {e}", fact.file, fact.movement, fact.edge))?;
         Ok(())
     }
 
     /// The fact that `listen` could not judge `arrival`, as `note_unjudged` keeps it.
-    fn unjudged_fact(&self, set: &FileSet, adapter: &str, listen: &Listen, arrival: &ArrivalIn, delivered: &Delivered<'_>, reason: &str) -> Result<crate::records_door::UnjudgedArrival, String> {
+    fn unjudged_fact(&self, set: &FileSet, adapter: &str, listen: &Listen, arrival: &ArrivalIn, delivered: &Delivered<'_>, why: &Unjudgement) -> Result<crate::records_door::UnjudgedArrival, String> {
         let identity = arrival.identity.as_deref().unwrap_or_default();
         Ok(crate::records_door::UnjudgedArrival {
             pipeline: listen.pipeline(),
@@ -1102,10 +1116,11 @@ impl Session {
             adapter: Some(adapter.to_string()),
             record_id: arrival.landing.as_ref().and_then(|landing| landing.get("recordId")).and_then(Js::as_str).map(str::to_string),
             landing: arrival.landing.clone(),
-            reason: reason.to_string(),
+            reason: why.reason.clone(),
             cause: self.chain_before(adapter, listen, arrival)?.pop(),
             at: iso(0),
             attempt: delivered.attempt(),
+            waiting: why.waiting,
         })
     }
 
@@ -1172,17 +1187,21 @@ impl Session {
         // Asked for by name, so a listen whose WHERE the invocation does not
         // match says so, and a rehearsal runs only what a run would.
         let mut fired = Fired::default();
-        let now_ms = self.now_ms() as f64;
+        let asking = Asking { now_ms: self.now_ms() as f64, host: self };
         let mut matched = Vec::new();
         for i in firing {
             let listen = &set.listens[i];
             let named = format!("{}:{}", set.file(&listen.file).name, listen.movement_name);
-            match listen.fires(&arrivals[0], None, now_ms) {
+            // An invocation is delivered once: nothing keeps it to wait behind another.
+            match listen.fires(&arrivals[0], None, asking).await {
                 Some(Verdict::Fires) => matched.push(i),
                 Some(Verdict::Skips { hop, reason: None }) => fired.redelivered.push(format!("{named}: the invocation does not match the WHERE of hop {}: it runs nothing", hop + 1)),
                 Some(Verdict::Skips { hop, reason: Some(reason) }) => fired.redelivered.push(format!("{named}: the invocation is not this listen's at hop {}: {reason}: it runs nothing", hop + 1)),
                 Some(verdict @ (Verdict::Undecided { .. } | Verdict::Asks(_))) => {
-                    let reason = crate::routing::unjudged_reason(&verdict).unwrap_or_default();
+                    let reason = match verdict {
+                        Verdict::Undecided { reason } => reason.to_string(),
+                        _ => "its host answered nothing".to_string(),
+                    };
                     fired.redelivered.push(format!("{named}: the invocation cannot be judged ({reason}): it runs nothing"));
                 }
                 None => {}
@@ -1389,14 +1408,14 @@ impl Session {
             arming(&mut fired, &shared.fires);
             // A cursor already keeps the backlog from firing; only an edge listed whole each time needs its receipts.
             if cursorless {
-                self.note_seen_arrivals(set, &key.adapter, &arrivals, key.credential.as_deref(), &shared.fires)?;
+                self.note_seen_arrivals(set, &key.adapter, &arrivals, key.credential.as_deref(), &shared.fires).await?;
             }
         } else {
             let (arrivals, shared) = match state.as_ref().filter(|_| cursorless) {
                 Some(state) => {
                     let joined = joined_since(set, shared, state.get("armedFor"));
                     arming(&mut fired, &joined);
-                    self.note_seen_arrivals(set, &key.adapter, &arrivals, key.credential.as_deref(), &joined)?;
+                    self.note_seen_arrivals(set, &key.adapter, &arrivals, key.credential.as_deref(), &joined).await?;
                     let listed: Option<BTreeSet<&str>> = state.get("listed").and_then(Js::as_array).map(|seen| seen.iter().filter_map(Js::as_str).collect());
                     let fresh: Vec<ArrivalIn> = arrivals.iter().filter(|a| listed.as_ref().is_none_or(|seen| !seen.contains(receipt_of(a).as_str()))).cloned().collect();
                     (fresh, crate::edge_polls::Shared { fires: shared.fires.iter().copied().filter(|i| !joined.contains(i)).collect(), ..shared.clone() })
@@ -1433,7 +1452,7 @@ impl Session {
                 }
                 crate::doors::queued_by(&mut waits, &row.key);
                 let delivered = Delivered { id: Some(&receipt.id), ..Delivered::default() };
-                let facts = unjudged.iter().map(|one| self.unjudged_fact(set, &key.adapter, &doors.listens[one.listen], &landed[one.arrival], &delivered, &one.reason)).collect::<Result<Vec<_>, _>>()?;
+                let facts = unjudged.iter().map(|one| self.unjudged_fact(set, &key.adapter, &doors.listens[one.listen], &landed[one.arrival], &delivered, &one.why)).collect::<Result<Vec<_>, _>>()?;
                 // The page, its runs, what no listen could judge and the cursor: one write.
                 let kept = self
                     .store
@@ -1468,15 +1487,15 @@ impl Session {
     /// listen sharing it has already seen: its receipt is kept, without a
     /// run, so the next poll (which lists all of it again) fires only what
     /// is new.
-    fn note_seen_arrivals(&self, set: &FileSet, adapter: &str, arrivals: &[ArrivalIn], credential: Option<&str>, sharing: &[usize]) -> Result<(), String> {
+    async fn note_seen_arrivals(&self, set: &FileSet, adapter: &str, arrivals: &[ArrivalIn], credential: Option<&str>, sharing: &[usize]) -> Result<(), String> {
         if sharing.is_empty() {
             return Ok(());
         }
-        let now_ms = self.now_ms() as f64;
+        let asking = Asking { now_ms: self.now_ms() as f64, host: self };
         for arrival in arrivals.iter().filter(|a| !a.gone) {
             let receipt = arrival_receipt_key(&arrival.edge, arrival.key.as_deref(), arrival.identity.as_deref().unwrap_or_default(), arrival.version.as_deref());
             for listen in sharing.iter().map(|i| &set.listens[*i]).filter(|l| l.is_on(adapter, &arrival.edge)) {
-                if matches!(listen.fires(arrival, credential, now_ms), Some(Verdict::Fires)) {
+                if matches!(listen.fires(arrival, credential, asking).await, Some(Verdict::Fires)) {
                     self.store.claim_event(&EventReceipt::own(&listen.pipeline(), &receipt)).map_err(|e| e.to_string())?;
                 }
             }

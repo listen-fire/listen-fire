@@ -232,6 +232,7 @@ impl Observed<'_> {
             sink: EventSink::Queue,
             notify: &|| {},
             listens: Vec::new(),
+            replaying: false,
         }
     }
 
