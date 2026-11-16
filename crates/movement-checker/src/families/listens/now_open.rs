@@ -15,8 +15,10 @@
 use std::borrow::Cow;
 
 use movement_parser::ast::{Loc, PathHead, Span};
+use movement_parser::catalog::packages::program_name_of;
 use movement_parser::catalog::types::{Composite, FieldType, PositionSchema};
 use movement_parser::lowering::expression::{EdgeStep, Expression, LogicalOp};
+use movement_parser::surface::table::plugin_name;
 use movement_parser::version::{Standing, standing};
 use serde_json::json;
 
@@ -104,11 +106,12 @@ impl Checker<'_> {
         let (callee, import) = match self.imported_as(key, scope) {
             Some(callee) => (callee, None),
             None => {
-                let (package, member) = (spec.package.as_deref()?, spec.name.as_deref()?);
+                let package = spec.package.as_deref()?;
+                let member = plugin_name(program_name_of(key, spec));
                 let local = package.rsplit('/').next().filter(|local| !local.is_empty()).unwrap_or("host");
                 let local = self.fresh_name(local, scope);
                 let import = format!("import {{ `{package}` as {local} }} from plugins");
-                (format!("{local}.{}", quote_name(member)), Some(import))
+                (format!("{local}.{}", quote_name(&member)), Some(import))
             }
         };
         let alias = match &last.alias {

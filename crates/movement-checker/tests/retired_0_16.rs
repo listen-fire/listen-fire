@@ -8,6 +8,10 @@ use movement_parser::catalog::types::CatalogSnapshot;
 use serde_json::json;
 
 fn catalog() -> CatalogSnapshot {
+    catalog_with_member("@lf-platform/team/isMember", "isMember")
+}
+
+fn catalog_with_member(key: &str, spec_name: &str) -> CatalogSnapshot {
     let email = json!({ "kind": "branded", "of": "text", "brands": ["claim:email/address"] });
     let message = |claims: serde_json::Value| {
         let mut properties = json!({ "Channel": "text", "Text": "text" });
@@ -27,9 +31,9 @@ fn catalog() -> CatalogSnapshot {
         },
         "credentials": {},
         "plugins": {
-            "@lf-platform/team/isMember": {
+            key: {
                 "args": ["e"], "priced": false, "requiredArgs": ["e"], "argTypes": { "e": email }, "effects": {},
-                "output": { "kind": "value", "type": "boolean" }, "package": "@lf-platform/team", "name": "isMember",
+                "output": { "kind": "value", "type": "boolean" }, "package": "@lf-platform/team", "name": spec_name,
                 "pure": true, "maxAgeSeconds": 300
             }
         }
@@ -157,4 +161,20 @@ fn acting_user_meta_keys_are_retired() {
     }
     let source = "import { slack } from adapters\ns = connect slack\nfunction f(m: <s-[:Message]->>) {\n  x = @current_date\n  return x\n}\nlisten to s-[:Messages]-> fire f\n";
     assert_eq!(check(source, Asked { upgrading_from: None, limiting_function: None }).iter().filter(|d| d.is_error()).count(), 0);
+}
+
+#[test]
+fn the_fix_spells_the_member_as_a_program_calls_it() {
+    for spec_name in ["is-member", "is_member"] {
+        let catalog = catalog_with_member("@lf-platform/team/is_member", spec_name);
+        let asked = Asked { upgrading_from: Some("0.15.3"), limiting_function: Some("@lf-platform/team/is_member") };
+        let options = || CheckOptions { upgrading_from: asked.upgrading_from, limiting_function: asked.limiting_function, zones: &movement_checker::host::native::NativeZones };
+        let source = format!("{SLACK}listen to s-[m:Messages WHERE m.Channel == \"C1\"]-> fire f\n");
+        let told: Vec<Diagnostic> = check_source(&source, &catalog, options()).unwrap().into_iter().filter(|d| d.code == "MOV_LISTEN_NOW_OPEN").collect();
+        let fix = told[0].fix.as_ref().expect("a fix");
+        let fixed = applied(&source, fix);
+        assert!(fixed.contains("team.isMember("), "{spec_name}: {fixed}");
+        let after = check_source(&fixed, &catalog, options()).unwrap();
+        assert_eq!(after.iter().map(|d| d.code.as_str()).collect::<Vec<_>>(), Vec::<&str>::new(), "{spec_name}: {fixed}");
+    }
 }
