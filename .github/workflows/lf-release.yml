@@ -15,7 +15,10 @@ name: lf-release
 #
 # `workflow_dispatch` builds the same matrix against any ref and uploads the
 # archives as workflow artifacts only: how a change to this file is proved
-# before it is tagged.
+# before it is tagged. Given `tag` instead, it builds that existing tag and
+# publishes its release, as the tag's own push would have. A tag's push runs
+# the workflow file as it was at that tag, so this is how a release is
+# published when that file could not build it; the tag never moves.
 on:
   push:
     tags:
@@ -26,15 +29,21 @@ on:
         description: "Ref to build (dry run — builds every target, publishes nothing)"
         required: false
         default: ""
+      tag:
+        description: "An existing lf-v tag to build and publish (its release must not exist yet)"
+        required: false
+        default: ""
 
 concurrency:
-  group: lf-release-${{ github.ref }}
+  group: lf-release-${{ inputs.tag || github.ref }}
   cancel-in-progress: false
 
 env:
   # The workspace's release profile is tuned for the WASM artifacts
   # (opt-level "z"); the native host wants speed.
   CARGO_PROFILE_RELEASE_OPT_LEVEL: "3"
+  # Empty on a dry run.
+  RELEASE_TAG: ${{ github.event_name == 'push' && github.ref_name || inputs.tag }}
 
 jobs:
   build:
@@ -47,26 +56,28 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { target: aarch64-apple-darwin, runner: macos-14, os: darwin, cpu: arm64, libc: "" }
-          - { target: x86_64-apple-darwin, runner: macos-14, os: darwin, cpu: x64, libc: "" }
+          # GitHub retired the macos-14 runners; one Apple Silicon runner builds both Mac targets.
+          - { target: aarch64-apple-darwin, runner: macos-15, os: darwin, cpu: arm64, libc: "" }
+          - { target: x86_64-apple-darwin, runner: macos-15, os: darwin, cpu: x64, libc: "" }
           - { target: x86_64-unknown-linux-musl, runner: ubuntu-latest, os: linux, cpu: x64, libc: glibc, zig: true }
           - { target: aarch64-unknown-linux-musl, runner: ubuntu-latest, os: linux, cpu: arm64, libc: glibc, zig: true }
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.ref || github.ref }}
+          ref: ${{ inputs.tag || inputs.ref || github.ref }}
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
       - name: The tag names the crate's version
         # `listen-fire --version` prints crates/lf's Cargo version, so a release whose
         # tag disagrees with it would ship a binary that misreports itself.
-        if: startsWith(github.ref, 'refs/tags/lf-v')
+        if: env.RELEASE_TAG != ''
         run: |
+          case "$RELEASE_TAG" in lf-v*) ;; *) echo "::error::$RELEASE_TAG is not an lf-v tag"; exit 1 ;; esac
           crate="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "listen-fire") | .version')"
-          tag="${GITHUB_REF_NAME#lf-v}"
+          tag="${RELEASE_TAG#lf-v}"
           if [ "$tag" != "$crate" ]; then
-            echo "::error::tag $GITHUB_REF_NAME names $tag, but crates/lf/Cargo.toml is $crate: set the crate's version and tag again"
+            echo "::error::tag $RELEASE_TAG names $tag, but crates/lf/Cargo.toml is $crate: set the crate's version and tag again"
             exit 1
           fi
       - name: Rust target
@@ -96,7 +107,7 @@ jobs:
       - name: Archive
         id: archive
         run: |
-          version="${GITHUB_REF_NAME:-dry-run}"
+          version="${RELEASE_TAG:-dry-run}"
           name="${version}-${{ matrix.target }}"
           mkdir -p "dist/$name/bin" "dist/$name/share/lf"
           cp "target/${{ matrix.target }}/release/listen-fire" "dist/$name/bin/listen-fire"
@@ -112,8 +123,9 @@ jobs:
           if-no-files-found: error
 
   release:
-    # Tag pushes only: a dry run stops after the archives exist.
-    if: startsWith(github.ref, 'refs/tags/lf-v')
+    # A tag's push or a dispatch naming a tag: a dry run stops after the archives exist.
+    # (A job's `if` cannot read `env`, so it repeats RELEASE_TAG's rule.)
+    if: startsWith(github.ref, 'refs/tags/lf-v') || inputs.tag != ''
     needs: build
     runs-on: ubuntu-latest
     permissions:
@@ -129,13 +141,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" artifacts/lf-*.tar.gz artifacts/SHA256SUMS \
-            --repo "$GITHUB_REPOSITORY" --title "listen-fire ${GITHUB_REF_NAME#lf-v}" --generate-notes \
-            $(case "${GITHUB_REF_NAME#lf-v}" in *-*) echo --prerelease ;; esac)
+          gh release create "$RELEASE_TAG" artifacts/lf-*.tar.gz artifacts/SHA256SUMS \
+            --repo "$GITHUB_REPOSITORY" --verify-tag --title "listen-fire ${RELEASE_TAG#lf-v}" --generate-notes \
+            $(case "${RELEASE_TAG#lf-v}" in *-*) echo --prerelease ;; esac)
 
   homebrew:
     # Pre-releases bump the tap too: it serves whatever the newest release is.
-    if: startsWith(github.ref, 'refs/tags/lf-v')
+    # So a backfill publishes older tags first, or the tap ends on the older one.
+    if: startsWith(github.ref, 'refs/tags/lf-v') || inputs.tag != ''
     needs: release
     runs-on: ubuntu-latest
     permissions:
@@ -169,8 +182,8 @@ jobs:
         # deploy/homebrew/listen-fire.rb, rather than edited by line number or pattern:
         # each hash is looked up by its tarball's name in SHA256SUMS.
         run: |
-          version="${GITHUB_REF_NAME#lf-v}"
-          gh release download "$GITHUB_REF_NAME" --pattern SHA256SUMS --repo "$GITHUB_REPOSITORY"
+          version="${RELEASE_TAG#lf-v}"
+          gh release download "$RELEASE_TAG" --pattern SHA256SUMS --repo "$GITHUB_REPOSITORY"
           sha() {
             hash="$(awk -v f="lf-v${version}-$1.tar.gz" '$2 == f { print $1 }' SHA256SUMS)"
             if [ -z "$hash" ]; then
@@ -179,7 +192,7 @@ jobs:
             fi
             echo "$hash"
           }
-          base="https://github.com/listen-fire/listen-fire/releases/download/${GITHUB_REF_NAME}/${GITHUB_REF_NAME}"
+          base="https://github.com/listen-fire/listen-fire/releases/download/${RELEASE_TAG}/${RELEASE_TAG}"
           mac_arm="$(sha aarch64-apple-darwin)"
           mac_intel="$(sha x86_64-apple-darwin)"
           linux_arm="$(sha aarch64-unknown-linux-musl)"
@@ -238,5 +251,5 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add Formula/listen-fire.rb
-          git commit -m "listen-fire ${GITHUB_REF_NAME#lf-v}"
+          git commit -m "listen-fire ${RELEASE_TAG#lf-v}"
           git push
