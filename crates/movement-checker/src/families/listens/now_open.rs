@@ -84,7 +84,7 @@ impl Checker<'_> {
         let takes_claim = |name: &str| {
             let Resolution::Found(id) = self.scopes.resolve(scope, name) else { return false };
             let spec = self.plugin_spec_of(id, name);
-            spec.is_some_and(|spec| spec.pure() && spec.arg_types.as_ref().is_some_and(|types| types.values().any(|ty| brands_asked(ty).is_some())))
+            spec.is_some_and(|spec| spec.pure() && spec.arg_types.as_ref().is_some_and(|types| types.values().any(|ty| !brands_asked(ty).is_empty())))
         };
         let calls = matches!(filter, Expression::Function { fn_, .. } if self.plugin_purity(fn_, scope) == Some(true) && takes_claim(fn_));
         calls || sub_expressions(filter).into_iter().any(|e| self.limits_senders(e, scope))
@@ -97,8 +97,11 @@ impl Checker<'_> {
         let key = self.limiting_function?;
         let spec = self.catalog.plugin(key)?;
         let parameter = spec.args.first()?;
-        let asked = spec.arg_types.as_ref().and_then(|types| types.get(parameter)).and_then(brands_asked)?;
-        let claim = landing.claims.iter().find(|claim| asked.iter().all(|brand| claim.brands.contains(brand)))?;
+        let asked = spec.arg_types.as_ref().and_then(|types| types.get(parameter)).map(brands_asked)?;
+        // Several fields may fit; the one fitting the union's first member
+        // wins, so the order the host wrote the parameter in is the order of
+        // preference.
+        let claim = asked.iter().find_map(|brands| landing.claims.iter().find(|claim| brands.iter().all(|brand| claim.brands.contains(brand))))?;
         let last = steps.last()?;
         if last.cardinality.is_some() {
             return None;
@@ -170,12 +173,15 @@ fn landed_schemas(landed: &Position) -> Vec<Cow<'_, PositionSchema>> {
     }
 }
 
-/// The brands a parameter of `ty` asks for.
-fn brands_asked(ty: &FieldType) -> Option<&[String]> {
+/// The brands a parameter of `ty` asks for: one set per member of its union
+/// (through `| null`), in the order written. A value fits a member when it
+/// carries all of that member's brands.
+fn brands_asked(ty: &FieldType) -> Vec<&[String]> {
     match ty {
-        FieldType::Composite(Composite::Branded { brands, .. }) => Some(brands),
+        FieldType::Composite(Composite::Branded { brands, .. }) => vec![brands.as_slice()],
         FieldType::Composite(Composite::MaybeAbsent { of }) => brands_asked(of),
-        _ => None,
+        FieldType::Composite(Composite::Union { of }) => of.iter().flat_map(brands_asked).collect(),
+        _ => Vec::new(),
     }
 }
 

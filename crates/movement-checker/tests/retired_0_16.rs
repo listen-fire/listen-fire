@@ -13,6 +13,11 @@ fn catalog() -> CatalogSnapshot {
 
 fn catalog_with_member(key: &str, spec_name: &str) -> CatalogSnapshot {
     let email = json!({ "kind": "branded", "of": "text", "brands": ["claim:email/address"] });
+    catalog_asking(key, spec_name, email)
+}
+
+fn catalog_asking(key: &str, spec_name: &str, asked: serde_json::Value) -> CatalogSnapshot {
+    let email = json!({ "kind": "branded", "of": "text", "brands": ["claim:email/address"] });
     let message = |claims: serde_json::Value| {
         let mut properties = json!({ "Channel": "text", "Text": "text" });
         properties.as_object_mut().unwrap().extend(claims.as_object().unwrap().clone());
@@ -32,7 +37,7 @@ fn catalog_with_member(key: &str, spec_name: &str) -> CatalogSnapshot {
         "credentials": {},
         "plugins": {
             key: {
-                "args": ["e"], "priced": false, "requiredArgs": ["e"], "argTypes": { "e": email }, "effects": {},
+                "args": ["e"], "priced": false, "requiredArgs": ["e"], "argTypes": { "e": asked }, "effects": {},
                 "output": { "kind": "value", "type": "boolean" }, "package": "@lf-platform/team", "name": spec_name,
                 "pure": true, "maxAgeSeconds": 300
             }
@@ -176,5 +181,23 @@ fn the_fix_spells_the_member_as_a_program_calls_it() {
         assert!(fixed.contains("team.isMember("), "{spec_name}: {fixed}");
         let after = check_source(&fixed, &catalog, options()).unwrap();
         assert_eq!(after.iter().map(|d| d.code.as_str()).collect::<Vec<_>>(), Vec::<&str>::new(), "{spec_name}: {fixed}");
+    }
+}
+
+#[test]
+fn the_fix_finds_the_claim_through_a_union_of_brands() {
+    let email = json!({ "kind": "branded", "of": "text", "brands": ["claim:email/address"] });
+    let phone = json!({ "kind": "branded", "of": "text", "brands": ["claim:phone/e164"] });
+    let key = "@lf-platform/team/is_member";
+    for asked in [json!({ "kind": "union", "of": [email, phone] }), json!({ "kind": "maybeAbsent", "of": { "kind": "union", "of": [phone, email] } })] {
+        let catalog = catalog_asking(key, "is_member", asked);
+        let options = || CheckOptions { upgrading_from: Some("0.15.3"), limiting_function: Some(key), zones: &movement_checker::host::native::NativeZones };
+        let source = format!("{SLACK}listen to s-[m:Messages WHERE m.Channel == \"C1\"]-> fire f\n");
+        let told: Vec<Diagnostic> = check_source(&source, &catalog, options()).unwrap().into_iter().filter(|d| d.code == "MOV_LISTEN_NOW_OPEN").collect();
+        let fix = told[0].fix.as_ref().expect("a fix through the union");
+        let fixed = applied(&source, fix);
+        assert!(fixed.contains("team.isMember(m.`User Email`)"), "{fixed}");
+        let after = check_source(&fixed, &catalog, options()).unwrap();
+        assert_eq!(after.iter().map(|d| d.code.as_str()).collect::<Vec<_>>(), Vec::<&str>::new(), "{fixed}");
     }
 }
