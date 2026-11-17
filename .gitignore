@@ -40,9 +40,6 @@ storybook.log
 # React Component Preview
 previewConfig.json
 
-# Test fixtures (pipeline recordings)
-fixtures/
-
 .slack-bridge
 .claude/worktrees/
 
