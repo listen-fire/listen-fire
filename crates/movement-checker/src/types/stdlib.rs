@@ -324,6 +324,7 @@ pub fn param_accepts(param: ParamType, ty: &Ty) -> bool {
         Ty::MaybeAbsent(of) => param_accepts(param, of),
         Ty::Absent | Ty::Never => true,
         Ty::Union(members) => members.iter().all(|m| param_accepts(param, m)),
+        Ty::Branded { of, .. } => param_accepts(param, of),
         Ty::Text | Ty::Owned(_) | Ty::Enum { .. } => matches!(param, T::Scalar | T::Text | T::Temporal | T::TextOrList),
         Ty::Number => matches!(param, T::Scalar | T::Number),
         Ty::Boolean => param == T::Scalar,
@@ -414,7 +415,6 @@ pub fn movement_meta_key_type(key: &str) -> Option<Ty> {
     match key {
         "current_date" => Some(Ty::Date),
         "current_timestamp" => Some(Ty::Datetime),
-        "user_email" | "user_name" | "user_id" | "actor_email" | "actor_name" | "actor_id" => Some(Ty::Text),
         _ => None,
     }
 }

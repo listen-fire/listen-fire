@@ -161,7 +161,7 @@ fn related_page() -> S {
 }
 
 fn schema_type_descriptor() -> S {
-    let described = loose(vec![req("fieldId", S::Str)]);
+    let described = loose(vec![req("fieldId", S::Str), opt("brands", arr(S::NonEmptyStr))]);
     loose(vec![
         req("typeId", S::Str),
         req("displayName", S::Str),
@@ -194,18 +194,6 @@ fn write_result() -> S {
     extend(external_record_ref(), vec![opt("events", arr(S::Unknown))], Some(true))
 }
 
-fn actor_identity() -> S {
-    obj(vec![
-        req("identifier", S::Str),
-        req("scheme", S::Enum(&["email", "phone", "opaque"])),
-        opt("adapterType", S::Str),
-        opt("email", S::Str),
-        opt("name", S::Str),
-        opt("label", S::Str),
-        opt("proven", S::Bool),
-    ])
-}
-
 fn await_landing() -> S {
     obj(vec![opt("recordId", S::Str), opt("recordType", S::Str), req("fields", record(S::Unknown)), opt("unknown", arr(S::NonEmptyStr))])
 }
@@ -227,7 +215,8 @@ fn arrival() -> S {
             opt("notFor", S::NonEmptyStr),
             opt("takenApplied", S::Bool),
             opt("occurredAt", S::NonEmptyStr),
-            opt("actor", actor_identity()),
+            // 2.7 through 2.9 modules still say who acted; from 2.10 a host reads none of it.
+            opt("actor", S::Unknown),
         ]),
         obj(vec![req("edge", S::NonEmptyStr), req("key", S::NonEmptyStr), req("gone", S::LiteralTrue)]),
     ])
@@ -291,8 +280,6 @@ fn result_schema(method: &str) -> Option<S> {
         "readRecord" => nullable(record(S::Unknown)),
         "describeOpaqueId" => nullable(S::Str),
         "resolveFileRef" => obj(vec![req("url", S::Str), opt("contentType", S::Str)]),
-        "getActorCandidates" => arr(obj(vec![req("identity", actor_identity()), req("source", S::Enum(&["originator", "relay"]))])),
-        "extractActor" => nullable(actor_identity()),
         _ => return None,
     })
 }
@@ -515,6 +502,14 @@ mod tests {
     }
 
     #[test]
+    fn a_fields_brands_are_names_and_nothing_else() {
+        let described = |brands: &str| format!(r#"{{"typeId":"t","displayName":"T","fields":[{{"fieldId":"f","brands":{brands}}}],"references":[]}}"#);
+        assert!(check("describe", "mail", &js(&described(r#"["claim:email/address"]"#))).is_ok());
+        assert!(check("describe", "mail", &js(&described("[1]"))).is_err());
+        assert!(check("describe", "mail", &js(&described(r#"[""]"#))).is_err());
+    }
+
+    #[test]
     fn arrivals_ride_on_a_deliverys_reading_and_name_their_identity() {
         let landed = r#"{"edge":"Comments","key":"thread:c1","identity":"k1","landing":{"fields":{"Text":"hi"}}}"#;
         let gone = r#"{"edge":"Comments","key":"thread:c2","gone":true}"#;
@@ -562,12 +557,9 @@ mod tests {
     }
 
     #[test]
-    fn a_2_7_arrival_may_say_who_acted() {
+    fn an_arrival_from_a_2_9_module_may_still_say_who_acted() {
         let arrival = r#"{"edge":"Messages","key":"C1","identity":"C1:1.0","landing":{"fields":{}},"actor":{"identifier":"U1","scheme":"opaque","label":"U1"}}"#;
-        let read = check("preprocessInbound", "slack", &js(&format!(r#"{{"events":[],"arrivals":[{arrival}]}}"#))).unwrap();
-        assert_eq!(read.get("arrivals").map(Js::to_json), Some(format!("[{arrival}]")));
-        let unschemed = r#"{"edge":"Messages","identity":"m","landing":{"fields":{}},"actor":{"identifier":"U1"}}"#;
-        assert!(check("preprocessInbound", "slack", &js(&format!(r#"{{"events":[],"arrivals":[{unschemed}]}}"#))).is_err(), "an actor states its scheme");
+        assert!(check("preprocessInbound", "slack", &js(&format!(r#"{{"events":[],"arrivals":[{arrival}]}}"#))).is_ok());
     }
 
     #[test]

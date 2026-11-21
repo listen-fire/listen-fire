@@ -1347,6 +1347,9 @@ export interface MovementParam {
 export type ValueTypeRef =
   | { kind: 'list'; of: ValueTypeMember; span: Span }
   | { kind: 'record'; keys: ValueTypeKey[]; span: Span }
+  /** `text & Brand<"claim:email/address">`: `of` narrowed by each brand,
+   *  TypeScript's intersection. A brand is a name, compared and never parsed. */
+  | { kind: 'branded'; of: ValueTypeMember; brands: string[]; span: Span }
   /**
    * `<(c: <Company>) => <text>>` — a CLOSURE type,
    * TypeScript's function type: what each parameter takes and what calling it
@@ -1422,6 +1425,8 @@ export function spellValueType(type: ValueTypeMember): string {
       return `{ ${type.keys.map(key => `${key.name}${key.optional ? '?' : ''}: ${spellValueType(key.type)}`).join(', ')} }`;
     case 'closure':
       return `(${type.params.map(param => `${param.name}: <${param.type !== undefined ? spellParamType(param.type) : '?'}>`).join(', ')}) => <${spellParamType(type.returns)}>`;
+    case 'branded':
+      return [spellValueType(type.of), ...[...new Set(type.brands)].sort().map((brand) => `Brand<${JSON.stringify(brand)}>`)].join(' & ');
   }
 }
 

@@ -25,9 +25,9 @@
 // Position-type resolution is no longer an adapter method: the former
 // `getPositionTypeId` was pure config, now resolved generically by the engine
 // (`engine/position_type.ts`) from the adapter's static `webhookEventTypeId`,
-// which a remote adapter carries in its manifest. `narrowReferenceType` and
-// `extractActor` are now async, so they round-trip cleanly over the protocol
-// and are full forwarders here (advertised → forwarded; absent → pruned).
+// which a remote adapter carries in its manifest. `narrowReferenceType` is
+// now async, so it round-trips cleanly over the protocol and is a full
+// forwarder here (advertised → forwarded; absent → pruned).
 
 import { Readable } from 'node:stream';
 
@@ -53,8 +53,6 @@ import type {
   ResolveEntityResult,
   ResolveFileRefResult,
   Resource,
-  ActorCandidate,
-  ActorIdentity,
   DedupRules,
   FilterTranslationResult,
   ResourceFilter,
@@ -196,8 +194,6 @@ export const OPTIONAL_REMOTE_METHODS = [
   'describeOpaqueId',
   'translateFilter',
   'getDedupRules',
-  'getActorCandidates',
-  'extractActor',
   'resolveFileRef',
   'invokeFieldFunction',
   'linkRecords',
@@ -696,14 +692,6 @@ export class RemoteAdapter implements Adapter {
    *  names it (adapter protocol 2.5). */
   private remoteArrivals(): ArrivalsCapability {
     return { awaitKeys: (input) => this.call('awaitKeys', input) };
-  }
-
-  getActorCandidates(input: { event: TriggerEvent }): Promise<ActorCandidate[]> {
-    return this.call('getActorCandidates', input) as Promise<ActorCandidate[]>;
-  }
-
-  extractActor(input: { event: TriggerEvent }): Promise<ActorIdentity | null> {
-    return this.call('extractActor', input) as Promise<ActorIdentity | null>;
   }
 
   invokeFieldFunction(input: InvokeFieldFunctionInput): Promise<unknown> {

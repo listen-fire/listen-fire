@@ -29,7 +29,6 @@
         "parents": [{ "recordId": "C1", "recordType": "Channel", "fields": { "Name": "deals" } }, null],
         "about": { "recordType": "Message", "externalId": "C1:1700000000.000100" },
         "occurredAt": "2023-11-14T22:14:10+00:00",
-        "actor": { "identifier": "U1", "scheme": "opaque", "label": "U1" },
         "takenApplied": true
       },
       "trigger": {
@@ -41,8 +40,7 @@
           "edge": "Replies",
           "landing": { "recordId": "C1:1700000050.000200", "recordType": "Message", "fields": { "text": "on it", "user": "U1" } },
           "parents": [{ "recordId": "C1", "recordType": "Channel", "fields": { "Name": "deals" } }, null],
-          "about": { "recordType": "Message", "externalId": "C1:1700000000.000100" },
-          "actor": { "identifier": "U1", "scheme": "opaque", "label": "U1" }
+          "about": { "recordType": "Message", "externalId": "C1:1700000000.000100" }
         },
         "occurredAt": "2023-11-14T22:14:10.000Z"
       }

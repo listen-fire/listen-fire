@@ -183,7 +183,7 @@ pub struct Project {
     pub language_version: String,
     pub movements_dir: PathBuf,
     pub externals_dir: PathBuf,
-    /// The local acting identity lf.yaml names.
+    /// Who presses run here, as lf.yaml names them.
     pub user: (Option<String>, Option<String>),
     /// The module filling each core slot: lf.yaml's `core:`, defaults beside.
     pub core: crate::core::CoreChoice,

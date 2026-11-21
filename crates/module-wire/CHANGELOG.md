@@ -1,6 +1,9 @@
 # Changelog
 
-## Unreleased
+## 0.13.0 - 2026-11-13
+
+- 2.10 also retires who acted as a module answers it: the result shapes of `getActorCandidates` and `extractActor` are gone (no host calls them), and an actor identity reads no `proven`.
+- `PROTOCOL_MINOR` is 10: adapter protocol 2.10, a host keeps a pure plugin's answers, and a module says they changed with `plugins.invalidate` at its host's plugins door. `PROTOCOL_MINORS` gains its row, the first that names a method a module calls at its host.
 
 ## 0.12.10 - 2026-11-11
 

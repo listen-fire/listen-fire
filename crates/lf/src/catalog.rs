@@ -189,7 +189,7 @@ pub fn unit_schema(unit: &str) -> Js {
     let entries = crate::units::entry_points(unit);
     let descriptors: IndexMap<String, Js> =
         crate::units::descriptors(unit).into_iter().map(|d| (d.get("typeId").and_then(Js::as_str).unwrap_or_default().to_string(), d)).collect();
-    crate::schema::describe_external_schema(unit, &crate::schema::Introspected { entries: &entries, reached: &crate::units::reached(unit), descriptors: &descriptors })
+    crate::schema::describe_external_schema(unit, &crate::schema::Introspected { entries: &entries, reached: &[], descriptors: &descriptors })
 }
 
 /// A static credential every field of which may be left out. An OAuth 2
@@ -251,6 +251,9 @@ fn adapter_snapshot_of(adapter: AdapterDeclarations) -> Js {
     }
     if let Some(become_) = adapter.listen.get("listenSettingsBecome") {
         snapshot.insert("listenSettingsBecome".into(), become_.clone());
+    }
+    if let Some(release) = adapter.listen.get("listensLimitedBefore") {
+        snapshot.insert("listensLimitedBefore".into(), release.clone());
     }
     snapshot.insert("schemaShape".into(), Js::str("introspected"));
     snapshot.insert("schemas".into(), Js::from(adapter.schemas));
@@ -484,6 +487,25 @@ mod tests {
         let become_ = catalog.adapter("at").and_then(|spec| spec.listen_settings_become.clone()).unwrap();
         assert_eq!(become_.path, ["Bases", "Tables", "Changes"]);
         assert_eq!(become_.keys["table"].hop, 1);
+    }
+
+    #[test]
+    fn the_release_a_modules_listens_were_limited_before_reaches_the_checker() {
+        let Js::Obj(listen) = Js::parse(br#"{"listensLimitedBefore":"0.16.0"}"#).unwrap() else { unreachable!() };
+        let snapshot = adapter_snapshot_of(AdapterDeclarations {
+            package: None,
+            supported_triggers: &[],
+            listen: &listen,
+            construction_args: Vec::new(),
+            declared_credentials: &[],
+            description: None,
+            resend_window_seconds: None,
+            schemas: Obj::new(),
+            construction_arg_options: Obj::new(),
+        });
+        let catalog = format!(r#"{{"adapters":{{"slack":{}}},"credentials":{{}},"plugins":{{}}}}"#, snapshot.to_json());
+        let catalog = movement_parser::catalog::types::CatalogSnapshot::load(&catalog).unwrap();
+        assert_eq!(catalog.adapter("slack").and_then(|spec| spec.listens_limited_before.as_deref()), Some("0.16.0"));
     }
 }
 

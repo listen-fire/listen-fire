@@ -76,11 +76,12 @@ pub async fn open_models_door(credentials: &crate::secrets::Credentials) -> Resu
                     Some([_, "models"]) => return models_door(&credentials, &request).await,
                     Some([_, "ocr"]) => return ocr_door(&request).await,
                     Some([_, crate::records_door::DOOR_VERB]) => return records_door(&request),
+                    Some([module, crate::plugin_answers::DOOR_VERB]) => return plugins_door(module, &request),
                     Some([module, crate::limits_door::DOOR_VERB]) => return limits_door(module, &request),
                     _ => {}
                 }
             }
-            Response::json(404, &Js::Obj(obj! { "error" => Js::str("not_found"), "message" => Js::str("outside listen-fire serve, listen-fire serves only the models, OCR and limits doors") }))
+            Response::json(404, &Js::Obj(obj! { "error" => Js::str("not_found"), "message" => Js::str("outside listen-fire serve, listen-fire serves only the models, OCR, records, plugins and limits doors") }))
         }
     }));
     Ok(())
@@ -441,6 +442,7 @@ async fn route(listening: &Listening, request: Request) -> Result<Response, Stri
         Some([_, "models"]) => return Ok(models_door(session.secrets().credentials(), &request).await),
         Some([_, "ocr"]) => return Ok(ocr_door(&request).await),
         Some([_, crate::records_door::DOOR_VERB]) => return Ok(records_door(&request)),
+        Some([module, crate::plugin_answers::DOOR_VERB]) => return Ok(plugins_door(module, &request)),
         _ => {}
     }
 
@@ -562,6 +564,22 @@ fn records_door(request: &Request) -> Response {
         Err(e) => return Response::json(400, &Js::Obj(obj! { "error" => Js::str("bad_request"), "message" => Js::Str(e) })),
     };
     let (status, answer) = crate::records_door::answer(&body);
+    Response::json(status, &answer)
+}
+
+/// The plugins door: a module saying its pure plugins' answers changed
+/// (`plugins.invalidate`, crate::plugin_answers).
+fn plugins_door(module: &str, request: &Request) -> Response {
+    let presented = request.headers.iter().find(|(k, _)| k == "authorization").map(|(_, v)| v.as_str());
+    let expected = host_token().map(|t| format!("Bearer {t}"));
+    if expected.is_none() || presented != expected.as_deref() {
+        return Response::json(401, &Js::Obj(obj! { "error" => Js::str("unauthorized") }));
+    }
+    let (module, body) = match (decoded(module), Js::parse(&request.body)) {
+        (Ok(module), Ok(body)) => (module, body),
+        (Err(message), _) | (_, Err(message)) => return Response::json(400, &Js::Obj(obj! { "error" => Js::str("bad_request"), "message" => Js::Str(message) })),
+    };
+    let (status, answer) = crate::plugin_answers::answer(&module, &body);
     Response::json(status, &answer)
 }
 

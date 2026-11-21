@@ -36,17 +36,6 @@ export const firedTriggerTypeSchema = z.union([triggerTypeSchema, z.literal('arr
  *  carries from earlier hops (adapter protocol 2.6). */
 const firedLandingSchema = z.object({ recordId: z.string().optional(), recordType: z.string().optional(), fields: z.record(z.string(), z.unknown()) });
 
-/** Who acted on an arrival, as its module says (`ActorIdentity`, 2.7). */
-const firedActorSchema = z.object({
-  identifier: z.string(),
-  scheme: z.enum(['email', 'phone', 'opaque']),
-  adapterType: z.string().optional(),
-  email: z.string().optional(),
-  name: z.string().optional(),
-  label: z.string().optional(),
-  proven: z.boolean().optional(),
-});
-
 /** The source system's identifier for the record an inbound event is about. */
 export const inboundRecordRefSchema = z.object({
   adapterType: z.string(),
@@ -103,7 +92,6 @@ export const triggerEventSchema = z.object({
       landing: firedLandingSchema,
       parents: z.array(firedLandingSchema.nullable()).optional(),
       about: z.object({ recordType: z.string(), externalId: z.string() }).optional(),
-      actor: firedActorSchema.optional(),
     })
     .optional(),
 });

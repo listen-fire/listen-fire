@@ -197,7 +197,7 @@ fn collect(expr: &Expression, out: &mut CollectedNames, position: Position) {
             collect(right, out, position);
         }
         Expression::Logical { operands, .. } => operands.iter().for_each(|o| collect(o, out, position)),
-        Expression::Not { expression } | Expression::Negate { expression } | Expression::Aggregate { expression, .. } => {
+        Expression::Not { expression } | Expression::Negate { expression } | Expression::Aggregate { expression, .. } | Expression::Field { expression, .. } => {
             collect(expression, out, position)
         }
         Expression::Concat { parts } => parts.iter().for_each(|p| collect(p, out, position)),

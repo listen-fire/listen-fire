@@ -108,7 +108,15 @@ pub struct Projecting<'a> {
 
 pub fn field_type_from_descriptor(field: &Js, at: &Projecting) -> Option<Js> {
     let owner = at.owner;
-    let scalar = match field.get("kind").and_then(Js::as_str) {
+    let kind = field.get("kind").and_then(Js::as_str);
+    let brands = field.get("brands");
+    // A brand narrows a scalar a module vouches for; on any other kind (or
+    // empty) the descriptor is malformed, and the field is left out with the
+    // other fields the projection cannot type.
+    if brands.is_some() && (!matches!(kind, Some("string" | "number")) || items(brands).is_empty()) {
+        return None;
+    }
+    let scalar = match kind {
         Some("string") => {
             let known = items(field.get("knownValues"));
             if field.get("knownValues").is_some() && !known.is_empty() {
@@ -142,6 +150,10 @@ pub fn field_type_from_descriptor(field: &Js, at: &Projecting) -> Option<Js> {
             Js::from(obj! { "kind" => Js::str("record"), "position" => Js::from(position) })
         }
         _ => return None,
+    };
+    let scalar = match brands {
+        Some(brands) => Js::from(obj! { "kind" => Js::str("branded"), "of" => scalar, "brands" => brands.clone() }),
+        None => scalar,
     };
     let type_ = if field.get("cardinality").and_then(Js::as_str) == Some("many") { Js::from(obj! { "kind" => Js::str("list"), "of" => scalar }) } else { scalar };
     Some(if Js::is_true(field.get("mayBeAbsent")) { Js::from(obj! { "kind" => Js::str("maybeAbsent"), "of" => type_ }) } else { type_ })
@@ -1648,6 +1660,32 @@ mod tests {
         let schema = describe_external_schema("airtable", &Introspected { entries: &entries, reached: &[], descriptors: &descriptors });
         assert_eq!(schema.get("positions").and_then(|p| p.get("Deals")).and_then(|d| d.get("properties")).and_then(|p| p.get("Name")).map(Js::to_json).as_deref(), Some(r#"{"kind":"maybeAbsent","of":"text"}"#));
         assert_eq!(schema.get("writableRoots").and_then(|w| w.get("Deals")).and_then(|d| d.get("fields")).and_then(|f| f.get("Name")).map(Js::to_json).as_deref(), Some(r#""text""#));
+    }
+
+    #[test]
+    fn a_branded_descriptor_projects_to_a_branded_type() {
+        let field = js(r#"{"fieldId":"from","displayName":"User Email","kind":"string","brands":["claim:email/address"],"mayBeAbsent":true,"writable":false,"required":false}"#);
+        assert_eq!(
+            field_type_from_descriptor(&field, &owned_by("slack")).unwrap().to_json(),
+            r#"{"kind":"maybeAbsent","of":{"kind":"branded","of":"text","brands":["claim:email/address"]}}"#
+        );
+        let id = js(r#"{"fieldId":"id","displayName":"Id","kind":"number","brands":["claim:github/user_id"],"writable":false,"required":true}"#);
+        assert_eq!(field_type_from_descriptor(&id, &owned_by("github")).unwrap().to_json(), r#"{"kind":"branded","of":"number","brands":["claim:github/user_id"]}"#);
+        let many = js(r#"{"fieldId":"to","displayName":"To","kind":"string","cardinality":"many","brands":["claim:email/address"],"writable":false,"required":false}"#);
+        assert_eq!(
+            field_type_from_descriptor(&many, &owned_by("email")).unwrap().to_json(),
+            r#"{"kind":"list","of":{"kind":"branded","of":"text","brands":["claim:email/address"]}}"#
+        );
+    }
+
+    #[test]
+    fn a_brand_on_a_kind_that_is_not_a_scalar_drops_the_field() {
+        for kind in ["boolean", "json", "date", "enum"] {
+            let field = js(&format!(r#"{{"fieldId":"f","displayName":"F","kind":"{kind}","brands":["claim:x/y"],"writable":false,"required":false}}"#));
+            assert!(field_type_from_descriptor(&field, &owned_by("x")).is_none(), "{kind}");
+        }
+        let empty = js(r#"{"fieldId":"f","displayName":"F","kind":"string","brands":[],"writable":false,"required":false}"#);
+        assert!(field_type_from_descriptor(&empty, &owned_by("x")).is_none());
     }
 
     #[test]

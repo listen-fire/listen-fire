@@ -176,6 +176,9 @@ struct Linker<'c> {
 struct Site<'a> {
     root_span: Option<Span>,
     within: Option<&'a str>,
+    /// The library the root imports that `within` is reached through (itself,
+    /// one level down): what a problem inside it names as its `file`.
+    imported: Option<&'a str>,
 }
 
 impl Linker<'_> {
@@ -184,7 +187,7 @@ impl Linker<'_> {
             Some(path) => (format!("\"{path}\" line {}: {message}", statement_span.start.line), site.root_span.unwrap_or(SPAN_FALLBACK)),
             None => (message, statement_span),
         };
-        self.problems.push(Diagnostic::error(code, message, span));
+        self.problems.push(Diagnostic { file: site.imported.map(str::to_string), ..Diagnostic::error(code, message, span) });
     }
 
     fn load(&mut self, path: &str, site: Site<'_>, statement_span: Span, root_span: Span) -> Option<Rc<LinkedFile>> {
@@ -211,7 +214,8 @@ impl Linker<'_> {
                     "\"{path}\" does not parse — {} (line {}, col {}) — fix the library file before importing from it",
                     e.message, e.loc.line, e.loc.col
                 );
-                self.report(site, codes::IMPORT_FILE_INVALID, message, statement_span);
+                // A library that does not parse is the library's fault, wherever it is imported.
+                self.report(Site { imported: site.imported.or(Some(path)), ..site }, codes::IMPORT_FILE_INVALID, message, statement_span);
                 self.files.insert(path.to_string(), None);
                 return None;
             }
@@ -220,7 +224,7 @@ impl Linker<'_> {
         // with them; a cycle back to it is caught by `loading`, not by the map.
         self.loading.push(path.to_string());
         let mut imports = IndexMap::new();
-        self.link_file_level(&program, &mut imports, Site { root_span: Some(root_span), within: Some(path) });
+        self.link_file_level(&program, &mut imports, Site { root_span: Some(root_span), within: Some(path), imported: Some(site.imported.unwrap_or(path)) });
         self.loading.pop();
         let file = Rc::new(LinkedFile { path: path.to_string(), program, imports });
         self.files.insert(path.to_string(), Some(file.clone()));
@@ -261,7 +265,7 @@ impl Linker<'_> {
 pub fn link_imports(program: &Program, catalog: &CatalogSnapshot) -> ProgramLink {
     let mut linker = Linker { catalog, files: IndexMap::new(), loading: Vec::new(), problems: Vec::new() };
     let mut imports = IndexMap::new();
-    linker.link_file_level(program, &mut imports, Site { root_span: None, within: None });
+    linker.link_file_level(program, &mut imports, Site { root_span: None, within: None, imported: None });
     let files = linker.files.into_iter().filter_map(|(path, file)| file.map(|f| (path, f))).collect();
     ProgramLink { imports, files, problems: linker.problems }
 }
@@ -332,6 +336,7 @@ impl Checker<'_> {
         for mut diagnostic in surfaced.into_iter().filter(|d| d.severity != Some(Severity::Info)) {
             diagnostic.message = format!("\"{}\" line {}: {}", file.path, diagnostic.span.start.line, diagnostic.message);
             diagnostic.span = at;
+            diagnostic.file = Some(file.path.clone());
             // A fix's edits are in the library file's text; applied to the
             // importer they would corrupt it.
             diagnostic.fix = None;
@@ -342,7 +347,7 @@ impl Checker<'_> {
         if self.type_only == 0 {
             for diagnostic in surfaced_spelling {
                 let message = format!("\"{}\" line {}: {}", file.path, diagnostic.span.start.line, diagnostic.message);
-                self.imports.spelling.push(Diagnostic::error(&diagnostic.code, message, at));
+                self.imports.spelling.push(Diagnostic { file: Some(file.path.clone()), ..Diagnostic::error(&diagnostic.code, message, at) });
             }
         }
         symbols

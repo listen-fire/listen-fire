@@ -23,6 +23,10 @@ export interface Diagnostic {
   /** The exact rewrite that resolves it, built from the author's own source —
    *  also spelled out in `message`, which is all a text reader sees. */
   fix?: DiagnosticFix;
+  /** The library it came from, as the checked file's import names it
+   *  (`lib/finance`), when it came from one. The message names it too; a host
+   *  tells a library's fault by this, never by reading the message. */
+  file?: string;
 }
 
 

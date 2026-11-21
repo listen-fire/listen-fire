@@ -20,6 +20,7 @@ use hmac::{Hmac, KeyInit, Mac};
 use sha2::{Digest, Sha256};
 
 use crate::arrivals::arrivals_of;
+use crate::externals::Unanswered;
 use crate::http::header;
 use crate::json::Js;
 use crate::obj;
@@ -633,10 +634,12 @@ pub trait InboundStore {
     async fn source_for(&self, subscription: &Subscription) -> Result<Option<Source>, String>;
     /// Whether the source's adapter reads deliveries (`preprocessInbound`).
     fn reads_deliveries(&self, source: &Source) -> bool;
-    async fn preprocess(&self, source: &Source, raw: &Js, checkpoint: Option<&Js>) -> Result<Extraction, String>;
+    /// The module's reading of a delivery (`preprocessInbound`); a failure
+    /// says whether the module was reached.
+    async fn preprocess(&self, source: &Source, raw: &Js, checkpoint: Option<&Js>) -> Result<Extraction, Unanswered>;
     /// The module's own check of a request (`checkInbound`), its answer
     /// validated as the wire's.
-    async fn check_inbound(&self, source: &Source, request: &RawRequest<'_>, secret: Option<&str>, checkpoint: Option<&Js>) -> Result<Js, String>;
+    async fn check_inbound(&self, source: &Source, request: &RawRequest<'_>, secret: Option<&str>, checkpoint: Option<&Js>) -> Result<Js, Unanswered>;
     /// An event's receipt: what `keep` later queues.
     async fn capture(&self, event: &Js, source: &Source) -> Result<Js, String>;
     /// What the delivery leaves, kept as one: the delivery's receipt, its
@@ -656,11 +659,6 @@ pub trait InboundStore {
     /// None to keep them.
     fn refuse_arrivals(&self, _source: &Source, _arrivals: &[crate::arrivals::ArrivalIn]) -> Option<String> {
         None
-    }
-    /// Each arrival with what the host adds to a landing written, before it is
-    /// judged or logged (crate::actor).
-    async fn with_actors(&self, _source: &Source, arrivals: Vec<crate::arrivals::ArrivalIn>) -> Vec<crate::arrivals::ArrivalIn> {
-        arrivals
     }
 }
 
@@ -837,7 +835,6 @@ async fn receive_delivery<S: InboundStore>(store: &S, provider_key: &str, delive
         (store.preprocess(&source, &body, subscription.checkpoint.as_ref()).await?, external_id, None)
     };
 
-    let extraction = Extraction { arrivals: store.with_actors(&source, extraction.arrivals).await, ..extraction };
     if let Some(message) = store.refuse_arrivals(&source, &extraction.arrivals) {
         eprintln!("Webhook delivery refused for subscription {}: {message}", delivery.subscription_id);
         return refused(Refusal::PayloadMismatch(message));
@@ -899,11 +896,15 @@ async fn receive_delivery<S: InboundStore>(store: &S, provider_key: &str, delive
 /// answered: a module that reads from a pull cursor reports every arrival
 /// since it, later deliveries' among them. Nothing is kept: the cursor its
 /// module answers is dropped.
-pub async fn reread_delivery<S: InboundStore>(store: &S, subscription_id: &str, captured: &Captured) -> Result<(Source, Extraction), String> {
-    let gone = || format!("the subscription {subscription_id} the delivery came through is no longer served");
-    let brought = captured.arrival_ids.as_ref().ok_or("the kept request names none of the arrivals its delivery brought (it was kept by an earlier listen-fire): it cannot be replayed")?;
-    let subscription = store.find_subscription(subscription_id).await?.ok_or_else(gone)?;
-    let source = store.source_for(&subscription).await?.ok_or_else(gone)?;
+///
+/// A failure says whether the module was reached: one out of reach may read
+/// it later; anything else (the module's own refusal, a subscription no
+/// longer served, a request kept by an earlier listen-fire) never will.
+pub async fn reread_delivery<S: InboundStore>(store: &S, subscription_id: &str, captured: &Captured) -> Result<(Source, Extraction), Unanswered> {
+    let gone = || Unanswered::Refused(format!("the subscription {subscription_id} the delivery came through is no longer served"));
+    let brought = captured.arrival_ids.as_ref().ok_or_else(|| Unanswered::Refused("the kept request names none of the arrivals its delivery brought (it was kept by an earlier listen-fire): it cannot be replayed".into()))?;
+    let subscription = store.find_subscription(subscription_id).await.map_err(Unanswered::Refused)?.ok_or_else(gone)?;
+    let source = store.source_for(&subscription).await.map_err(Unanswered::Refused)?.ok_or_else(gone)?;
     let extraction = if source.declaration.scheme == Scheme::Module {
         let secret = is_usable_secret(&source.secret).then_some(source.secret.as_str());
         let answer = store.check_inbound(&source, &captured.raw(), secret, captured.checkpoint.as_ref()).await?;
@@ -911,23 +912,22 @@ pub async fn reread_delivery<S: InboundStore>(store: &S, subscription_id: &str, 
             Some(outcome @ ("reply" | "refused")) => {
                 let status = status_of(answer.get("status").or_else(|| answer.get("reply").and_then(|r| r.get("status"))));
                 let said = status.map_or_else(|| outcome.to_string(), |status| format!("{outcome} {status}"));
-                return Err(format!("{} refused the kept request, though it was told it is a replay: it answered {said}", source.adapter_type));
+                return Err(Unanswered::Refused(format!("{} refused the kept request, though it was told it is a replay: it answered {said}", source.adapter_type)));
             }
             _ => Extraction {
                 events: answer.get("events").and_then(Js::as_array).map(<[Js]>::to_vec).unwrap_or_default(),
-                arrivals: arrivals_of(&answer).map_err(|e| format!("checkInbound for adapter {}: {e}", source.adapter_type))?,
+                arrivals: arrivals_of(&answer).map_err(|e| Unanswered::Refused(format!("checkInbound for adapter {}: {e}", source.adapter_type)))?,
                 checkpoint: None,
             },
         }
     } else {
         if !store.reads_deliveries(&source) {
-            return Err(format!("{} reads no deliveries (preprocessInbound)", source.adapter_type));
+            return Err(Unanswered::Refused(format!("{} reads no deliveries (preprocessInbound)", source.adapter_type)));
         }
-        let body = delivery_body(&captured.body, &captured.headers)?;
+        let body = delivery_body(&captured.body, &captured.headers).map_err(Unanswered::Refused)?;
         Extraction { checkpoint: None, ..store.preprocess(&source, &body, captured.checkpoint.as_ref()).await? }
     };
     let arrivals = extraction.arrivals.into_iter().filter(|arrival| brought.contains(&arrival.receipt_key())).collect();
-    let arrivals = store.with_actors(&source, arrivals).await;
     Ok((source, Extraction { arrivals, ..extraction }))
 }
 
@@ -1276,11 +1276,11 @@ mod tests {
         fn reads_deliveries(&self, _source: &Source) -> bool {
             self.signed
         }
-        async fn preprocess(&self, _source: &Source, raw: &Js, _checkpoint: Option<&Js>) -> Result<Extraction, String> {
+        async fn preprocess(&self, _source: &Source, raw: &Js, _checkpoint: Option<&Js>) -> Result<Extraction, Unanswered> {
             self.seen.borrow_mut().push(raw.to_json());
-            Ok(Extraction { events: Vec::new(), arrivals: arrivals_of(raw)?, checkpoint: None })
+            Ok(Extraction { events: Vec::new(), arrivals: arrivals_of(raw).map_err(Unanswered::Refused)?, checkpoint: None })
         }
-        async fn check_inbound(&self, _source: &Source, request: &RawRequest<'_>, secret: Option<&str>, _checkpoint: Option<&Js>) -> Result<Js, String> {
+        async fn check_inbound(&self, _source: &Source, request: &RawRequest<'_>, secret: Option<&str>, _checkpoint: Option<&Js>) -> Result<Js, Unanswered> {
             self.seen.borrow_mut().push(format!("{} {} {}", request.wire().to_json(), secret.unwrap_or("-"), request.method));
             self.replayed.borrow_mut().push(request.replayed);
             Ok(self.answer.clone())
@@ -1369,7 +1369,7 @@ mod tests {
         assert_eq!(extraction.arrivals.iter().map(|a| a.identity.as_deref()).collect::<Vec<_>>(), [Some("r1")]);
         // One kept before deliveries named their arrivals is refused by name.
         let mut unnamed = RawRequest { method: "POST", path: "/p", query: "", headers: &[], body: b"{}", replayed: false }.wire();
-        let error = reread_delivery(&store, "inst", &Captured::read(&unnamed).unwrap()).await.err().unwrap();
+        let Some(Unanswered::Refused(error)) = reread_delivery(&store, "inst", &Captured::read(&unnamed).unwrap()).await.err() else { panic!("refused, never waited on") };
         assert!(error.contains("names none of the arrivals its delivery brought"), "{error}");
         Captured::name_arrivals(&mut unnamed, &[]);
         assert_eq!(reread_delivery(&store, "inst", &Captured::read(&unnamed).unwrap()).await.unwrap().1.arrivals.len(), 0);
@@ -1438,7 +1438,7 @@ mod tests {
     async fn a_replay_a_module_still_refuses_is_reported_by_name() {
         let store = ModuleChecked::answering(r#"{"outcome":"refused","status":401}"#);
         let error = reread_delivery(&store, "inst", &kept_as(br#"{"providerKey":"mail","scheme":"module"}"#, &[], &[])).await.err().unwrap();
-        assert_eq!(error, "mail refused the kept request, though it was told it is a replay: it answered refused 401");
+        assert_eq!(error, Unanswered::Refused("mail refused the kept request, though it was told it is a replay: it answered refused 401".into()));
     }
 
     #[tokio::test]

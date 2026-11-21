@@ -50,6 +50,11 @@ pub trait TypeEnv {
     fn name_in_scope(&self, _name: &str) -> bool {
         false
     }
+    /// The plugin a call names here (`team.isMember`, as the program
+    /// imports it), as its catalog declares it.
+    fn plugin(&self, _name: &str) -> Option<movement_parser::catalog::types::PluginSpec> {
+        None
+    }
     /// The variables in scope, innermost first: what a bare name in a hop's
     /// WHERE may have meant (the did-you-mean).
     fn value_names_in_scope(&self) -> Vec<String> {
@@ -929,7 +934,7 @@ impl<'a> Typing<'a> {
             Expression::Traverse { alias_root: Some(next), .. } if past_steps.is_empty() => Some(next.as_str()),
             _ => None,
         };
-        let scalar = field.as_ref().and_then(|ty| match strip_absent(ty) {
+        let scalar = field.as_ref().map(unbranded).and_then(|ty| match strip_absent(&ty) {
             Ty::Text | Ty::Owned(_) | Ty::Enum { .. } => Some(FieldlessScalar::Text),
             Ty::Number => Some(FieldlessScalar::Number),
             Ty::Boolean => Some(FieldlessScalar::Boolean),
@@ -972,6 +977,37 @@ impl<'a> Typing<'a> {
         }
     }
 
+    /// `team.userFor(e)?.Level`: a field of the record a call answers, as
+    /// TypeScript reads `f(x)?.level`. Where the answer may be none, `.`
+    /// is refused and `?.` reads it, absent then: a call's answer is never
+    /// narrowed, each call answering anew.
+    fn read_answer_field(&mut self, answer: &Expression, ty: Option<&Ty>, field: &str, optional: bool) -> Option<Ty> {
+        let ty = ty?;
+        let spelled = match answer {
+            Expression::Function { fn_, .. } => format!("{fn_}(…)"),
+            _ => "this value".to_string(),
+        };
+        let quoted = crate::families::values::quote_name(field);
+        let fields = match strip_absent(ty) {
+            Ty::Record(Some(record)) => (**record).clone(),
+            Ty::HeldRecord(held) => held.position.clone(),
+            other => {
+                let message = format!("'{spelled}' answers {}, which has no field '{field}'", crate::types::field::spell_type(other));
+                self.report(codes::UNKNOWN_PROPERTY, message);
+                return None;
+            }
+        };
+        let may_be_none = is_maybe_absent(Some(ty));
+        if may_be_none && !optional {
+            let message = format!(
+                "'{spelled}' may answer no record, and '{spelled}.{quoted}' reads through it. Read it with `{spelled}?.{quoted}` (absent when it answers none)."
+            );
+            self.report(codes::ABSENT_REQUIRED, message);
+        }
+        let read = self.read_property(Some(&fields), field)?;
+        Some(if may_be_none { maybe_absent(read) } else { read })
+    }
+
     /// A name holding what a `record` field holds (`r = c.Current`).
     fn held_by_name(&self, root: &str) -> Option<(Rc<HeldRecord>, bool)> {
         if self.root_type(root).is_some() {
@@ -992,7 +1028,7 @@ impl<'a> Typing<'a> {
         if !steps.is_empty() || self.root_type(root).is_some() {
             return None;
         }
-        let held = self.scalar_type(root)?;
+        let held = unbranded(&self.scalar_type(root)?);
         let scalar = match strip_absent(&held) {
             Ty::Text | Ty::Owned(_) | Ty::Enum { .. } => FieldlessScalar::Text,
             Ty::Number => FieldlessScalar::Number,
@@ -1086,6 +1122,10 @@ impl<'a> Typing<'a> {
 
     fn type_exact_at(&mut self, expr: &Expression, position: Option<&Position>) -> Option<Ty> {
         let (ty, operands) = self.type_node(expr, position);
+        // An operation reads its operands' bases: only an argument check
+        // judges a brand, and nothing an operator or a function makes of a
+        // value keeps one.
+        let operands: Vec<Option<Ty>> = operands.iter().map(|operand| operand.as_ref().map(unbranded)).collect();
         crate::families::values::observe(self, expr, position, &operands, ty.as_ref());
         crate::families::calls::observe(self, expr, position, &operands, ty.as_ref());
         ty
@@ -1255,6 +1295,9 @@ impl<'a> Typing<'a> {
                     negative_presence_proofs(condition, &mut type_of)
                 };
                 let else_ty = self.with_presence(&else_proofs, position, |t, narrowed| t.infer_at(else_, narrowed));
+                // Choosing is an operation: `c ? e : f` is unbranded, as a
+                // function's answer is.
+                let (then_ty, else_ty) = (then_ty.as_ref().map(unbranded), else_ty.as_ref().map(unbranded));
                 // A closure is not data: IF chooses
                 // between values, never between closures.
                 if self.refuse_closure_operands(&[(then, then_ty.as_ref()), (else_, else_ty.as_ref())], expr, &format!("chosen by {}", spell_word("IF … THEN … ELSE … END"))) {
@@ -1287,18 +1330,22 @@ impl<'a> Typing<'a> {
                 (ty, vec![condition_ty, then_ty, else_ty])
             }
             Expression::At { expression, index } => {
-                let inner = self.infer_exact_at(expression, position);
+                let inner = self.infer_exact_at(expression, position).as_ref().map(unbranded);
                 let index_ty = self.infer_at(index, position);
                 if crate::families::values::refuse_record_key(self, expression, index, index_ty.as_ref()) {
                     return (None, vec![inner, index_ty]);
                 }
                 (self.at_type(inner.as_ref(), index, index_ty.as_ref()), vec![inner, index_ty])
             }
+            Expression::Field { expression: answer, field, optional } => {
+                let inner = self.infer_at(answer, position);
+                (self.read_answer_field(answer, inner.as_ref(), field, *optional), vec![inner])
+            }
             Expression::Aggregate { fn_, expression, .. } => {
                 if *fn_ == AggregationFunction::Llm {
                     self.observe_builtin("LLM_AGG");
                 }
-                let inner = self.infer_at(expression, position);
+                let inner = self.infer_at(expression, position).as_ref().map(unbranded);
                 (self.aggregate_type(*fn_, inner.as_ref(), expression), vec![inner])
             }
             Expression::Llm { prompt_expression, .. } => {
@@ -1307,6 +1354,12 @@ impl<'a> Typing<'a> {
                 (None, prompt.into_iter().collect())
             }
             Expression::Function { fn_, args } => {
+                if let Some(spec) = self.env.plugin(fn_) {
+                    // A plugin's argument keeps its brand: only an operation drops one.
+                    let types: Vec<Option<Ty>> = args.iter().map(|a| self.infer_at(a, position)).collect();
+                    let ty = crate::families::plugin_calls::type_plugin_call(self, fn_, &spec, &types);
+                    return (ty, types);
+                }
                 let options = crate::families::extraction::options_contract(fn_);
                 let types: Vec<Option<Ty>> = args
                     .iter()
@@ -1315,6 +1368,7 @@ impl<'a> Typing<'a> {
                         Some(contract) if contract.index == i => crate::families::extraction::type_options_map(self, a, contract, position),
                         _ => self.infer_at(a, position),
                     })
+                    .map(|ty| ty.as_ref().map(unbranded))
                     .collect();
                 self.observe_builtin(fn_);
                 crate::families::values::observe_call(self, fn_, args);

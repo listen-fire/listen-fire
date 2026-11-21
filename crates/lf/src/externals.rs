@@ -414,6 +414,63 @@ pub async fn rpc(running: &RunningExternal, credentials: &Credentials, tenant: &
     rpc_as(running, credentials, credential_for(credentials, &running.external.manifest.name), tenant, method, params).await
 }
 
+/// Why a call to a module got no answer of its own.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Unanswered {
+    /// Nothing answered: the module did not start, the connection failed,
+    /// or something in between answered an HTTP error.
+    Unreachable(String),
+    /// The module answered, with an error of its own (or a malformed answer).
+    Refused(String),
+}
+
+impl Unanswered {
+    /// A send's failure: one that reached nothing is out of reach, any other refused.
+    pub fn of(error: crate::credential_calls::SendError) -> Unanswered {
+        use crate::credential_calls::SendError;
+        use crate::protocol::RpcError;
+        match error {
+            SendError::Rpc(error @ (RpcError::Unreachable(_) | RpcError::Transport { .. })) => Unanswered::Unreachable(error.message()),
+            other => Unanswered::Refused(String::from(other)),
+        }
+    }
+}
+
+impl From<Unanswered> for String {
+    fn from(unanswered: Unanswered) -> String {
+        match unanswered {
+            Unanswered::Unreachable(message) | Unanswered::Refused(message) => message,
+        }
+    }
+}
+
+/// One call to a module: as `credential` (one connection's, or none), the
+/// construction's position args (`settings`) carried on it.
+pub struct ModuleCall<'c> {
+    pub credentials: &'c Credentials,
+    pub credential: Option<&'c Credential>,
+    pub tenant: &'c str,
+    pub method: &'c str,
+    pub params: serde_json::Value,
+    pub settings: Option<serde_json::Value>,
+}
+
+/// `call` to a running module, saying whether a failure is the module's
+/// own answer or no answer at all.
+pub async fn rpc_reaching(running: &RunningExternal, call: ModuleCall<'_>) -> Result<Js, Unanswered> {
+    let lease = running.reach.lease().await.map_err(Unanswered::Unreachable)?;
+    let target = Target {
+        external: &running.external,
+        base_url: &lease.address,
+        declarations: &running.credential_declarations,
+        methods: &running.methods,
+        settings: &running.settings,
+        limits: &running.limits,
+        inbound_url: running.inbound_url.as_deref(),
+    };
+    call_reaching(&target, call).await
+}
+
 /// A position arg's source text as its value: a quoted string loses its quotes.
 fn unquoted(raw: &str) -> String {
     let trimmed = raw.trim();
@@ -430,26 +487,18 @@ pub async fn rpc_as(running: &RunningExternal, credentials: &Credentials, creden
 
 /// `rpc_as`, with the construction's position args (`settings`) carried on the call.
 pub async fn rpc_in(running: &RunningExternal, credentials: &Credentials, credential: Option<&Credential>, tenant: &str, method: &str, params: serde_json::Value, settings: Option<serde_json::Value>) -> Result<Js, String> {
-    let lease = running.reach.lease().await?;
-    let target = Target {
-        external: &running.external,
-        base_url: &lease.address,
-        declarations: &running.credential_declarations,
-        methods: &running.methods,
-        settings: &running.settings,
-        limits: &running.limits,
-        inbound_url: running.inbound_url.as_deref(),
-    };
-    call_as(&target, credentials, credential, tenant, method, params, settings).await
+    Ok(rpc_reaching(running, ModuleCall { credentials, credential, tenant, method, params, settings }).await?)
 }
 
 async fn call(target: &Target<'_>, credentials: &Credentials, tenant: &str, method: &str, params: serde_json::Value) -> Result<Js, String> {
-    call_as(target, credentials, credential_for(credentials, &target.external.manifest.name), tenant, method, params, None).await
+    let credential = credential_for(credentials, &target.external.manifest.name);
+    Ok(call_reaching(target, ModuleCall { credentials, credential, tenant, method, params, settings: None }).await?)
 }
 
-async fn call_as(target: &Target<'_>, credentials: &Credentials, credential: Option<&Credential>, tenant: &str, method: &str, params: serde_json::Value, settings: Option<serde_json::Value>) -> Result<Js, String> {
+async fn call_reaching(target: &Target<'_>, call: ModuleCall<'_>) -> Result<Js, Unanswered> {
+    let ModuleCall { credentials, credential, tenant, method, params, settings } = call;
     let signer = signer_of(credentials, &target.external.manifest.name, credential);
-    Ok(send(target, credentials, credential, signer, Sending { tenant, method, cache_scope_id: "<none>", params, settings }).await?)
+    send(target, credentials, credential, signer, Sending { tenant, method, cache_scope_id: "<none>", params, settings }).await.map_err(Unanswered::of)
 }
 
 /// The externals the files connect or import (`from adapters`, `from
@@ -483,6 +532,22 @@ pub fn needed_externals(externals: Vec<External>, files: &[std::rc::Rc<Parsed>],
                 || also(e)
         })
         .collect()
+}
+
+/// Why `install` cannot be used: it holds a setting its module's manifest
+/// retires (`retiredSettings`), refused with the module's own `instead`. A
+/// setting is kept with the connection, in listen-fire's own configuration,
+/// not in a movement's text, so no upgrade can rewrite it: listen-fire
+/// refuses the connection until the author has written the replacement and
+/// removed the setting.
+fn retired_setting_refusal(listen: &Obj, install: Option<&Credential>) -> Option<String> {
+    let install = install?;
+    let retired = listen.get("retiredSettings")?.as_array()?;
+    retired.iter().find_map(|entry| {
+        let name = entry.get("name")?.as_str()?;
+        let instead = entry.get("instead")?.as_str()?;
+        install.fields.contains_key(name).then(|| format!("{}: the setting `{name}` is retired: {instead}", install.name))
+    })
 }
 
 /// Read every external's manifest, its process started on that first call
@@ -540,6 +605,9 @@ async fn start_external(external: &External, reach: Reach, credentials: &Credent
     }
     let credential_declarations = with_install_endpoints(declarations_of(&raw).map_err(|expected| shape_error("manifest", name, &raw, &expected))?, install);
     let limits = crate::limiter::module_limits_of(&raw).map_err(|expected| shape_error("manifest", name, &raw, &expected))?;
+    if let Some(refusal) = retired_setting_refusal(&manifest.listen, install) {
+        return Err(refusal);
+    }
     if external.manifest.kind == "plugin" && manifest.plugins.is_none() {
         return Err(format!("external \"{name}\" is a plugin external, but its manifest declares no plugins"));
     }
@@ -708,6 +776,23 @@ fn listen_declarations(raw: &Js) -> Result<Obj, String> {
         let parsed = settings_become(value)?;
         let stored = serde_json::to_string(&parsed).map_err(|e| format!("listenSettingsBecome: {e}"))?;
         out.insert("listenSettingsBecome".into(), Js::parse(stored.as_bytes()).map_err(|e| format!("listenSettingsBecome: {e}"))?);
+    }
+    if let Some(value) = raw.get("listensLimitedBefore") {
+        let release = value.as_str().filter(|release| movement_parser::version::compatibility_key(release).is_ok());
+        let release = release.ok_or("listensLimitedBefore: expected a release (0.16.0)")?;
+        out.insert("listensLimitedBefore".into(), Js::str(release));
+    }
+    if let Some(value) = raw.get("retiredSettings") {
+        let entries = value.as_array().ok_or("retiredSettings: expected an array")?;
+        let named = |entry: &Js, key: &str| entry.get(key).and_then(Js::as_str).filter(|text| !text.is_empty()).map(str::to_string);
+        let mut retired = Vec::new();
+        for entry in entries {
+            let (Some(name), Some(instead)) = (named(entry, "name"), named(entry, "instead")) else {
+                return Err("retiredSettings: expected { name, instead } entries".into());
+            };
+            retired.push(Js::Obj(Obj::from([("name".to_string(), Js::str(name)), ("instead".to_string(), Js::str(instead))])));
+        }
+        out.insert("retiredSettings".into(), Js::Arr(retired));
     }
     Ok(out)
 }
@@ -928,6 +1013,28 @@ fn serve_module_command(project: &Project, external: &str) -> Result<Vec<String>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn drop_own_messages_is_refused_with_its_replacement() {
+        let install = |fields: &[(&str, &str)]| Credential {
+            name: "slack_install".into(),
+            external: "slack".into(),
+            binding: crate::secrets::Binding::Install,
+            fields: fields.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
+            origin: Default::default(),
+        };
+        let manifest = Js::parse(br#"{"retiredSettings":[{"name":"drop_own_messages","instead":"NOT m.`Sent By This App` on each listen"}]}"#).unwrap();
+        let retiring = listen_declarations(&manifest).unwrap();
+        let configured = install(&[("bot_token", "xoxb"), ("drop_own_messages", "on")]);
+        assert_eq!(
+            retired_setting_refusal(&retiring, Some(&configured)).as_deref(),
+            Some("slack_install: the setting `drop_own_messages` is retired: NOT m.`Sent By This App` on each listen")
+        );
+        assert_eq!(retired_setting_refusal(&retiring, Some(&install(&[("bot_token", "xoxb")]))), None);
+        assert_eq!(retired_setting_refusal(&retiring, None), None);
+        assert_eq!(retired_setting_refusal(&Obj::new(), Some(&configured)), None, "a module that retires nothing refuses nothing");
+        assert!(listen_declarations(&Js::parse(br#"{"retiredSettings":[{"name":"x"}]}"#).unwrap()).is_err());
+    }
 
     #[test]
     fn lf_yaml_s_resend_window_for_a_module_wins_over_its_manifest_s_which_wins_over_the_hour() {

@@ -12,7 +12,7 @@ import { z } from 'zod';
 
 import type { Expression } from './expression/expression';
 
-import { expressionSchema } from './expression/expression';
+import { listenFilterSchema } from './expression/expression';
 
 /** How the host honours a hop's filter: nothing to judge; judged on each
  *  arrival against the record it carries (the last hop always is); or by
@@ -40,6 +40,10 @@ export interface PlanHop {
    *  evaluate (an owned one). Absent when it reads none. */
   owned?: string[];
   judged: HopJudged;
+  /** Whether `checked` calls a plugin the host answers, named there by its
+   *  catalog key. Each AND and OR in it lists the terms that ask no host
+   *  first. Absent when it calls none. */
+  asksHost?: boolean;
 }
 
 export interface ListenPlan {
@@ -99,10 +103,11 @@ export const planHopSchema: z.ZodType<PlanHop> = z
     to: z.string(),
     memberOf: z.string().optional(),
     alias: z.string().optional(),
-    taken: expressionSchema.optional(),
-    checked: expressionSchema.optional(),
+    taken: listenFilterSchema.optional(),
+    checked: listenFilterSchema.optional(),
     owned: z.array(z.string()).optional(),
     judged: hopJudgedSchema,
+    asksHost: z.boolean().optional(),
   })
   .strict();
 
@@ -177,11 +182,60 @@ export const planArrivalSchema: z.ZodType<PlanArrival> = z
 /** Whether an arrival fires a listen: it does; it fails the filter of hop
  *  `skips` (outermost is 0), or, with a `reason`, the record it carries for
  *  that hop is of another record type; or the judge cannot tell, and says
- *  why. An undecided arrival runs nothing, and the host logs the reason. */
-export type Verdict = { fires: true } | { skips: number; reason?: string } | { undecided: string };
+ *  why: with `unreachable`, the host function the host could not answer,
+ *  which a host judges again once it can. An undecided arrival runs
+ *  nothing, and the host logs the reason. */
+export type Verdict = { fires: true } | { skips: number; reason?: string } | { undecided: string; unreachable?: string };
 
 export const verdictSchema: z.ZodType<Verdict> = z.union([
   z.object({ fires: z.literal(true) }).strict(),
   z.object({ skips: z.number().int().nonnegative(), reason: z.string().optional() }).strict(),
-  z.object({ undecided: z.string() }).strict(),
+  z.object({ undecided: z.string(), unreachable: z.string().min(1).optional() }).strict(),
 ]);
+
+/** A question the judge asks its host: what the pure plugin `plugin`, by its
+ *  catalog key (`@lf-platform/team/isMember`), answers for `args`. */
+export interface PluginQuestion {
+  plugin: string;
+  args: unknown[];
+}
+
+export const pluginQuestionSchema: z.ZodType<PluginQuestion> = z.object({ plugin: z.string().min(1), args: z.array(z.unknown()) }).strict();
+
+/** A filter that calls a host function the host has not answered for this
+ *  arrival: the questions the judge reached. The host asks each, then judges
+ *  again with the answers. */
+export interface ListenAsks {
+  asks: PluginQuestion[];
+}
+
+/** What the judge makes of an arrival: a verdict, or the questions it needs
+ *  answered first. */
+export type Judgement = Verdict | ListenAsks;
+
+export const judgementSchema: z.ZodType<Judgement> = z.union([verdictSchema, z.object({ asks: z.array(pluginQuestionSchema).min(1) }).strict()]);
+
+/** What the host answered the judge's questions, each the question with the
+ *  plugin's `value`, or `unreachable` and why: the judge keys them itself. */
+export type PluginAnswers = Array<PluginQuestion & ({ value: unknown } | { unreachable: string })>;
+
+export const pluginAnswersSchema: z.ZodType<PluginAnswers> = z.array(
+  z.union([
+    // A plugin may answer null; it answered only when `value` is present.
+    z
+      .object({ plugin: z.string().min(1), args: z.array(z.unknown()), value: z.unknown() })
+      .strict()
+      .refine((answer) => Object.hasOwn(answer, 'value'), { message: 'an answer holds the value the plugin answered, or says why it is unreachable' }),
+    z.object({ plugin: z.string().min(1), args: z.array(z.unknown()), unreachable: z.string() }).strict(),
+  ]),
+);
+
+/** A judgement and the term of the filter that skipped the arrival, as the
+ *  filter writes it (a host function by its catalog key): what "why didn't
+ *  this fire?" names. */
+export interface Explanation {
+  verdict: Judgement;
+  firstFailed?: string;
+}
+
+export const explanationSchema: z.ZodType<Explanation> = z.object({ verdict: judgementSchema, firstFailed: z.string().optional() }).strict();

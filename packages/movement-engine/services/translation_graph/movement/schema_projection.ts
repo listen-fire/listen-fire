@@ -261,7 +261,7 @@ function describedBy(declared: { description?: string }): string | undefined {
 export function fieldTypeFromDescriptor(
   field: Pick<
     SchemaFieldDescriptor,
-    'kind' | 'enumValues' | 'cardinality' | 'knownValues' | 'knownValuePattern' | 'owned' | 'record' | 'mayBeAbsent'
+    'kind' | 'enumValues' | 'cardinality' | 'knownValues' | 'knownValuePattern' | 'owned' | 'record' | 'mayBeAbsent' | 'brands'
   >,
   at: { owner: string; positionOf: (typeId: string) => string },
 ): SchemaFieldType | undefined {
@@ -333,7 +333,13 @@ export function fieldTypeFromDescriptor(
     }
   })();
   if (scalar === undefined) return undefined;
-  const type: SchemaFieldType = field.cardinality === 'many' ? { kind: 'list', of: scalar } : scalar;
+  // The descriptor schema refuses brands on any other kind, and the Rust
+  // projection leaves such a field out; here it cannot arrive.
+  const branded: SchemaFieldType =
+    field.brands !== undefined && (field.kind === 'string' || field.kind === 'number')
+      ? { kind: 'branded', of: scalar, brands: [...field.brands] }
+      : scalar;
+  const type: SchemaFieldType = field.cardinality === 'many' ? { kind: 'list', of: branded } : branded;
   return field.mayBeAbsent === true ? { kind: 'maybeAbsent', of: type } : type;
 }
 

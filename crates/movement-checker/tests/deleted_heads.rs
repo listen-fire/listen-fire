@@ -37,7 +37,7 @@ const HEADER: &str = "import { chat as chat_module, crm as crm_module } from ada
 /// as an upgrade from `pin` when one is given.
 fn found_with(body: &str, functions: &str, pin: Option<&str>) -> Vec<String> {
     let source = format!("{HEADER}\n{body}}}\n{functions}");
-    let options = CheckOptions { upgrading_from: pin, zones: &movement_checker::host::native::NativeZones };
+    let options = CheckOptions { upgrading_from: pin, limiting_function: None, zones: &movement_checker::host::native::NativeZones };
     check_source(&source, &CatalogSnapshot::load(CATALOG).unwrap(), options)
         .unwrap_or_else(|e| panic!("{source}: {e:?}"))
         .into_iter()

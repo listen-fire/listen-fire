@@ -15,7 +15,7 @@ use crate::codes;
 use crate::scope::{Resolution, ScopeId};
 use crate::types::field::{
     Ty, spell_type, field_assignable, field_type_equals, handle_within, is_maybe_absent, shows_more_handles, spell_held_steps,
-    strip_absent, HeldWalk,
+    strip_absent, unvouched_for_a_brand, brand_required_message, HeldWalk,
 };
 use crate::types::position::{PlaneType, Position, ReturnShape, describe_position, positions_match};
 
@@ -336,6 +336,10 @@ impl Checker<'_> {
                 return;
             }
             let got = shape.plane.field.clone().or_else(|| shape.plane.pos.as_deref().map(record_of));
+            if unvouched_for_a_brand(got.as_ref(), target) {
+                self.report(codes::BRAND_REQUIRED, brand_required_message(expected, "this return", got.as_ref()), span);
+                return;
+            }
             let Some(got) = got else { return };
             if is_maybe_absent(Some(&got)) && !is_maybe_absent(Some(target)) {
                 self.report(

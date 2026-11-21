@@ -113,6 +113,9 @@ export interface WhatsappPayload {
   messageId: string;
   /** Sender phone number, `whatsapp:` prefix stripped. */
   from: string;
+  /** The sender's number as `claim:phone/e164` (`+447700900001`); null when
+   *  `from` is not a number in that form. */
+  senderPhone: string | null;
   /** Recipient phone number (the WhatsApp business number), prefix
    *  stripped. */
   to: string;

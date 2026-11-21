@@ -10,16 +10,14 @@
 import { Readable } from 'node:stream';
 
 import { LRUCache } from 'lru-cache';
-import { z } from 'zod';
 
 import type { ReadableStream as WebReadableStream } from 'node:stream/web';
 import type { EnsureEdgeSubscriptionInput, ModuleFiles, RemoveEdgeSubscriptionInput } from 'module-kit';
-import { firedActor, firedRecordFields } from 'module-kit';
+
 import type { ArrivalsCapability, AwaitHead, AwaitKey } from 'engine-contracts';
 import type { AttioRecord } from './api_client';
 import { extractAttioValue, optionTitle, type AttioAttribute } from './attributes';
 import {
-  ATTIO_CHANGE_ACTOR,
   ATTIO_CHANGES_EDGE,
   ATTIO_RECORD_EVENTS,
   changeArrivals,
@@ -34,8 +32,6 @@ import {
 import type { TriggerEvent } from 'movement-engine/public/inbound';
 import type { SnapshotInput } from 'movement-engine/public/adapter';
 import type {
-  ActorCandidate,
-  ActorIdentity,
   AdapterManifest,
   DeleteInput,
   DeleteResult,
@@ -588,7 +584,7 @@ function describeCommentMeta(): SchemaTypeDescriptor {
       { fieldId: 'content_plaintext', displayName: 'Content', kind: 'string', writable: true, required: true },
       // Attio requires every comment to carry a workspace-member author.
       // Authors set this by EMAIL (the same convention as actor-reference
-      // fields on records — `@user_email` is the natural mapping); the write
+      // fields on records); the write
       // resolves it to a workspace member and rejects unknown addresses.
       { fieldId: 'author', displayName: 'Author (email)', kind: 'string', writable: true, required: true },
       // Set Thread ID to reply into an existing thread; leave it blank to
@@ -653,95 +649,6 @@ export class AttioAdapter extends BaseAdapter {
   constructor(private readonly host: AttioHost) {
     super();
     this.teamId = host.tenant;
-  }
-
-  // ── 0. Actor candidate parsing (acting-user split) ──────────────────────
-  // Attio surfaces at most one `originator` candidate: the workspace
-  // member's email, resolved at runtime via `/v2/workspace_members/{id}`
-  // (the webhook payload carries only `actor: { type, id }`, never an
-  // email). No persistence — no `user_attio` mapping table, no stored
-  // actors. Only attempted for `workspace-member` actors (api-token /
-  // system actors have no email). A lookup that fails is not a member with no
-  // email: it throws, so the host names who acted unknown.
-  //
-  // External-system API enrichment (the workspace-member fetch) is
-  // explicitly allowed in `getActorCandidates`; Listen-Fire DB access is NOT.
-  // The creator-override (T6) — the PRIMARY Attio use case, where the
-  // creator who connected the integration is the right acting user even
-  // though the literal actor is someone else (still visible via
-  // `@actor_*`) — plus the email→user match, the creator-fallback
-  // (`trigger.config.fallbackToCreatorIfActorUnregistered`), and the
-  // null-on-no-match rejection all live in `resolveActingUser`.
-  async getActorCandidates(input: { event: TriggerEvent }): Promise<ActorCandidate[]> {
-    const resolved = await this.resolveActorEmail(input.event);
-    if (!resolved) return [];
-    // `identifier` stays the workspace-member id (the source-system primary
-    // key); the API-resolved address rides `email`, making the candidate
-    // email-resolvable (`scheme: 'email'`).
-    return [
-      {
-        identity: {
-          identifier: resolved.memberId,
-          scheme: 'email',
-          adapterType: this.adapterType,
-          email: resolved.email,
-        },
-        source: 'originator',
-      },
-    ];
-  }
-
-  /**
-   * Resolve the inbound Attio actor's email at runtime.
-   *
-   * Attio webhook payloads carry only `actor: { type, id }` — no email. The
-   * email lives on the workspace member record, fetched via
-   * `GET /v2/workspace_members/{workspace_member_id}` with the stored API
-   * key. Only `workspace-member` actors are resolvable; `api-token` /
-   * `system` actors (and our own echoes) have no human email and return
-   * null immediately.
-   *
-   * A missing actor, a non-member actor type, or a member with no email is a
-   * genuine miss and returns null. A missing credential or any API failure
-   * throws: a filter on the address must land as undecided, not as a
-   * non-match. No persistence of the resolved email.
-   */
-  private async resolveActorEmail(
-    event: TriggerEvent,
-  ): Promise<{ memberId: string; email: string } | null> {
-    const memberId = firedActor(event)?.identifier;
-    if (memberId === undefined || readAttioActor(event)?.type !== 'workspace-member') return null;
-
-    try {
-      const client = await this.getApiClient();
-      const response = await client.fetch({
-        route: `/v2/workspace_members/${memberId}`,
-        method: 'GET',
-        responseValidator: z.object({
-          data: z.object({
-            email_address: z.string().nullable().optional(),
-          }).passthrough(),
-        }),
-      });
-      const email = response.data.email_address;
-      const normalized = email ? email.trim().toLowerCase() : null;
-      return normalized ? { memberId, email: normalized } : null;
-    } catch (err) {
-      logger.warn('[AttioAdapter] workspace-member actor-email resolution failed', {
-        teamId: this.teamId,
-        workspaceMemberId: memberId,
-        error: err instanceof Error ? err.message : String(err),
-      });
-      throw err;
-    }
-  }
-
-  // Raw Attio actor — the id of who made the change a run was fired on, as
-  // the door named them on the arrival (`changeArrivals`). Synchronous parse
-  // only; resolving Attio actor → workspace member display name would need a
-  // separate API call, which `extractActor` forbids.
-  async extractActor(input: { event: TriggerEvent }): Promise<ActorIdentity | null> {
-    return firedActor(input.event);
   }
 
   // ── 1. Schema introspection ────────────────────────────────────────────
@@ -2984,13 +2891,12 @@ export class AttioAdapter extends BaseAdapter {
 
   /**
    * Coerce author-provided values for `actor-reference` ("User") fields into
-   * Attio's write shape. Authors set these by EMAIL — a literal, or a meta
-   * value like `@actor_email` / `@user_email` — and Attio's API expects
+   * Attio's write shape. Authors set these by EMAIL — a literal, or a
+   * claim a host function answers — and Attio's API expects
    * `[{ referenced_actor_type: 'workspace-member', referenced_actor_id }]`. We
    * resolve each email to a workspace member (case-insensitive). An email that
    * matches no member is dropped with a warning rather than sent as a broken
-   * value (e.g. an external sender's address can't own a record — the author
-   * should use `@user_email`, the responsible team member, for an owner field).
+   * value (e.g. an external sender's address can't own a record).
    * Mutates `fields` in place. No-op — and no workspace-member fetch — when the
    * write touches no actor-reference field.
    */
@@ -3288,7 +3194,7 @@ export class AttioAdapter extends BaseAdapter {
   }
 
   /** POST /v2/comments — Attio requires a workspace-member author, set by
-   *  EMAIL (the `author` field; `@user_email` is the natural mapping). Target
+   *  EMAIL (the `author` field). Target
    *  is the parent record's thread (new) or an explicit `thread_id` (reply). */
   private async createCommentFromWrite(input: WriteInput): Promise<WriteResult> {
     const content = this.requireStringField(input, 'content_plaintext');
@@ -3301,7 +3207,7 @@ export class AttioAdapter extends BaseAdapter {
     );
     if (!member) {
       throw new Error(
-        `AttioAdapter.createRecord(${input.recordType}): author "${authorEmail}" does not match any Attio workspace member. Comments must be authored by a workspace member — map the "author" field to a member's email (e.g. @user_email).`,
+        `AttioAdapter.createRecord(${input.recordType}): author "${authorEmail}" does not match any Attio workspace member. Comments must be authored by a workspace member — map the "author" field to a member's email.`,
       );
     }
 
@@ -4333,22 +4239,6 @@ function buildPerListTypeDescriptor(
   };
 }
 
-/**
- * The Attio actor `{ type, id }` that made the change a run was fired on, as
- * its webhook named it (`changeArrivals` keeps it on the change, beside the
- * arrival's `actor`, which carries the id alone). `type` is Attio's own:
- * `'workspace-member' | 'api-token' | 'system'`, so the email-resolution path
- * can gate on member-ness. Null when the run was fired by no change, or Attio
- * named no actor.
- */
-function readAttioActor(event: TriggerEvent): { type: string; id: string | null } | null {
-  const actor = firedRecordFields(event)[ATTIO_CHANGE_ACTOR];
-  if (typeof actor !== 'object' || actor === null) return null;
-  const type: unknown = Reflect.get(actor, 'type');
-  const id: unknown = Reflect.get(actor, 'id');
-  return typeof type === 'string' ? { type, id: typeof id === 'string' ? id : null } : null;
-}
-
 function mapAttributeTypeToFieldKind(type: string): SchemaFieldKind {
   switch (type) {
     case 'number':
@@ -4368,8 +4258,7 @@ function mapAttributeTypeToFieldKind(type: string): SchemaFieldKind {
     // Actor-references (Attio "User" fields — Deal owner, Created by, …) are
     // SETTABLE values: you assign a workspace member by email, not an edge to a
     // traversable record. Surface them as a writable string field (the author
-    // writes an email — a literal or a meta value like @actor_email /
-    // @user_email — and createRecord/updateRecord resolves it to the workspace
+    // writes an email — a literal or a claim a host function answers — and createRecord/updateRecord resolves it to the workspace
     // member). Mapping them to 'reference' made them phantom edges that
     // buildTypeDescriptor never added to `references` and schema_projection then
     // silently dropped, so required User fields vanished from write completions.

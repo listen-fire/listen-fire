@@ -14,7 +14,7 @@ const HEAD: &str = "import { crm } from adapters\nc = connect crm\n";
 fn codes(body: &str) -> Vec<String> {
     let source = format!("{HEAD}{body}");
     let catalog = CatalogSnapshot::load(CRM).unwrap();
-    let options = CheckOptions { upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
+    let options = CheckOptions { upgrading_from: None, limiting_function: None, zones: &movement_checker::host::native::NativeZones };
     check_source(&source, &catalog, options)
         .unwrap()
         .into_iter()
@@ -76,7 +76,7 @@ fn a_known_option_in_a_parameter_type_where_passes() {
 fn judged(body: &str) -> Vec<(String, bool, String)> {
     let source = format!("{HEAD}{body}");
     let catalog = CatalogSnapshot::load(CRM).unwrap();
-    let options = CheckOptions { upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
+    let options = CheckOptions { upgrading_from: None, limiting_function: None, zones: &movement_checker::host::native::NativeZones };
     check_source(&source, &catalog, options).unwrap().into_iter().map(|d| (d.code, d.severity.is_none(), d.message)).collect()
 }
 

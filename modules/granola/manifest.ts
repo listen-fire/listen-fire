@@ -27,7 +27,6 @@ export const GRANOLA_MANIFEST: AdapterManifest = {
   supportedTriggers: ['poll'],
   methods: [
     'listEntryPoints', 'describe', 'getFieldValue', 'getRelated',
-    'getActorCandidates', 'extractActor',
   ],
   requiredCredentialType: 'GRANOLA',
   // A 0.12 `listen to granola { folder: "Deals" }` is

@@ -34,6 +34,11 @@ use movement_parser::util::form::form_of_text;
 pub struct CheckOptions<'a> {
     /// Checking for a move up from this release (`upgradingFrom`).
     pub upgrading_from: Option<&'a str>,
+    /// The catalog key of the pure plugin a host limits a listen's senders
+    /// with (`@lf-platform/team/isMember`), when it has one: an open listen
+    /// told so on an upgrade (MOV_LISTEN_NOW_OPEN) is offered the check that
+    /// calls it, as an unsafe fix. The language knows no such function.
+    pub limiting_function: Option<&'a str>,
     /// The host's zone database (`host`): a cron listen's `timezone`, a
     /// standard-library zone argument.
     pub zones: &'a dyn host::ZoneLookup,
@@ -60,6 +65,10 @@ pub(crate) fn run_check_with<'c>(program: &Program, catalog: &'c CatalogSnapshot
     let mut checker = checker::Checker::new(catalog, &options, resolves_files);
     checker.imports = families::imports::ImportState::new(link);
     checker.story = story.then(Box::default);
+    checker.last_import = program.statements.iter().rev().find_map(|s| match s {
+        movement_parser::ast::Statement::Import(import) => Some(import.span),
+        _ => None,
+    });
     checker.run(&program.statements);
     let found = std::mem::take(&mut checker.diagnostics);
     let spelling: Vec<Diagnostic> = program

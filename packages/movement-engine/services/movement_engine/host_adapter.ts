@@ -205,8 +205,6 @@ export function hostAdapter(input: { host: EngineHost; segmentId: string; resolv
     describeOpaqueId: optional('describeOpaqueId', (args) => call('describeOpaqueId', args)),
     translateFilter: optional('translateFilter', (args) => call('translateFilter', args)),
     getDedupRules: optional('getDedupRules', (args) => call('getDedupRules', args)),
-    getActorCandidates: optional('getActorCandidates', (args) => call('getActorCandidates', args)),
-    extractActor: optional('extractActor', (args) => call('extractActor', args)),
   };
   // An optional method the instance lacks is absent, not undefined, so a
   // presence check (`'readRecord' in adapter`, a spread) reads the instance

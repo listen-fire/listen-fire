@@ -245,7 +245,7 @@ fn guide_type(type_: Option<&FieldType>) -> String {
         },
         FieldType::Composite(composite) => match composite {
             Composite::List { of, .. } => format!("list of {}", guide_type(Some(of))),
-            Composite::MaybeAbsent { of } => guide_type(Some(of)),
+            Composite::MaybeAbsent { of } | Composite::Branded { of, .. } => guide_type(Some(of)),
             Composite::Tuple { .. } => "a list of values".into(),
             Composite::Dict { .. } => "a set of named values".into(),
             Composite::Record { .. } => "a record".into(),

@@ -153,6 +153,13 @@ pub struct PlanHop {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub owned: Vec<String>,
     pub judged: HopJudged,
+    /// Whether `checked` calls a plugin the host answers (a pure one, such
+    /// as `team.isMember`). Its conjuncts, and the operands of each AND and
+    /// OR in them, are ordered so every term that asks no host comes first:
+    /// a local term that decides the verdict saves the round trip. Absent
+    /// when false, so a host older than pure calls reads the same plan.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub asks_host: bool,
 }
 
 impl PlanHop {

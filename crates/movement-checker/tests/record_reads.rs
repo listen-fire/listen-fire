@@ -32,7 +32,7 @@ fn catalog() -> CatalogSnapshot {
 /// Each error's code and message (a warning is not one).
 fn errors_of(source: &str) -> Vec<(String, String)> {
     let source = format!("import {{ hub }} from adapters\nh = connect hub\n{source}");
-    let options = CheckOptions { upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
+    let options = CheckOptions { upgrading_from: None, limiting_function: None, zones: &movement_checker::host::native::NativeZones };
     check_source(&source, &catalog(), options)
         .unwrap_or_else(|e| panic!("{source}: {e:?}"))
         .into_iter()

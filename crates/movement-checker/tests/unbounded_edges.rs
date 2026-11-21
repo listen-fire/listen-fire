@@ -89,7 +89,7 @@ fn diagnostics(body: &str) -> Vec<Diagnostic> {
         "import {{ cron as cron_module, inbox as inbox_module, gmail as gmail_module, crm as crm_module, mail as mail_module }} from adapters; cron = connect cron_module; inbox = connect inbox_module; gmail = connect gmail_module; crm = connect crm_module; mail = connect mail_module; function reads(pick: <text>, q: <text>) {{\n{body}}}\n"
     );
     let catalog = CatalogSnapshot::load(CATALOG).unwrap();
-    let options = CheckOptions { upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
+    let options = CheckOptions { upgrading_from: None, limiting_function: None, zones: &movement_checker::host::native::NativeZones };
     movement_checker::check_source(&source, &catalog, options).unwrap_or_else(|e| panic!("{source}: {e:?}"))
 }
 

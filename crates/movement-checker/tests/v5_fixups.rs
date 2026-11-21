@@ -9,7 +9,7 @@ const CATALOG: &str = r#"{"adapters":{},"credentials":{},"plugins":{}}"#;
 
 fn check(source: &str) -> Vec<Diagnostic> {
     let catalog = CatalogSnapshot::load(CATALOG).unwrap();
-    let options = CheckOptions { upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
+    let options = CheckOptions { upgrading_from: None, limiting_function: None, zones: &movement_checker::host::native::NativeZones };
     check_source(source, &catalog, options).unwrap()
 }
 
@@ -88,7 +88,7 @@ fn a_targets_bare_field_is_respelled_through_the_alias_at_its_own_place() {
             "import {{ registry }} from adapters\nimport {{ public_registry }} from credentials\nreg = registry(credentials: public_registry)\nmovement main() {{\n{line}\n}}"
         );
         let catalog = CatalogSnapshot::load(REGISTRY).unwrap();
-        let options = CheckOptions { upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
+        let options = CheckOptions { upgrading_from: None, limiting_function: None, zones: &movement_checker::host::native::NativeZones };
         let found = check_source(&source, &catalog, options).unwrap();
         let d = found.into_iter().find(|d| d.code == "MOV_V5_SPELLING" && d.message.contains("hop's alias")).expect("a walk field respelling");
         d.fix.expect("a fix")["edits"]
@@ -115,7 +115,7 @@ fn sort_by_a_function_key_is_refused_where_sort_with_a_key_was() {
     let codes = |body: &str| -> Vec<String> {
         let source = format!("import {{ `@lf/slack` as slack }} from adapters\nchat = connect slack\n\nfunction m(c: <chat-[:channel]->>) {{\n{body}\n  return t\n}}");
         let catalog = CatalogSnapshot::load(MEMBERS).unwrap();
-        let options = CheckOptions { upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
+        let options = CheckOptions { upgrading_from: None, limiting_function: None, zones: &movement_checker::host::native::NativeZones };
         check_source(&source, &catalog, options).unwrap().into_iter().filter(|d| d.is_error()).map(|d| d.code).collect()
     };
     let names = "  names = c-[p:Members]-> { return p.Name }\n";
@@ -131,7 +131,7 @@ fn includes_inside_walk_brackets_reads_as_the_contains_or_in_written_there() {
     let walk = |where_: &str| -> Vec<String> {
         let source = format!("import {{ registry }} from adapters\nimport {{ public_registry }} from credentials\nreg = connect registry using public_registry\n\nfunction f() {{\n  rows = reg-[e:entities WHERE {where_}]-> {{ return e }}\n  return rows\n}}");
         let catalog = CatalogSnapshot::load(REGISTRY).unwrap();
-        let options = CheckOptions { upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
+        let options = CheckOptions { upgrading_from: None, limiting_function: None, zones: &movement_checker::host::native::NativeZones };
         check_source(&source, &catalog, options).unwrap().into_iter().filter(|d| d.is_error()).map(|d| d.code).collect()
     };
     for (everyday, caps) in [("Text.includes(e.City, \"a\")", "e.City CONTAINS \"a\""), ("List.includes([\"a\", \"b\"], e.City)", "e.City IN [\"a\", \"b\"]")] {

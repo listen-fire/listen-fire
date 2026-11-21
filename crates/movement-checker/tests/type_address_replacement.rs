@@ -27,7 +27,7 @@ const PRELUDE: &str = "import { chat as chat_module, sys as sys_module } from ad
 fn unknown_positions(body: &str) -> Vec<Diagnostic> {
     let source = format!("{PRELUDE}{body}");
     let catalog = CatalogSnapshot::load(CATALOG).unwrap();
-    let options = CheckOptions { upgrading_from: Some("0.12.13"), zones: &movement_checker::host::native::NativeZones };
+    let options = CheckOptions { upgrading_from: Some("0.12.13"), limiting_function: None, zones: &movement_checker::host::native::NativeZones };
     check_source(&source, &catalog, options).unwrap_or_else(|e| panic!("{source}: {e:?}")).into_iter().filter(|d| d.code == "MOV_UNKNOWN_POSITION").collect()
 }
 

@@ -184,13 +184,42 @@ function installDirOf(version: string): string {
   return dir;
 }
 
+function unbrand(node: unknown): unknown {
+  if (Array.isArray(node)) return node.map(unbrand);
+  if (node === null || typeof node !== 'object') return node;
+  const record: Record<string, unknown> = { ...node };
+  if (record.kind === 'branded' && 'of' in record) return unbrand(record.of);
+  return Object.fromEntries(Object.entries(record).map(([key, value]) => [key, unbrand(value)]));
+}
+
+/** Everything 0.16 added to a catalog snapshot, taken away: a field's brand, a
+ *  plugin's `pure` and `maxAgeSeconds`, a record output that may be none, and
+ *  an adapter's `listensLimitedBefore`. An older reader
+ *  refuses a snapshot carrying any of them. */
+function stripBrands(catalog: CatalogSnapshot): void {
+  for (const adapter of Object.values(catalog.adapters)) {
+    Object.assign(adapter, unbrand(adapter));
+    delete adapter.listensLimitedBefore;
+  }
+  for (const plugin of Object.values(catalog.plugins)) {
+    Object.assign(plugin, unbrand(plugin));
+    delete plugin.pure;
+    delete plugin.maxAgeSeconds;
+    if (plugin.output !== undefined && 'maybeAbsent' in plugin.output) {
+      plugin.output = Object.fromEntries(Object.entries(plugin.output).filter(([key]) => key !== 'maybeAbsent')) as typeof plugin.output;
+    }
+  }
+}
+
 /** The catalog as the older checker could have been given it: no member the
  *  release did not define. */
 function catalogFor(version: Triple, catalog: CatalogSnapshot): CatalogSnapshot {
   // `AdapterSpec.package` and a plugin's, and a changed field's `unchangedValues`, came with 0.13.1; a reader built
   // before it refuses a snapshot carrying them.
-  if (compareVersions(version, [0, 13, 1]) >= 0) return catalog;
   const stripped: CatalogSnapshot = structuredClone(catalog);
+  // A field's brand and a plugin's `pure` came with 0.16; an older reader refuses a snapshot carrying them.
+  if (compareVersions(version, [0, 16, 0]) < 0) stripBrands(stripped);
+  if (compareVersions(version, [0, 13, 1]) >= 0) return stripped;
   for (const adapter of Object.values(stripped.adapters)) {
     delete adapter.package;
     for (const schema of Object.values(adapter.schemas)) {

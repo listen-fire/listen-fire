@@ -85,7 +85,7 @@ class PapermarkCrawler extends Crawler {
     if (needsEmail) {
       if (!this.email) {
         return new PapermarkGateError(
-          'This Papermark link needs an email to view — pass email: to vc_url_retrieval (e.g. email: @user_email)',
+          'This Papermark link needs an email to view — pass email: to vc_url_retrieval (an address your team reads)',
         );
       }
       await email.fill(this.email);

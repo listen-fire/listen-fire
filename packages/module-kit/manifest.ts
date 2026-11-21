@@ -40,6 +40,8 @@ function adapterManifest(definition: AdapterModuleDefinition, instance: AdapterM
     ...(instance.webhookEventTypeId !== undefined ? { webhookEventTypeId: instance.webhookEventTypeId } : {}),
     ...(manifest.description !== undefined ? { description: manifest.description } : {}),
     ...(manifest.listenSettingsBecome !== undefined ? { listenSettingsBecome: manifest.listenSettingsBecome } : {}),
+    ...(manifest.listensLimitedBefore !== undefined ? { listensLimitedBefore: manifest.listensLimitedBefore } : {}),
+    ...(manifest.retiredSettings !== undefined ? { retiredSettings: manifest.retiredSettings.map((setting) => ({ ...setting })) } : {}),
     ...(manifest.positionArgs !== undefined && manifest.positionArgs.length > 0 ? { positionArgs: manifest.positionArgs.map((arg) => ({ ...arg })) } : {}),
     ...(manifest.introspectedSchema === true ? { introspectedSchema: true } : {}),
     ...(manifest.resendWindowSeconds !== undefined ? { resendWindowSeconds: manifest.resendWindowSeconds } : {}),

@@ -29,8 +29,8 @@ function hello(run: <manual-[:Invocations]->>) {
 listen to manual-[:Invocations]-> fire hello
 "#;
 
-const PROJECT_TAIL: &str = "# Who events act as on this machine (@user_name, @user_email). Defaults to the OS user;
-# LF_USER and LF_USER_EMAIL override.
+const PROJECT_TAIL: &str = "# Who presses run on this machine (a manual run's `Run by (name)` and `Run by (email)`).
+# Defaults to the OS user; LF_USER and LF_USER_EMAIL override.
 # user: { name: Your Name, email: you@example.com }
 # Where this listen-fire is reached from outside; a form's link and a webhook's door are under
 # it. Defaults to where `listen-fire serve` listens.

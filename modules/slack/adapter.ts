@@ -29,8 +29,6 @@ import { Readable } from 'node:stream';
 
 import type { ReadableStream as WebReadableStream } from 'node:stream/web';
 import type {
-  ActorCandidate,
-  ActorIdentity,
   Adapter,
   DeleteInput,
   DeleteResult,
@@ -50,9 +48,7 @@ import type {
 } from 'movement-engine/public/adapter';
 import type { Arrival, ArrivalsCapability, AwaitHead, AwaitKey } from 'engine-contracts';
 import type { SchemaEntryPoint, SchemaTypeDescriptor, SourcePosition } from 'movement-engine/public/catalog';
-import type { TriggerEvent } from 'movement-engine/public/inbound';
 import type { ModuleLog } from 'module-kit';
-import { firedActor } from 'module-kit';
 import type { SlackAPIClient } from './api_client';
 import type { SlackWriteHost } from './write';
 
@@ -81,6 +77,7 @@ import {
   slackFileShares,
   slackMentionsApp,
   slackMessageKey,
+  slackSentByThisApp,
   slackTopicOfBlocks,
   type SlackActionData,
   type SlackInteractionData,
@@ -126,8 +123,6 @@ export interface SlackSources extends SlackWriteHost {
   client(): Promise<SlackAPIClient | null>;
   /** Why `client` gave none, for the error a call that needs one raises. */
   missingClient(op: string): string;
-  /** The connection's `drop_own_messages` setting, on only when "on". */
-  dropOwnMessages?: boolean;
   /** The tenant, on log lines. */
   tenant: string;
   /** The host's name for the install's credential, which a file's source
@@ -216,6 +211,9 @@ const MAX_REPLIES_PAGES = 25;
  */
 export const SLACK_FILE_TYPE_ID = 'slack:file';
 
+/** The claim Slack vouches for on a sender's address. */
+export const SLACK_EMAIL_CLAIM = 'claim:email/address';
+
 /**
  * Field ids on the slack:message descriptor. Stable strings — used by the
  * editor, by `getFieldValue` lookups against the cached event payload, and
@@ -232,6 +230,8 @@ export const SLACK_MESSAGE_FIELDS = {
   buttons: 'buttons',
   topic: 'topic',
   mentionsApp: 'mentions_app',
+  userEmail: 'user_email',
+  sentByThisApp: 'sent_by_this_app',
 } as const;
 
 /**
@@ -241,7 +241,7 @@ export const SLACK_MESSAGE_FIELDS = {
  * member who pressed.
  */
 export const SLACK_INTERACTION_TYPE_ID = 'slack:interaction';
-export const SLACK_INTERACTION_FIELDS = { id: 'id', at: SLACK_PRESSED_AT_ID } as const;
+export const SLACK_INTERACTION_FIELDS = { id: 'id', at: SLACK_PRESSED_AT_ID, pressedByEmail: 'pressed_by_email' } as const;
 export const SLACK_INTERACTION_EDGES = { actions: 'actions', by: 'by', message: 'message' } as const;
 export const SLACK_INTERACTION_EDGE_NAMES = { actions: 'Actions', by: 'By', message: 'Message' } as const;
 
@@ -329,6 +329,7 @@ interface SlackMessageData {
   text?: string;
   blocks?: unknown;
   user?: string;
+  bot_id?: string;
   channel?: string;
   ts?: string;
   thread_ts?: string;
@@ -347,6 +348,40 @@ interface SlackReactionData {
   item_user?: string;
 }
 
+/**
+ * The two fields a message and a reaction say of their sender. `User Email`
+ * is a claim: Slack signs the delivery and holds the member's profile, so the
+ * module vouches for the address as `claim:email/address`. `Sent By This App`
+ * is true only when Slack names the app's bot user or bot as the sender, so a
+ * person's message is never true.
+ */
+function senderClaimFields(subject: string): SchemaTypeDescriptor['fields'] {
+  return [
+    {
+      fieldId: SLACK_MESSAGE_FIELDS.userEmail,
+      displayName: 'User Email',
+      kind: 'string',
+      brands: [SLACK_EMAIL_CLAIM],
+      mayBeAbsent: true,
+      writable: false,
+      required: false,
+      description:
+        `The address Slack holds for the member who sent ${subject}, lower case; null for a member with none and for a bot. ` +
+        'A claim Slack vouches for: a plugin function such as a team check accepts it where it refuses plain text.',
+    },
+    {
+      fieldId: SLACK_MESSAGE_FIELDS.sentByThisApp,
+      displayName: 'Sent By This App',
+      kind: 'boolean',
+      writable: false,
+      required: false,
+      description:
+        `Whether this app itself sent ${subject}. A listen that should not hear the app's own posts filters on NOT Sent By This App. ` +
+        'False when Slack does not say who the app is.',
+    },
+  ];
+}
+
 export class SlackAdapter extends BaseAdapter {
 
   /**
@@ -362,8 +397,7 @@ export class SlackAdapter extends BaseAdapter {
       channelName: (channelId) => this.resolveChannelName(channelId),
       botUserId: () => this.botUserId(),
       botId: () => this.botId(),
-      dropOwnMessages: this.sources.dropOwnMessages === true,
-      warn: (message) => this.sources.log.warn(`[SlackAdapter] ${message}`, { teamId: this.sources.tenant }),
+      userEmail: (userId) => this.userEmail(userId),
       fileShares: (fileId) => this.fileShares(fileId),
     });
     return { events: [], ...(arrivals.length > 0 ? { arrivals } : {}) };
@@ -635,6 +669,7 @@ export class SlackAdapter extends BaseAdapter {
               'Whether the message @-mentions the connected app: ' +
               '`listen to chat-[:Channels]->-[m:Messages WHERE m.`Mentions App` == true]->` runs when somebody asks it something.',
           },
+          ...senderClaimFields('the message'),
         ],
         // Files reach the source graph as a regular outgoing many-edge:
         // one `slack:file` position per attachment. The composition
@@ -806,6 +841,18 @@ export class SlackAdapter extends BaseAdapter {
             required: false,
             description: 'When the press was made.',
           },
+          {
+            fieldId: SLACK_INTERACTION_FIELDS.pressedByEmail,
+            displayName: 'Pressed By Email',
+            kind: 'string',
+            brands: [SLACK_EMAIL_CLAIM],
+            mayBeAbsent: true,
+            writable: false,
+            required: false,
+            description:
+              'The address Slack holds for the member who pressed, lower case; null for a member with none. ' +
+              'A claim Slack vouches for: a plugin function such as a team check accepts it where it refuses plain text.',
+          },
         ],
         references: [
           {
@@ -934,6 +981,7 @@ export class SlackAdapter extends BaseAdapter {
             required: false,
             description: 'The U… id of the user who added the reaction (read-only — walk the `Reactor` edge for the User node).',
           },
+          ...senderClaimFields('the reaction'),
         ],
         references: [
           // The message the reaction is on — a real Slack Message (read its
@@ -1080,6 +1128,10 @@ export class SlackAdapter extends BaseAdapter {
           return reaction.item?.channel ?? null;
         case 'reactor':
           return reaction.user ?? null;
+        case SLACK_MESSAGE_FIELDS.userEmail:
+          return reaction.user === undefined ? null : ((await this.userEmail(reaction.user))?.email ?? null);
+        case SLACK_MESSAGE_FIELDS.sentByThisApp:
+          return this.sentByThisApp(reaction);
         default:
           return null;
       }
@@ -1099,6 +1151,8 @@ export class SlackAdapter extends BaseAdapter {
           return press.id ?? null;
         case SLACK_INTERACTION_FIELDS.at:
           return isoInstantFromSlackTs(press.at ?? undefined);
+        case SLACK_INTERACTION_FIELDS.pressedByEmail:
+          return press.user?.id === undefined ? null : ((await this.userEmail(press.user.id))?.email ?? null);
         default:
           return null;
       }
@@ -1142,6 +1196,10 @@ export class SlackAdapter extends BaseAdapter {
         return data.text ?? null;
       case SLACK_MESSAGE_FIELDS.user:
         return data.user ?? null;
+      case SLACK_MESSAGE_FIELDS.userEmail:
+        return data.user === undefined ? null : ((await this.userEmail(data.user))?.email ?? null);
+      case SLACK_MESSAGE_FIELDS.sentByThisApp:
+        return this.sentByThisApp(data);
       case SLACK_MESSAGE_FIELDS.channel:
         return data.channel ?? null;
       case SLACK_MESSAGE_FIELDS.timestamp:
@@ -1458,8 +1516,31 @@ export class SlackAdapter extends BaseAdapter {
   /** The app's bot id, from the same cached `auth.test`: what a `bot_message`
    *  names in place of a user. */
   private async botId(): Promise<string | null> {
-    const who = await this.lookup('the app\'s bot (auth.test, drop_own_messages)', (client) => client.lookups.auth.test());
+    const who = await this.lookup('the app\'s bot (auth.test, Sent By This App)', (client) => client.lookups.auth.test());
     return typeof who?.bot_id === 'string' ? who.bot_id : null;
+  }
+
+  /** Whether the app itself sent a message or reaction: false when Slack does
+   *  not say who the app is. */
+  private async sentByThisApp(sender: { user?: string; bot_id?: string }): Promise<boolean> {
+    return slackSentByThisApp(sender, { botUserId: await this.botUserId(), botId: await this.botId() });
+  }
+
+  /**
+   * The address Slack holds for a member, lower case: what `User Email` says,
+   * and the claim a host's `team.isMember` is asked about. Read with
+   * `users.info` through the bounded lookup client (the bot token carries the
+   * `users:read.email` scope), which caches it. A member with no address
+   * gives `{ email: null }`; null is for a lookup that could not be made or
+   * failed, which a filter reading the address must not take for "no
+   * address".
+   */
+  private async userEmail(userId: string): Promise<{ email: string | null } | null> {
+    const info = await this.lookup(`member ${userId}'s address (users.info, User Email)`, (client) => client.lookups.users.info({ user: userId }));
+    if (info === null) return null;
+    const email = info.user?.profile?.email;
+    const normalised = typeof email === 'string' ? email.trim().toLowerCase() : '';
+    return { email: normalised === '' ? null : normalised };
   }
 
   /**
@@ -1823,96 +1904,6 @@ export class SlackAdapter extends BaseAdapter {
     },
   };
 
-  // ── 4c. Actor candidate parsing (acting-user split) ─────────────────────
-  // Slack has no service-account concept the way email does (every Slack
-  // user is a first-class person), so it surfaces at most one `originator`
-  // candidate: the inbound actor's email, resolved at runtime via
-  // `users.info` (the Slack bot token carries the `users:read.email` scope
-  // — see the connector install scopes). No persistence — no `user_slack`
-  // mapping table, no stored actors (ruling 2026-06-01).
-  //
-  // External-system API enrichment (the `users.info` round-trip) is
-  // explicitly allowed in `getActorCandidates`; Listen-Fire DB access is NOT.
-  // The creator-override (T6), the email→user match, the creator-fallback
-  // (`trigger.config.fallbackToCreatorIfActorUnregistered`), and the
-  // null-on-no-match rejection all live in `resolveActingUser`.
-  //
-  // A genuine miss (no actor id, no email on the profile) swallows to an empty
-  // candidate list. A lookup that cannot be made (no client) or that FAILS
-  // (missing scope, rate limit, network/outage) is not swallowed — it
-  // throws out of `resolveActorEmail` uncaught, so this method rejects too.
-  // That lets `consultActorGate` tell "actor unregistered" apart from
-  // "couldn't check" (see `resolveActorEmail`'s doc comment).
-  async getActorCandidates(input: { event: TriggerEvent }): Promise<ActorCandidate[]> {
-    const resolved = await this.resolveActorEmail(input.event);
-    if (!resolved) return [];
-    // `identifier` stays the raw Slack user id (the source-system primary key);
-    // the API-resolved address rides `email`, which makes the candidate
-    // email-resolvable (`scheme: 'email'`).
-    return [
-      {
-        identity: {
-          identifier: resolved.userId,
-          scheme: 'email',
-          adapterType: this.adapterType,
-          email: resolved.email,
-        },
-        source: 'originator',
-      },
-    ];
-  }
-
-  /**
-   * Resolve the inbound Slack actor's email at runtime via `users.info`.
-   *
-   * The Slack event payload carries only the user id (`U…`), never an
-   * email, so resolving the email requires an API round-trip with the
-   * `users:read.email` scope (granted at install — see
-   * `adapters/slack/webApi/connector.ts:generateInstallUrl`). T6 makes
-   * this call at dispatch and does NOT persist the result.
-   *
-   * Two different kinds of "no email" get treated differently:
-   *   - GENUINE MISSES return null: no actor on the event, or a profile with
-   *     no email set. These fall through the resolution chain the same as an
-   *     unregistered sender.
-   *   - A lookup that cannot be made (no working Slack API client: a
-   *     missing/malformed credential) or that itself FAILS (missing scope,
-   *     rate limit, network error, Slack outage) is not a miss — we don't know whether
-   *     the actor is registered, so it THROWS. `getActorCandidates` has no
-   *     catch around this call and `resolveActingUser` has no catch around
-   *     `getCandidates()`, so the throw propagates to `consultActorGate`'s
-   *     own try/catch, which drops the event with the lookup-failure reason
-   *     (replayable) instead of the "unregistered sender" reason.
-   */
-  private async resolveActorEmail(
-    event: TriggerEvent,
-  ): Promise<{ userId: string; email: string } | null> {
-    const slackUserId = firedActor(event)?.identifier;
-    if (!slackUserId) return null;
-
-    const client = await this.getSlackApiClient();
-    // Nothing was asked, so nobody is not the answer: a filter reading the
-    // address must land as undecided, which only a throw tells the host.
-    if (!client) throw new Error('slack: who acted could not be looked up, the connection has no usable Slack client');
-
-    // The door asks this before it keeps and acknowledges the delivery, so it is
-    // bounded (api_client.ts): a rate limited call fails at once.
-    let info: Awaited<ReturnType<typeof client.lookups.users.info>>;
-    try {
-      info = await client.lookups.users.info({ user: slackUserId });
-    } catch (err) {
-      this.sources.log.warn('[SlackAdapter] users.info actor-email lookup failed', {
-        teamId: this.sources.tenant,
-        slackUserId,
-        error: err instanceof Error ? err.message : String(err),
-      });
-      throw err;
-    }
-    const email = info.user?.profile?.email;
-    const normalized = email ? email.trim().toLowerCase() : null;
-    return normalized ? { userId: slackUserId, email: normalized } : null;
-  }
-
   /**
    * Stamp the workspace's REAL channel names onto the Channel type's `Name`
    * field as OPEN knownValues, so a typo'd `WHERE \`Name\` == "genral"` warns at
@@ -2062,19 +2053,6 @@ export class SlackAdapter extends BaseAdapter {
       stream: Readable.fromWeb(res.body as unknown as WebReadableStream),
       contentType: res.headers.get('content-type') ?? fallbackContentType ?? undefined,
     };
-  }
-
-  // ── 4d. Actor extraction (T5) ────────────────────────────────────────────
-  // Raw Slack actor — the member who posted the message, added the
-  // reaction or pressed the button that fired the run, as the door named them
-  // on the arrival (`slackActorOf`, inbound.ts). Independent of auth;
-  // populates `@actor_id` so authors can attribute events to their raw
-  // originator (the Slack member id) even when auth went through the creator
-  // fallback. Email/name slots are left blank: what arrives doesn't carry
-  // them without a separate `users.info` round trip, which the door's
-  // pure-parse contract forbids.
-  async extractActor(input: { event: TriggerEvent }): Promise<ActorIdentity | null> {
-    return firedActor(input.event);
   }
 
   // ── 5. Writes — target side (edge-anchored posts / replies) ───────────

@@ -186,7 +186,7 @@ test("a message says which inboxes forwarded it, and who sent it, to the run it 
     '',
     'inbox = connect email',
     '',
-    'function seen(m: <inbox-[:Emails]->>) { return { through: m.`Forwarded Through`, sender: m.Actor?.Email } }',
+    'function seen(m: <inbox-[:Emails]->>) { return { through: m.`Forwarded Through`, sender: m.`From` } }',
     '',
     'listen to inbox-[e:Emails WHERE e.Key == "deals"]-> fire seen',
     '',
@@ -203,7 +203,7 @@ test("a message says which inboxes forwarded it, and who sent it, to the run it 
   };
   const forwarded = sentTo(dir, 'inbox+deals@acme.test', 'forwarded', { ...HELLO, sender: 'Ada <Ada@Example.com>', through: 'dealflow@portfolio.example' });
   assert.equal(forwarded.code, 0, forwarded.out);
-  assert.deepEqual(returned(forwarded.out), { through: ['dealflow@portfolio.example'], sender: 'ada@example.com' });
+  assert.deepEqual(returned(forwarded.out), { through: ['dealflow@portfolio.example'], sender: 'Ada <Ada@Example.com>' });
   const direct = sentTo(dir, 'inbox+deals@acme.test', 'direct');
   assert.equal(direct.code, 0, direct.out);
   assert.deepEqual(returned(direct.out), { through: [], sender: 'ada@example.com' });

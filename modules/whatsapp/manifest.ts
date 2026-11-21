@@ -44,7 +44,7 @@ export function whatsappManifest(movementsNumber: string | null): AdapterManifes
     supportedTriggers: ['webhook'],
     methods: [
       'listEntryPoints', 'describe', 'getFieldValue', 'getRelated', 'preprocessInbound',
-      'getActorCandidates', 'extractActor', 'resolveFileRef', 'createRecord',
+      'resolveFileRef', 'createRecord',
     ],
     // A 0.12 `listen to wa { events: [...] }` heard messages when it named no
     // events, and otherwise the kinds it named; each kind arrives on its own

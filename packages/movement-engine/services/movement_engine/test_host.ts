@@ -4,7 +4,6 @@
 
 import type { CatalogSnapshot, FileArtifactType } from 'movement-lang';
 import { guidSequence } from 'engine-contracts';
-import type { ActingUser } from '../translation_graph/adapter';
 import type { DryRunWriteSink } from '../translation_graph/engine/dry_run_adapter';
 import type { MovementTraceEntry } from './run_types';
 import type { EngineHost, ParkSources, RenderFile } from './host';
@@ -14,7 +13,7 @@ import { isCheckFailure } from './errors';
 
 import type { adapterTable, CredentialOwnership, LiveAdapterResolver } from '../translation_graph/engine/adapter_table';
 import { InMemoryWriteLocks, type WriteLocks } from '../write_locks/write_locks';
-import { appendingInto, type ActingUserLookup, type QueuedWake } from './host_kit';
+import { appendingInto, type QueuedWake } from './host_kit';
 import { inProcessHost } from '../embed/in_process_host';
 
 /** What a test supplies: any piece of any group, the rest defaulted. */
@@ -33,9 +32,6 @@ export interface TestHostOverrides {
   park?: Partial<EngineHost['park']>;
   control?: Partial<EngineHost['control']>;
   files?: Partial<EngineHost['files']>;
-  /** The acting-user lookup, handed the source instance's candidates as a
-   *  call into the test's live adapter. */
-  lookup?: { resolveActingUser?: (input: ActingUserLookup) => Promise<ActingUser | null> };
   locks?: WriteLocks;
   /** Where the run's trace is appended as it goes. */
   trace?: MovementTraceEntry[];
@@ -72,7 +68,7 @@ export const TEST_HOST_NOW = '2026-01-01T00:00:00.000Z';
  * host without them (`makeFakeParkSink` is an in-memory park sink).
  */
 export function makeTestHost(overrides: TestHostOverrides = {}): EngineHost {
-  const { segment = {}, adapters, llm, park = {}, control, files = {}, lookup, locks, writeSink, wakes = [] } = overrides;
+  const { segment = {}, adapters, llm, park = {}, control, files = {}, locks, writeSink, wakes = [] } = overrides;
   let opened = 0;
   // Deterministic by default, so a recorded run is the same run every time:
   // one fixed instant, and ids from a GUID sequence in the order asked.
@@ -84,7 +80,6 @@ export function makeTestHost(overrides: TestHostOverrides = {}): EngineHost {
     credentials: overrides.credentials ?? { belongsTo: () => true },
     ...(llm !== undefined ? { llm } : {}),
     ...(control !== undefined ? { control } : {}),
-    ...(lookup !== undefined ? { lookup } : {}),
     ...(locks !== undefined ? { locks } : {}),
     ...(writeSink !== undefined ? { writeSink } : {}),
     segment: {

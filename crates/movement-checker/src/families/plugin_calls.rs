@@ -15,7 +15,10 @@ use movement_parser::catalog::types::{FieldType as SchemaFieldType, PluginOutput
 use crate::checker::Checker;
 use crate::codes;
 use crate::scope::SymbolId;
-use crate::types::field::{CollectionOrder, HandleKinds, HeldHandle, HeldStep, Ty, spell_type, field_assignable, holds_records, list_of, spell_held_steps, strip_absent};
+use crate::types::field::{
+    CollectionOrder, HandleKinds, HeldHandle, HeldStep, Ty, brand_required_message, field_assignable, holds_records, lacks_a_brand, unvouched_for_a_brand, list_of, spell_held_steps, spell_type, strip_absent,
+    unbranded,
+};
 use crate::types::position::{LocalNode, PlaneType, Position, ReturnShape, describe_position};
 
 /// What a plugin call's arguments are held to: the types it declares, by name.
@@ -32,6 +35,59 @@ fn found(callee: &str, fields: &movement_parser::catalog::types::JsMap<SchemaFie
         run_built: None,
         extracted: None,
     })
+}
+
+/// The record a plugin answers, or none (`{ … } | null`): its fields as a
+/// value, as TypeScript's `T | undefined` of a plain object type, since it
+/// has no identity to walk from.
+fn answered_or_none(callee: &str, fields: &movement_parser::catalog::types::JsMap<SchemaFieldType>) -> Ty {
+    crate::types::field::maybe_absent(Ty::HeldRecord(std::rc::Rc::new(crate::types::field::HeldRecord { position: found(callee, fields), live_edge: None })))
+}
+
+/// A plugin called inside an expression, which only a listen's filter and a
+/// wait's WHERE admit (`team.isMember(m.Email)`): each argument fills the
+/// parameter at its place and is held to its declared type, a brand and its
+/// presence included, since the host is never asked about a missing value;
+/// the call's value is the output the plugin declares.
+pub fn type_plugin_call(typing: &mut crate::types::infer::Typing, callee: &str, spec: &PluginSpec, operands: &[Option<Ty>]) -> Option<Ty> {
+    let params = spec.positional_params(PluginCallSite::Plain);
+    if operands.len() < params.len() {
+        let missing: Vec<String> = params[operands.len()..].iter().map(|p| format!("'{p}'")).collect();
+        let which = if missing.len() == 1 { "the required argument" } else { "required arguments" };
+        typing.report(codes::THROUGH_ARG_MISSING, format!("'{callee}' is missing {which} {}", missing.join(", ")));
+    }
+    if operands.len() > params.len() {
+        let takes = params.iter().map(|p| format!("'{p}'")).collect::<Vec<_>>().join(", ");
+        typing.report(codes::THROUGH_BAD_ARG, format!("'{callee}' takes {} argument{} ({takes}), and is given {}", params.len(), if params.len() == 1 { "" } else { "s" }, operands.len()));
+    }
+    for (param, value) in params.iter().zip(operands) {
+        let Some(declared) = spec.arg_types.as_ref().and_then(|types| types.0.get(*param)) else { continue };
+        let declared = Ty::from_schema(declared);
+        let expected = format!("'{callee}' takes {} for '{param}'", spell_type(&declared));
+        if unvouched_for_a_brand(value.as_ref(), &declared) || value.as_ref().is_some_and(|value| lacks_a_brand(value, &declared)) {
+            typing.report(codes::BRAND_REQUIRED, brand_required_message(&expected, "this", value.as_ref()));
+            continue;
+        }
+        let Some(value) = value else { continue };
+        if crate::types::field::is_maybe_absent(Some(value)) && !crate::types::field::is_maybe_absent(Some(&declared)) {
+            typing.report(
+                codes::ABSENT_REQUIRED,
+                format!("{expected}, and this may be missing — nothing is asked about a missing value. Test it first: `x != null AND {callee}(x)`"),
+            );
+            continue;
+        }
+        if !field_assignable(value, &declared) {
+            let mut warning = crate::diagnostic::Diagnostic::error(codes::CALL_ARG_TYPE, format!("{expected}, and this is {}", spell_type(strip_absent(value))), typing.span);
+            warning.severity = Some(crate::diagnostic::Severity::Warning);
+            typing.diagnostics.push(warning);
+        }
+    }
+    match spec.output.as_ref()? {
+        PluginOutput::Value { type_ } => Some(Ty::from_schema(type_)),
+        PluginOutput::Record { fields, maybe_absent: false } => Some(Ty::record(Some(found(callee, fields)))),
+        PluginOutput::Record { fields, maybe_absent: true } => Some(answered_or_none(callee, fields)),
+        PluginOutput::Records { fields } => Some(list_of(Ty::record(Some(found(callee, fields))), CollectionOrder::Ordered)),
+    }
 }
 
 impl Checker<'_> {
@@ -72,7 +128,10 @@ impl Checker<'_> {
         let Some(output) = spec.output.as_ref() else { return ReturnShape::default() };
         let plane = match output {
             PluginOutput::Value { type_ } => PlaneType { field: Some(Ty::from_schema(type_)), pos: None },
-            PluginOutput::Record { fields } => PlaneType { pos: Some(Box::new(found(&call.callee, fields))), field: None },
+            PluginOutput::Record { fields, maybe_absent: false } => PlaneType { pos: Some(Box::new(found(&call.callee, fields))), field: None },
+            // A record that may be none is a value that may be absent, read
+            // with `?.` until it is tested.
+            PluginOutput::Record { fields, maybe_absent: true } => PlaneType { field: Some(answered_or_none(&call.callee, fields)), pos: None },
             // One record per thing found, in the order the plugin found them.
             PluginOutput::Records { fields } => {
                 PlaneType { field: Some(list_of(Ty::record(Some(found(&call.callee, fields))), CollectionOrder::Ordered)), pos: None }
@@ -256,14 +315,15 @@ impl Checker<'_> {
         // any arm; a file argument a file as the whole value, never one
         // inside a map or a list.
         let declared_ty = Ty::from_schema(declared);
-        if matches!(strip_absent(&declared_ty), Ty::Text)
+        let declared_base = unbranded(&declared_ty);
+        if matches!(strip_absent(&declared_base), Ty::Text)
             && held.is_none()
             && let Some((dict, may)) = value.and_then(|v| record_value_in(v).map(|d| (d, false))).or_else(|| may_hold.and_then(record_value_in).map(|d| (d, true)))
         {
             self.refuse_record_value_for_text(callee, name, dict, may, span);
             return;
         }
-        let misplaced = held.or_else(|| if matches!(strip_absent(&declared_ty), Ty::File) { file_below_whole(may_hold.or(value)) } else { None });
+        let misplaced = held.or_else(|| if matches!(strip_absent(&declared_base), Ty::File) { file_below_whole(may_hold.or(value)) } else { None });
         if let Some(misplaced) = misplaced {
             self.report(codes::CALL_ARG_TYPE, handle_in_typed_plugin_arg_message(callee, name, &declared_ty, &misplaced), span);
             return;
@@ -276,6 +336,11 @@ impl Checker<'_> {
         {
             return;
         }
+        let expected = format!("'{callee}' takes {} for '{name}'", spell_type(&declared_ty));
+        if unvouched_for_a_brand(value, &declared_ty) || value.is_some_and(|value| lacks_a_brand(value, &declared_ty)) {
+            self.report(codes::BRAND_REQUIRED, brand_required_message(&expected, "this", value), span);
+            return;
+        }
         // A warning while the 0.12 pins read: those releases admitted the
         // value, and a plugin may have coerced it, so a saved movement still
         // runs as written. Refusing it is a tightened rule, for a release of
@@ -283,7 +348,7 @@ impl Checker<'_> {
         if let Some(value) = value
             && !field_assignable(value, &declared_ty)
         {
-            let message = format!("'{callee}' takes {} for '{name}', and this is {}", spell_type(&declared_ty), spell_type(strip_absent(value)));
+            let message = format!("{expected}, and this is {}", spell_type(strip_absent(value)));
             let mut warning = crate::diagnostic::Diagnostic::error(codes::CALL_ARG_TYPE, message, span);
             warning.severity = Some(crate::diagnostic::Severity::Warning);
             self.push(warning);

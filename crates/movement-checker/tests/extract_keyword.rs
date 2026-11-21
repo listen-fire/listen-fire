@@ -9,7 +9,7 @@ const CATALOG: &str = r#"{"adapters":{"slack":{"constructionArgs":[],"schemas":{
 
 fn check(source: &str) -> Vec<Diagnostic> {
     let catalog = CatalogSnapshot::load(CATALOG).unwrap();
-    let options = CheckOptions { upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
+    let options = CheckOptions { upgrading_from: None, limiting_function: None, zones: &movement_checker::host::native::NativeZones };
     check_source(source, &catalog, options).unwrap().into_iter().filter(|d| d.code == "MOV_EXTRACT_KEYWORD_RETIRED").collect()
 }
 
@@ -47,7 +47,7 @@ fn check_all(source: &str, files: serde_json::Value) -> Vec<Diagnostic> {
     let mut snapshot: serde_json::Value = serde_json::from_str(CATALOG).unwrap();
     snapshot["files"] = files;
     let catalog = CatalogSnapshot::load(&snapshot.to_string()).unwrap();
-    let options = CheckOptions { upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
+    let options = CheckOptions { upgrading_from: None, limiting_function: None, zones: &movement_checker::host::native::NativeZones };
     check_source(source, &catalog, options).unwrap()
 }
 

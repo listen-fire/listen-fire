@@ -350,7 +350,7 @@ fn owned_name(target: &PositionSchema, field: &str) -> Option<String> {
         use movement_parser::catalog::types::Composite;
         match ty {
             FieldType::Composite(Composite::Owned { name, .. }) => Some(name),
-            FieldType::Composite(Composite::MaybeAbsent { of: inner } | Composite::List { of: inner, .. }) => of(inner),
+            FieldType::Composite(Composite::MaybeAbsent { of: inner } | Composite::List { of: inner, .. } | Composite::Branded { of: inner, .. }) => of(inner),
             _ => None,
         }
     }
@@ -464,6 +464,11 @@ pub fn spell(expr: &Expression, alias: Option<&str>) -> String {
             Expression::Compare { .. } if is_presence_test(expression) => format!("NOT {}", spell(expression, alias)),
             _ => format!("NOT ({})", spell(expression, alias)),
         },
+        Expression::Function { fn_, args } => {
+            let args: Vec<String> = args.iter().map(|a| spell(a, alias)).collect();
+            format!("{}({})", movement_parser::surface::table::spell(fn_), args.join(", "))
+        }
+        Expression::Field { expression, field, optional } => format!("{}{}{}", spell(expression, alias), if *optional { "?." } else { "." }, spell_name(field)),
         _ => "…".to_string(),
     }
 }

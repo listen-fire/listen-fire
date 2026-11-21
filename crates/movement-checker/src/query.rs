@@ -267,6 +267,7 @@ impl Analysis {
                 upgrading_from: None,
                 function_values: &self.function_values,
                 entry_reads: &self.entry_reads,
+                catalog: None,
             },
         };
         let span = Span { start: at, end: at };

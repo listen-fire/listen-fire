@@ -264,6 +264,7 @@ mod tests {
                     checked: and(checked.to_vec()),
                     owned: Vec::new(),
                     judged: HopJudged::Resolved,
+                    asks_host: false,
                 }
             })
             .collect()

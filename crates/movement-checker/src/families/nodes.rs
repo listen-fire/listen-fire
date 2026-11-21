@@ -510,6 +510,7 @@ impl Checker<'_> {
                     );
                 }
             }
+            ValueType::Branded { of, .. } => self.report_value_type(of, scope),
             ValueType::List { of, span } => {
                 if matches!(**of, ValueType::Closure { .. }) {
                     self.report(codes::CLOSURE_NOT_DATA, crate::types::field::closure_not_data_message("a list's element is typed as"), *span);

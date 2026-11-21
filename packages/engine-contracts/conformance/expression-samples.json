@@ -212,6 +212,22 @@
       "description": "the total",
       "type": "extract_value"
     },
+    "Field": {
+      "expression": {
+        "args": [
+          {
+            "fieldOnly": true,
+            "propertyTypeId": "Owner",
+            "type": "edge_property"
+          }
+        ],
+        "fn": "coalesce",
+        "type": "function"
+      },
+      "field": "Level",
+      "optional": true,
+      "type": "field"
+    },
     "Function": {
       "args": [
         {

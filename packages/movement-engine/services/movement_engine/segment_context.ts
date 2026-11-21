@@ -27,7 +27,7 @@
 
 import { LANGUAGE_VERSION, findPlugin, type FileArtifactType, type LanguageVersion, type PluginOutput, type PluginSpec, type SchemaFieldType } from 'movement-lang';
 
-import { HOST_FAMILIES_VERSION, filesAtType, guidSequence, missingHostMethods, type ActingPrincipal, type TenantId } from 'engine-contracts';
+import { HOST_FAMILIES_VERSION, filesAtType, guidSequence, missingHostMethods, type TenantId } from 'engine-contracts';
 import type { FileRef } from '../translation_graph/adapter';
 import type { MovementTraceEntry, CancelGate, MovementRunResult, ParkSink, RunMovementInput } from './run_types';
 import type {
@@ -35,7 +35,6 @@ import type {
   AdapterResolution,
   EngineHost,
   RecordBindings,
-  ResolveActingUserInput,
   ResolvedAdapter,
   TransformInvocationResult,
 } from './host';
@@ -313,7 +312,6 @@ export interface SegmentHost {
   };
   control: { cancel: CancelGate };
   files: { render(input: { content: string; type: FileArtifactType }): Promise<FileRef> };
-  lookup: { resolveActingUser(input: ResolveActingUserInput): Promise<ActingPrincipal | null> };
   clock: EngineClock;
   ids: IdMint;
 }
@@ -339,7 +337,6 @@ function bindSegment(host: EngineHost, segmentId: string): SegmentHost {
       },
     },
     files: { render: (input) => host.files.render({ ...input, segmentId }) },
-    lookup: { resolveActingUser: (input) => host.lookup.resolveActingUser({ ...input, segmentId }) },
     clock: { now: async () => instantFrom(await host.clock.now({ segmentId })) },
     ids: {
       mint: async (count) => (count === 0 ? [] : mintedFrom(await host.ids.mint({ segmentId, count }), count)),

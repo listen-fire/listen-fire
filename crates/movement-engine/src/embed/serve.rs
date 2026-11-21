@@ -130,27 +130,6 @@ impl Session {
                 let reply = adapters.call(AdapterCall { instance: text(args, "instance", label)?.to_string(), method: text(args, "method", label)?.to_string(), args: call_args });
                 Box::pin(async move { Ok(Reply::Adapter(reply.await?)) })
             }
-            "lookup.resolveActingUser" => {
-                let Some(adapters) = hosts.adapters.as_deref_mut() else { return Ok(now(Some(Json::Null))) };
-                let event = wire(args.get("event"), label)?;
-                let user = adapters.acting_user(text(args, "instance", label)?, &event);
-                then(user, |user| {
-                    Ok(Some(match user {
-                        None => Json::Null,
-                        Some(user) => {
-                            let mut principal = vec![("id".to_string(), Data::Text(user.id))];
-                            if let Some(display) = user.display {
-                                principal.push(("display".into(), Data::Text(display)));
-                            }
-                            let mut out = vec![("principal".to_string(), Data::Map(principal))];
-                            if let Some(email) = user.email {
-                                out.push(("email".into(), Data::Text(email)));
-                            }
-                            Data::Map(out).to_wire()
-                        }
-                    }))
-                })
-            }
             "llm.client.call" | "llm.extractCall.call" => {
                 let models = hosts.models.as_deref_mut().ok_or_else(|| unserved_failure(label))?;
                 let prompt = if label == "llm.client.call" {

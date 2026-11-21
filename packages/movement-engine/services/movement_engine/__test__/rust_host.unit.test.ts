@@ -186,10 +186,10 @@ describe("the shim's park.waits routes", () => {
 });
 
 describe('a segment opened on the in-process host', () => {
-  it('is refused when it carries host families version 1', async () => {
+  it('is refused when it carries host families version 2, which 0.15 sent', async () => {
     const host = makeTestHost();
-    await expect(host.segment.open({ teamId: TEAM, languageVersion: LANGUAGE_VERSION, hostFamiliesVersion: 1 })).rejects.toThrow(
-      'segment.open carries host families version 1, which this host does not serve (supported: 2)',
+    await expect(host.segment.open({ teamId: TEAM, languageVersion: LANGUAGE_VERSION, hostFamiliesVersion: 2 })).rejects.toThrow(
+      'segment.open carries host families version 2, which this host does not serve (supported: 3)',
     );
     await expect(host.segment.open({ teamId: TEAM, languageVersion: LANGUAGE_VERSION, hostFamiliesVersion: HOST_FAMILIES_VERSION })).resolves.toEqual({
       segmentId: expect.any(String),

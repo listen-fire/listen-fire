@@ -190,7 +190,7 @@ pub fn check(source: &str, catalog: &Catalog, language_version: &str) -> Vec<Pro
     if let Some(refusal) = movement_checker::language_version_diagnostic(language_version) {
         return vec![Problem { code: refusal.code, message: external(&refusal.message), line: 0, column: 0, severity: Severity::Error }];
     }
-    let options = movement_checker::CheckOptions { upgrading_from: None, zones: &NativeZones };
+    let options = movement_checker::CheckOptions { upgrading_from: None, limiting_function: None, zones: &NativeZones };
     match movement_checker::check_source(source, &catalog.snapshot, options) {
         Err(refusal) => vec![Problem { code: "MOV_PARSE".into(), message: external(&refusal.message), line: 0, column: 0, severity: Severity::Error }],
         Ok(diagnostics) => diagnostics
@@ -234,23 +234,25 @@ pub struct Listen {
 }
 
 /// Whether an arrival fires a listen ([`Listen::judge`]).
-pub use crate::listen_judge::{ArrivedRecord, PlanArrival, Verdict as ListenVerdict};
+pub use crate::listen_judge::{ArrivedRecord, Explanation, Judging, PlanArrival, PluginAnswer, PluginAnswers, PluginQuestion, UndecidedReason, Verdict as ListenVerdict};
 pub use movement_parser::listen_plan::ListenPlan;
 
 impl Listen {
-    /// Whether `arrival` (on this listen's edge) fires it at `now_ms`
-    /// (epoch ms, the instant `WITHIN` measures from), as listen-fire's
-    /// judge decides: each record it carries is read by the names the
-    /// program writes, then judged against the plan's filters. A record of
-    /// another record type skips; an `Undecided` verdict runs nothing, and
-    /// says why, which a host reports rather than drops.
-    pub fn judge(&self, arrival: &PlanArrival, now_ms: f64) -> ListenVerdict {
+    /// Whether `arrival` (on this listen's edge) fires it as of `judging`
+    /// (the instant `WITHIN` measures from, the answers the host holds to
+    /// the questions it was asked), as listen-fire's judge decides: each
+    /// record it carries is read by the names the program writes, then
+    /// judged against the plan's filters. A record of another record type
+    /// skips; an `Undecided` verdict runs nothing, and says why, which a host
+    /// reports rather than drops; an `Asks` verdict names the host functions
+    /// to ask before judging again.
+    pub fn judge(&self, arrival: &PlanArrival, judging: Judging<'_>) -> ListenVerdict {
         let named = |record: &ArrivedRecord| match record.record_type.as_ref().and_then(|t| self.field_ids.get(t)) {
             Some(ids) => ArrivedRecord { fields: crate::listen_judge::named_fields(&record.fields, ids), ..record.clone() },
             None => record.clone(),
         };
         let arrival = PlanArrival { landing: named(&arrival.landing), parents: arrival.parents.iter().map(|p| p.as_ref().map(named)).collect(), ..arrival.clone() };
-        crate::listen_judge::judge_arrival(&self.plan, &arrival, now_ms)
+        crate::listen_judge::judge_arrival(&self.plan, &arrival, judging)
     }
 }
 
@@ -262,7 +264,7 @@ pub fn listens(source: &str, catalog: &Catalog, language_version: &str) -> Resul
     let form = movement_parser::util::form::form_of_text(source);
     let program = movement_parser::stmt::parse_program(&form, true)
         .map_err(|e| format!("{} (line {}, col {})", movement_parser::util::form::external_text(&e.message), e.loc.line, e.loc.col))?;
-    let options = movement_checker::CheckOptions { upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
+    let options = movement_checker::CheckOptions { upgrading_from: None, limiting_function: None, zones: &movement_checker::host::native::NativeZones };
     let mut plans = movement_checker::answer::check_answer(&program, &catalog.snapshot, options).listens.into_iter();
     let mut aliases = std::collections::HashMap::new();
     let mut instances = std::collections::HashMap::new();
@@ -460,65 +462,9 @@ impl Landing {
     }
 }
 
-/// How who acted resolves to a user of the host: by email, by phone, or not
-/// at all (a provider's own id).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ActorScheme {
-    Email,
-    Phone,
-    Opaque,
-}
-
-/// Who acted on an arrival, as its module says at the door (adapter protocol
-/// 2.7): what `@actor_*` reads, and what a host resolves `@user_*` from
-/// ([`Adapters::acting_user`] is handed it on the event's `arrival.actor`).
-#[derive(Debug, Clone, PartialEq)]
-pub struct Actor {
-    /// The provider's id for them (an address, a phone number, a member id).
-    pub identifier: String,
-    pub scheme: ActorScheme,
-    pub email: Option<String>,
-    pub name: Option<String>,
-    pub label: Option<String>,
-}
-
-impl Actor {
-    pub fn new(identifier: impl Into<String>, scheme: ActorScheme) -> Actor {
-        Actor { identifier: identifier.into(), scheme, email: None, name: None, label: None }
-    }
-    pub fn email(mut self, email: impl Into<String>) -> Actor {
-        self.email = Some(email.into());
-        self
-    }
-    pub fn name(mut self, name: impl Into<String>) -> Actor {
-        self.name = Some(name.into());
-        self
-    }
-    pub fn label(mut self, label: impl Into<String>) -> Actor {
-        self.label = Some(label.into());
-        self
-    }
-
-    fn to_data(&self) -> Data {
-        let scheme = match self.scheme {
-            ActorScheme::Email => "email",
-            ActorScheme::Phone => "phone",
-            ActorScheme::Opaque => "opaque",
-        };
-        let mut out = vec![("identifier".to_string(), Data::text(self.identifier.clone())), ("scheme".into(), Data::text(scheme))];
-        for (key, value) in [("email", &self.email), ("name", &self.name), ("label", &self.label)] {
-            if let Some(value) = value {
-                out.push((key.into(), Data::text(value.clone())));
-            }
-        }
-        Data::Map(out)
-    }
-}
-
 /// What landed on a listen's last edge, as its module reports it (adapter
-/// protocol 2.6; who acted, 2.7): the run it fires binds the function's
-/// parameter to the landing, reads `@actor_*` from the actor, and stamps its
-/// writes with when it happened.
+/// protocol 2.6): the run it fires binds the function's parameter to the
+/// landing and stamps its writes with when it happened.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Arrival {
     /// The adapter it arrived from (the listened instance's).
@@ -531,14 +477,13 @@ pub struct Arrival {
     pub parents: Vec<Option<Landing>>,
     /// The record it is about, when that is not its landing: its type and id.
     pub about: Option<(String, String)>,
-    pub actor: Option<Actor>,
     /// When it happened at its provider, ISO 8601; None: the run's `now`.
     pub occurred_at: Option<String>,
 }
 
 impl Arrival {
     pub fn new(adapter_type: impl Into<String>, edge: impl Into<String>, landing: Landing) -> Arrival {
-        Arrival { adapter_type: adapter_type.into(), edge: edge.into(), landing, parents: Vec::new(), about: None, actor: None, occurred_at: None }
+        Arrival { adapter_type: adapter_type.into(), edge: edge.into(), landing, parents: Vec::new(), about: None, occurred_at: None }
     }
     pub fn parents(mut self, parents: Vec<Option<Landing>>) -> Arrival {
         self.parents = parents;
@@ -547,10 +492,6 @@ impl Arrival {
     /// The record it is about.
     pub fn about(mut self, record_type: impl Into<String>, external_id: impl Into<String>) -> Arrival {
         self.about = Some((record_type.into(), external_id.into()));
-        self
-    }
-    pub fn by(mut self, actor: Actor) -> Arrival {
-        self.actor = Some(actor);
         self
     }
     pub fn occurred_at(mut self, at: impl Into<String>) -> Arrival {
@@ -571,9 +512,6 @@ impl Arrival {
         }
         if let Some((record_type, external_id)) = &self.about {
             arrival.push(("about".into(), Data::map([("recordType", Data::text(record_type.clone())), ("externalId", Data::text(external_id.clone()))])));
-        }
-        if let Some(actor) = &self.actor {
-            arrival.push(("actor".into(), actor.to_data()));
         }
         let occurred = self.occurred_at.as_deref().and_then(crate::js_date::parse).map(crate::js_date::to_iso_string);
         Data::Map(vec![
@@ -915,9 +853,11 @@ mod tests {
             parents: Vec::new(),
             taken_applied: false,
         };
-        assert_eq!(found[0].judge(&arrival("Message", "Hi"), 0.0), ListenVerdict::Fires);
-        assert_eq!(found[0].judge(&arrival("Message", "Bye"), 0.0), ListenVerdict::Skips { hop: 0, reason: None });
-        assert!(matches!(found[0].judge(&arrival("Draft", "Hi"), 0.0), ListenVerdict::Skips { reason: Some(_), .. }), "another record type's edge of that name");
+        let none = PluginAnswers::default();
+        let at_zero = Judging { now_ms: 0.0, answers: &none };
+        assert_eq!(found[0].judge(&arrival("Message", "Hi"), at_zero), ListenVerdict::Fires);
+        assert_eq!(found[0].judge(&arrival("Message", "Bye"), at_zero), ListenVerdict::Skips { hop: 0, reason: None });
+        assert!(matches!(found[0].judge(&arrival("Draft", "Hi"), at_zero), ListenVerdict::Skips { reason: Some(_), .. }), "another record type's edge of that name");
     }
 
     /// A host with no store cannot park: the run fails naming what it

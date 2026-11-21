@@ -8,7 +8,7 @@ const CATALOG: &str = r#"{"adapters":{},"credentials":{},"plugins":{}}"#;
 
 fn codes_at(source: &str) -> Vec<(String, String)> {
     let catalog = CatalogSnapshot::load(CATALOG).unwrap();
-    let options = CheckOptions { upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
+    let options = CheckOptions { upgrading_from: None, limiting_function: None, zones: &movement_checker::host::native::NativeZones };
     check_source(source, &catalog, options)
         .unwrap()
         .into_iter()
@@ -33,7 +33,7 @@ fn debug_case() {
     let Ok(dir) = std::env::var("NODES_CASE") else { return };
     let source = std::fs::read_to_string(format!("{dir}/case.mov")).unwrap();
     let catalog = CatalogSnapshot::load(&std::fs::read_to_string(format!("{dir}/case.json")).unwrap()).unwrap();
-    let options = CheckOptions { upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
+    let options = CheckOptions { upgrading_from: None, limiting_function: None, zones: &movement_checker::host::native::NativeZones };
     for d in check_source(&source, &catalog, options).unwrap() {
         eprintln!("{} {:?} {}", d.code, d.span, d.message);
     }

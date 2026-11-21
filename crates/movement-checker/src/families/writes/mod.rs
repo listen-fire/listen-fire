@@ -1244,7 +1244,8 @@ impl Checker<'_> {
     /// time, which is a reason for silence only while some value could still
     /// be right — so an empty domain is refused whatever is written.
     fn check_enum_literal_write(&mut self, value: &movement_parser::ast::ExprSlot, target: Option<&Ty>, subject: &str) {
-        let found: Vec<_> = match target.map(strip_absent) {
+        let target = target.map(crate::types::field::unbranded);
+        let found: Vec<_> = match target.as_ref().map(strip_absent) {
             Some(Ty::Owned(owned)) => {
                 let zones = self.zones;
                 let Some(message) = static_string_literal_of(value).and_then(|literal| {

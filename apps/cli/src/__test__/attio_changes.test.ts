@@ -36,7 +36,7 @@ function moved(c: <crm-[:DealChange]->>) {
     write crm-[:Companies]-> {
       unique by (Name)
       Name: d.Name
-      Description: "\${d.Name} is now \${d.Stage} (\${c.Kind} \${c.Field} by \${@actor_id})"
+      Description: "\${d.Name} is now \${d.Stage} (\${c.Kind} \${c.Field} by \${c.\`Changed By\`})"
     }
   }
 }

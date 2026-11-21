@@ -48,6 +48,7 @@ interface AdapterSpec {
   description?: string;                           // the adapter's own words for itself (its manifest's `description`); shown, never checked
   resendWindowSeconds?: number;                   // how long the provider may re-send an arrival it already sent (its manifest's); a default lf.yaml overrides per connection
   listenSettingsBecome?: SettingsBecome;          // what a 0.12 settings listen on it becomes as a traversal (its manifest's); `listen-fire upgrade` rewrites by it
+  listensLimitedBefore?: string;                  // the release before which a host may have let only registered senders set a listen on it off (its manifest's: Slack's `0.16.0`); an upgrade from an older key tells each listen its filter does not limit (MOV_LISTEN_NOW_OPEN)
 }
 
 interface SettingsBecome {
@@ -90,10 +91,12 @@ interface ConstructionArg {
 interface PluginSpec {
   args: string[];
   priced: boolean;
-  argTypes?: Record<string, SchemaFieldType>;   // each argument's declared input type, by name; absent for one nobody typed
+  argTypes?: Record<string, PluginArgType>;   // each argument's declared input type, by name (a `SchemaFieldType`, or `{ kind: 'union', of: PluginArgType[] }` for one of several); absent for one nobody typed
   requiredArgs?: string[];
   effects?: { reads?: string[]; writes?: string[]; ai?: boolean; now?: boolean; suspend?: boolean };
   fedByExtraction?: boolean;
+  pure?: boolean;   // the same arguments give the same answer until the host says otherwise; absent: not pure
+  maxAgeSeconds?: number;   // how long a host may keep a pure plugin's answer; only with `pure: true`
   fedArgs?: Array<{ name: string; required?: true }>;
   output?: PluginOutput;
   package?: string;   // the package tag it is a member of (`@lf/web`); absent when it is in none
@@ -104,6 +107,8 @@ interface PluginSpec {
 
 **A plugin's arguments by position.** A call passes the plugin's required inputs by position, then its other inputs in one settings record (`fetchUrl(u)`, `research(n, { context: s })`). The positions are the spec's required `fedArgs`, then its `requiredArgs` in `args` order; a `through [ … ]` stage, which is never fed by its author, takes only the `requiredArgs`. The spec keeps a plugin's fed inputs apart from its author's, so it does not say how the two interleave in the manifest; every plugin declares its fed input first, so fed-then-author is the manifest's declared order. A settings key is an input's name exactly as `args` (or, on a plain call, `fedArgs`) spells it. The call is bound to the named config before the plugin is invoked, so the wire is unchanged: the plugin is handed `{ url: … }` as before. One binding does this in each language (Rust `PluginSpec::bind_args`, TypeScript `bindPluginArgs`); both checkers and both engines use it.
 
+**A plugin's output that is one record, or none.** A `record` output with `maybeAbsent` is `record | absent`: a lookup that may find nobody (`team.userFor(e)`). Its fields are read with `?.` (`team.userFor(e)?.Level`), absent when it answered none. None has one spelling: an answer with no `data` member (or `data: null`) and no `text`. A text-only answer, or a `data` that is not an object, is refused as malformed, never read as none. `data: {}` is a record whose fields are each absent, allowed only where every field may be absent; otherwise the answer is refused as malformed, never read as none. `maybeAbsent` is optional and additive, so the version stays 1. A TypeScript declaration spells it `output: { kind: 'record', fields: { … }, optional: true }`.
+
 **A plugin's output that is one file.** A `value` output of type `file` is the file the host put at the answer's `data.value`, not the fetched text (a PDF: `pdf.render(text)`).
 
 **A plugin package.** A spec's `package` is a tag (`@lf/web`), compared exactly and never parsed. An import from `plugins` whose name equals some spec's `package` imports that package: ``import { `@lf/web` as web } from plugins``. Its members are the specs that declare that tag, each called by its key in camelCase after the package's local name (`fetch_url` → `web.fetchUrl(u)`, `through [web.linkedinEnrichment]`). A member call is an ordinary plugin call: it binds by position as above, and the plugin is invoked by its catalog key with the named config. The platform's catalog lists two: `@lf/web` and `@lf/pdf` (`pdf.render(text)`). A package's plugin is keyed by module and name (`@lf/pdf/render`, `@lf/web/render`), so two modules can each serve a `render`; the spec's `name` is what a program writes. A bare import (`import { fetch_url } from plugins`, as the older language wrote it) finds the one plugin of that name, and is refused, naming the packages, when several have it. The key is compared, never parsed. `name` is optional and additive, so the version stays 1. The member is optional and additive, both readers carry it, so the version stays 1.
@@ -111,8 +116,10 @@ interface PluginSpec {
 ```ts
 type PluginOutput =
   | { kind: 'value'; type: SchemaFieldType }
-  | { kind: 'record'; fields: Record<string, SchemaFieldType> }
+  | { kind: 'record'; fields: Record<string, SchemaFieldType>; maybeAbsent?: true }   // maybeAbsent: `{ … } | null`, it may answer no record
   | { kind: 'records'; fields: Record<string, SchemaFieldType> };
+
+type PluginArgType = SchemaFieldType | { kind: 'union'; of: PluginArgType[] };   // an argument takes one of several types (a union of brands); a schema's field never does
 
 type SchemaFieldType =
   | 'text' | 'number' | 'boolean' | 'date' | 'datetime' | 'file' | 'json' | 'absent'
@@ -122,6 +129,7 @@ type SchemaFieldType =
   | { kind: 'enum'; options: string[]; open?: { allowPattern?: string } }
   | { kind: 'owned'; name: string; owner: string; allowPattern?: string; format?: 'cron' | 'timeZone' }   // a named scalar its owner (the adapter) parses: a cron schedule; `format`, a format the checker validates a literal by, whatever the name
   | { kind: 'maybeAbsent'; of: SchemaFieldType }
+  | { kind: 'branded'; of: SchemaFieldType; brands: string[] }   // `text & Brand<"claim:email/address">`: `of` narrowed by each brand, each a name compared whole, never parsed; it fits where `of` is asked for, and a value without the brand never fits where it is
   | { kind: 'record'; position: { kind: 'position'; position: string } | { kind: 'union'; union: string } };   // a record held as the value, of a position of this instance: read on with `.`, never fetched
 
 interface InstanceSchema {
@@ -243,6 +251,8 @@ interface FieldCapability {
 
 ## Changes
 
+- **Version 3, with 0.16:** an `AdapterSpec` gains `listensLimitedBefore?`, the release before which a host may have let only registered senders set a listen on the module off (its manifest's; Slack declares `0.16.0`). The checker reads it on an upgrade from an older key to tell each listen whose filter calls no pure function taking a claim (`MOV_LISTEN_NOW_OPEN`). It is optional and additive, so the version stays 3. A Rust reader built before it refuses a snapshot that carries it.
+- **Version 3, with 0.16:** a `SchemaFieldType` gains `branded` (`{ kind: 'branded', of, brands }`, spelled `text & Brand<"claim:email/address">`): a module's field or a plugin's argument or answer narrowed by brands, each a name compared whole. The checker refuses a value without the brand where one is asked for (`MOV_BRAND_REQUIRED`). It is optional and additive, so the version stays 3. A Rust reader built before it refuses a snapshot that carries it.
 - **Version 3, with the shared description of the graph:** a `CollectionSchema` gains `description?`, as an `EdgeSchema` already has. A type known only by what is written to it has no position, so its module's description had nowhere to go. Both builders now carry it here, for such a type only; a type with a position keeps its description there. It is optional and additive, so the version stays 3. A Rust reader built before it refuses a snapshot that carries it, so a host's cached catalog stays keyed by the release that built it.
 - **Version 3, after 0.13.0:** an `AdapterSpec` gains `package?`, the package the module is installed from, compared whole against what a `connect` names (``connect `@lf/github` ``). It is optional and additive, so the version stays 3. A Rust reader built before it refuses a snapshot that carries it, so a builder writes it only for a reader of this release or later.
 - **Version 3, with 0.13's listen:** the settings listen (`listen to x { … }`) is retired, and with it what said what it could hear.

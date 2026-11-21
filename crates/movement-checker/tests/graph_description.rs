@@ -83,7 +83,7 @@ fn catalog_of(schema: Value) -> CatalogSnapshot {
 }
 
 fn options() -> CheckOptions<'static> {
-    CheckOptions { upgrading_from: None, zones: &NativeZones }
+    CheckOptions { upgrading_from: None, limiting_function: None, zones: &NativeZones }
 }
 
 fn analysis_of(source: &str, catalog: &CatalogSnapshot) -> Analysis {

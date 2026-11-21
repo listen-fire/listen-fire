@@ -19,8 +19,6 @@ import { Readable } from 'node:stream';
 
 import type { ReadableStream as WebReadableStream } from 'node:stream/web';
 import type {
-  ActorCandidate,
-  ActorIdentity,
   Adapter,
   DeleteInput,
   DeleteResult,
@@ -38,9 +36,7 @@ import type {
 } from 'movement-engine/public/adapter';
 import type { SchemaEntryPoint, SchemaTypeDescriptor, SourcePosition } from 'movement-engine/public/catalog';
 import type { Arrival } from 'engine-contracts';
-import type { TriggerEvent } from 'movement-engine/public/inbound';
 import type { LinkedIdentity, ModuleIdentities, ModuleLog } from 'module-kit';
-import { firedActor } from 'module-kit';
 
 import { fileHandle, ownedFileSource, singleParentLink } from 'movement-engine/public/adapter';
 import { META_RECORD_TYPE, makeStablePosition, makeUnstablePosition, positionData } from 'movement-engine/public/catalog';
@@ -249,6 +245,16 @@ export class TelegramAdapter extends BaseAdapter implements Adapter {
           { fieldId: 'sender_id', displayName: 'Sender Id', kind: 'string', writable: false, required: false, description: 'The numeric id of the user who sent the message.' },
           { fieldId: 'sender_username', displayName: 'Sender Username', kind: 'string', writable: false, required: false, description: 'The @username of the sender, when set.' },
           { fieldId: 'sender_first_name', displayName: 'Sender First Name', kind: 'string', writable: false, required: false, description: 'The sender\'s first name.' },
+          {
+            fieldId: 'sender_email',
+            displayName: 'Sender Email',
+            kind: 'string',
+            brands: ['claim:email/address'],
+            mayBeAbsent: true,
+            writable: false,
+            required: false,
+            description: 'The address the sender bound to their Telegram account by the link handshake, lower case; null for a sender who has not linked. A claim Telegram vouches for: a plugin function such as a team check accepts it where it refuses plain text.',
+          },
           { fieldId: 'date', displayName: 'Date', kind: 'string', writable: false, required: false, description: 'When the message was sent (ISO-8601).' },
         ],
         references: [
@@ -457,81 +463,44 @@ export class TelegramAdapter extends BaseAdapter implements Adapter {
     const arrivals = await Promise.all(
       telegramInboundArrivals(input.raw).map(async (arrival) => {
         if ('gone' in arrival) return arrival;
-        const actor = await this.actorOfMessage(arrival.landing.fields);
-        return actor === null ? arrival : { ...arrival, actor };
+        return { ...arrival, landing: await this.withSenderEmail(arrival.landing) };
       }),
     );
     return { events: [], arrivals };
   }
 
-  // ── 6. Actor candidate parsing (acting-user split) ────────────────────
+  // ── 6. The sender's claim ─────────────────────────────────────────────
   // A Telegram sender is identified by the team-scoped binding in
   // `adapters.telegram_identity` (`telegram_user_id → email`, populated by the
-  // authenticated deep-link handshake). The adapter's job is to map its
-  // external token → an email; the framework's team-clamped
-  // `lookupTeamUserByEmail` turns that email into the run's ActingUser. An
-  // unbound sender resolves to no email → no actor → the dispatch is ignored.
-  async getActorCandidates(input: { event: TriggerEvent }): Promise<ActorCandidate[]> {
-    const actor = firedActor(input.event);
-    if (!actor) return [];
-    return [{ identity: actor, source: 'originator' }];
-  }
-
-  // ── 6b. Actor extraction (@actor_*) ───────────────────────────────────
-  // The sender, as the door named them on the arrival (`actorOfMessage`).
-  async extractActor(input: { event: TriggerEvent }): Promise<ActorIdentity | null> {
-    return firedActor(input.event);
-  }
-
-  // Resolve a message's Telegram sender to an email-bearing identity via the
-  // adapter's OWN store, scoped to this adapter's team. The numeric user id
-  // stays the `identifier` (the source-system primary key) and the
-  // username/first name ride `name`/`label` so `@actor_*` still surfaces the
-  // raw Telegram sender; the resolved `email` + `scheme: 'email'` is the
-  // AUTHENTICATION key the framework matches against the team's users. An
-  // unbound sender (no row for this team) → `null` (no actor; downstream
-  // ignores it). The store read is team-scoped here, and the framework's
-  // `lookupTeamUserByEmail` is itself hard-clamped to the team —
-  // identification can never cross teams.
-  private async actorOfMessage(message: Record<string, unknown>): Promise<ActorIdentity | null> {
-    const senderId = message.sender_id;
-    if (typeof senderId !== 'string' || senderId.length === 0) return null;
-
-    const email = await this.resolveActorEmail(senderId);
-    if (!email) return null;
-
-    const username = typeof message.sender_username === 'string' ? message.sender_username : undefined;
-    const firstName = typeof message.sender_first_name === 'string' ? message.sender_first_name : undefined;
-    return {
-      identifier: senderId,
-      scheme: 'email',
-      adapterType: this.adapterType,
-      email,
-      ...(firstName !== undefined ? { name: firstName } : {}),
-      label: username ? `@${username}` : (firstName ?? senderId),
-      // The sender id is Telegram's, from a delivery the host admits only with
-      // the bot's secret token; the address is the one they bound by handshake.
-      proven: true,
-    };
+  // authenticated deep-link handshake). The module vouches for that address
+  // as the message's `Sender Email`, a `claim:email/address`: the sender id is
+  // Telegram's own, from a delivery the host admits only with the bot's secret
+  // token, and the address is the one they bound by handshake. An unbound
+  // sender has none, which is no claim. The store read is team-scoped here,
+  // and a binding another team holds is invisible to this one.
+  private async withSenderEmail<L extends { fields: Record<string, unknown> }>(landing: L): Promise<L> {
+    const senderId = landing.fields.sender_id;
+    const bound = typeof senderId === 'string' && senderId.length > 0 ? await this.boundEmail(senderId) : { email: null };
+    const email = bound?.email ?? null;
+    return { ...landing, fields: { ...landing.fields, sender_email: email, 'Sender Email': email }, ...(bound === null ? { unknown: ['Sender Email'] } : {}) };
   }
 
   /**
-   * Map a Telegram user id → the bound Listen-Fire email, scoped to THIS adapter's
-   * team. Reads `adapters.telegram_identity` WHERE `telegram_user_id` AND
-   * `team_id` match — `UNIQUE(team_id, telegram_user_id)` guarantees at most
-   * one row, so a single `executeTakeFirst` is exact. Returns null when the
-   * sender has no binding in this team (the cross-team clamp: a row owned by a
-   * different team is invisible here). Failure-resilient — a DB error swallows
-   * to null so a read-path hiccup ignores rather than throws into dispatch.
-   *
+   * Map a Telegram user id → the bound Listen-Fire email, lower case, scoped
+   * to THIS adapter's team. Reads `adapters.telegram_identity` WHERE
+   * `telegram_user_id` AND `team_id` match — `UNIQUE(team_id, telegram_user_id)`
+   * guarantees at most one row. `{ email: null }` when the sender has no
+   * binding in this team (the cross-team clamp: a row owned by a different
+   * team is invisible here); null when the binding could not be read, which
+   * the message carries as unknown rather than as no address.
    */
-  private async resolveActorEmail(telegramUserId: string): Promise<string | null> {
+  private async boundEmail(telegramUserId: string): Promise<{ email: string | null } | null> {
     try {
       const email = (await this.sources.identities.find(telegramUserId))?.email;
-      if (typeof email !== 'string' || email.length === 0) return null;
-      return email.trim().toLowerCase();
+      if (typeof email !== 'string' || email.trim().length === 0) return { email: null };
+      return { email: email.trim().toLowerCase() };
     } catch (err) {
-      this.sources.log.warn('[TelegramAdapter] linked identity actor-email resolution failed', {
+      this.sources.log.warn('[TelegramAdapter] linked identity sender-email resolution failed', {
         telegramUserId,
         error: err instanceof Error ? err.message : String(err),
       });

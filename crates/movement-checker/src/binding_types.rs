@@ -62,6 +62,7 @@ impl Checker<'_> {
             upgrading_from: self.upgrading_from,
             function_values: &self.function_values,
             entry_reads: &self.entry_reads,
+            catalog: Some(self.catalog),
         }
     }
 
@@ -460,6 +461,7 @@ impl Checker<'_> {
         match value {
             ValueType::Name { name, .. } => Ty::from_scalar_name(name).or_else(|| self.declared_type_in(name, scope)),
             ValueType::List { of, .. } => self.value_member_type(of, scope).map(Ty::list),
+            ValueType::Branded { of, brands, .. } => self.value_member_type(of, scope).map(|of| crate::types::field::branded(of, brands.iter().cloned())),
             ValueType::Record { keys, .. } => {
                 let mut shape = Vec::new();
                 for key in keys {

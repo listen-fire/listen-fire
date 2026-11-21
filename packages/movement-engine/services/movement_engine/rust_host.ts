@@ -303,6 +303,20 @@ const ROUTES: Record<string, Route> = {
     const typed = 'error' in answer ? answer : withDeclaredFiles(answer, output);
     return new Plain(wired(wire, typed, 'llm.transforms.invoke'));
   },
+  /** A pure plugin's kept answer inside an expression, asked only of a host
+   *  that serves it (the engine otherwise invokes the plugin). Plain JSON
+   *  both ways, by position, as the listen judge asks. */
+  async 'llm.transforms.answer'(request, { host }) {
+    const { answer } = host.llm.transforms;
+    if (answer === undefined) throw notServed('llm.transforms.answer');
+    if (!Array.isArray(request.args)) throw new RustShimError('llm.transforms.answer args is a list');
+    const answered = await answer.call(host.llm.transforms, {
+      plugin: string(request.plugin, 'llm.transforms.answer plugin'),
+      args: request.args,
+      segmentId: segmentOf(request),
+    });
+    return plainJson(answered, 'llm.transforms.answer');
+  },
   /** A source file's text, a priced call: the descriptor on the eval wire. */
   async 'files.resolveFileText'(request, { host, context, wire }) {
     if (request.wire !== true) throw new RustShimError('files.resolveFileText carries its file on the eval wire');
@@ -313,26 +327,6 @@ const ROUTES: Record<string, Route> = {
     const answer = await host.files.resolveFileText({ file: { ...file }, segmentId: segmentOf(request), budget: budgetOf(request.budget) });
     context.ledger.charge(answer.cost);
     return new Plain(wired(wire, answer, 'files.resolveFileText'));
-  },
-  /** The principal the event acts as (`@user_*`), the event on the eval
-   *  wire, and the answer back on it. A host that throws answers an error,
-   *  which the engine reads as no user, as the TypeScript engine forgives
-   *  the throw (`resolveMovementActingUserUncached`). */
-  async 'lookup.resolveActingUser'(request, { host, wire }) {
-    if (request.wire !== true) throw new RustShimError('lookup.resolveActingUser carries its event on the eval wire');
-    const event = wire.read(request.event);
-    if (!isTriggerEvent(event)) throw new RustShimError('lookup.resolveActingUser event is a trigger event');
-    const triggerId = optionalString(request.triggerId, 'lookup.resolveActingUser triggerId');
-    const actingUser = await host.lookup.resolveActingUser({
-      ...(triggerId !== undefined ? { triggerId } : {}),
-      instance: string(request.instance, 'lookup.resolveActingUser instance'),
-      event,
-      // Last, as run_context.ts's binding adds it.
-      segmentId: segmentOf(request),
-    });
-    const value = wire.value(actingUser);
-    if (value === REFUSED) throw new RustShimError('lookup.resolveActingUser answered a principal the eval wire cannot carry as itself');
-    return new Plain(value);
   },
   /** `FILE(content, type)`: the host renders and stores the artifact; its
    *  descriptor comes back on the eval wire. */

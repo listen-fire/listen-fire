@@ -16,7 +16,7 @@ fn check(body: &str, upgrading_from: Option<&str>) -> Vec<(String, &'static str,
         "node Found: \"the extraction\" {{\n  title: <text> \"the title\"\n  maybe: <text | null> \"a title, if any\"\n  size: <number> \"how many\"\n  node item: \"each item\" {{\n    label: <text> \"its label\"\n  }}\n}}\nfunction go(t: <text>) {{\n  r = extractOne([t], Found)\n{body}\n}}\n"
     );
     let catalog = CatalogSnapshot::load(CATALOG).unwrap();
-    let options = CheckOptions { upgrading_from, zones: &movement_checker::host::native::NativeZones };
+    let options = CheckOptions { upgrading_from, limiting_function: None, zones: &movement_checker::host::native::NativeZones };
     let diagnostics: Vec<Diagnostic> = check_source(&source, &catalog, options).unwrap_or_else(|e| panic!("{source}: {e:?}"));
     diagnostics
         .into_iter()

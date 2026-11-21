@@ -37,6 +37,15 @@ pub fn is_flat_builtin(name: &str) -> bool {
     FLAT.contains(&folded.as_str()) || FORMS.contains(&folded.as_str())
 }
 
+/// Whether `name` is a built-in's, flat or namespaced (`fail`'s `error`
+/// too): anything else a program calls is a plugin. A listen's plan names a
+/// plugin by its catalog key, which the checker holds to no built-in's name,
+/// so the judge tells a host call from a built-in by this alone.
+pub fn is_builtin(name: &str) -> bool {
+    let folded = crate::js::to_lower_case(name);
+    is_flat_builtin(name) || NAMESPACED.contains(&folded.as_str()) || folded == "error"
+}
+
 pub const NAMESPACED: [&str; 20] = [
     "currency.get_number_from_figure",
     "currency.get_code_from_figure",

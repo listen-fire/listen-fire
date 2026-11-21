@@ -1,5 +1,13 @@
 # @listen-fire/telegram
 
+## 0.14.0
+
+### Minor Changes
+
+- Claims: `Message` gains `Sender Email`: the address the sender bound by the link handshake, lower case, a `claim:email/address` Telegram vouches for; null for a sender who never linked, and unknown when the binding could not be read. The module no longer declares `getActorCandidates` or `extractActor`, and its arrivals carry no `actor`.
+- `Sender Email` is declared `text & Brand<"claim:email/address"> | null`, so a filter tests it for null before a host function takes it.
+- Peer floors on `movement-lang`, `engine` and `engine-contracts` are raised to `>=0.16.0 <1.0.0`: the branded, nullable claim fields above are types a core before 0.16 cannot read.
+
 ## 0.13.4
 
 ### Patch Changes

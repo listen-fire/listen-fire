@@ -91,7 +91,7 @@ impl Address {
     /// with the describing option. A host narrows the catalog first, as it
     /// would for any program.
     pub fn land(&self, program: &Program, catalog: &CatalogSnapshot, zones: &dyn host::ZoneLookup) -> Result<Landed, String> {
-        let analysis = analyze(program, catalog, CheckOptions { upgrading_from: None, zones });
+        let analysis = analyze(program, catalog, CheckOptions { upgrading_from: None, limiting_function: None, zones });
         let connect_lines = self.connect.lines().count();
         let mut diagnostics: Vec<Diagnostic> = analysis.diagnostics.iter().filter(|d| d.span.start.line <= connect_lines).cloned().collect();
         if diagnostics.iter().any(Diagnostic::is_error) {

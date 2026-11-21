@@ -18,7 +18,7 @@ const CATALOG: &str = r#"{"adapters":{
 const PROGRAM: &str = "import { mail as mail_module } from adapters\nmail = connect mail_module\nfunction triage(m: <mail-[:Messages]->>) {\n  return m.Labels\n}\nlisten to mail-[m:Messages WHERE m.Labels CONTAINS \"Label_12\"]-> fire triage\n";
 
 fn checked(pin: Option<&str>) -> Vec<Diagnostic> {
-    let options = CheckOptions { upgrading_from: pin, zones: &movement_checker::host::native::NativeZones };
+    let options = CheckOptions { upgrading_from: pin, limiting_function: None, zones: &movement_checker::host::native::NativeZones };
     check_source(PROGRAM, &CatalogSnapshot::load(CATALOG).unwrap(), options).unwrap()
 }
 
@@ -45,7 +45,7 @@ fn a_check_on_the_release_that_changed_it_says_nothing() {
 }
 
 fn told_for(source: &str) -> Vec<Diagnostic> {
-    let options = CheckOptions { upgrading_from: Some("0.12.13"), zones: &movement_checker::host::native::NativeZones };
+    let options = CheckOptions { upgrading_from: Some("0.12.13"), limiting_function: None, zones: &movement_checker::host::native::NativeZones };
     let found = check_source(source, &CatalogSnapshot::load(CATALOG).unwrap(), options).unwrap();
     found.into_iter().filter(|d| d.code == "MOV_FIELD_MEANING_CHANGED").collect()
 }
@@ -82,7 +82,7 @@ fn a_comparison_with_any_other_value_is_still_warned() {
 
 #[test]
 fn a_catalog_that_declares_no_unchanged_values_warns_on_every_comparison() {
-    let options = CheckOptions { upgrading_from: Some("0.12.13"), zones: &movement_checker::host::native::NativeZones };
+    let options = CheckOptions { upgrading_from: Some("0.12.13"), limiting_function: None, zones: &movement_checker::host::native::NativeZones };
     let catalog = CATALOG.replace(",\"unchangedValues\":[\"INBOX\",\"UNREAD\"]", "");
     let found = check_source(&listening_where("m.Labels CONTAINS \"INBOX\""), &CatalogSnapshot::load(&catalog).unwrap(), options).unwrap();
     assert_eq!(found.iter().filter(|d| d.code == "MOV_FIELD_MEANING_CHANGED").count(), 1, "{found:?}");

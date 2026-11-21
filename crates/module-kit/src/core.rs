@@ -378,6 +378,11 @@ pub struct UnjudgedArrival {
     pub at: String,
     #[serde(default)]
     pub attempt: u32,
+    /// Its listen waits on it: the host could not answer a function its
+    /// filter calls, or an earlier arrival waits so (`unjudged.judged`
+    /// clears it).
+    #[serde(default)]
+    pub waiting: bool,
 }
 
 /// What a `work.release` says of the claim.
@@ -823,12 +828,19 @@ slot! {
             at: String,
             #[serde(default)]
             attempt: u32,
+            #[serde(default)]
+            waiting: bool,
             forget_before: String,
         }) -> bool;
         /// The unjudged arrivals kept, oldest first (ties by pipeline, then
         /// arrival, then attempt), after the one `after` names, only the
-        /// listen `pipeline`'s when it names one, at most `limit`.
-        "unjudged.list" => fn unjudged_arrivals(UnjudgedList { #[serde(default)] after: Option<UnjudgedAfter>, #[serde(default)] pipeline: Option<String>, limit: i64 }) -> Vec<UnjudgedArrival>;
+        /// listen `pipeline`'s when it names one, only those that wait when
+        /// `waiting`, at most `limit`.
+        "unjudged.list" => fn unjudged_arrivals(UnjudgedList { #[serde(default)] after: Option<UnjudgedAfter>, #[serde(default)] pipeline: Option<String>, #[serde(default)] waiting: bool, limit: i64 }) -> Vec<UnjudgedArrival>;
+        /// The listen `pipeline` judged `arrival`: none of its facts waits
+        /// any more. A store that keeps none waiting may answer
+        /// `method_not_implemented`.
+        "unjudged.judged" => fn judged_unjudged(UnjudgedJudged { pipeline: String, arrival: String }) -> ();
         /// One write: the receipt first, then the cursor (absent: left as it
         /// is), the arrivals and the work rows. A duplicate
         /// (`delivery.external_id` kept at this subscription before) writes

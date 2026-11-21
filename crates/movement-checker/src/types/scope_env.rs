@@ -49,6 +49,9 @@ pub struct ScopeEnv<'s> {
     /// Each index read hoisted out of an expression, by the name it is bound
     /// to: its structure, and its text as written.
     pub entry_reads: &'s std::collections::HashMap<String, (EntryRead, String)>,
+    /// The catalog the plugins a name may be bound to are read from; `None`
+    /// for a typing outside a check, which then knows no plugin.
+    pub catalog: Option<&'s movement_parser::catalog::types::CatalogSnapshot>,
 }
 
 impl ScopeEnv<'_> {
@@ -106,6 +109,15 @@ impl TypeEnv for ScopeEnv<'_> {
 
     fn resolve_scalar(&self, name: &str) -> Option<Ty> {
         self.types(name)?.field.clone()
+    }
+
+    fn plugin(&self, name: &str) -> Option<movement_parser::catalog::types::PluginSpec> {
+        let Resolution::Found(id) = self.scopes.resolve(self.scope, name) else { return None };
+        let symbol = self.scopes.symbol(id);
+        if symbol.kind != crate::scope::SymbolKind::Plugin {
+            return None;
+        }
+        self.catalog?.plugin(symbol.imported_name.as_deref().unwrap_or(name)).map(|spec| spec.as_called())
     }
 
     fn undescribed_event(&self, name: &str) -> Option<crate::families::walks::UndescribedEvent> {

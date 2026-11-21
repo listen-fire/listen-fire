@@ -1,5 +1,12 @@
 # @listen-fire/granola
 
+## 0.14.0
+
+### Minor Changes
+
+- Claims: `Note Owner Email` is a `claim:email/address` (lower case): the address is Granola's own answer to the connection's credential. The module no longer declares `getActorCandidates` or `extractActor`, and its arrivals carry no `actor`.
+- Peer floors on `movement-lang`, `engine` and `engine-contracts` are raised to `>=0.16.0 <1.0.0`: the branded, nullable claim fields above are types a core before 0.16 cannot read.
+
 ## 0.13.2
 
 ### Patch Changes

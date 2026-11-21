@@ -8,7 +8,7 @@
 // host's (`llm.transforms.invoke`): a host serves the plugins it implements
 // and refuses the rest by name.
 
-import { maybeAbsent, type PluginOutput, type PluginSpec, type SchemaFieldType } from 'movement-lang';
+import { maybeAbsent, type PluginArgType, type PluginOutput, type PluginSpec, type SchemaFieldType } from 'movement-lang';
 
 import type {
   ExpressionType,
@@ -27,6 +27,10 @@ import { neverAsAny } from 'movement-lang';
 export interface PluginDeclaration {
   signature: TransformSignature;
   priced: boolean;
+  /** Same arguments, same answer, until the host says otherwise. Absent ⇒ not pure. */
+  pure?: boolean;
+  /** How long a host may keep a pure plugin's answer. */
+  maxAgeSeconds?: number;
 }
 
 /** The name a program writes for a plugin: movement identifiers can't carry
@@ -92,7 +96,7 @@ export function pluginSpecOf(declaration: PluginDeclaration): PluginSpec {
   // Every argument's declared type, the auto-fed ones included: a plain call
   // writes those itself.
   const argTypes = Object.fromEntries(
-    signature.params.map((p) => [p.name, fieldTypeOfExpressionType(p.type)]),
+    signature.params.map((p) => [p.name, argTypeOfExpressionType(p.type)]),
   );
   return {
     args: authorParams.map((p) => p.name),
@@ -104,6 +108,8 @@ export function pluginSpecOf(declaration: PluginDeclaration): PluginSpec {
     ...(fedByExtraction ? { fedByExtraction: true } : {}),
     ...(signature.output !== undefined ? { output: pluginOutputOf(signature.output) } : {}),
     // The author's words, which the language service's hover leads with.
+    ...(declaration.pure === true ? { pure: true as const } : {}),
+    ...(declaration.maxAgeSeconds !== undefined ? { maxAgeSeconds: declaration.maxAgeSeconds } : {}),
     ...(signature.description !== undefined && signature.description.length > 0 ? { description: signature.description } : {}),
   };
 }
@@ -120,7 +126,7 @@ function pluginOutputOf(output: TransformOutputKind): PluginOutput {
     case 'value':
       return { kind: 'value', type: outputFieldType(output) };
     case 'record':
-      return { kind: 'record', fields: outputFieldTypes(output.fields) };
+      return { kind: 'record', fields: outputFieldTypes(output.fields), ...(output.optional === true ? { maybeAbsent: true as const } : {}) };
     case 'records':
       return { kind: 'records', fields: outputFieldTypes(output.fields) };
     default:
@@ -142,6 +148,20 @@ function outputFieldType(field: { type: ExpressionType; optional?: boolean }): S
   // `maybeAbsent` widens to undefined only for an undefined input, which a
   // projected base type never is.
   return maybeAbsent(base) ?? base;
+}
+
+/**
+ * A parameter's declared type as the catalog's argument type: the field types
+ * a plugin takes, and a union of them (a brand rides the field type). Only an
+ * argument accepts one of several, so an output stays a `SchemaFieldType`.
+ */
+function argTypeOfExpressionType(type: ExpressionType): PluginArgType {
+  switch (type.kind) {
+    case 'union':
+      return { kind: 'union', of: type.of.map(argTypeOfExpressionType) };
+    default:
+      return fieldTypeOfExpressionType(type);
+  }
 }
 
 /**
@@ -168,6 +188,12 @@ function fieldTypeOfExpressionType(type: ExpressionType): SchemaFieldType {
       return { kind: 'enum', options: [...type.values] };
     case 'list':
       return { kind: 'list', of: fieldTypeOfExpressionType(type.element) };
+    case 'branded':
+      return { kind: 'branded', of: fieldTypeOfExpressionType(type.of), brands: [...type.brands] };
+    case 'union':
+      // Only an argument accepts one of several (`argTypeOfExpressionType`); a
+      // value a plugin hands back is one type, so there is nothing to project.
+      throw new Error('a union is a parameter type only: a plugin output field or list element cannot be one');
     case 'json':
     case 'record':
       // Structured data nothing further describes — the data top type, which is

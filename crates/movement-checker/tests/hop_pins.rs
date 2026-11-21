@@ -40,7 +40,7 @@ fn errors_of(body: &str) -> Vec<String> {
     let source = format!(
         "import {{ tracker }} from adapters\nimport {{ Tracker }} from credentials\n\nt = connect tracker using Tracker\n\nfunction `Find` (name: <text>, squad: <text>) {{\n{body}\n}}\n"
     );
-    let options = CheckOptions { upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
+    let options = CheckOptions { upgrading_from: None, limiting_function: None, zones: &movement_checker::host::native::NativeZones };
     check_source(&source, &catalog(), options)
         .unwrap_or_else(|e| panic!("{source}: {e:?}"))
         .into_iter()

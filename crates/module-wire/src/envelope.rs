@@ -7,7 +7,7 @@ use crate::json::Js;
 pub const PROTOCOL_VERSION: &str = "2";
 /// The highest minor of version 2 this kit knows (`PROTOCOL_MINOR`): a module
 /// states the minor its manifest uses, from 0 to this.
-pub const PROTOCOL_MINOR: u64 = 9;
+pub const PROTOCOL_MINOR: u64 = 10;
 
 /// The method that names a minor's feature (`ProtocolMinorUse`), by name or by
 /// its ending.
@@ -29,13 +29,17 @@ pub struct ProtocolMinor {
 /// (`PROTOCOL_MINORS`, test-held equal to it in crates/lf). Offering one
 /// never raises the minor a module states: an older host never calls it. 2.3,
 /// labelled poll events, 2.7, `pollAgainAt`, 2.8, `hostRelease` on a slot
-/// request, and 2.9, `proven` on an actor identity, are host behaviours and name no method.
+/// request, and 2.9, `proven` on an actor identity (gone from 2.10), are host
+/// behaviours and name no method. 2.10's, `plugins.invalidate`, is a method a
+/// module calls at its host: an older host keeps no answers, so it has none to
+/// forget.
 pub const PROTOCOL_MINORS: &[ProtocolMinor] = &[
     ProtocolMinor { minor: 1, feature: "a <slot>.watch method", uses: MinorUse::MethodEndingWith(".watch") },
     ProtocolMinor { minor: 2, feature: "work.enqueueIfAbsent", uses: MinorUse::Method("work.enqueueIfAbsent") },
     ProtocolMinor { minor: 4, feature: "refreshEventSubscription", uses: MinorUse::Method("refreshEventSubscription") },
     ProtocolMinor { minor: 5, feature: "awaitKeys", uses: MinorUse::Method("awaitKeys") },
     ProtocolMinor { minor: 5, feature: "waits.log", uses: MinorUse::Method("waits.log") },
+    ProtocolMinor { minor: 10, feature: "plugins.invalidate", uses: MinorUse::Method("plugins.invalidate") },
 ];
 
 /// The minor a manifest states (`protocolMinorOf`): what it needs its host to
@@ -115,6 +119,7 @@ mod tests {
         assert_eq!(minor_introducing("refreshEventSubscription"), Some(4));
         assert_eq!(minor_introducing("awaitKeys"), Some(5));
         assert_eq!(minor_introducing("waits.log"), Some(5));
+        assert_eq!(minor_introducing("plugins.invalidate"), Some(10));
         assert_eq!(minor_introducing("describe"), None);
         // 2.3 (labelled poll events) is a rule for sources and a host behaviour: no module states it.
         assert!(PROTOCOL_MINORS.iter().map(|e| e.minor).max() <= Some(PROTOCOL_MINOR));

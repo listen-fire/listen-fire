@@ -7,21 +7,18 @@
 // saying `EngineHost.llm.client not provided`.
 
 import type { EngineHost, RenderFile } from '../movement_engine/host';
-import type { ActingUser } from '../translation_graph/adapter';
 import type { DryRunWriteSink } from '../translation_graph/engine/dry_run_adapter';
 
 import { adapterTable, type CredentialOwnership, type LiveAdapterResolver } from '../translation_graph/engine/adapter_table';
 import { withFileOwners } from '../translation_graph/engine/files/file_owners';
 import { InMemoryWriteLocks, segmentWriteLocks, type WriteLocks } from '../write_locks/write_locks';
 import {
-  actingPrincipalOf,
   closeSegmentWith,
   NEVER_CANCELLED,
   openSegmentWith,
   RANDOM_IDS,
   SegmentDirectory,
   WALL_CLOCK,
-  type ActingUserLookup,
 } from '../movement_engine/host_kit';
 
 /** What an in-process shell supplies: any piece of any group. */
@@ -43,9 +40,6 @@ export interface InProcessHostOptions {
   control?: Partial<EngineHost['control']>;
   /** The files slot: reading a file's text, rendering `FILE(…)`. */
   files?: Partial<EngineHost['files']>;
-  /** The acting-user lookup, handed the source instance's candidates as a call
-   *  into its live adapter. Absent ⇒ no event acts as anyone. */
-  lookup?: { resolveActingUser?: (input: ActingUserLookup) => Promise<ActingUser | null> };
   /** Cross-run write locks. Absent ⇒ in memory, which holds for one process. */
   locks?: WriteLocks;
   trace?: EngineHost['trace'];
@@ -65,7 +59,7 @@ function notProvided(piece: string): Error {
 
 /** An `EngineHost` over in-process parts (see the file's head). */
 export function inProcessHost(options: InProcessHostOptions = {}): EngineHost {
-  const { segment = {}, adapters = {}, llm = {}, park = {}, control = {}, files = {}, lookup = {} } = options;
+  const { segment = {}, adapters = {}, llm = {}, park = {}, control = {}, files = {} } = options;
   let opened = 0;
   const segments = new SegmentDirectory();
   const table = adapterTable({
@@ -134,26 +128,6 @@ export function inProcessHost(options: InProcessHostOptions = {}): EngineHost {
         return withFileOwners(table.fileOwners(input.segmentId), () => read(input));
       },
       render: files.render ?? (refused('files.render') satisfies RenderFile),
-    },
-    lookup: {
-      resolveActingUser: async ({ triggerId, segmentId, instance, event }) => {
-        const resolve = lookup.resolveActingUser;
-        if (resolve === undefined) return null;
-        return actingPrincipalOf(await resolve({
-          teamId: segments.facts(segmentId).teamId,
-          ...(triggerId !== undefined ? { triggerId } : {}),
-          // The module's own candidates where it offers them (an API lookup,
-          // a mail's relays); else who acted on the arrival, as its module
-          // said at the door (adapter protocol 2.7).
-          getCandidates: async () => {
-            if (table.offers({ segmentId, instance, method: 'getActorCandidates' })) {
-              return table.answer({ segmentId, instance, method: 'getActorCandidates', args: { event } });
-            }
-            const actor = event.arrival?.actor;
-            return actor === undefined ? [] : [{ identity: actor, source: 'originator' as const }];
-          },
-        }));
-      },
     },
     locks: { acquire: (input) => locks.acquire(input), release: (input) => locks.release(input) },
     ...(options.trace !== undefined ? { trace: options.trace } : {}),

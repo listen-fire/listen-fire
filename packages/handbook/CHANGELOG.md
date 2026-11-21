@@ -1,5 +1,11 @@
 # @listen-fire/handbook
 
+## 0.16.0
+
+### Minor Changes
+
+- The handbook teaches host functions in a filter, claims as the way to say who acted, and carries the 0.16 adapter fixtures; it checks under 0.16. Its peer floors on the core are now 0.16.0.
+
 ## 0.15.2
 
 ### Patch Changes

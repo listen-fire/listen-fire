@@ -17,7 +17,7 @@ class BrieflinkCrawler extends Crawler {
     if (await emailFieldLocator.isVisible()) {
       if (!this.email) {
         return new InvalidCredentialsError(
-          'This BriefLink needs an email to view — pass email: to vc_url_retrieval (e.g. email: @user_email)',
+          'This BriefLink needs an email to view — pass email: to vc_url_retrieval (an address your team reads)',
         );
       }
       await emailFieldLocator.fill(this.email);

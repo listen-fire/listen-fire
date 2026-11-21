@@ -16,8 +16,6 @@ import { Readable } from 'node:stream';
 
 import type { ReadableStream as WebReadableStream } from 'node:stream/web';
 import type {
-  ActorCandidate,
-  ActorIdentity,
   Adapter,
   EdgesFromResult,
   FileRef,
@@ -35,9 +33,7 @@ import type {
   SourcePosition,
 } from 'movement-engine/public/catalog';
 import type { Arrival } from 'engine-contracts';
-import type { TriggerEvent } from 'movement-engine/public/inbound';
 import type { ModuleLog } from 'module-kit';
-import { firedActor } from 'module-kit';
 import type { WhatsappCloudClient } from './client';
 
 import { fileHandle, isFileValue, ownedFileSource, singleParentLink } from 'movement-engine/public/adapter';
@@ -49,7 +45,7 @@ import { uniformWalk } from 'module-kit/adapter/hop';
 import { BaseAdapter } from 'module-kit/adapter/base';
 import { readProfileName, readString, whatsappInboundArrivals } from './inbound';
 import { WHATSAPP_MANIFEST } from './manifest';
-import { normalizeWhatsappPhone } from './phone';
+import { normalizeWhatsappPhone, whatsappE164 } from './phone';
 import {
   WHATSAPP_ADAPTER_TYPE,
   WHATSAPP_RECORD_TYPE_ID,
@@ -283,6 +279,7 @@ export class WhatsappAdapter extends BaseAdapter implements Adapter {
         fields: [
           { fieldId: 'messageId', displayName: 'Message Id', kind: 'string', writable: false, required: true, description: 'The WhatsApp message id — the value a reply or reaction addresses.' },
           { fieldId: 'from', displayName: 'From', kind: 'string', writable: false, required: true, description: 'The sender\'s phone number, digits with the country code first and no plus (`447700900001`): the conversation a message is in, so a listen narrows to one by it.' },
+          { fieldId: 'senderPhone', displayName: 'Sender Phone', kind: 'string', brands: ['claim:phone/e164'], mayBeAbsent: true, writable: false, required: false, description: 'The sender\'s number with its plus (`+447700900001`), a claim WhatsApp vouches for: Meta signs the delivery. A plugin function that accepts `claim:phone/e164` takes it where it refuses plain text.' },
           { fieldId: 'to', displayName: 'To', kind: 'string', writable: false, required: false, description: 'Inbound: the team\'s own WhatsApp business number (the message\'s recipient). On a send: the other party\'s phone number, derived from the message the write is anchored on (an inbound parent\'s From, a sent parent\'s To) — read-only either way.' },
           { fieldId: 'body', displayName: 'Body', kind: 'string', writable: true, required: false, description: 'The message text. Empty for media-only messages. At least one of Body / File on a send (the Body captions the file).' },
           // Send-side only (`readable: false`): outbound media rides the send;
@@ -418,6 +415,7 @@ export class WhatsappAdapter extends BaseAdapter implements Adapter {
           { fieldId: 'reactedMessageId', displayName: 'Reacted Message Id', kind: 'string', writable: false, required: true, description: 'The message the reaction is on.' },
           { fieldId: 'messageId', displayName: 'Message Id', kind: 'string', writable: false, required: true, description: 'The reaction event\'s own id.' },
           { fieldId: 'from', displayName: 'From', kind: 'string', writable: false, required: true, description: 'The reactor\'s phone number.' },
+          { fieldId: 'senderPhone', displayName: 'Sender Phone', kind: 'string', brands: ['claim:phone/e164'], mayBeAbsent: true, writable: false, required: false, description: 'The reactor\'s number with its plus (`+447700900001`), a claim WhatsApp vouches for: Meta signs the delivery. A plugin function that accepts `claim:phone/e164` takes it where it refuses plain text.' },
           { fieldId: 'profileName', displayName: 'Profile Name', kind: 'string', writable: false, required: false },
           { fieldId: 'timestamp', displayName: 'Timestamp', kind: 'string', writable: false, required: false },
         ],
@@ -438,6 +436,7 @@ export class WhatsappAdapter extends BaseAdapter implements Adapter {
           { fieldId: 'address', displayName: 'Address', kind: 'string', writable: false, required: false },
           { fieldId: 'messageId', displayName: 'Message Id', kind: 'string', writable: false, required: true },
           { fieldId: 'from', displayName: 'From', kind: 'string', writable: false, required: true },
+          { fieldId: 'senderPhone', displayName: 'Sender Phone', kind: 'string', brands: ['claim:phone/e164'], mayBeAbsent: true, writable: false, required: false, description: 'The sender\'s number with its plus (`+447700900001`), a claim WhatsApp vouches for: Meta signs the delivery. A plugin function that accepts `claim:phone/e164` takes it where it refuses plain text.' },
           { fieldId: 'profileName', displayName: 'Profile Name', kind: 'string', writable: false, required: false },
           { fieldId: 'timestamp', displayName: 'Timestamp', kind: 'string', writable: false, required: false },
         ],
@@ -538,36 +537,6 @@ export class WhatsappAdapter extends BaseAdapter implements Adapter {
     }
 
     return [];
-  }
-
-  // ── 3a. Actor candidate parsing (acting-user split) ─────────────────────
-  // WhatsApp's resolution chain — the phone twin of email's. Pure parse: NO
-  // Listen-Fire DB access.
-  //
-  //   • Sender (`From` / `from`) → ONE `originator` candidate with a
-  //     `scheme: 'phone'` identity (the `whatsapp:` prefix stripped).
-  //     `resolveActingUser` matches it against the `phone_number` table.
-  //
-  // WhatsApp has no forwarding / relay concept (no header chain), so there
-  // are no `relay` candidates — a single originator only.
-  async getActorCandidates(input: { event: TriggerEvent }): Promise<ActorCandidate[]> {
-    const sender = firedActor(input.event);
-    if (!sender) return [];
-    return [
-      {
-        identity: { identifier: sender.identifier, scheme: 'phone', adapterType: this.adapterType },
-        source: 'originator',
-      },
-    ];
-  }
-
-  // ── 3b. Actor extraction (T5) ────────────────────────────────────────────
-  // The raw sender, as the door named them on the arrival
-  // (`whatsappActorOf`). Independent of auth — populates `@actor_*` so
-  // authors can see the raw sender even when auth went through a fallback.
-  // Surfaces the profile name as the friendly label when present.
-  async extractActor(input: { event: TriggerEvent }): Promise<ActorIdentity | null> {
-    return firedActor(input.event);
   }
 
   // ── 3c. Byte resolution (owner-side) ─────────────────────────────────────
@@ -816,6 +785,7 @@ function coerceMessageScalars(payload: Record<string, unknown>): Partial<Whatsap
   return {
     messageId: readString(payload, 'messageId', 'MessageSid'),
     from: normalizeWhatsappPhone(readString(payload, 'from', 'From')) ?? undefined,
+    senderPhone: whatsappE164(readString(payload, 'from', 'From')),
     to: normalizeWhatsappPhone(readString(payload, 'to', 'To')) ?? undefined,
     body: readString(payload, 'body', 'Body') ?? '',
     waId: readString(payload, 'waId', 'WaId'),

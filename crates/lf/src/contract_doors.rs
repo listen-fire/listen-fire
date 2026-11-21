@@ -232,6 +232,7 @@ impl Observed<'_> {
             sink: EventSink::Queue,
             notify: &|| {},
             listens: Vec::new(),
+            replaying: false,
         }
     }
 
@@ -265,11 +266,11 @@ impl InboundStore for Observed<'_> {
         self.lf().reads_deliveries(source)
     }
 
-    async fn preprocess(&self, source: &Source, raw: &Js, checkpoint: Option<&Js>) -> Result<Extraction, String> {
+    async fn preprocess(&self, source: &Source, raw: &Js, checkpoint: Option<&Js>) -> Result<Extraction, crate::externals::Unanswered> {
         self.lf().preprocess(source, raw, checkpoint).await
     }
 
-    async fn check_inbound(&self, source: &Source, request: &crate::inbound::RawRequest<'_>, secret: Option<&str>, checkpoint: Option<&Js>) -> Result<Js, String> {
+    async fn check_inbound(&self, source: &Source, request: &crate::inbound::RawRequest<'_>, secret: Option<&str>, checkpoint: Option<&Js>) -> Result<Js, crate::externals::Unanswered> {
         self.lf().check_inbound(source, request, secret, checkpoint).await
     }
 
@@ -360,13 +361,7 @@ fn delivery(raw: &Js) -> Result<SuiteDelivery, String> {
 }
 
 impl Reader for SuiteReader {
-    async fn actor_candidates(&self, _external: &str, _install: Option<&Credential>, _event: &Js) -> Result<Option<Js>, String> {
-        Ok(None)
-    }
 
-    fn needs_actor_lookup(&self) -> bool {
-        false
-    }
 
     /// The suite's adapters are judged without waits.
     async fn await_keys(&self, _: &str, _: Option<&Credential>, _: &str, _: Js) -> Result<Option<Js>, String> {
@@ -377,12 +372,12 @@ impl Reader for SuiteReader {
         true
     }
 
-    async fn preprocess(&self, _external: &str, _install: &Credential, raw: &Js, _checkpoint: Option<&Js>) -> Result<Extraction, String> {
-        let SuiteDelivery { events, arrivals, checkpoint } = delivery(raw)?;
+    async fn preprocess(&self, _external: &str, _install: &Credential, raw: &Js, _checkpoint: Option<&Js>) -> Result<Extraction, crate::externals::Unanswered> {
+        let SuiteDelivery { events, arrivals, checkpoint } = delivery(raw).map_err(crate::externals::Unanswered::Refused)?;
         Ok(Extraction { events: events.into_iter().map(|payload| Js::Obj(obj! { "payload" => payload })).collect(), arrivals, checkpoint })
     }
 
-    async fn check_inbound(&self, _external: &str, _install: &Credential, _request: &Js, _replayed: bool, _secret: Option<&str>, _checkpoint: Option<&Js>) -> Result<Js, String> {
-        Err("the suite's adapter checks no inbound of its own".into())
+    async fn check_inbound(&self, _external: &str, _install: &Credential, _request: &Js, _replayed: bool, _secret: Option<&str>, _checkpoint: Option<&Js>) -> Result<Js, crate::externals::Unanswered> {
+        Err(crate::externals::Unanswered::Refused("the suite's adapter checks no inbound of its own".into()))
     }
 }

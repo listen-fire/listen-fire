@@ -65,8 +65,6 @@ const ALL_METHODS = [
   'readRecord',
   'translateFilter',
   'getDedupRules',
-  'getActorCandidates',
-  'extractActor',
   'describeOpaqueId',
   'resolveFileRef',
   'invokeFieldFunction',
@@ -504,44 +502,25 @@ describe('RemoteAdapter streaming re-wrap', () => {
 
 describe('RemoteAdapter manifest gating', () => {
   it('omits an optional method the manifest did not advertise', () => {
-    const adapter = buildAdapter(ALL_METHODS.filter((m) => m !== 'getActorCandidates'));
-    expect(adapter.getActorCandidates).toBeUndefined();
+    const adapter = buildAdapter(ALL_METHODS.filter((m) => m !== 'describeOpaqueId'));
+    expect(adapter.describeOpaqueId).toBeUndefined();
   });
 
   it('keeps an optional method the manifest advertised as a callable forwarder', async () => {
-    postRpcMock.mockResolvedValueOnce([
-      { identity: { identifier: 'h@x.com', scheme: 'email' }, source: 'originator' },
-    ]);
+    postRpcMock.mockResolvedValueOnce('Ada Lovelace');
 
     const adapter = buildAdapter();
-    expect(typeof adapter.getActorCandidates).toBe('function');
+    expect(typeof adapter.describeOpaqueId).toBe('function');
 
-    const event = { pipelineInputId: 'pi', adapterType: 'remote-email', triggerType: 'webhook', payload: null };
-    const result = await adapter.getActorCandidates!({ event: event as never });
-    expect(result).toEqual([
-      { identity: { identifier: 'h@x.com', scheme: 'email' }, source: 'originator' },
-    ]);
-    expect(postRpcMock).toHaveBeenCalledWith(
-      expect.objectContaining({ method: 'getActorCandidates', params: { event } }),
-    );
+    const params = { fieldPath: 'owner', value: 'wm-1' };
+    const result = await adapter.describeOpaqueId!(params);
+    expect(result).toBe('Ada Lovelace');
+    expect(postRpcMock).toHaveBeenCalledWith(expect.objectContaining({ method: 'describeOpaqueId', params }));
   });
 
   it('omits iterateRelated when neither paging method is advertised', () => {
     const adapter = buildAdapter(['listEntryPoints', 'describe']);
     expect(adapter.iterateRelated).toBeUndefined();
-  });
-
-  it('forwards extractActor over the wire when advertised', async () => {
-    postRpcMock.mockResolvedValueOnce({ identifier: 'wm-1', scheme: 'opaque', adapterType: 'attio', label: 'wm-1' });
-    const adapter = buildAdapter();
-    expect(typeof adapter.extractActor).toBe('function');
-
-    const event = { pipelineInputId: 'pi', adapterType: 'remote-email', triggerType: 'webhook', payload: null };
-    const result = await adapter.extractActor!({ event: event as never });
-    expect(result).toEqual({ identifier: 'wm-1', scheme: 'opaque', adapterType: 'attio', label: 'wm-1' });
-    expect(postRpcMock).toHaveBeenCalledWith(
-      expect.objectContaining({ method: 'extractActor', params: { event } }),
-    );
   });
 
   it('forwards invokeFieldFunction over the wire when advertised', async () => {
@@ -563,13 +542,13 @@ describe('RemoteAdapter manifest gating', () => {
     );
   });
 
-  it('prunes extractActor / invokeFieldFunction when not advertised', () => {
+  it('prunes describeOpaqueId / invokeFieldFunction when not advertised', () => {
     const adapter = buildAdapter(
       ALL_METHODS.filter(
-        (m) => m !== 'extractActor' && m !== 'invokeFieldFunction',
+        (m) => m !== 'describeOpaqueId' && m !== 'invokeFieldFunction',
       ),
     );
-    expect(adapter.extractActor).toBeUndefined();
+    expect(adapter.describeOpaqueId).toBeUndefined();
     expect(adapter.invokeFieldFunction).toBeUndefined();
   });
 });
@@ -615,21 +594,21 @@ describe('fetchRemoteManifest refuses an older server', () => {
 
   it('refuses a newer major or a newer minor, naming what each side speaks', async () => {
     const v2 = { protocolVersion: 2, adapterType: 'remote-email', supportedTriggers: [], runtimeCapabilities, methods: [] };
-    const speaks = `this @listen-fire/engine (${LANGUAGE_VERSION}) speaks 2.0–2.9`;
+    const speaks = `this @listen-fire/engine (${LANGUAGE_VERSION}) speaks 2.0–2.10`;
     postRpcMock.mockResolvedValueOnce({ ...v2, protocolVersion: 3 });
     await expect(fetchRemoteManifest(config, 's3cr3t')).rejects.toThrow(
       `Remote adapter "remote-email" at ${config.baseUrl} refused: it speaks adapter protocol 3; ${speaks}. Upgrade @listen-fire/engine.`,
     );
-    postRpcMock.mockResolvedValueOnce({ ...v2, protocolMinor: 10 });
+    postRpcMock.mockResolvedValueOnce({ ...v2, protocolMinor: 11 });
     await expect(fetchRemoteManifest(config, 's3cr3t')).rejects.toThrow(
-      `Remote adapter "remote-email" at ${config.baseUrl} refused: it speaks adapter protocol 2.10; ${speaks}. ` +
-        "Upgrade @listen-fire/engine to a release that speaks 2.10 (the protocol's Changes list names it), or use a version of it that speaks 2.9 or lower.",
+      `Remote adapter "remote-email" at ${config.baseUrl} refused: it speaks adapter protocol 2.11; ${speaks}. ` +
+        "Upgrade @listen-fire/engine to a release that speaks 2.11 (the protocol's Changes list names it), or use a version of it that speaks 2.10 or lower.",
     );
   });
 
   it('reads an unstated minor, and every minor up to its own, as before', async () => {
     const v2 = { protocolVersion: 2, adapterType: 'remote-email', supportedTriggers: [], runtimeCapabilities, methods: [] };
-    for (const stated of [{}, { protocolMinor: 0 }, { protocolMinor: 2 }, { protocolMinor: 3 }, { protocolMinor: 4 }, { protocolMinor: 5 }, { protocolMinor: 6 }, { protocolMinor: 7 }, { protocolMinor: 8 }, { protocolMinor: 9 }]) {
+    for (const stated of [{}, { protocolMinor: 0 }, { protocolMinor: 2 }, { protocolMinor: 3 }, { protocolMinor: 4 }, { protocolMinor: 5 }, { protocolMinor: 6 }, { protocolMinor: 7 }, { protocolMinor: 8 }, { protocolMinor: 9 }, { protocolMinor: 10 }]) {
       postRpcMock.mockResolvedValueOnce({ ...v2, ...stated });
       await expect(fetchRemoteManifest(config, 's3cr3t')).resolves.toMatchObject({ adapterType: 'remote-email' });
     }

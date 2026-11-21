@@ -47,7 +47,7 @@ pub fn may_hold_file(ty: &FieldType) -> bool {
     use movement_parser::catalog::types::{Composite, Scalar};
     match ty {
         FieldType::Scalar(scalar) => *scalar == Scalar::File,
-        FieldType::Composite(Composite::List { of, .. } | Composite::Dict { of, .. } | Composite::MaybeAbsent { of }) => may_hold_file(of),
+        FieldType::Composite(Composite::List { of, .. } | Composite::Dict { of, .. } | Composite::MaybeAbsent { of } | Composite::Branded { of, .. }) => may_hold_file(of),
         FieldType::Composite(Composite::Tuple { of, .. }) => of.iter().flatten().any(may_hold_file),
         FieldType::Composite(_) => false,
     }

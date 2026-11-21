@@ -14,13 +14,15 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use movement_parser::catalog::plugin_args::{EXTRACTED_RECORD_PARAM, PluginCallSite};
-use movement_parser::catalog::types::{Composite, FieldType, JsMap, PluginOutput, PluginSpec, Scalar};
+use movement_parser::catalog::types::{Composite, FieldType, JsMap, PluginOutput, PluginSpec, Scalar, SchemaFieldType};
 
 use crate::bindings::{Binding, Node, Scope};
 use crate::env::{Trail, ValueBinding};
 use crate::js::{Js, JsObject};
 use movement_parser::ast::CallArg;
+use serde_json::Value as Json;
 
+use crate::host;
 use crate::run::{Address, Failure, Run, Stop};
 use crate::trace::{Members, TraceEntry};
 
@@ -177,21 +179,19 @@ impl Run<'_> {
                 let handed_back = !matches!(value, Js::Null);
                 (Binding::Value(ValueBinding { value, trail: Some(trail), many: false }), handed_back)
             }
+            // A record that may be none, and none was answered: absent, as
+            // the checker typed it.
+            Some(PluginOutput::Record { fields, maybe_absent: true }) => match maybe_absent_record(&result, &fields, &registered).map_err(Stop::Thrown)? {
+                None => (Binding::Value(ValueBinding { value: Js::Null, trail: Some(trail), many: false }), false),
+                Some(fields) => {
+                    let handed_back = !fields.entries().is_empty();
+                    (Binding::Node(Rc::new(RefCell::new(record_node(fields, &trail)))), handed_back)
+                }
+            },
             Some(PluginOutput::Record { .. }) => {
-                let mut fields = JsObject::new();
-                if let Some(text) = result.text() {
-                    fields.set(FETCHED_TEXT_FIELD.into(), Js::str(text));
-                }
-                if let Some(Js::Object(data)) = &result.data {
-                    for (key, value) in data.entries() {
-                        fields.set(key.clone(), value.clone());
-                    }
-                }
-                let field_order: Vec<String> = fields.entries().iter().map(|(k, _)| k.clone()).collect();
-                let handed_back = !field_order.is_empty();
-                let field_provenance = field_order.iter().map(|name| (name.clone(), trail.clone())).collect();
-                let node = Node { fields, field_order, field_provenance, landed_on: None, edges: Vec::new(), resources: Vec::new() };
-                (Binding::Node(Rc::new(RefCell::new(node))), handed_back)
+                let fields = record_fields(&result);
+                let handed_back = !fields.entries().is_empty();
+                (Binding::Node(Rc::new(RefCell::new(record_node(fields, &trail)))), handed_back)
             }
             // One record per thing the plugin found, in its order: the
             // landings a hop would give, so FIRST, MAP and a field read work
@@ -229,6 +229,92 @@ impl Run<'_> {
     }
 }
 
+impl Run<'_> {
+    /// A plugin called inside an expression (a pure one, in a wait's WHERE,
+    /// judged once per arrival): `args` by position, bound to its parameters
+    /// in the order it declares them, and its value as it declares it. Timed
+    /// and traced as a plain call is. A plugin whose output is a value or one
+    /// record is called so; a list of records is read only off a bound name.
+    ///
+    /// A pure plugin on a host that keeps answers (`llm.transforms.answer`)
+    /// is asked through it instead, as a listen's filter is: a host that
+    /// could not ask it fails the evaluation `MOVENG_HOST_UNREACHABLE`,
+    /// which a wait reads as an arrival it cannot judge yet.
+    pub(crate) async fn expression_call(&self, written: &str, args: Vec<Js>, scope: &Scope) -> Result<Js, Failure> {
+        let registered = self.registered_plugin(written, scope);
+        let Some(spec) = self.plugin_spec(&registered) else {
+            return Err(Failure::engine("MOVENG_RUNTIME", format!("'{written}' is no plugin the catalog holds — the checker should have caught this")));
+        };
+        let output = match spec.output.clone() {
+            Some(output @ (PluginOutput::Value { .. } | PluginOutput::Record { .. })) => output,
+            Some(PluginOutput::Records { .. }) | None => {
+                return Err(Failure::unsupported(&format!("'{written}' inside an expression"), "a plugin called inside an expression hands back a value or one record; bind the records it answers first"));
+            }
+        };
+        let mut values = Vec::with_capacity(args.len());
+        for value in args {
+            values.push(match crate::record::binding_of(&value) {
+                Some(record) => Js::object(crate::record::fields_of(&record).map_err(|e| Failure::of_eval(e, ""))?),
+                None => value,
+            });
+        }
+        let started = self.clock_now().await?;
+        let (answered, result) = match spec.pure() && self.serves(KEPT_ANSWERS) {
+            true => (self.kept_answer(&registered, &values).await?, None),
+            false => {
+                let mut config = JsObject::new();
+                for (name, value) in spec.as_called().positional_params(PluginCallSite::Plain).into_iter().zip(values) {
+                    config.set(name.to_string(), value);
+                }
+                let result = self.invoke(&registered, &config, &JsObject::new()).await?;
+                (expression_value(&result, &output, &registered)?, Some(result))
+            }
+        };
+        let duration = self.clock_now().await? - started;
+        let value = match &output {
+            PluginOutput::Value { type_ } if !matches!(answered, Js::Null) && !fits(&answered, type_) => text_as(&answered, type_).unwrap_or(Js::Null),
+            _ => answered,
+        };
+        let mut entry = Members::default();
+        entry.set("plugin", Js::str(registered.clone()));
+        entry.set("durationMs", Js::Number(duration));
+        if let Some(result) = &result {
+            result.trace_into(&mut entry);
+        }
+        entry.set("returned", Js::str(if matches!(value, Js::Null) { "absent" } else { "value" }));
+        self.trace(TraceEntry::Plugin(entry));
+        Ok(value)
+    }
+
+    /// A pure plugin's value for `args`, as its host keeps it.
+    async fn kept_answer(&self, registered: &str, args: &[Js]) -> Result<Js, Failure> {
+        let args = Json::Array(args.iter().map(crate::env::json_of_js).collect());
+        let answer = self.ask(host::llm::transforms_answer(self.segment(), registered, args)).await?;
+        match answer.as_ref().and_then(Json::as_object) {
+            Some(answered) if answered.contains_key("value") => Ok(crate::env::js_of_json(&answered["value"])),
+            Some(answered) if answered.get("unreachable").is_some_and(Json::is_string) => Err(Failure::engine(
+                HOST_UNREACHABLE,
+                format!("the host could not answer {registered} ({})", answered["unreachable"].as_str().unwrap_or_default()),
+            )),
+            _ => Err(Failure::host_answer("llm.transforms.answer", "{ value } or { unreachable }", &answer.as_ref().map_or(Js::Undefined, crate::env::js_of_json))),
+        }
+    }
+}
+
+/// The host method that keeps pure plugins' answers.
+const KEPT_ANSWERS: &str = "llm.transforms.answer";
+
+/// The code a plugin's answer the host could not get fails an evaluation
+/// with: a wait leaves the arrival it was judging for later.
+pub(crate) const HOST_UNREACHABLE: &str = "MOVENG_HOST_UNREACHABLE";
+
+impl Run<'_> {
+    /// Whether `failure` is a pure plugin's answer its host could not get.
+    pub(crate) fn host_unreachable(failure: &Failure) -> bool {
+        matches!(failure, Failure::Engine { class: crate::eval::ErrorClass::Engine(code), .. } if *code == HOST_UNREACHABLE)
+    }
+}
+
 /// A `value` output's value: a plugin answers it as `data.value`, in its own
 /// type; a text output may answer it as the text it fetched instead.
 fn declared_value(result: &crate::extract::run::PluginResult, declared: &FieldType) -> Js {
@@ -239,6 +325,67 @@ fn declared_value(result: &crate::extract::run::PluginResult, declared: &FieldTy
     let text = result.text().map(Js::str);
     let first = if matches!(declared, FieldType::Scalar(Scalar::Text)) { text.or(data_value) } else { data_value.or(text) };
     first.unwrap_or(Js::Null)
+}
+
+/// A record a plugin answered: its text (under `text`), then `data`'s
+/// entries. None answered is no field at all.
+fn record_fields(result: &crate::extract::run::PluginResult) -> JsObject {
+    let mut fields = JsObject::new();
+    if let Some(text) = result.text() {
+        fields.set(FETCHED_TEXT_FIELD.into(), Js::str(text));
+    }
+    if let Some(Js::Object(data)) = &result.data {
+        for (key, value) in data.entries() {
+            fields.set(key.clone(), value.clone());
+        }
+    }
+    fields
+}
+
+fn record_node(fields: JsObject, trail: &Trail) -> Node {
+    let field_order: Vec<String> = fields.entries().iter().map(|(k, _)| k.clone()).collect();
+    let field_provenance = field_order.iter().map(|name| (name.clone(), trail.clone())).collect();
+    Node { fields, field_order, field_provenance, landed_on: None, edges: Vec::new(), resources: Vec::new() }
+}
+
+/// A record that may be none, as the plugin answered it: none is an answer
+/// with no `data` and no text (text alone is malformed); `data: {}` is a record whose fields are each absent,
+/// which only a record whose fields may all be absent can be (otherwise the
+/// answer is malformed, never silently none).
+fn maybe_absent_record(result: &crate::extract::run::PluginResult, declared: &JsMap<SchemaFieldType>, plugin: &str) -> Result<Option<JsObject>, Failure> {
+    let Some(Js::Object(data)) = &result.data else {
+        if result.text().is_some() {
+            return Err(Failure::engine(
+                "MOVENG_RUNTIME",
+                format!("{plugin} answered text without `data` for a record that may be none: the host answered something malformed (a record is its `data` object; none is an answer with neither `data` nor text)"),
+            ));
+        }
+        return Ok(None);
+    };
+    if data.entries().is_empty() {
+        if let Some((name, _)) = declared.iter().find(|(_, type_)| !type_.admits_absent()) {
+            return Err(Failure::engine(
+                "MOVENG_RUNTIME",
+                format!("{plugin} answered an empty `data` for a record whose field {name} is required: the host answered something malformed (none is an answer with no `data`)"),
+            ));
+        }
+    }
+    Ok(Some(record_fields(result)))
+}
+
+/// What a plugin called inside an expression answers, as its output declares
+/// it: a value, or a record's fields as a map (`null` where none was
+/// answered), which a field read reads on.
+fn expression_value(result: &crate::extract::run::PluginResult, output: &PluginOutput, registered: &str) -> Result<Js, Failure> {
+    match output {
+        PluginOutput::Value { type_ } => {
+            let answered = declared_value(result, type_);
+            Ok(if matches!(answered, Js::Null) || fits(&answered, type_) { answered } else { text_as(&answered, type_).unwrap_or(Js::Null) })
+        }
+        PluginOutput::Record { fields, maybe_absent: true } => maybe_absent_record(result, fields, registered).map(|record| record.map_or(Js::Null, Js::object)),
+        PluginOutput::Record { .. } => Ok(Js::object(record_fields(result))),
+        PluginOutput::Records { .. } => unreachable!("expression_call refuses a records output before it invokes"),
+    }
 }
 
 /// Whether a plugin's value is of the type it declares, as the checker
@@ -277,6 +424,7 @@ fn fits(value: &Js, declared: &FieldType) -> bool {
             },
             Composite::Enum { options, open } => matches!(value, Js::String(text) if open.is_some() || options.iter().any(|o| o.as_str() == text.as_str())),
             Composite::MaybeAbsent { of } => value.is_nullish() || fits(value, of),
+            Composite::Branded { of, .. } => fits(value, of),
             Composite::Union { of } => of.iter().any(|arm| fits(value, arm)),
             Composite::Record { .. } => matches!(value, Js::Object(_) | Js::Record(_)),
             Composite::Owned { .. } => matches!(value, Js::String(_)),

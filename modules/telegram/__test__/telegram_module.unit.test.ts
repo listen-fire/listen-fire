@@ -8,7 +8,6 @@ import type { Arrival } from 'engine-contracts';
 import type { CredentialFields, LinkedIdentity, ModuleCredential } from 'module-kit';
 
 import { adapterInProcess, noCredential, refusingFiles, refusingKv } from 'module-kit';
-import { arrivalTriggerOf } from 'movement-engine/public/inbound';
 import { instanceSchemaFromDescriptors, makeMetaPosition, makeStablePosition, makeUnstablePosition, positionData } from 'movement-engine/public/catalog';
 
 import { telegramModule } from '../index';
@@ -56,12 +55,9 @@ function landing(arrival: Arrival | undefined) {
   return arrival;
 }
 
-/** The event a run fired by the message `from` sent is handed, as the host
- *  hands it: the arrival its delivery reported. */
-async function firedBy(adapter: ReturnType<typeof load>['adapter'], from: { id: number; username?: string }) {
-  const raw = { update_id: 1, message: { message_id: 5, date: 1, chat: { id: from.id, type: 'private' }, from, text: 'hey' } };
-  const arrival = landing((await delivered(adapter, raw)).arrivals[0]);
-  return arrivalTriggerOf({ pipelineInputId: 'tg:answer', adapterType: 'telegram', arrival, now: new Date() });
+/** A delivery of a message `from` sent. */
+function messageFrom(from: { id: number; username?: string }) {
+  return { update_id: 1, message: { message_id: 5, date: 1, chat: { id: from.id, type: 'private' }, from, text: 'hey' } };
 }
 
 const dm = (adapter: ReturnType<typeof load>['adapter']) =>
@@ -103,27 +99,37 @@ describe('@lf/telegram', () => {
     expect(calls).toEqual([]);
   });
 
-  it('linked users and the actor come from the host’s identities', async () => {
+  it('linked users come from the host’s identities, and the sender’s claim is on the event, branded, normalised', async () => {
     const { adapter } = load({ credential: credential({ botToken: 'T' }) });
     const users = await adapter.getRelated({ position: makeMetaPosition('telegram'), fieldId: 'Linked Users', direction: 'outgoing' });
     expect(users.map((u) => u.position.identity.data)).toEqual([{ chat_id: '777', email: 'Ada@Example.com ', linked_at: '2026-06-01T12:00:00.000Z' }]);
-    const event = await firedBy(adapter, { id: 777, username: 'adas' });
-    const actor = await adapter.extractActor?.({ event });
-    expect(actor).toMatchObject({ identifier: '777', email: 'ada@example.com', label: '@adas' });
-    // The door names the sender on the arrival itself, from the host's identities.
-    expect(event.arrival?.actor).toEqual({ identifier: '777', scheme: 'email', adapterType: 'telegram', email: 'ada@example.com', label: '@adas', proven: true });
-    await expect(adapter.getActorCandidates?.({ event })).resolves.toEqual([{ identity: actor, source: 'originator' }]);
-    const unbound = await firedBy(adapter, { id: 888 });
-    expect(unbound.arrival).not.toHaveProperty('actor');
-    await expect(adapter.extractActor?.({ event: unbound })).resolves.toBeNull();
+    const field = (await adapter.describe('Message'))?.fields.find((f) => f.displayName === 'Sender Email');
+    expect(field).toMatchObject({ kind: 'string', brands: ['claim:email/address'], mayBeAbsent: true, required: false, writable: false });
+    // The address they bound, trimmed and lower case, under the schema's name and the payload's.
+    const bound = landing((await delivered(adapter, messageFrom({ id: 777, username: 'adas' }))).arrivals[0]);
+    expect(bound.landing.fields).toMatchObject({ 'Sender Email': 'ada@example.com', sender_email: 'ada@example.com' });
+    expect(bound.landing).not.toHaveProperty('unknown');
+    expect(bound).not.toHaveProperty('actor');
+    // A sender who never linked has no address, which the host did say.
+    const unbound = landing((await delivered(adapter, messageFrom({ id: 888 }))).arrivals[0]);
+    expect(unbound.landing.fields).toMatchObject({ 'Sender Email': null, sender_email: null });
+    expect(unbound.landing).not.toHaveProperty('unknown');
   });
 
-  it('a host with no identities refuses the listing and resolves no actor', async () => {
+  it('declares no actor identity methods', () => {
+    const { manifest } = load({ credential: credential({ botToken: 'T' }) });
+    expect(manifest.methods).not.toContain('getActorCandidates');
+    expect(manifest.methods).not.toContain('extractActor');
+  });
+
+  it('a host with no identities refuses the listing, and a sender’s address is unknown, never none', async () => {
     const { adapter } = load({ credential: credential({ botToken: 'T' }), identities: false });
     await expect(adapter.getRelated({ position: makeMetaPosition('telegram'), fieldId: 'Linked Users', direction: 'outgoing' })).rejects.toThrow(
       /keeps no linked identities/,
     );
-    await expect(adapter.extractActor?.({ event: await firedBy(adapter, { id: 777 }) })).resolves.toBeNull();
+    const sent = landing((await delivered(adapter, messageFrom({ id: 777 }))).arrivals[0]);
+    expect(sent.landing.fields['Sender Email']).toBeNull();
+    expect(sent.landing.unknown).toEqual(['Sender Email']);
     const message = makeStablePosition({ adapterType: 'telegram', recordType: 'Message', recordId: '1', data: { sender_id: '777' } });
     await expect(adapter.getRelated({ position: message, fieldId: 'Sender', direction: 'outgoing' })).resolves.toEqual([]);
   });

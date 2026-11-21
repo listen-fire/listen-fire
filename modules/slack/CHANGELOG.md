@@ -1,5 +1,14 @@
 # @listen-fire/slack
 
+## 0.14.0
+
+### Minor Changes
+
+- Claims: `Message` and `Reaction` gain `User Email` (the sender's profile address, lower case, a `claim:email/address` Slack vouches for) and `Sent By This App` (true when Slack names the app's bot user or bot as the sender, false when it names neither). `Interaction` (a button press) gains `Pressed By Email`, the presser's profile address as a `claim:email/address`, unknown when the lookup fails. The `drop_own_messages` setting is gone: a listen that should not hear the app's own posts filters on `NOT m.`Sent By This App``. The module no longer declares `getActorCandidates`, `extractActor` or the registered sender gate (`inboundRequiresRegisteredActor`).
+- The manifest declares `listensLimitedBefore: '0.16.0'`: before 0.16 a host may have let only registered team members set a Slack listen off, so an upgrade from an older key tells each Slack listen whose filter does not limit it (`MOV_LISTEN_NOW_OPEN`). `listen-fire` refuses a Slack connection that still holds `drop_own_messages`, naming `` NOT m.`Sent By This App` `` as its replacement.
+- A claim that can be missing is declared so: `User Email` and `Pressed By Email` are `text & Brand<"claim:email/address"> | null` (null for a bot, a member with no profile address, or a lookup that failed), so a filter tests them for null before a host function takes them. `Sent By This App` is never null.
+- Peer floors on `movement-lang`, `engine` and `engine-contracts` are raised to `>=0.16.0 <1.0.0`: the branded, nullable claim fields above are types a core before 0.16 cannot read.
+
 ## 0.13.5
 
 ### Patch Changes

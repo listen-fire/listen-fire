@@ -72,6 +72,20 @@ export const expressionTypeSchema: z.ZodType<ExpressionType> = z.lazy(() =>
       kind: z.literal('record'),
       fields: z.record(z.string(), expressionTypeSchema),
     }),
+    /** `string & Brand<"claim:email/address">`: `of` narrowed by each brand. A
+     *  plugin parameter declares one; only a string or a number takes a brand. */
+    z.object({
+      kind: z.literal('branded'),
+      of: expressionTypeSchema.refine((of) => of.kind === 'string' || of.kind === 'number', {
+        error: 'branded.of: expected a string or a number',
+      }),
+      brands: z.array(z.string().min(1)).min(1),
+    }),
+    /** One of several types, as the catalog spells a union. */
+    z.object({
+      kind: z.literal('union'),
+      of: z.array(expressionTypeSchema).min(1),
+    }),
   ]),
 );
 
@@ -85,7 +99,9 @@ export type ExpressionType =
   | { kind: 'enum'; values: string[] }
   | { kind: 'file' }
   | { kind: 'list'; element: ExpressionType }
-  | { kind: 'record'; fields: Record<string, ExpressionType> };
+  | { kind: 'record'; fields: Record<string, ExpressionType> }
+  | { kind: 'branded'; of: ExpressionType; brands: string[] }
+  | { kind: 'union'; of: ExpressionType[] };
 
 // ── GenericShape: declared in-memory contract for a TG side ─────────────────
 // Used by `kind: 'generic'` schemaRefs. The shape declares properties (typed
@@ -875,6 +891,10 @@ export const schemaFieldDescriptorSchema = z.object({
   /** A record may not hold the field at all (a change's row before, when
    *  the row was created): a read of it may be absent. Absent ⇒ false. */
   mayBeAbsent: z.boolean().optional(),
+  /** With `kind: 'string'` or `'number'`: the module vouches for the value
+   *  under these names (`claim:email/address`). A brand narrows the type, as
+   *  TypeScript's intersection does; a name is compared whole, never parsed. */
+  brands: z.array(z.string().min(1)).min(1).optional(),
   /** The release that changed what the field holds, and how, as a check for
    *  an upgrade from before it warns where a program reads it (gmail's
    *  `Labels`: label ids before 0.13, names since). `unchangedValues` are
@@ -888,6 +908,13 @@ export const schemaFieldDescriptorSchema = z.object({
       code: z.ZodIssueCode.custom,
       path: ['owned'],
       message: `'${field.displayName}': 'owned' names the scalar of a field of kind 'owned', and only of one`,
+    });
+  }
+  if (field.brands !== undefined && field.kind !== 'string' && field.kind !== 'number') {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['brands'],
+      message: `'${field.displayName}': 'brands' narrow a string or a number, and this field is of kind '${field.kind}'`,
     });
   }
   if ((field.kind === 'record') !== (field.record !== undefined)) {
@@ -2354,6 +2381,10 @@ const transformOutputKindSchema = z.discriminatedUnion('kind', [
   z.object({
     kind: z.literal('record'),
     fields: z.record(z.string(), transformOutputFieldSchema),
+    /** `{ … } | null`: the plugin may answer no record at all (a lookup that
+     *  found nobody). Read downstream as `record | absent`, so a field is
+     *  read off it with `?.`. */
+    optional: z.boolean().optional(),
   }),
   z.object({
     kind: z.literal('records'),

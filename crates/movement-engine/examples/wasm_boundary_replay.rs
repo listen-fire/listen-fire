@@ -149,7 +149,7 @@ enum Serialised {
 fn is_engine_export(name: &str) -> bool {
     matches!(
         name,
-        "engine_start" | "engine_answer" | "language_version" | "language_standing" | "judge_arrival" | "listen_identity" | "landing_node" | "landing_misfits"
+        "engine_start" | "engine_answer" | "language_version" | "language_standing" | "judge_arrival" | "explain_arrival" | "listen_identity" | "landing_node" | "landing_misfits"
     )
 }
 

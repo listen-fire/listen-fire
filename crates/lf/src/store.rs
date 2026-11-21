@@ -120,9 +120,10 @@ create table if not exists arrival_unjudged (
   cause text,
   noted_at text not null,
   attempt integer not null,
+  waiting integer not null default 0,
+  kept_order integer not null default 0,
   primary key (pipeline, arrival, attempt)
 );
-create index if not exists arrival_unjudged_at on arrival_unjudged (noted_at, pipeline, arrival, attempt);
 create table if not exists module_processes (
   id integer primary key check (id = 1),
   processes text not null,
@@ -201,7 +202,16 @@ create table if not exists work (
 /// The core's park reasons (`CORE_PARK_REASONS`).
 pub const CORE_PARK_REASONS: &[&str] = &["timer", "await", "limit"];
 /// The work kinds listen-fire queues.
-pub const WORK_KINDS: &[&str] = &["resume_timer", "wake_await", "fire_event", crate::edge_polls::EDGE_POLL_WORK_KIND, crate::resolve::RESOLVE_WORK_KIND, "refresh_subscription", SETTLE_RACE_WORK_KIND];
+pub const WORK_KINDS: &[&str] = &[
+    "resume_timer",
+    "wake_await",
+    "fire_event",
+    crate::edge_polls::EDGE_POLL_WORK_KIND,
+    crate::resolve::RESOLVE_WORK_KIND,
+    "refresh_subscription",
+    SETTLE_RACE_WORK_KIND,
+    crate::listen_replay::JUDGE_WAITING_WORK_KIND,
+];
 /// A race a resumed arm won and left to its run to settle (crate::run_host):
 /// the row is what the run owes until the commit of the step that settles
 /// the race deletes it.
@@ -779,6 +789,16 @@ impl Store {
                 db.execute_batch(&format!("alter table arrival_unjudged add column {column} text"))?;
             }
         }
+        // Added to a state file written before an arrival could wait for its host (0.16.0).
+        if !unjudged_columns.iter().any(|c| c == "waiting") {
+            db.execute_batch("alter table arrival_unjudged add column waiting integer not null default 0")?;
+        }
+        // Facts found in one instant read back in the order they were kept
+        // (0.16.0): those kept before, in the order the file holds them.
+        if !unjudged_columns.iter().any(|c| c == "kept_order") {
+            db.execute_batch("alter table arrival_unjudged add column kept_order integer not null default 0; update arrival_unjudged set kept_order = rowid;")?;
+        }
+        db.execute_batch("drop index if exists arrival_unjudged_at; create index if not exists arrival_unjudged_order on arrival_unjudged (noted_at, kept_order);")?;
         // Callbacks and the waits keyed by a correlation retired at 0.13: a
         // run parked on one cannot resume on this release, and the work rows
         // that would have woken it (a callback's firing, a wake by key

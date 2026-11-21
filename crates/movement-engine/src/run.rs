@@ -412,10 +412,6 @@ pub(crate) struct Run<'a> {
     pub(crate) movement_name: RefCell<String>,
     /// The writes, in program order (`MovementRunResult.writes`).
     pub(crate) writes: RefCell<Vec<Rc<WriteRecord>>>,
-    /// `@user_*`'s acting user and `@actor_*`'s actor, once looked up
-    /// (`actingUserCache` / `actorCache`: null is an answer too).
-    pub(crate) acting_user: RefCell<Option<Js>>,
-    pub(crate) actor: RefCell<Option<Js>>,
     /// The target adapters resolved, by instance identity.
     pub(crate) targets: RefCell<Vec<(String, Rc<TargetAdapter>)>>,
     /// What every write tells its adapter about where it came from.
@@ -584,8 +580,6 @@ pub(crate) async fn open<'a>(host: &'a Host, input: &'a SegmentInput, ledger: &'
         import_originals: RefCell::default(),
         source: RefCell::default(),
         source_instance: RefCell::default(),
-        acting_user: RefCell::default(),
-        actor: RefCell::default(),
         origins: RefCell::default(),
         misses: RefCell::default(),
         trace: FlowTrace::default(),
@@ -657,7 +651,7 @@ async fn pin_libraries(host: &Host, input: &SegmentInput, state: &Json, catalog:
 /// that still runs does not block. A pin this release does not read never
 /// gets here: the run's entry refused it.
 fn native_check(program: &ast::Program, catalog: &CatalogSnapshot) -> Result<Json, Stop> {
-    let options = movement_checker::CheckOptions { upgrading_from: None, zones: &crate::env_services::EnvZones };
+    let options = movement_checker::CheckOptions { upgrading_from: None, limiting_function: None, zones: &crate::env_services::EnvZones };
     let answer = movement_checker::answer::check_answer(program, catalog, options);
     let blocking: Vec<String> = answer
         .diagnostics
@@ -1969,10 +1963,6 @@ impl Run<'_> {
                 let value = Js::Bool(crate::filter::within(&left, &right, now));
                 Ok(Ok(Evaluated { value, prov: Prov::Built(Trail::default()) }))
             }
-            Ask::Meta { key } => {
-                let value = self.meta_value(&key).await?;
-                Ok(Ok(Evaluated { value, prov: Prov::Built(Trail::default()) }))
-            }
             Ask::RenderFile { content, kind } => {
                 let request = host::files::render(self.segment(), &content, &kind);
                 let answer = self.ask(request).await?.unwrap_or(Json::Null);
@@ -1983,6 +1973,10 @@ impl Run<'_> {
             Ask::Ai { prompt, tier } => self.ai(&prompt, tier.as_deref()).await.map(|value| Ok(Evaluated { value, prov: Prov::Built(Trail::default()) })),
             // Asked only of a write field's evaluation, which answers it.
             Ask::FieldFunction { id, .. } => Err(Failure::engine("MOVENG_RUNTIME", format!("{id}() was asked of no write field"))),
+            Ask::PluginCall { written, args } => {
+                let value = self.expression_call(&written, args, scope).await?;
+                Ok(Ok(Evaluated { value, prov: Prov::Built(Trail::default()) }))
+            }
         }
     }
 
@@ -2047,110 +2041,6 @@ impl Run<'_> {
         let traced = crate::extract::emission::cut(prompt, AI_TRACE_PROMPT_CHARS);
         self.trace.push(TraceEntry::Ai { prompt: traced, has_value: !value.is_nullish(), tier: settings.tier, model: settings.model, effort: settings.effort });
         Ok(value)
-    }
-
-    /// `resolveMovementMetaKey` for the acting-user and raw-actor keys.
-    async fn meta_value(&self, key: &str) -> Result<Js, Failure> {
-        let nullish = |value: Js| if value.is_nullish() { Js::Null } else { value };
-        match key {
-            "user_email" | "user_name" | "user_id" => {
-                let acting = self.acting_user().await?;
-                if !acting.truthy() {
-                    return Ok(Js::Null);
-                }
-                // The answer was validated when it came (`acting_user_answer`).
-                let principal = event_get(&acting, "principal");
-                Ok(match key {
-                    "user_email" => nullish(event_get(&acting, "email")),
-                    "user_name" => nullish(event_get(&principal, "display")),
-                    _ => event_get(&principal, "id"),
-                })
-            }
-            _ => {
-                let actor = self.actor().await?;
-                if !actor.truthy() {
-                    return Ok(Js::Null);
-                }
-                Ok(match key {
-                    "actor_email" => {
-                        let email = event_get(&actor, "email");
-                        if !email.is_nullish() {
-                            email
-                        } else if crate::js::strict_equals(&event_get(&actor, "scheme"), &Js::str("email")) {
-                            event_get(&actor, "identifier")
-                        } else {
-                            Js::Null
-                        }
-                    }
-                    "actor_name" => {
-                        let name = event_get(&actor, "name");
-                        if !name.is_nullish() { name } else { nullish(event_get(&actor, "label")) }
-                    }
-                    _ => event_get(&actor, "identifier"),
-                })
-            }
-        }
-    }
-
-    /// Who acted on the arrival that fired the run, as its module said at the
-    /// door (adapter protocol 2.7); undefined when it names no one.
-    fn arrival_actor(&self) -> Js {
-        event_get(&event_get(&self.event, "arrival"), "actor")
-    }
-
-    /// `resolveMovementActingUser`: asked of the host once per segment,
-    /// through the source when it lists `getActorCandidates` or the arrival
-    /// names who acted (the host resolves the user from it); a throw is no
-    /// user.
-    async fn acting_user(&self) -> Result<Js, Failure> {
-        if let Some(cached) = self.acting_user.borrow().clone() {
-            return Ok(cached);
-        }
-        let source = self.source.borrow().clone();
-        let resolved = match source {
-            Some(source) if source.instance.has("getActorCandidates") || self.arrival_actor().truthy() => {
-                let trigger = event_get(&self.event, "triggerEntryId");
-                let trigger_id = trigger.truthy().then(|| trigger.to_js_string());
-                let request = host::lookup::resolve_acting_user(self.segment(), trigger_id.as_deref(), &source.instance, self.encode(&self.event)?);
-                match self.ask(request).await {
-                    Ok(Some(user)) => {
-                        let user = self.wire.decode(&user).map_err(|e| Failure::engine("MOVENG_RUNTIME", e))?;
-                        acting_user_answer(&user)?;
-                        user
-                    }
-                    Ok(None) | Err(Failure::Host(_)) => Js::Null,
-                    Err(other) => return Err(other),
-                }
-            }
-            _ => Js::Null,
-        };
-        *self.acting_user.borrow_mut() = Some(resolved.clone());
-        Ok(resolved)
-    }
-
-    /// `resolveMovementActor`: who acted on the arrival, as its module said
-    /// at the door; else the source adapter's `extractActor` of the event (a
-    /// module that names no actor on its arrivals), once per segment; a
-    /// failure is no actor.
-    async fn actor(&self) -> Result<Js, Failure> {
-        if let Some(cached) = self.actor.borrow().clone() {
-            return Ok(cached);
-        }
-        let named = self.arrival_actor();
-        let source = self.source.borrow().clone();
-        let resolved = match source {
-            _ if named.truthy() => named,
-            Some(source) if source.instance.has("extractActor") => {
-                match self.call_adapter(&source.instance, "extractActor", env::object_of(vec![("event", self.event.clone())])).await {
-                    Ok(actor) => actor,
-                    Err(Failure::Host(_)) => Js::Null,
-                    Err(other) => return Err(other),
-                }
-            }
-            _ => Js::Null,
-        };
-        *self.actor.borrow_mut() = Some(resolved.clone());
-        Ok(resolved)
     }
 
     /// `readSourcePositionField` on the event: the source adapter's
@@ -2396,31 +2286,6 @@ impl Run<'_> {
     }
 }
 
-/// `lookup.resolveActingUser`'s answer, which the contract
-/// (`ActingPrincipal`) gives as `{principal: {id, display?}, email?}` or
-/// nothing: anything else ends the run, coded, where the answer is read.
-fn acting_user_answer(user: &Js) -> Result<(), Failure> {
-    const CALL: &str = "lookup.resolveActingUser";
-    if user.is_nullish() {
-        return Ok(());
-    }
-    let Js::Object(_) = user else { return Err(Failure::host_answer(CALL, "{principal: {id}, email?} or nothing", user)) };
-    let principal = event_get(user, "principal");
-    if !matches!(principal, Js::Object(_)) {
-        return Err(Failure::host_answer(CALL, "a principal object ({id, display?}) under `principal`", &principal));
-    }
-    let text_or_absent = |value: &Js| value.is_nullish() || matches!(value, Js::String(_));
-    let id = event_get(&principal, "id");
-    if !matches!(id, Js::String(_)) {
-        return Err(Failure::host_answer(CALL, "the principal's `id` as text", &id));
-    }
-    for (what, value) in [("the principal's `display` as text or absent", event_get(&principal, "display")), ("`email` as text or absent", event_get(user, "email"))] {
-        if !text_or_absent(&value) {
-            return Err(Failure::host_answer(CALL, what, &value));
-        }
-    }
-    Ok(())
-}
 
 /// A write record with every citation of a write by number the ledger
 /// holds renumbered (`WriteLedger.cite`): the record's own `origin`, and the
@@ -2521,6 +2386,10 @@ impl Reader for Reading<'_, '_> {
 
     fn field_function(&self, id: &str) -> bool {
         self.field.is_some_and(|field| field.has(id))
+    }
+
+    fn plugin(&self, id: &str) -> bool {
+        matches!(self.scope.resolve(id), Some(Binding::Plugin(_)))
     }
 
     fn step(&self) -> Result<(), EvalError> {
@@ -2651,6 +2520,9 @@ fn spell_value_type(value: &ast::ValueType) -> String {
             ast::ValueType::Closure { .. } => format!("<{}>[]", spell_value_type(of)),
             _ => format!("{}[]", spell_value_type(of)),
         },
+        ast::ValueType::Branded { of, brands, .. } => {
+            movement_parser::catalog::written_type::WrittenType::branded(movement_parser::catalog::written_type::WrittenType::Words(spell_value_type(of)), brands.iter().cloned()).spell()
+        }
         ast::ValueType::Record { keys, .. } => format!(
             "{{ {} }}",
             keys.iter().map(|k| format!("{}{}: {}", k.name, if k.optional == Some(true) { "?" } else { "" }, spell_value_type(&k.type_))).collect::<Vec<_>>().join(", ")
@@ -2985,40 +2857,6 @@ mod tests {
         assert!(run(json!({ "records": [{ "url": "u" }] })).get("result").is_some());
     }
 
-    /// The acting user the host answers is `{principal: {id, display?},
-    /// email?}`: one that is not ends the run coded where `@user_*` reads it.
-    #[test]
-    fn a_malformed_acting_user_ends_the_run_coded() {
-        let source = "import { email } from adapters\ninbox = connect email\nfunction m(msg: <inbox-[:message]->>) {\n  who = @user_name\n}";
-        let run = |user: Json| {
-            let host = |request: &PendingRequest| match (request.family, request.method.as_str()) {
-                ("adapters", "resolve") => json!({ "value": { "instance": "i1", "adapterType": "email", "methods": ["getActorCandidates"] } }),
-                ("lookup", "resolveActingUser") => json!({ "value": wire(user.clone()) }),
-                ("clock", "now") => json!({ "value": { "nowIso": "2026-10-07T12:00:00.000Z" } }),
-                _ => plain_host(json!({}))(request),
-            };
-            drive_input(segment_input(source, json!(["o", []]), &[]), host).0
-        };
-        for (user, wanted) in [
-            (json!({ "email": "ada@acme.example" }), "a principal object ({id, display?}) under `principal`, got nothing"),
-            (json!({ "principal": { "display": "Ada" } }), "the principal's `id` as text, got nothing"),
-            (json!({ "principal": { "id": "u1", "display": 5 } }), "the principal's `display` as text or absent, got number (5)"),
-            (json!({ "principal": { "id": "u1" }, "email": ["a"] }), "`email` as text or absent, got object ([\"a\"])"),
-            (json!("ada"), "{principal: {id}, email?} or nothing, got string (\"ada\")"),
-        ] {
-            let done = run(user.clone());
-            assert_eq!(done["failed"]["error"]["code"], json!("MOVENG_RUNTIME"), "{user}: {done}");
-            assert_eq!(
-                done["failed"]["error"]["message"],
-                json!(format!("the host's lookup.resolveActingUser answered something malformed: expected {wanted}")),
-                "{user}"
-            );
-        }
-        for user in [json!({ "principal": { "id": "u1" } }), json!({ "principal": { "id": "u1", "display": "Ada" }, "email": "a@b.c" }), Json::Null] {
-            assert!(run(user.clone()).get("result").is_some(), "{user}");
-        }
-    }
-
     /// A segment pinned to a release this one does not read throws
     /// MOVENG_LANGUAGE_VERSION naming the pin and the remedy, before anything
     /// is asked.
@@ -3184,40 +3022,6 @@ mod tests {
         let (done, seen) = drive_input(input, plain_host(json!({})));
         assert_eq!(done["result"]["returned"], json!(["o", [["id", "pay_1"], ["more", 1201.0]]]), "{done}");
         assert!(seen.iter().all(|r| r.family != "adapters"), "no adapter is asked: {:?}", seen.iter().map(|r| (r.family, r.method.clone())).collect::<Vec<_>>());
-    }
-
-    /// A run fired by an arrival reads who acted from the arrival, as its
-    /// module said at the door (adapter protocol 2.7): `@actor_*` asks the
-    /// module nothing, and `@user_*` asks the host, which resolves the user
-    /// from it, though the module offers no `getActorCandidates`.
-    #[test]
-    fn a_run_fired_by_an_arrival_reads_who_acted_from_it() {
-        let source = "import { email } from adapters\ninbox = connect email\nfunction m(msg: <inbox-[:message]->>) {\n  return { id: @actor_id, email: @actor_email, name: @actor_name, user: @user_email }\n}";
-        let fired = |actor: Option<Json>| {
-            let mut arrival = vec![json!(["adapterType", "email"]), json!(["edge", "message"]), json!(["landing", ["o", [["recordId", "m1"], ["fields", ["o", [["subject", "Hi"]]]]]]])];
-            if let Some(actor) = actor {
-                arrival.push(json!(["actor", actor]));
-            }
-            let mut input = segment_input(source, json!(["o", []]), &[]);
-            input["event"] = env::encode_plain(&env::decode(&json!(["o", [["pipelineInputId", "p"], ["adapterType", "email"], ["triggerType", "arrival"], ["arrival", ["o", arrival]]]])).unwrap());
-            input["recordsReturned"] = json!(true);
-            let host = |request: &PendingRequest| match (request.family, request.method.as_str()) {
-                ("adapters", "resolve") => json!({ "value": { "instance": "i1", "adapterType": "email", "methods": [] } }),
-                ("lookup", "resolveActingUser") => json!({ "value": wire(json!({ "principal": { "id": "u1" }, "email": "ada@acme.example" })) }),
-                _ => plain_host(json!({}))(request),
-            };
-            drive_input(input, host)
-        };
-        let (done, seen) = fired(Some(json!(["o", [["identifier", "ada@acme.example"], ["scheme", "email"], ["name", "Ada"]]])));
-        assert_eq!(
-            done["result"]["returned"],
-            json!(["o", [["id", "ada@acme.example"], ["email", "ada@acme.example"], ["name", "Ada"], ["user", "ada@acme.example"]]]),
-            "{done}"
-        );
-        assert!(seen.iter().all(|r| r.family != "adapters" || r.method != "call"), "the module is asked nothing");
-        let (unnamed, seen) = fired(None);
-        assert_eq!(unnamed["result"]["returned"], json!(["o", [["id", null], ["email", null], ["name", null], ["user", null]]]), "{unnamed}");
-        assert!(seen.iter().all(|r| r.family != "lookup"), "no actor and no candidates: the host is not asked");
     }
 
     /// A host that records what the movement returned gets it in the
@@ -3857,8 +3661,6 @@ pub(crate) fn with_bare_run<T>(source: &str, body: impl FnOnce(&mut Run<'_>) -> 
         import_originals: RefCell::default(),
         source: RefCell::default(),
         source_instance: RefCell::default(),
-        acting_user: RefCell::default(),
-        actor: RefCell::default(),
         origins: RefCell::default(),
         misses: RefCell::default(),
         trace: crate::trace::FlowTrace::default(),

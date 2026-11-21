@@ -1,6 +1,9 @@
 # Changelog
 
-## Unreleased
+## 0.15.0 - 2026-11-13
+
+- `Ctx::invalidate_plugin_answers(plugin, args)` tells the host that started the module (`LF_HOST_URL`) that a pure plugin's kept answers changed (adapter protocol 2.10, `plugins.invalidate`): the one for `args`, or every answer of `plugin` without them. A host before 2.10, or none, has nothing to forget.
+- Breaking (listen-fire 0.16.0): the `Store` trait gains `unjudged.judged` (`UnjudgedJudged { pipeline, arrival }`), and `UnjudgedNote`, `UnjudgedList` and `UnjudgedArrival` carry `waiting`: a listen keeps an arrival its host could not answer, and those behind it, until it judges them in order. A store module built on the kit implements `judged_unjudged` to compile; one that answers `method_not_implemented` holds no arrival for its host.
 
 ## 0.14.0 - 2026-11-02
 

@@ -18,7 +18,7 @@ fn found(body: &str, upgrading_from: Option<&str>) -> Vec<(String, &'static str,
         "import {{ attio }} from adapters\nimport {{ crm_cred }} from credentials\ncrm = connect attio using crm_cred\nnode Found: \"the companies named\" {{\n  node co: \"each company\" {{\n    name: <text> \"its name\"\n  }}\n}}\nfunction go(t: <text>) {{\n  found = extractOne([t], Found)\n{body}\n}}\n"
     );
     let catalog = CatalogSnapshot::load(CATALOG).unwrap();
-    let options = CheckOptions { upgrading_from, zones: &movement_checker::host::native::NativeZones };
+    let options = CheckOptions { upgrading_from, limiting_function: None, zones: &movement_checker::host::native::NativeZones };
     let diagnostics = check_source(&source, &catalog, options).unwrap_or_else(|e| panic!("{source}: {e:?}"));
     diagnostics
         .into_iter()

@@ -1,8 +1,8 @@
 # The host families
 
-Version: 2
+Version: 3
 
-The movement engine runs a program. Everything outside the program goes through one interface the caller hands it, `EngineHost` (`packages/movement-engine/services/movement_engine/host.ts`): adapters, model calls, parking, cancellation, files, the acting principal, write locks, the trace, the clock and fresh ids. The engine imports none of these itself. This document is that interface and the four entry points into the engine. How lf-platform's hosts serve it, and the engine's own notes, are in lf-platform, `docs/engine-host.md`. The data shapes are in the `engine-contracts` package (`packages/engine-contracts/`).
+The movement engine runs a program. Everything outside the program goes through one interface the caller hands it, `EngineHost` (`packages/movement-engine/services/movement_engine/host.ts`): adapters, model calls, parking, cancellation, files, write locks, the trace, the clock and fresh ids. The engine imports none of these itself. This document is that interface and the four entry points into the engine. How lf-platform's hosts serve it, and the engine's own notes, are in lf-platform, `docs/engine-host.md`. The data shapes are in the `engine-contracts` package (`packages/engine-contracts/`).
 
 This document is the host contract, frozen as JSON. Every host call is one request and one awaited answer, each plain JSON: no callback, live object, `Date`, stream or shared array crosses, and instants are ISO 8601 strings. An embedder in another language or process serves exactly these shapes.
 
@@ -15,17 +15,17 @@ Two tests hold the contract to this document (lf-platform's, `apps/api/src/servi
 
 ## Versions
 
-- **The version is an integer**, stated at the top of this document and held by `HOST_FAMILIES_VERSION`. This release serves version 2 only ([the index](README.md) lists what each release supports and deprecates).
-- **On the wire:** every `segment.open` request carries `hostFamiliesVersion`. A host refuses an open whose version it does not serve, or that names none, before it opens anything. The refusal is a thrown failure whose message names the contract, the version it was handed and the versions it serves: `segment.open carries host families version 1, which this host does not serve (supported: 2)`. The entry fails before any statement runs.
+- **The version is an integer**, stated at the top of this document and held by `HOST_FAMILIES_VERSION`. This release serves version 3 only ([the index](README.md) lists what each release supports and deprecates).
+- **On the wire:** every `segment.open` request carries `hostFamiliesVersion`. A host refuses an open whose version it does not serve, or that names none, before it opens anything. The refusal is a thrown failure whose message names the contract, the version it was handed and the versions it serves: `segment.open carries host families version 2, which this host does not serve (supported: 3)`. The entry fails before any statement runs.
 - **What bumps it:** a change in meaning. A method removed or renamed, a field whose meaning changed, a required field added to a request, or an answer reshaped. An optional request field a host may ignore, or a new optional family, keeps the version.
-- **A required family is part of the version.** Adding one bumps it, as any required addition does. A host that lacks a required method is refused by the engine before `segment.open`, with a message naming each missing method (`the host does not serve clock.now, ids.mint, which host families version 2 requires (the clock, ids families); no segment was opened`). The engine checks every method of every family the manifest does not mark optional.
+- **A required family is part of the version.** Adding one bumps it, as any required addition does. A host that lacks a required method is refused by the engine before `segment.open`, with a message naming each missing method (`the host does not serve clock.now, ids.mint, which host families version 3 requires (the clock, ids families); no segment was opened`). The engine checks every method of every family the manifest does not mark optional.
 - **How a break lands:** the engine sends the new version; a host that serves both branches on it at the point of difference. It is never a second host interface.
 
 ## Conventions
 
 The shapes are TypeScript-ish. These rules apply to every one of them.
 
-- **The segment.** Every request but `segment.open`'s carries `segmentId: string`, the id `segment.open` answered. A method with nothing else to say takes `{ segmentId }` alone. A call the host answers from what the segment is for (its team, its instances: `adapters.*`, `park.wake`, `park.bindings.*`, `lookup`) is refused when the segment is not open, never opened or already closed: `adapters.call` answers an `adapter_error`, the others throw, and the message names the segment. Closing a segment twice is not refused (see `segment.close`).
+- **The segment.** Every request but `segment.open`'s carries `segmentId: string`, the id `segment.open` answered. A method with nothing else to say takes `{ segmentId }` alone. A call the host answers from what the segment is for (its team, its instances: `adapters.*`, `park.wake`, `park.bindings.*`) is refused when the segment is not open, never opened or already closed: `adapters.call` answers an `adapter_error`, the others throw, and the message names the segment. Closing a segment twice is not refused (see `segment.close`).
 - **Optional fields.** `x?: T` means the field may be absent. An absent field and one that is `undefined` are the same; a host never sends `null` for an absent optional field unless the type says `| null`.
 - **`unknown`.** Any JSON value, opaque to the receiver: carried, never interpreted.
 - **Numbers.** Finite. Money is integer microdollars.
@@ -113,9 +113,6 @@ interface TriggerEvent {
 
 // A parked flow's whole state (`ParkedScopeState` in `engine-contracts`), opaque to the host
 interface ParkedScopeState { version: 1; address: string; bindingName: string | null; scopeChain: unknown[]; /* … */ }
-
-// Who an event acts as: an opaque reference the host mints
-interface PrincipalReference { id: string; display?: string }
 ```
 
 `ParkedScopeState` ([`park-state.md`](park-state.md)) and `MovementTraceEntry` (`movement_engine/expression.ts`) are engine-defined JSON. A host stores them and hands them back byte for byte; it never reads inside them.
@@ -124,7 +121,7 @@ interface PrincipalReference { id: string; display?: string }
 
 - **Data.** The source and its language version, a `CatalogSnapshot`, the credential ids its imports name (`credentialIds`: import name to id, beside the snapshot, never in it), the trigger event, the instant it fired (`firedAt`, an ISO 8601 string; every clock read the program makes answers from it), the cost cap (`costCapMicrodollars`, absent for none) with what the run spent before this segment, and, on resume, the parked state. A run may also be handed addresses to suspend at (`suspendAt`: just before a statement, or before the k-th call a statement makes); the first flow to reach one parks there once.
 - **The catalog snapshot** ([`catalog-snapshot.md`](catalog-snapshot.md)). The team's catalog as plain JSON: adapters and their schemas, credential names, plugins, models, and the saved files the program imports (file imports resolve from the snapshot's `files` only). Everything the engine knows of a plugin comes from the snapshot's `plugins`: the arguments a stage feeds it (`fedArgs`), the ones it must be handed (`requiredArgs`), what a plain call hands back (`output`), and whether it is `priced`.
-- **A host.** The families below. A host may add fields to what lands before it is judged or run; the engine reads them as the module's own (listen-fire adds `Actor`: [`actor-field.md`](actor-field.md)).
+- **A host.** The families below. A host may add fields to what lands before it is judged or run; the engine reads them as the module's own.
 
 ## Entry points
 
@@ -235,7 +232,7 @@ Every entry answers the segment's result (`MovementRunResult`, `movement_engine/
 | `adapters` | `resolve`, `call` | no |
 | `llm.client` | `call` | no (may throw, if the embedder's programs never call a model) |
 | `llm.extractCall` | `call` | same as `llm.client` |
-| `llm.transforms` | `invoke` | same as `llm.client` |
+| `llm.transforms` | `invoke`, `answer` | same as `llm.client`; `answer` is optional: absent, a pure plugin is invoked as any other |
 | `llm` | `arbitrateEntities` | same as `llm.client` |
 | `park.sink` | `recordJoin`, `commitTimerPark`, `commitAwaitPark`, `decrementJoin`, `persistBranchExport`, `collectBranchExports`, `cancelSubtrees`, `commitSuspension`, `commitLimitPause` | yes: absent, a run that reaches a park fails (a dry run) |
 | `park` | `wake` | no (may throw, if `park.sink` is absent: only an await park asks for a wake) |
@@ -244,7 +241,6 @@ Every entry answers the segment's result (`MovementRunResult`, `movement_engine/
 | `park.bindings` | `record`, `findBoundCounterpart`, `delete` | no (may throw, if no program binds) |
 | `control.cancel` | `cancelled`, `cancelledNow` | no (answer `false` for a run nothing cancels) |
 | `files` | `resolveFileText`, `render` | no |
-| `lookup` | `resolveActingUser` | no (answer `null` when no user is known) |
 | `locks` | `acquire`, `release` | no |
 | `trace` | `append` | yes: absent, the trace is on the run's result only |
 | `clock` | `now` | no |
@@ -326,7 +322,7 @@ type AdapterMethod =
   | 'iterateRelatedPage' | 'preprocessInbound' | 'listEventTypes' | 'createRecord' | 'updateRecord'
   | 'deleteRecord' | 'linkRecords' | 'unlinkRecords' | 'ensureEventSubscription' | 'removeEventSubscription'
   | 'awaitKeys' | 'readRecord' | 'translateFilter' | 'getDedupRules'
-  | 'getActorCandidates' | 'extractActor' | 'describeOpaqueId' | 'invokeFieldFunction';
+  | 'describeOpaqueId' | 'invokeFieldFunction';
 
 request: { segmentId: string; instance: string; method: AdapterMethod; args: object }
 answer:
@@ -431,6 +427,22 @@ answer: PricedAnswer<{
 - The engine refuses a plugin the snapshot marks `priced` before it starts once the run's cap is spent, without calling the host.
 - **Persist:** whatever the plugin stores (fetched documents go to the document store and come back as descriptors).
 - **Retry:** the plugin's own.
+
+#### `llm.transforms.answer`
+
+```ts
+request: {
+  segmentId: string;
+  plugin: string;      // its catalog key (`@lf-platform/team/is_member`)
+  args: unknown[];     // plain JSON, by position, as the listen judge asks
+}
+answer: { value: unknown } | { unreachable: string }
+```
+
+- A pure plugin's answer (its spec says `pure: true`) called inside an expression: a wait's `WHERE`. The host answers it as it answers a listen's filter, from the answers it keeps by plugin and arguments (adapter protocol 2.10, [Pure plugins and their answers](adapter-protocol.md#pure-plugins-and-their-answers)), asking the plugin's module only for one it does not keep.
+- **`unreachable`:** the host could not ask the module (it did not start, or the connection failed). The engine leaves the arrival it was judging unjudged and unnoted, and the arrivals after it with it; the run parks on its wait, and the host wakes it to judge them again once its module may answer (`listen-fire` a retry later, as a listen's waiting arrivals are).
+- An error the module answers itself is no answer: the host fails the call, and the run fails, as any plugin call's error fails it.
+- Optional: an engine asks only a host that serves it, and otherwise invokes the plugin (`llm.transforms.invoke`) for each arrival it judges.
 
 ### `llm`
 
@@ -736,27 +748,6 @@ answer:  FileRef            // a document-store descriptor
 - `FILE(content, type)`: the host renders the composed string (the older language; a `pdf` is the text on A4 in Helvetica, wrapped at the page edge, drawn without a browser by `@lf/pdf`'s writer; a character outside WinAnsi prints as `?`. Now a PDF is the `@lf/pdf` plugin's `pdf.render(text)`, and listen-fire refuses a `pdf` kind that only meets this family at run time), stores the artifact under the team's key prefix (what makes it the team's to read again), and answers its descriptor.
 - **Persist:** the artifact's bytes in the document store. **Retry:** not idempotent (each call stores a new artifact).
 
-### `lookup`
-
-#### `lookup.resolveActingUser`
-
-```ts
-request: {
-  segmentId: string;
-  triggerId?: string;      // the trigger the event dispatched through; absent for events that predate trigger-aware dispatch
-  instance: string;        // the source instance, as adapters.resolve answered it
-  event: TriggerEvent;
-}
-answer: { principal: PrincipalReference; email?: string } | null
-```
-
-- The principal an event acts as (`@user_*`), in the segment's team. The host maps the event's actor to one of its own principals through the trigger (its creator override and creator fallback), asking the source instance for the event's actor candidates itself (`getActorCandidates`, inside the segment) only when the trigger does not already decide it. `null`: no principal matches.
-- `principal.id` is opaque: the engine carries it (`@user_id`) and never looks it up. `principal.display` is how a person would see it named (`@user_name`); absent, `@user_name` reads as absent.
-- `email` is supplied only by a host whose principals have one (this repository's production host does; the test host passes the email a test's user carries). Absent, `@user_email` reads as absent, exactly as it does when no principal matches. The engine never sees a user table.
-- The engine asks only through a source the host resolved; an adapter the engine implements itself has no instance to ask, and the engine refuses (`MOVENG_UNSUPPORTED`) rather than answer null.
-- A throw is forgiven: the engine reads `@user_*` as absent.
-- **Persist:** nothing. **Retry:** idempotent; the engine caches the answer for the run.
-
 ### `locks`
 
 Cross-run write locks. A token stands for one acquire.
@@ -830,7 +821,7 @@ The engine keeps the run's ledger (`movement_engine/run_context.ts`). The budget
 
 ## The Rust engine's requests
 
-The Rust engine (`crates/movement-engine`; the engine for the language of this release, by the run's pin alone) is an engine, not a host: it runs a segment the run host opened (`inRunContext` in `movement_engine/run.ts`), and its shim (`movement_engine/rust_host.ts`) forwards each request it makes to the run's `EngineHost`. Every request that names an `EngineHost` method is that method's request, in the shape above, with the segment's id; the engine's slice reaches `segment` only through the run host, and `adapters.resolve`, `adapters.call`, `llm.client.call`, `llm.extractCall.call` (an extraction call, `extract(…)`, `extractOne(…)`), `llm.transforms.invoke`, `llm.arbitrateEntities`, `files.resolveFileText`, `files.render`, `lookup.resolveActingUser`, `park.sink.*` (a timer, a suspension, an await's park on its wait, a limit pause, and a combinator's join: `recordJoin`, `persistBranchExport`, `decrementJoin`, `collectBranchExports`, `cancelSubtrees`), `park.wake` (an arrival that landed while an await parked), `park.waits.*` (a run's waits, opened where their records enter and read at the `await`), `park.sources.save` and `park.sources.load` (a park's library texts), `control.cancel.*`, `locks.*`, `trace.append`, `clock.now` and `ids.mint` itself. It asks `ids.mint` for an extraction's resources (once per batch, in the tree's order). A wait asks the record's adapter for its key (`awaitKeys`) through `adapters.call`, once per adapter and edge as records enter; a plain `await` on an edge that can also be listed lists it first (`getRelated`). `parallel` and `race` arms run as concurrent flows: their requests are in flight together, interleaved as the TypeScript engine's arms interleave them, and effects take the run's in-run locks in the same order.
+The Rust engine (`crates/movement-engine`; the engine for the language of this release, by the run's pin alone) is an engine, not a host: it runs a segment the run host opened (`inRunContext` in `movement_engine/run.ts`), and its shim (`movement_engine/rust_host.ts`) forwards each request it makes to the run's `EngineHost`. Every request that names an `EngineHost` method is that method's request, in the shape above, with the segment's id; the engine's slice reaches `segment` only through the run host, and `adapters.resolve`, `adapters.call`, `llm.client.call`, `llm.extractCall.call` (an extraction call, `extract(…)`, `extractOne(…)`), `llm.transforms.invoke`, `llm.arbitrateEntities`, `files.resolveFileText`, `files.render`, `park.sink.*` (a timer, a suspension, an await's park on its wait, a limit pause, and a combinator's join: `recordJoin`, `persistBranchExport`, `decrementJoin`, `collectBranchExports`, `cancelSubtrees`), `park.wake` (an arrival that landed while an await parked), `park.waits.*` (a run's waits, opened where their records enter and read at the `await`), `park.sources.save` and `park.sources.load` (a park's library texts), `control.cancel.*`, `locks.*`, `trace.append`, `clock.now` and `ids.mint` itself. It asks `ids.mint` for an extraction's resources (once per batch, in the tree's order). A wait asks the record's adapter for its key (`awaitKeys`) through `adapters.call`, once per adapter and edge as records enter; a plain `await` on an edge that can also be listed lists it first (`getRelated`). `parallel` and `race` arms run as concurrent flows: their requests are in flight together, interleaved as the TypeScript engine's arms interleave them, and effects take the run's in-run locks in the same order.
 
 - **What it refuses.** A program reaches the engine only past the checker, the one gate; a program pinned to a release of another compatibility key is refused before anything is asked (`MOVENG_LANGUAGE_VERSION`, naming the pin and the remedy), and a construct the engine has not ported, or a parked state it cannot read, fails the run with `MOVENG_UNSUPPORTED` and a stable reason (`crates/movement-engine/README.md`, "Refusals"). No engine runs it instead.
 - **The values on the eval wire.** `adapters.call`'s `args` and `result`, a park's `state`, a plugin's `config` and `extractedContext`, a file's descriptor, and the answers of `llm.client.call`, `llm.transforms.invoke` and `files.resolveFileText` cross between the engine and its shim on the eval wire (`wire: true`; `crates/movement-engine/src/env.rs`) and reach the host as plain objects. The eval wire carries plain JSON: a list is `["l", items]` and an object `["o", [[key, value]…]]` in its own key order; `undefined`, `NaN`, `±Infinity` and `-0` cross as `null` and a lone surrogate as U+FFFD; nothing crosses by identity (an object reached twice is written twice, a cycle or a function is refused). A value is data or one of the engine's records, and the two never share a form: every object the host sends is data, whatever keys it carries (a `kind` naming an engine binding's included); a record whose binding object is data (the event) reaches the host as `["x", id, descriptor]`, the host hands it back as `["x", id]`, and no other record crosses. A model reply's `parsedJson` reaches the engine in `JSON.parse`'s key order. A remote host serves the JSON shapes above.
@@ -859,6 +850,11 @@ Four requests are the Rust engine's own: they are not `EngineHost` methods, and 
 | `log.write { lines }` | `undefined`; each line `{ level: 'info' \| 'warn', message, fields }` written to the platform's log, the run's id added; sent as a statement's trace is handed over | the log lines the TypeScript engine writes (an extraction stage skipped, a plugin's empty argument, a continued answer, a source file truncated for the prompt, a refinement kept) |
 
 ## Changes
+
+- **Version 3 (0.16, who acted is a claim).** A method removed, so the version moves:
+  - **`lookup`** is gone, with `lookup.resolveActingUser`: 0.16 retires `@user_*` and `@actor_*`. Who acted is a claim on what lands (a field whose type carries a brand), and who that is to a host is a host function's answer, a pure plugin the host serves ([Pure plugins and their answers](adapter-protocol.md#pure-plugins-and-their-answers)).
+  - **`adapters.call`** no longer calls `getActorCandidates` or `extractActor` (adapter protocol 2.10).
+  - A version 2 host is refused at `segment.open` (`segment.open carries host families version 2, which this host does not serve (supported: 3)`). A host that also runs 0.15's engine serves version 2 to it, with `lookup`.
 
 - **Version 2 (0.13, waits on listenable edges).** A change in meaning, so the version moves:
   - **`park.waits`:** new, optional: `mark`, `open`, `arrivals` and `note`. An await on an adapter's edge reads the wait its record opened when it entered the run, not the adapter's `resolveAwait`. `open` takes `gone: true` in place of a key for a record already gone, and the record's `recordId`; `arrivals` answers no `gone` (a deleted record leaves its wait waiting, [stranded-waits.md](stranded-waits.md)).

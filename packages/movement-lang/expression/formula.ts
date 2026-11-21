@@ -69,7 +69,7 @@ export interface FormulaCapabilities {
   resources: boolean;
   llm: boolean;
   /**
-   * KG-bound global identifiers (`@id`, `@user_*`, `@parent.*`,
+   * KG-bound global identifiers (`@id`, `@parent.*`,
    * `@current_date`, `@input_channel_name`). True for the TG field
    * editor where these resolve against the surrounding action node /
    * pipeline context. False for adapter-source filter authoring (trigger
@@ -351,6 +351,9 @@ export function serialize(
     }
     case 'at': {
       return `AT(${ser(expr.expression)}, ${ser(expr.index)})`;
+    }
+    case 'field': {
+      return `${ser(expr.expression)}${expr.optional === true ? '?.' : '.'}${quoteName(expr.field)}`;
     }
   }
 
@@ -1110,8 +1113,6 @@ const FUNCTION_COMPLETIONS: Completion[] = [
 
 const SPECIAL_COMPLETIONS: Completion[] = [
   { label: '@id', insert: '@id', kind: 'special' },
-  { label: '@user_name', insert: '@user_name', kind: 'special' },
-  { label: '@user_email', insert: '@user_email', kind: 'special' },
   { label: '@current_date', insert: '@current_date', kind: 'special' },
   { label: '@input_channel_name', insert: '@input_channel_name', kind: 'special' },
   { label: '@parent.created', insert: '@parent.created', kind: 'special' },
@@ -1677,7 +1678,7 @@ export function getCompletions(
   // Early check: typing @ prefix for special completions. Gated on the
   // `kgGlobals` capability — adapter-source authoring contexts (e.g.
   // trigger filters) have no parent action node or KG identifiers in
-  // scope, so offering @parent / @id / @user_* would mislead.
+  // scope, so offering @parent / @id would mislead.
   const specialPrefix = textBefore.match(/@([a-zA-Z0-9_.]*)?$/);
   if (specialPrefix) {
     if (capabilities.kgGlobals === false) return [];

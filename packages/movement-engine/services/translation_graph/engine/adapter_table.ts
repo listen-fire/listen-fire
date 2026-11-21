@@ -86,8 +86,6 @@ const DISPATCH: { [M in AdapterMethod]: (adapter: Adapter, args: AdapterCallMap[
   readRecord: (adapter, args) => implemented(adapter, 'readRecord', adapter.readRecord)(args),
   translateFilter: (adapter, args) => implemented(adapter, 'translateFilter', adapter.translateFilter)(args),
   getDedupRules: (adapter, args) => implemented(adapter, 'getDedupRules', adapter.getDedupRules)(args),
-  getActorCandidates: (adapter, args) => implemented(adapter, 'getActorCandidates', adapter.getActorCandidates)(args),
-  extractActor: (adapter, args) => implemented(adapter, 'extractActor', adapter.extractActor)(args),
   describeOpaqueId: (adapter, args) => implemented(adapter, 'describeOpaqueId', adapter.describeOpaqueId)(args),
   invokeFieldFunction: (adapter, args) =>
     implemented(adapter, 'invokeFieldFunction', adapter.invokeFieldFunction)(args),

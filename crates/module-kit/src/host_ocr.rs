@@ -97,7 +97,7 @@ pub fn base64_bytes<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<u8
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::cell::RefCell;
     use std::rc::Rc;
 
@@ -109,7 +109,7 @@ mod tests {
 
     /// A host's OCR door on loopback answering `status` and `answer`; every
     /// request it is sent, logged.
-    async fn door(status: u16, answer: &'static str) -> (HostDoors, Rc<RefCell<Vec<String>>>) {
+    pub(crate) async fn door(status: u16, answer: &'static str) -> (HostDoors, Rc<RefCell<Vec<String>>>) {
         let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
         let port = listener.local_addr().unwrap().port();
         let log = Rc::new(RefCell::new(Vec::new()));

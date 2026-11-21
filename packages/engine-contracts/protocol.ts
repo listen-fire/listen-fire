@@ -39,7 +39,7 @@ export const MANIFEST_PROTOCOL_VERSION = 2;
 
 /** The highest minor of version 2 this release speaks: a host reads 2.0 to
  *  2.`PROTOCOL_MINOR` (docs/contracts/adapter-protocol.md "Minors of version 2"). */
-export const PROTOCOL_MINOR = 9;
+export const PROTOCOL_MINOR = 10;
 
 /** The method that names a minor's feature, by name or by its ending
  *  (`<slot>.watch`). Data, so the Rust twin (module-wire
@@ -49,16 +49,19 @@ export type ProtocolMinorUse = { method: string } | { methodEndingWith: string }
 /** Each minor of version 2 whose hosts speak a method, and that method. A host
  *  speaking the minor may call it; a module offering it needs nothing of an
  *  older host, which never calls it, so offering one never raises the minor
- *  a module states. A minor that names no method has no row: 2.0, 2.3
+ *  a module states. 2.10's is a method a module calls at its host
+ *  (`plugins.invalidate`): an older host keeps no answers, so it has none to
+ *  forget. A minor that names no method has no row: 2.0, 2.3
  *  (labelled poll events), 2.7 (`pollAgainAt`), 2.8 (`hostRelease` on a
- *  slot request) and 2.9 (`proven` on an actor identity), each a host
- *  behaviour. */
+ *  slot request) and 2.9 (`proven` on an actor identity, gone from 2.10),
+ *  each a host behaviour. */
 export const PROTOCOL_MINORS: readonly { minor: number; feature: string; uses: ProtocolMinorUse }[] = [
   { minor: 1, feature: 'a <slot>.watch method', uses: { methodEndingWith: '.watch' } },
   { minor: 2, feature: 'work.enqueueIfAbsent', uses: { method: 'work.enqueueIfAbsent' } },
   { minor: 4, feature: 'refreshEventSubscription', uses: { method: 'refreshEventSubscription' } },
   { minor: 5, feature: 'awaitKeys', uses: { method: 'awaitKeys' } },
   { minor: 5, feature: 'waits.log', uses: { method: 'waits.log' } },
+  { minor: 10, feature: 'plugins.invalidate', uses: { method: 'plugins.invalidate' } },
 ];
 
 /** The minor a manifest states: what it needs its host to speak. That is 0
@@ -363,7 +366,7 @@ export const WireTriggerEvent = z.object({
    *  made this one (`WireDiscriminableEvent.idempotencyKey`). */
   idempotencyKey: z.string().optional(),
   /** What fired a listen on a traversal (`triggerType: 'arrival'`, 2.6),
-   *  what it is about and who acted (2.7). */
+   *  what it is about (2.7). */
   arrival: z
     .object({
       adapterType: z.string(),
@@ -371,7 +374,6 @@ export const WireTriggerEvent = z.object({
       landing: WireTriggerLanding,
       parents: z.array(WireTriggerLanding.nullable()).optional(),
       about: z.object({ recordType: z.string(), externalId: z.string() }).optional(),
-      actor: z.lazy(() => WireActorIdentity).optional(),
     })
     .optional(),
 });
@@ -500,24 +502,6 @@ export const WireRelatedResult = z.object({
   edgeId: z.string().optional(),
 });
 export type WireRelatedResultShape = z.infer<typeof WireRelatedResult>;
-
-/** Mirror of `ActorIdentity`. */
-export const WireActorIdentity = z.object({
-  identifier: z.string(),
-  scheme: z.enum(['email', 'phone', 'opaque']),
-  adapterType: z.string().optional(),
-  email: z.string().optional(),
-  name: z.string().optional(),
-  label: z.string().optional(),
-  proven: z.boolean().optional(),
-});
-
-/** Mirror of `ActorCandidate`. */
-export const WireActorCandidate = z.object({
-  identity: WireActorIdentity,
-  source: z.enum(['originator', 'relay']),
-});
-export type WireActorCandidateShape = z.infer<typeof WireActorCandidate>;
 
 // ── Schema-introspection DTOs ────────────────────────────────────────────────
 // Mirror `SchemaEntryPoint` / `SchemaTypeDescriptor` structurally. Field /
@@ -747,9 +731,7 @@ export const WireDescribeOpaqueIdInput = z.object({
   value: z.string(),
 });
 
-export const WireGetActorCandidatesInput = z.object({ event: WireTriggerEvent });
 
-export const WireExtractActorInput = z.object({ event: WireTriggerEvent });
 
 // Field functions (e.g. Slack's SLACK_MESSAGE) — see
 // plans/2026-06-06-target-composer-functions. Fully serialisable: the engine
@@ -806,6 +788,11 @@ export const WireListenDeclarations = z.object({
   listenSettingsBecome: settingsMapping
     .extend({ byEvent: z.record(z.string(), settingsMapping).optional() })
     .optional(),
+  /** The release before which a host may have let only registered senders
+   *  set a listen on this module off (`AdapterManifest.listensLimitedBefore`). */
+  listensLimitedBefore: z.string().regex(/^\d+\.\d+\.\d+$/, 'listensLimitedBefore: expected a release (0.16.0)').optional(),
+  /** Settings the module no longer reads (`AdapterManifest.retiredSettings`). */
+  retiredSettings: z.array(z.object({ name: z.string().min(1), instead: z.string().min(1) })).optional(),
 });
 
 // ── Module declarations (within version 2: all optional) ─────────────────────
@@ -1016,6 +1003,21 @@ export const WirePluginSpec = z.object({
   output: z.record(z.string(), z.unknown()).optional(),
   /** What the plugin does, in its author's words: shown when an author hovers a call. */
   description: z.string().optional(),
+  /** Same arguments, same answer, until the host says otherwise: what lets a
+   *  call stand where only a pure expression may (a listen's filter). Absent
+   *  ⇒ not pure. */
+  pure: z.boolean().optional(),
+  /** How long a host may keep a pure plugin's answer. Only a pure plugin
+   *  declares one. */
+  maxAgeSeconds: z.number().int().positive().optional(),
+}).superRefine((spec, ctx) => {
+  if (spec.maxAgeSeconds !== undefined && spec.pure !== true) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['maxAgeSeconds'],
+      message: "a plugin's 'maxAgeSeconds' is the age of a pure plugin's answer: declare 'pure: true' with it",
+    });
+  }
 });
 export type WirePluginSpecShape = z.infer<typeof WirePluginSpec>;
 
@@ -1299,9 +1301,6 @@ export const WireArrival = z.union([
     notFor: z.string().min(1).optional(),
     takenApplied: z.boolean().optional(),
     occurredAt: z.string().min(1).optional(),
-    /** Who acted (2.7): the run's `@actor_*`, and what a host resolves the
-     *  acting user from. */
-    actor: WireActorIdentity.optional(),
   }),
   z.object({ edge: z.string().min(1), key: z.string().min(1), gone: z.literal(true) }),
 ]);
@@ -1686,14 +1685,6 @@ export const METHODS = {
   getDedupRules: {
     params: WireGetDedupRulesInput,
     result: WireDedupRules.nullable(),
-  },
-  getActorCandidates: {
-    params: WireGetActorCandidatesInput,
-    result: z.array(WireActorCandidate),
-  },
-  extractActor: {
-    params: WireExtractActorInput,
-    result: WireActorIdentity.nullable(),
   },
   describeOpaqueId: {
     params: WireDescribeOpaqueIdInput,

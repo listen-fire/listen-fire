@@ -55,6 +55,11 @@ pub struct Checker<'c> {
     pub bound_sort_keys: std::cell::RefCell<std::collections::HashSet<(Option<String>, usize, usize)>>,
     /// Checking for a move up from this version (`upgradingFrom`).
     pub upgrading_from: Option<&'c str>,
+    /// The plugin a host limits a listen's senders with (crate::CheckOptions).
+    pub limiting_function: Option<&'c str>,
+    /// Where the checked file's last import ends: a fix that imports a
+    /// plugin adds its import after it (MOV_LISTEN_NOW_OPEN).
+    pub last_import: Option<movement_parser::ast::Span>,
     /// The host's zone database.
     pub zones: &'c dyn crate::host::ZoneLookup,
     /// Each movement's parameter names, by its symbol (`ScopeSymbol.movement`).
@@ -268,6 +273,8 @@ impl<'c> Checker<'c> {
             bound_sort_keys: Default::default(),
             schemas: Default::default(),
             upgrading_from: options.upgrading_from,
+            limiting_function: options.limiting_function,
+            last_import: None,
             return_stack: Vec::new(),
             file_value: None,
             function_returns: Default::default(),
@@ -1265,6 +1272,13 @@ impl<'c> Checker<'c> {
 
     /// `checkPathHead`, the name half: its root and every name its hops read.
     pub fn check_path_head(&mut self, head: &PathHead, scope: ScopeId) -> Vec<String> {
+        self.check_path_head_judged(head, crate::families::calls::JudgedHops::None, scope)
+    }
+
+    /// `check_path_head` of a listen's or a wait's head, whose `judged` hops'
+    /// WHEREs the host judges on each arrival: a pure call there needs no
+    /// binding first.
+    pub fn check_path_head_judged(&mut self, head: &PathHead, judged: crate::families::calls::JudgedHops, scope: ScopeId) -> Vec<String> {
         let aliases = extract_hop_aliases(&head.hops_raw);
         if head.root.is_none() {
             self.report(crate::codes::WALK_ROOTLESS, crate::families::walks::rootless_head_message(&head.hops_raw), head.span);
@@ -1322,7 +1336,7 @@ impl<'c> Checker<'c> {
                 }
             }
             self.report_block_read_back(&names, scope, head.span);
-            self.check_head_expression(&probe, head, scope);
+            self.check_head_expression(&probe, head, judged, scope);
         }
         self.check_head_resources(head, &probe, root_name.as_deref(), scope);
         if let Some(name) = &root_name {
@@ -1375,7 +1389,7 @@ impl<'c> Checker<'c> {
             AwaitSource::Traversal { head, arrivals_only, .. } => {
                 self.check_awaited_head(head);
                 self.report_await_on_list(head, scope);
-                self.check_path_head(head, scope);
+                self.check_path_head_judged(head, crate::families::calls::JudgedHops::Last, scope);
                 self.report_head_off_maybe_absent(head, scope, crate::families::walks::HeadUse::Wait);
                 let walk = self.walk_head(head, scope, true);
                 self.check_awaitable(head, walk.as_ref(), *arrivals_only);

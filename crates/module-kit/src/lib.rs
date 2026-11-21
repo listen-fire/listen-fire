@@ -45,6 +45,7 @@ pub mod core;
 pub mod host;
 pub mod host_limits;
 pub mod host_ocr;
+pub mod host_plugins;
 pub mod module;
 pub mod plugin;
 

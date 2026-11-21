@@ -25,7 +25,7 @@ const CATALOG: &str = r#"{"adapters":{"crm":{"canFire":false,"constructionArgs":
 fn errors(body: &str) -> Vec<String> {
     let source = format!("import {{ crm as m }} from adapters\ncrm = connect m\nfunction go() {{\n{body}\n}}\n");
     let catalog = CatalogSnapshot::load(CATALOG).unwrap();
-    let options = CheckOptions { upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
+    let options = CheckOptions { upgrading_from: None, limiting_function: None, zones: &movement_checker::host::native::NativeZones };
     check_source(&source, &catalog, options)
         .unwrap_or_else(|e| panic!("{source}: {e:?}"))
         .into_iter()
@@ -152,7 +152,7 @@ fn a_write_is_held_to_every_landing_until_narrowed() {
 fn a_union_made_otherwise_keeps_its_code() {
     let source = "import { crm as m } from adapters\ncrm = connect m\nfunction go(n: <crm-[:Memo]-> | crm-[:Remark]->>) {\n  x = n.Mood\n}\n";
     let catalog = CatalogSnapshot::load(CATALOG).unwrap();
-    let options = CheckOptions { upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
+    let options = CheckOptions { upgrading_from: None, limiting_function: None, zones: &movement_checker::host::native::NativeZones };
     let found: Vec<String> = check_source(source, &catalog, options).unwrap().into_iter().filter(|d| d.severity.is_none()).map(|d| d.code).collect();
     assert_eq!(found, ["MOV_UNKNOWN_PROPERTY"]);
 }

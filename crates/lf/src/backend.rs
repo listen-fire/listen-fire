@@ -336,9 +336,12 @@ pub trait RunHostStore {
     /// arrival and attempt (whether it is new), and forget what was kept
     /// before `forget_before` (`unjudged.note`).
     fn note_unjudged(&self, fact: &UnjudgedArrival, forget_before: &str) -> Result<bool>;
-    /// The unjudged arrivals of `page`, oldest first, ties by listen, then
-    /// arrival, then attempt (`unjudged.list`).
+    /// The unjudged arrivals of `page`, oldest first, those found in one
+    /// instant in the order they were kept (`unjudged.list`).
     fn unjudged_arrivals(&self, page: &UnjudgedPage<'_>) -> Result<Vec<UnjudgedArrival>>;
+    /// The listen `pipeline` judged `arrival`: none of its facts waits any
+    /// more (`unjudged.judged`).
+    fn judged_unjudged(&self, pipeline: &str, arrival: &str) -> Result<()>;
     /// What one inbound delivery leaves, as one write: its receipt, its pull
     /// cursor (when it moved), its arrivals and its work rows (its events,
     /// its wakes). A crash never leaves a cursor past events its receipt does
@@ -619,6 +622,9 @@ impl RunHostStore for Store {
     }
     fn unjudged_arrivals(&self, page: &UnjudgedPage<'_>) -> Result<Vec<UnjudgedArrival>> {
         Store::unjudged_arrivals(self, page)
+    }
+    fn judged_unjudged(&self, pipeline: &str, arrival: &str) -> Result<()> {
+        Store::judged_unjudged(self, pipeline, arrival)
     }
     fn keep_delivery(
         &self,

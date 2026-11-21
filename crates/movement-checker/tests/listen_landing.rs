@@ -44,7 +44,7 @@ function refunded(e: <Refund>) { return e.reason }
 ";
 
 fn options() -> CheckOptions<'static> {
-    CheckOptions { upgrading_from: None, zones: &movement_checker::host::native::NativeZones }
+    CheckOptions { upgrading_from: None, limiting_function: None, zones: &movement_checker::host::native::NativeZones }
 }
 
 fn check(source: &str) -> Vec<String> {

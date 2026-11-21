@@ -181,12 +181,12 @@ pub enum Ask {
     /// A rootless `EXISTS(-[…]->)` inside a hop's WHERE, walked off the
     /// record the evaluation is scoped at (`evaluateExists`).
     ScopedExists { expr: Expression },
-    /// `@user_*` and `@actor_*` (`resolveMovementMetaKey`): the acting user
-    /// the host looks up, the actor the source adapter parses.
-    Meta { key: String },
     /// A function the destination field advertises (`invokeFieldFunction`),
     /// called by its lowered name with its arguments' values.
     FieldFunction { id: String, args: Vec<Js> },
+    /// A plugin called inside an expression (a pure one, in a wait's WHERE),
+    /// by the name the program writes, with its arguments' values in order.
+    PluginCall { written: String, args: Vec<Js> },
     /// `AI(prompt[, tier])`: the model's answer (`evaluateAi`), or null.
     Ai { prompt: String, tier: Option<String> },
     /// `FILE(content, type)`: the host's rendered artifact (`files.render`).
@@ -202,12 +202,6 @@ fn json_text(value: &Js) -> String {
         Js::Undefined => "undefined".into(),
         other => crate::js::json_stringify(other, 0),
     }
-}
-
-/// The ambients a run reads through its host (`resolveMovementMetaKey`'s
-/// acting-user and raw-actor families).
-pub fn is_host_meta(key: &str) -> bool {
-    matches!(key, "user_email" | "user_name" | "user_id" | "actor_email" | "actor_name" | "actor_id")
 }
 
 /// An evaluation in progress, or a host answer it awaits.
@@ -243,6 +237,11 @@ pub trait Reader {
     /// Whether the write field this evaluation is the value of advertises a
     /// function of this lowered name (`ctx.fieldFunctions`).
     fn field_function(&self, _id: &str) -> bool {
+        false
+    }
+    /// Whether `id` names a plugin the program imports, in this
+    /// evaluation's scope.
+    fn plugin(&self, _id: &str) -> bool {
         false
     }
     /// An entry onto the running flow's trace (`ctx.trace.push`).
@@ -498,6 +497,12 @@ impl<'a> Evaluator<'a> {
                 let inner = self.eval(expression).await?;
                 Ok(Evaluated { value: Js::Number(-inner.value.to_number()), prov: self.union(&[&inner.prov]) })
             }
+            // A field of a call's answer: absent past anything that is no record.
+            Expression::Field { expression, field, .. } => {
+                let inner = self.eval(expression).await?;
+                let value = crate::filter::read_on(inner.value, &[field.as_str()]);
+                Ok(Evaluated { value: if value.is_nullish() { Js::Null } else { value }, prov: self.union(&[&inner.prov]) })
+            }
             Expression::Arithmetic { op, left, right } => {
                 let l = self.eval(left).await?;
                 let r = self.eval(right).await?;
@@ -539,16 +544,6 @@ impl<'a> Evaluator<'a> {
                 };
                 let value = reader.ask(Ask::Ai { prompt: text.clone(), tier: tier.clone() }).await?.value;
                 let id = reader.ai_origin(&text, &inputs);
-                Ok(Evaluated { value, prov: Prov::Built(Trail { origins: vec![id], direct: Some(id) }) })
-            }
-            // `@user_*` / `@actor_*`: the run's lookups, then the key's trail,
-            // minted after the value as the TypeScript's `fromOrigin` is.
-            Expression::Meta { key } if is_host_meta(key) => {
-                let Some(reader) = self.reader() else {
-                    return Err(EvalError::Fallback("an ambient is the run's".into()));
-                };
-                let value = reader.ask(Ask::Meta { key: key.clone() }).await?.value;
-                let id = reader.meta(key);
                 Ok(Evaluated { value, prov: Prov::Built(Trail { origins: vec![id], direct: Some(id) }) })
             }
             Expression::Traverse { alias_root: Some(root), .. } => self.traverse_from(expr, root).await,
@@ -902,6 +897,21 @@ impl<'a> Evaluator<'a> {
             && let Some(reader) = self.reader()
         {
             return if id == "file" { self.render_file(reader, args).await } else { self.read_file(reader, args).await };
+        }
+        if let Some(reader) = self.reader()
+            && reader.plugin(id)
+        {
+            // The checker admits a plugin inside an expression only where
+            // the host judges it: a pure one in a wait's WHERE.
+            let mut values = Vec::new();
+            let mut provs = Vec::new();
+            for a in args {
+                let result = self.eval(a).await?;
+                provs.push(result.prov);
+                values.push(result.value);
+            }
+            let value = reader.ask(Ask::PluginCall { written: id.to_string(), args: values }).await?.value;
+            return Ok(Evaluated { value, prov: self.union(&provs.iter().collect::<Vec<_>>()) });
         }
         if !stdlib::FLAT.contains(&id) {
             let Some(reader) = self.reader() else {

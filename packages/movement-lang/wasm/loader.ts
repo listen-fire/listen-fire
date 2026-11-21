@@ -76,6 +76,7 @@ type CheckerFunction =
   | 'describe_query'
   | 'story_analysis'
   | 'judge_arrival'
+  | 'explain_arrival'
   | 'listen_identity'
   | 'landing_node'
   | 'landing_misfits';
@@ -198,10 +199,13 @@ export function callCatalog(snapshotJson: string, queryJson: string): { ok: bool
 export interface CheckCallOptions {
   /** The release a move up starts from. */
   upgradingFrom?: string;
+  /** The catalog key of the pure plugin the host limits a listen's senders
+   *  with: an open listen told so on an upgrade is offered its check. */
+  limitingFunction?: string;
 }
 
 function optionsJson(options: CheckCallOptions): string {
-  return JSON.stringify({ upgradingFrom: options.upgradingFrom ?? null });
+  return JSON.stringify({ upgradingFrom: options.upgradingFrom ?? null, limitingFunction: options.limitingFunction ?? null });
 }
 
 /**
@@ -310,14 +314,26 @@ export function callStoryAnalysis(source: string, snapshotJson: string, options:
 
 /**
  * Whether an arrival fires a listen (crates/movement-engine/src/abi.rs
- * `judge_arrival`): `{plan, arrival, nowMs}` as JSON, and the reply — the
- * verdict, `{fires: true}`, `{skips}` or `{undecided}` — or `{error}` for an
- * input that does not read.
+ * `judge_arrival`): `{plan, arrival, nowMs, answers?}` as JSON, and the reply
+ * — the verdict, `{fires: true}`, `{skips}`, `{undecided}`, or `{asks}` for a
+ * host function the answers do not answer yet — or `{error}` for an input
+ * that does not read.
  *
  * @internal Used by the engine's judge (movement-engine triggers/listen_plans.ts).
  */
 export function callJudgeArrival(inputJson: string): { ok: boolean; json: unknown } {
   return callChecker('judge_arrival', [inputJson], []);
+}
+
+/**
+ * `callJudgeArrival`'s verdict with the term of the filter that skipped the
+ * arrival (crates/movement-engine/src/abi.rs `explain_arrival`): the same
+ * input, and the reply `{verdict, firstFailed?}`, or `{error}`.
+ *
+ * @internal Used by the engine's judge (movement-engine triggers/listen_plans.ts).
+ */
+export function callExplainArrival(inputJson: string): { ok: boolean; json: unknown } {
+  return callChecker('explain_arrival', [inputJson], []);
 }
 
 /**
@@ -653,6 +669,7 @@ function readExports(raw: Record<string, unknown>): ParserExports {
     'describe_query',
     'story_analysis',
     'judge_arrival',
+    'explain_arrival',
     'listen_identity',
     'landing_node',
     'landing_misfits',

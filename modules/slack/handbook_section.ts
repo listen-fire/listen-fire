@@ -131,7 +131,8 @@ listen to chat-[ch:Channels WHERE ch.Name IN ["deals"]]->-[m:Messages WHERE m.\`
 - A thread reply is not one of a channel's \`Messages\`: it is its thread's \`Replies\`, heard in the channels you name with \`chat-[ch:Channels WHERE ch.Name == "deals"]->-[:Messages]->-[:Replies]->\`.
 - A reply or a reaction arrives with its channel but not the message it is under, so a listen on \`Replies\` or \`Reactions\` narrows by channel only; a filter on that message is refused while you write it.
 - A reaction on a file arrives on the \`Reactions\` of each message that shares the file, as a reaction on that message.
-- A connection made with the setting \`drop_own_messages=on\` hears no message or reaction the app itself posted, so a listen on a channel the app also writes to does not run on its own posts or reactions.
+- \`Sent By This App\` is true on a message or reaction the app itself sent, so \`WHERE NOT m.\`Sent By This App\`\` keeps a listen on a channel the app also writes to from running on its own posts. It is false when Slack does not say who the app is.
+- \`User Email\` is the sender's Slack profile address in lower case, null for a member with none or a bot. A press carries \`Pressed By Email\`, the presser's. Slack vouches for both, so a plugin function that wants a claim accepts them where it refuses plain text.
 
 ### a-poll-that-keeps-answering
 
@@ -157,7 +158,7 @@ listen to chat-[:Channels]->-[m:Messages WHERE m.Topic == "lunch-poll" AND m.Tim
 
 ### what-fires-a-run
 
-Slack delivers only the events its app is subscribed to, so an automation reading Slack usually fires on the bot being mentioned rather than on every message in a channel; narrow with \`Mentions App\` and the channel's \`Name\` in the listen. A run also needs the person who sent the message (or added the reaction) to be a known member of the team, matched on their Slack profile email — activity from guests, external members of a shared channel, other bots, and this platform's own posts is dropped before anything runs. A press and a thread reply are different: they reach the run waiting on their message whoever made them, so say in a \`WHERE\` whose answer counts when it matters. Slack only sends what its app is set up to send: presses need interactivity switched on, messages and replies the message events subscribed, and a listen on \`Reactions\` the \`reaction_added\` event. Point both of the app's request URLs, Interactivity's and Event Subscriptions', at the connection's door, the address your host gives for it: \`listen-fire serve\` prints it for every Slack connection a run can wait on, whether or not a listen names the connection.
+Slack delivers only the events its app is subscribed to, so an automation reading Slack usually fires on the bot being mentioned rather than on every message in a channel; narrow with \`Mentions App\` and the channel's \`Name\` in the listen. A listen hears whoever Slack delivers — guests, external members of a shared channel, other bots and the app itself — so narrow with \`User Email\` and \`Sent By This App\` when it matters. A press and a thread reply reach the run waiting on their message whoever made them, so say in a \`WHERE\` whose answer counts when it matters. Slack only sends what its app is set up to send: presses need interactivity switched on, messages and replies the message events subscribed, and a listen on \`Reactions\` the \`reaction_added\` event. Point both of the app's request URLs, Interactivity's and Event Subscriptions', at the connection's door, the address your host gives for it: \`listen-fire serve\` prints it for every Slack connection a run can wait on, whether or not a listen names the connection.
 
 ### Common mistakes
 

@@ -190,8 +190,8 @@ fn report_step(typing: &mut Typing, from: &Position, edge: &str, filter: Option<
                 typing.report(codes::TRAVERSE_UNKNOWN_EDGE, message);
             }
             Some(local_edge) => {
-                if local_edge.schema.listenable == Some(true) && typing.awaited && filter.is_some_and(|f| !is_pure_predicate(f)) {
-                    report_await_impure_where(typing, edge);
+                if local_edge.schema.listenable == Some(true) && typing.awaited {
+                    report_await_unjudgeable(typing, edge, filter);
                 }
             }
         },
@@ -204,9 +204,7 @@ fn report_step(typing: &mut Typing, from: &Position, edge: &str, filter: Option<
 /// allows.
 fn report_listenable_step(typing: &mut Typing, owner: &str, edge: &str, readable: bool, filter: Option<&Expression>) {
     if typing.awaited {
-        if filter.is_some_and(|f| !is_pure_predicate(f)) {
-            report_await_impure_where(typing, edge);
-        }
+        report_await_unjudgeable(typing, edge, filter);
         return;
     }
     if !readable {
@@ -215,6 +213,26 @@ fn report_listenable_step(typing: &mut Typing, owner: &str, edge: &str, readable
         return;
     }
     typing.watchable_reads.push(edge.to_string());
+}
+
+/// MOV_AWAIT_IMPURE_WHERE: a wait's WHERE is judged against each candidate,
+/// so it reads only the record and literals, and calls only pure functions.
+fn report_await_unjudgeable(typing: &mut Typing, edge: &str, filter: Option<&Expression>) {
+    let Some(filter) = filter else { return };
+    let env = typing.env;
+    let purity = |name: &str| env.plugin(name).map(|spec| spec.pure());
+    if is_judgeable_predicate(filter, &purity) {
+        return;
+    }
+    match unjudgeable_call(filter, &purity) {
+        Some((name, why)) => typing.report(
+            codes::AWAIT_IMPURE_WHERE,
+            format!(
+                "The WHERE on '-[:{edge}]->' calls '{name}', which {why} — an 'await' judges its condition against each candidate without re-running the movement, so it calls only pure functions: a built-in that reads no clock, model or source, or a plugin that declares itself pure."
+            ),
+        ),
+        None => report_await_impure_where(typing, edge),
+    }
 }
 
 fn report_await_impure_where(typing: &mut Typing, edge: &str) {
@@ -790,6 +808,9 @@ fn report_read(typing: &mut Typing, position: &Position, property: &str) {
             if schema.open_properties == Some(true) || report_edge_read_as_field(typing, position, &FieldRead { root: None, property, rest: &[] }, None) {
                 return;
             }
+            if crate::families::claims::report_actor_retired(typing, position, schema, property) {
+                return;
+            }
             let mut available: Vec<&str> = schema.properties.keys().map(String::as_str).collect();
             available.extend(write_typed.iter().map(String::as_str).filter(|name| !schema.properties.contains_key(*name)));
             let hint = match p.instance.schema.narrow_by.as_ref().and_then(|n| n.get(&p.position)).map(Vec::as_slice) {
@@ -1278,28 +1299,102 @@ fn collect_filter_predicates(expr: &Expression) -> Vec<(String, (&'static str, &
 /// `isPurePredicate`: every node is one the shared filter unit evaluates
 /// with no adapter, no AI and no walk.
 pub fn is_pure_predicate(expr: &Expression) -> bool {
+    predicate_of(expr, &|_| false)
+}
+
+/// Whether the name a filter calls is a plugin, and if so whether it declares
+/// itself pure; `None` when the name is no plugin.
+pub type PluginPurity<'a> = &'a dyn Fn(&str) -> Option<bool>;
+
+/// Whether a listen's filter or a wait's WHERE can be judged on each
+/// arrival: `is_pure_predicate`, and a call too when what it calls gives the
+/// same answer for the same arguments and its arguments are judged alike. A
+/// call is never pushed down to a module, so pushdown keeps
+/// `is_pure_predicate`.
+pub fn is_judgeable_predicate(expr: &Expression, purity: PluginPurity) -> bool {
+    predicate_of(expr, &|call| match call {
+        Expression::Function { fn_, args } => impurity_of(fn_, purity).is_none() && args.iter().all(|arg| is_judgeable_predicate(arg, purity)),
+        _ => false,
+    })
+}
+
+/// The pure-predicate shape, a call admitted as `call` says.
+fn predicate_of(expr: &Expression, call: &dyn Fn(&Expression) -> bool) -> bool {
+    let each = |e: &Expression| predicate_of(e, call);
     match expr {
-        Expression::Traverse { steps, expression, .. } => steps.is_empty() && is_pure_predicate(expression),
+        Expression::Traverse { steps, expression, .. } => steps.is_empty() && each(expression),
         Expression::Static { .. } | Expression::Property { .. } | Expression::EdgeProperty { .. } | Expression::AliasRef { .. } | Expression::Meta { .. } => {
             true
         }
         Expression::List { elements } => elements.iter().all(|e| match e {
-            ListElement::Expression(e) => is_pure_predicate(e),
-            ListElement::Spread(s) => is_pure_predicate(&s.expression),
+            ListElement::Expression(e) => each(e),
+            ListElement::Spread(s) => each(&s.expression),
         }),
-        Expression::Compare { left, right, .. } | Expression::Arithmetic { left, right, .. } => is_pure_predicate(left) && is_pure_predicate(right),
-        Expression::Logical { operands, .. } => operands.iter().all(is_pure_predicate),
-        Expression::Not { expression } | Expression::Negate { expression } => is_pure_predicate(expression),
-        Expression::Concat { parts } => parts.iter().all(is_pure_predicate),
-        Expression::Conditional { condition, then, else_ } => is_pure_predicate(condition) && is_pure_predicate(then) && is_pure_predicate(else_),
-        Expression::At { expression, index } => is_pure_predicate(expression) && is_pure_predicate(index),
+        Expression::Compare { left, right, .. } | Expression::Arithmetic { left, right, .. } => each(left) && each(right),
+        Expression::Logical { operands, .. } => operands.iter().all(each),
+        Expression::Not { expression } | Expression::Negate { expression } => each(expression),
+        Expression::Concat { parts } => parts.iter().all(each),
+        Expression::Conditional { condition, then, else_ } => each(condition) && each(then) && each(else_),
+        Expression::At { expression, index } => each(expression) && each(index),
+        // A field of a call's answer is judged as the call is.
+        Expression::Field { expression, .. } => each(expression),
+        Expression::Function { .. } => call(expr),
         _ => false,
     }
 }
 
+/// Why a call in a filter cannot be judged on each arrival, in words after
+/// its name; `None` when it can: a built-in that declares no effect (no
+/// clock, no model, no source read), or a plugin that declares itself pure.
+pub fn impurity_of(fn_: &str, purity: PluginPurity) -> Option<String> {
+    if let Some(pure) = purity(fn_) {
+        return (!pure).then(|| "does not declare itself pure, so its answer to the same value could change from one arrival to the next".to_string());
+    }
+    let Some(builtin) = crate::types::stdlib::builtin_under(&fn_.to_ascii_uppercase()) else {
+        return Some("is neither a built-in nor a plugin this program imports, and only a run calls anything else".to_string());
+    };
+    let effects = builtin.effects;
+    if matches!(builtin.returns, crate::types::stdlib::Returns::Never) {
+        Some("fails the run, and a filter cannot fail: it answers yes or no for each arrival".to_string())
+    } else if effects.now {
+        Some("reads the clock".to_string())
+    } else if effects.ai {
+        Some("calls a model".to_string())
+    } else if let Some(source) = effects.reads.first() {
+        Some(format!("reads {source}"))
+    } else {
+        None
+    }
+}
+
+/// A callee that cannot be judged on each arrival, as the program spells
+/// it, and why.
+pub fn unjudgeable_callee(fn_: &str, purity: PluginPurity) -> Option<(String, String)> {
+    let why = impurity_of(fn_, purity)?;
+    let spelled = if purity(fn_).is_some() { fn_.to_string() } else { movement_parser::surface::table::spell(fn_) };
+    Some((spelled, why))
+}
+
+/// The first call in `expr` that cannot be judged on each arrival, as the
+/// program spells it, and why.
+pub fn unjudgeable_call(expr: &Expression, purity: PluginPurity) -> Option<(String, String)> {
+    if let Expression::Function { fn_, .. } = expr
+        && let Some(found) = unjudgeable_callee(fn_, purity)
+    {
+        return Some(found);
+    }
+    crate::families::values::sub_expressions(expr).into_iter().find_map(|e| unjudgeable_call(e, purity))
+}
+
+/// Whether `expr` calls a plugin, which the host answers.
+pub fn asks_host(expr: &Expression, purity: PluginPurity) -> bool {
+    matches!(expr, Expression::Function { fn_, .. } if purity(fn_).is_some())
+        || crate::families::values::sub_expressions(expr).into_iter().any(|e| asks_host(e, purity))
+}
+
 /// Called by the type core for each `@key` read (`checkMetaKey`).
 pub fn observe_meta(typing: &mut Typing, key: &str) {
-    if META_KEYS.contains(&key) {
+    if META_KEYS.contains(&key) || crate::families::claims::report_acting_user_retired(typing, key) {
         return;
     }
     let closest = closest_by_edit_distance(key, META_KEYS);
@@ -1310,7 +1405,7 @@ pub fn observe_meta(typing: &mut Typing, key: &str) {
 }
 
 /// `MOVEMENT_META_KEYS`, in the TypeScript's order (the first closest wins).
-const META_KEYS: &[&str] = &["current_date", "current_timestamp", "user_email", "user_name", "user_id", "actor_email", "actor_name", "actor_id"];
+const META_KEYS: &[&str] = &["current_date", "current_timestamp"];
 
 /// `didYouMean`: ` — did you mean 'x'?` when a close candidate exists.
 pub fn did_you_mean(value: &str, candidates: &[&str]) -> String {

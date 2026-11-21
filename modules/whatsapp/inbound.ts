@@ -11,11 +11,10 @@
 
 import { z } from 'zod';
 
-import type { ActorIdentity, Arrival } from 'engine-contracts';
+import type { Arrival } from 'engine-contracts';
 
-import { normalizeWhatsappPhone } from './phone';
+import { normalizeWhatsappPhone, whatsappE164 } from './phone';
 import {
-  WHATSAPP_ADAPTER_TYPE,
   WHATSAPP_ARRIVAL_EDGES,
   WHATSAPP_LOCATION_DISPLAY_NAME,
   WHATSAPP_MESSAGE_DISPLAY_NAME,
@@ -118,6 +117,7 @@ export function normalizeMetaMessage(
   return {
     messageId: message.id,
     from: normalizeWhatsappPhone(message.from) ?? message.from,
+    senderPhone: whatsappE164(message.from),
     to: ctx.businessNumber ? normalizeWhatsappPhone(ctx.businessNumber) ?? ctx.businessNumber : '',
     ...(ctx.businessPhoneNumberId ? { businessPhoneNumberId: ctx.businessPhoneNumberId } : {}),
     body: message.text?.body ?? media?.caption ?? '',
@@ -151,6 +151,7 @@ export function classifyMetaMessage(
   const common = {
     messageId: message.id,
     from: normalizeWhatsappPhone(message.from) ?? message.from,
+    senderPhone: whatsappE164(message.from),
     waId: message.from,
     profileName: ctx.profileName,
     timestamp: message.timestamp,
@@ -207,10 +208,13 @@ function instantOf(timestamp: string | undefined): string | undefined {
 /** A record's fields under the names the schema gives them, the ones a
  *  listen's WHERE compares. Absent values are left out. */
 function schemaFields(kind: WhatsappEventKind, payload: Record<string, unknown>): Record<string, unknown> {
+  // The sender's number is read from a request the module has checked against
+  // the Meta app's secret (a missing secret refuses the request), which is why
+  // `Sender Phone` is a claim.
   const named: Record<WhatsappEventKind, Record<string, string>> = {
-    message: { 'Message Id': 'messageId', From: 'from', To: 'to', Body: 'body', 'WhatsApp Id': 'waId', 'Profile Name': 'profileName', Timestamp: 'timestamp' },
-    reaction: { Emoji: 'emoji', 'Reacted Message Id': 'reactedMessageId', 'Message Id': 'messageId', From: 'from', 'Profile Name': 'profileName', Timestamp: 'timestamp' },
-    location: { Latitude: 'latitude', Longitude: 'longitude', Name: 'name', Address: 'address', 'Message Id': 'messageId', From: 'from', 'Profile Name': 'profileName', Timestamp: 'timestamp' },
+    message: { 'Message Id': 'messageId', From: 'from', 'Sender Phone': 'senderPhone', To: 'to', Body: 'body', 'WhatsApp Id': 'waId', 'Profile Name': 'profileName', Timestamp: 'timestamp' },
+    reaction: { Emoji: 'emoji', 'Reacted Message Id': 'reactedMessageId', 'Message Id': 'messageId', From: 'from', 'Sender Phone': 'senderPhone', 'Profile Name': 'profileName', Timestamp: 'timestamp' },
+    location: { Latitude: 'latitude', Longitude: 'longitude', Name: 'name', Address: 'address', 'Message Id': 'messageId', From: 'from', 'Sender Phone': 'senderPhone', 'Profile Name': 'profileName', Timestamp: 'timestamp' },
   };
   return Object.fromEntries(Object.entries(named[kind]).flatMap(([field, key]) => (payload[key] === undefined ? [] : [[field, payload[key]]])));
 }
@@ -232,41 +236,12 @@ export function readString(payload: Record<string, unknown>, ...keys: string[]):
 }
 
 /**
- * Read the raw sender value from the payload, tolerating both the TG-side
- * `from` field and the raw Twilio `From` key (which carries the
- * `whatsapp:` prefix).
- */
-function readSender(payload: Record<string, unknown>): string | undefined {
-  return readString(payload, 'from', 'From');
-}
-
-/**
  * Read the sender's WhatsApp profile display name, tolerating both the
  * TG-side `profileName` field and the raw Twilio `ProfileName` key.
  */
 export function readProfileName(payload: Record<string, unknown>): string | null {
   const name = readString(payload, 'profileName', 'ProfileName');
   return name ? name.trim() : null;
-}
-
-/** Who sent a message, as the door names them on its arrival: the bare phone
- *  number of its sender, with the profile name as `name` and `label` when
- *  there is one. None when the message names no number. `proven`: the number
- *  is read from a request the module has checked against the Meta app's
- *  secret; a missing secret refuses the request, and a replay is a request
- *  the host kept after it was admitted. */
-function whatsappActorOf(message: Record<string, unknown>): ActorIdentity | undefined {
-  const phone = normalizeWhatsappPhone(readSender(message));
-  if (!phone) return undefined;
-  const profileName = readProfileName(message);
-  return {
-    identifier: phone,
-    scheme: 'phone',
-    adapterType: WHATSAPP_ADAPTER_TYPE,
-    ...(profileName !== null ? { name: profileName } : {}),
-    label: profileName ?? phone,
-    proven: true,
-  };
 }
 
 /**
@@ -294,12 +269,10 @@ export function whatsappInboundArrivals(body: unknown): Arrival[] {
         const { kind, payload } = classified;
         const occurredAt = instantOf(message.timestamp);
         const fields = { ...payload, ...schemaFields(kind, payload) };
-        const actor = whatsappActorOf(fields);
         arrivals.push({
           edge: WHATSAPP_ARRIVAL_EDGES[kind],
           identity: message.id,
           landing: { recordId: message.id, recordType: LANDS_ON[kind], fields },
-          ...(actor !== undefined ? { actor } : {}),
           ...(kind === 'reaction' && message.reaction !== undefined
             ? { about: { recordType: WHATSAPP_MESSAGE_DISPLAY_NAME, externalId: message.reaction.message_id } }
             : {}),

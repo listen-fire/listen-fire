@@ -80,7 +80,7 @@ pub fn check_parsed(file: &MovementFile, parsed: &Result<Program, ParseError>, c
             fix: None,
         }]);
     }
-    let options = CheckOptions { upgrading_from: None, zones: &NativeZones };
+    let options = CheckOptions { upgrading_from: None, limiting_function: None, zones: &NativeZones };
     let diagnostics = movement_checker::check_source(&file.source, catalog, options)
         .map_err(|refusal| format!("the Rust checker refused {}: {}", file.path.display(), refusal.message))?;
     Ok(diagnostics
@@ -311,7 +311,7 @@ async fn describe_connection(running: &RunningExternal, credentials: &Credential
         }
     };
     let walker = Walker::new(&walk, adapter_type);
-    let refining = Refining { adapter: &running.external.manifest.name, entries: &entries, methods: &running.methods, walker: &walker };
+    let refining = Refining { adapter: &running.external.manifest.name, entries: &entries, walker: &walker };
     let schema = refine_instance_schema(described.clone(), &chains.iter().collect::<Vec<_>>(), &refining).await?;
     Ok(Some(Described { entries, described, chains, schema, position_options }))
 }
@@ -477,9 +477,7 @@ pub(crate) async fn describe_as(running: &RunningExternal, credentials: &Credent
             return Err(format!("Remote adapter \"{name}\" declares {refusal}"));
         }
     }
-    let offered = crate::actor::with_actor_descriptors(&crate::actor::Introspection { entries: &entry_list, descriptors: &descriptors, methods: &running.methods });
-    offered.say_kept(name);
-    let schema = describe_external_schema(name, &Introspected { entries: &entry_list, reached: &offered.reached, descriptors: &offered.descriptors });
+    let schema = describe_external_schema(name, &Introspected { entries: &entry_list, reached: &[], descriptors: &descriptors });
     Ok((entry_list, schema))
 }
 

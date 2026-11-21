@@ -5,9 +5,8 @@
 
 import { randomUUID } from 'node:crypto';
 
-import { refuseUnsupportedHostFamiliesVersion, type ActingPrincipal, type TenantId } from 'engine-contracts';
+import { refuseUnsupportedHostFamiliesVersion, type TenantId } from 'engine-contracts';
 import type { CostLine } from '../../lib/run_cost';
-import type { ActingUser, ActorCandidate } from '../translation_graph/adapter';
 import type { SegmentWriteLocks } from '../write_locks/write_locks';
 import type { MovementTraceEntry } from './run_types';
 import type { EngineHost, SegmentOpening } from './host';
@@ -79,24 +78,6 @@ export class SegmentDirectory {
 export interface QueuedWake {
   teamId: TenantId;
   waitId: string;
-}
-
-/** An acting-user lookup with the source's candidates as a call: what the
- *  host's resolver works from, and what a test's lookup is handed. */
-export interface ActingUserLookup {
-  teamId: TenantId;
-  triggerId?: string;
-  getCandidates: () => Promise<ActorCandidate[]>;
-}
-
-/** A team user as the lookup answers it: the user's id as the principal's
- *  opaque reference, its name to show, and its email, which this host has. */
-export function actingPrincipalOf(user: ActingUser | null): ActingPrincipal | null {
-  if (user === null) return null;
-  return {
-    principal: { id: user.id, ...(typeof user.name === 'string' ? { display: user.name } : {}) },
-    email: user.email,
-  };
 }
 
 /** A host's `trace` family over an array a caller reads as the run goes. */

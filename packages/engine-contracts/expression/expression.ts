@@ -22,166 +22,188 @@ import type { Expression } from 'movement-lang/expression/types';
 // The inferred output of this schema doesn't perfectly match Expression because
 // traversalStepSchema uses z.unknown() for EdgeStep.filter. The cast is safe —
 // the schema accepts a superset of valid Expressions.
-const _expressionSchema: z.ZodTypeAny = z.lazy(() =>
-  z.union([
-    // Leaves
-    // `fieldOnly`: a hop's alias read (`m.email`), the record's own field
-    // even where a name of the same text is in scope.
-    z.object({ type: z.literal('property'), propertyTypeId: z.string(), fieldOnly: z.literal(true).optional() }),
-    z.object({ type: z.literal('edge_property'), propertyTypeId: z.string(), fieldOnly: z.literal(true).optional() }),
-    z.object({ type: z.literal('static'), value: z.union([z.string(), z.number(), z.boolean(), z.null()]) }),
-    z.object({ type: z.literal('llm'), prompt: z.string(), promptExpression: _expressionSchema.optional(), tier: z.string().optional() }),
-    z.object({ type: z.literal('meta'), key: z.string() }),
-    z.object({ type: z.literal('parent_result'), field: z.enum(['created', 'external_id']) }),
-    // `action_result` — a previously-applied action's result (write-handle
-    // reads). `field` is 'created' / 'external_id' or a written-field /
-    // result-data name. Compiler-emitted; serializer-led (no parser entry).
-    z.object({ type: z.literal('action_result'), nodeId: z.string(), field: z.string() }),
-    z.object({ type: z.literal('resource'), field: z.enum(['name', 'url', 'type', 'document_url', 'content', 'contentType']) }),
-    z.object({ type: z.literal('linked_object'), adapter: z.string(), field: z.string() }),
-    // TG-parity leaves (F3 — see plans/2026-05-19-tg-extraction-parity/expression_syntax.md)
-    // `extract_value` — LLM-scalar extraction sub-prompt; valid only inside
-    // an ancestral `#extract` meta-edge (enforced by validateTgExpression).
-    z.object({ type: z.literal('extract_value'), description: z.string() }),
-    // `alias_ref` — bare-name reference to an alias bound by an ancestor
-    // cypher bracket or trigger binding.
-    z.object({ type: z.literal('alias_ref'), name: z.string() }),
-    // `list` — set literal used inside meta-edge config objects
-    // (notably `#extract`'s `data:` parameter).
-    // A member is a value or a spread of a collection's (`[a, ...xs]`).
-    z.object({
-      type: z.literal('list'),
-      elements: z.array(z.union([
-        _expressionSchema,
-        z.object({ type: z.literal('spread'), expression: _expressionSchema }),
-      ])),
-    }),
-    // `object` — object literal (`{ key: expr, … }`); keys are the target
-    // API's verbatim spelling, values are ordinary expressions. A member is
-    // an entry or a spread of another object (`{ ...xs, k: v }`).
-    z.object({
-      type: z.literal('object'),
-      entries: z.array(z.union([
-        z.object({ key: z.string(), value: _expressionSchema }),
-        z.object({ type: z.literal('spread'), expression: _expressionSchema }),
-      ])),
-    }),
-    // Traversal — `aliasRoot` (optional) starts the walk from a named
-    // alias's bound position instead of the surrounding context. F3 emits
-    // this for dot-chains (`opp.company`) and alias-rooted walks
-    // (`msg-[:Author]->.email`).
-    z.object({
-      type: z.literal('traverse'),
-      aliasRoot: z.string().optional(),
-      steps: z.array(traversalStepSchema),
-      expression: _expressionSchema,
-      // `x?.F`: written knowing the root may be missing. It reads as `x.F`
-      // does (absent when the root is); only the checker tells them apart.
-      optional: z.boolean().optional(),
-    }),
-    // Quantifier — `exists` returns true iff the traversal yields at least
-    // one position satisfying `where` (or any position when `where` is
-    // absent). Adapter-uniform substitute for canned predicates like
-    // "is in list X".
-    z.object({
-      type: z.literal('exists'),
-      steps: z.array(traversalStepSchema),
-      where: _expressionSchema.optional(),
-    }),
-    // Resource traversal
-    z.object({
-      type: z.literal('resource_traverse'),
-      filter: z.object({
-        resourceType: z.enum(['URL', 'EMAIL', 'WHATSAPP', 'FILE', 'TEXT']).optional(),
-        hasDocument: z.boolean().optional(),
-        mimeType: z.string().optional(),
-        namePattern: z.string().optional(),
-      }).optional(),
-      expressionFilter: _expressionSchema.optional(),
-      expression: _expressionSchema,
-    }),
-    // Operations
-    z.object({
-      type: z.literal('arithmetic'),
-      op: z.enum(['+', '-', '*', '/', '%']),
-      left: _expressionSchema,
-      right: _expressionSchema,
-    }),
-    z.object({
-      type: z.literal('compare'),
-      op: z.enum(['eq', 'neq', 'contains', 'gt', 'gte', 'lt', 'lte', 'exists', 'in', 'within']),
-      left: _expressionSchema,
-      right: _expressionSchema,
-    }),
-    z.object({
-      type: z.literal('logical'),
-      op: z.enum(['and', 'or']),
-      operands: z.array(_expressionSchema),
-    }),
-    z.object({ type: z.literal('not'), expression: _expressionSchema }),
-    z.object({ type: z.literal('negate'), expression: _expressionSchema }),
-    z.object({ type: z.literal('concat'), parts: z.array(_expressionSchema) }),
-    z.object({
-      type: z.literal('conditional'),
-      condition: _expressionSchema,
-      then: _expressionSchema,
-      else: _expressionSchema,
-    }),
-    z.object({
-      type: z.literal('at'),
-      expression: _expressionSchema,
-      index: _expressionSchema,
-    }),
-    // Aggregation
-    z.object({
-      type: z.literal('aggregate'),
-      fn: z.enum(['first', 'last', 'only', 'count', 'sum', 'avg', 'min', 'max', 'join', 'collect', 'sort', 'llm']),
-      expression: _expressionSchema,
-      separator: z.string().optional(),
-      prompt: z.string().optional(),
-      // `SORT`'s key is an expression over the element; a FieldRef is the
-      // older spelling of the same.
-      orderBy: z.union([legacyOrderKeySchema, _expressionSchema]).optional(),
-      orderDirection: z.enum(['asc', 'desc']).optional(),
-    }),
-    // Functions
-    z.object({
-      type: z.literal('function'),
-      fn: z.enum([
-        'isnull', 'coalesce', 'trim', 'lower', 'upper', 'length',
-        'abs', 'round', 'floor', 'ceil', 'tostring', 'tonumber',
-        // Array constructors — produce a multi-cardinality value from
-        // scalar inputs. Pair with the adapter-side `isMulti` write-path
-        // so multi-select target fields receive a real array.
-        'multi', 'split',
-        // Recency-window predicate for uniqueness constraints —
-        // `within(<dateProperty>, "<interval>")`. The uniqueness-constraint
-        // validator (`ALLOWED_FUNCTIONS`), the SQL `compileExpressionToWhere`
-        // path, and the Attio adapter's `resolveByConstraints` within branch
-        // all consume this shape; it was absent from this persisted-schema
-        // enum, so `setNodeUniquenessConstraints` built a valid `within`
-        // expression that then failed the TG-body Zod parse on save —
-        // rolling back the agent's whole batch (INV3, trial3-fix). Adding it
-        // here closes the gap between the runtime contract and the schema.
-        // within is a persistable function expr
-        'within',
-      ]),
-      args: z.array(_expressionSchema),
-    }),
-    // Knowledge graph queries
-    z.object({
-      type: z.literal('kg_exists'),
-      query: z.string(),
-      params: z.array(_expressionSchema),
-    }),
-    z.object({
-      type: z.literal('kg_value'),
-      query: z.string(),
-      params: z.array(_expressionSchema),
-    }),
+//
+// The functions a persisted body may call are a fixed list; a listen plan's
+// filter calls any built-in by its canonical name (`text.regex_extract`) and
+// a pure plugin by its catalog key (`@lf-platform/team/isMember`), so its
+// schema takes the function's name as `functionName` says.
+function expressionSchemaCalling(functionName: z.ZodType<string>): z.ZodTypeAny {
+  const _expressionSchema: z.ZodTypeAny = z.lazy(() =>
+    z.union([
+      // Leaves
+      // `fieldOnly`: a hop's alias read (`m.email`), the record's own field
+      // even where a name of the same text is in scope.
+      z.object({ type: z.literal('property'), propertyTypeId: z.string(), fieldOnly: z.literal(true).optional() }),
+      z.object({ type: z.literal('edge_property'), propertyTypeId: z.string(), fieldOnly: z.literal(true).optional() }),
+      z.object({ type: z.literal('static'), value: z.union([z.string(), z.number(), z.boolean(), z.null()]) }),
+      z.object({ type: z.literal('llm'), prompt: z.string(), promptExpression: _expressionSchema.optional(), tier: z.string().optional() }),
+      z.object({ type: z.literal('meta'), key: z.string() }),
+      z.object({ type: z.literal('parent_result'), field: z.enum(['created', 'external_id']) }),
+      // `action_result` — a previously-applied action's result (write-handle
+      // reads). `field` is 'created' / 'external_id' or a written-field /
+      // result-data name. Compiler-emitted; serializer-led (no parser entry).
+      z.object({ type: z.literal('action_result'), nodeId: z.string(), field: z.string() }),
+      z.object({ type: z.literal('resource'), field: z.enum(['name', 'url', 'type', 'document_url', 'content', 'contentType']) }),
+      z.object({ type: z.literal('linked_object'), adapter: z.string(), field: z.string() }),
+      // TG-parity leaves (F3 — see plans/2026-05-19-tg-extraction-parity/expression_syntax.md)
+      // `extract_value` — LLM-scalar extraction sub-prompt; valid only inside
+      // an ancestral `#extract` meta-edge (enforced by validateTgExpression).
+      z.object({ type: z.literal('extract_value'), description: z.string() }),
+      // `alias_ref` — bare-name reference to an alias bound by an ancestor
+      // cypher bracket or trigger binding.
+      z.object({ type: z.literal('alias_ref'), name: z.string() }),
+      // `list` — set literal used inside meta-edge config objects
+      // (notably `#extract`'s `data:` parameter).
+      // A member is a value or a spread of a collection's (`[a, ...xs]`).
+      z.object({
+        type: z.literal('list'),
+        elements: z.array(z.union([
+          _expressionSchema,
+          z.object({ type: z.literal('spread'), expression: _expressionSchema }),
+        ])),
+      }),
+      // `object` — object literal (`{ key: expr, … }`); keys are the target
+      // API's verbatim spelling, values are ordinary expressions. A member is
+      // an entry or a spread of another object (`{ ...xs, k: v }`).
+      z.object({
+        type: z.literal('object'),
+        entries: z.array(z.union([
+          z.object({ key: z.string(), value: _expressionSchema }),
+          z.object({ type: z.literal('spread'), expression: _expressionSchema }),
+        ])),
+      }),
+      // Traversal — `aliasRoot` (optional) starts the walk from a named
+      // alias's bound position instead of the surrounding context. F3 emits
+      // this for dot-chains (`opp.company`) and alias-rooted walks
+      // (`msg-[:Author]->.email`).
+      z.object({
+        type: z.literal('traverse'),
+        aliasRoot: z.string().optional(),
+        steps: z.array(traversalStepSchema),
+        expression: _expressionSchema,
+        // `x?.F`: written knowing the root may be missing. It reads as `x.F`
+        // does (absent when the root is); only the checker tells them apart.
+        optional: z.boolean().optional(),
+      }),
+      // Quantifier — `exists` returns true iff the traversal yields at least
+      // one position satisfying `where` (or any position when `where` is
+      // absent). Adapter-uniform substitute for canned predicates like
+      // "is in list X".
+      z.object({
+        type: z.literal('exists'),
+        steps: z.array(traversalStepSchema),
+        where: _expressionSchema.optional(),
+      }),
+      // Resource traversal
+      z.object({
+        type: z.literal('resource_traverse'),
+        filter: z.object({
+          resourceType: z.enum(['URL', 'EMAIL', 'WHATSAPP', 'FILE', 'TEXT']).optional(),
+          hasDocument: z.boolean().optional(),
+          mimeType: z.string().optional(),
+          namePattern: z.string().optional(),
+        }).optional(),
+        expressionFilter: _expressionSchema.optional(),
+        expression: _expressionSchema,
+      }),
+      // Operations
+      z.object({
+        type: z.literal('arithmetic'),
+        op: z.enum(['+', '-', '*', '/', '%']),
+        left: _expressionSchema,
+        right: _expressionSchema,
+      }),
+      z.object({
+        type: z.literal('compare'),
+        op: z.enum(['eq', 'neq', 'contains', 'gt', 'gte', 'lt', 'lte', 'exists', 'in', 'within']),
+        left: _expressionSchema,
+        right: _expressionSchema,
+      }),
+      z.object({
+        type: z.literal('logical'),
+        op: z.enum(['and', 'or']),
+        operands: z.array(_expressionSchema),
+      }),
+      z.object({ type: z.literal('not'), expression: _expressionSchema }),
+      z.object({ type: z.literal('negate'), expression: _expressionSchema }),
+      z.object({ type: z.literal('concat'), parts: z.array(_expressionSchema) }),
+      z.object({
+        type: z.literal('conditional'),
+        condition: _expressionSchema,
+        then: _expressionSchema,
+        else: _expressionSchema,
+      }),
+      z.object({
+        type: z.literal('at'),
+        expression: _expressionSchema,
+        index: _expressionSchema,
+      }),
+      z.object({
+        type: z.literal('field'),
+        expression: _expressionSchema,
+        field: z.string(),
+        optional: z.boolean().optional(),
+      }),
+      // Aggregation
+      z.object({
+        type: z.literal('aggregate'),
+        fn: z.enum(['first', 'last', 'only', 'count', 'sum', 'avg', 'min', 'max', 'join', 'collect', 'sort', 'llm']),
+        expression: _expressionSchema,
+        separator: z.string().optional(),
+        prompt: z.string().optional(),
+        // `SORT`'s key is an expression over the element; a FieldRef is the
+        // older spelling of the same.
+        orderBy: z.union([legacyOrderKeySchema, _expressionSchema]).optional(),
+        orderDirection: z.enum(['asc', 'desc']).optional(),
+      }),
+      // Functions
+      z.object({
+        type: z.literal('function'),
+        fn: functionName,
+        args: z.array(_expressionSchema),
+      }),
+      // Knowledge graph queries
+      z.object({
+        type: z.literal('kg_exists'),
+        query: z.string(),
+        params: z.array(_expressionSchema),
+      }),
+      z.object({
+        type: z.literal('kg_value'),
+        query: z.string(),
+        params: z.array(_expressionSchema),
+      }),
+    ]),
+  );
+  return _expressionSchema;
+}
+
+const expressionSchema = expressionSchemaCalling(
+  z.enum([
+    'isnull', 'coalesce', 'trim', 'lower', 'upper', 'length',
+    'abs', 'round', 'floor', 'ceil', 'tostring', 'tonumber',
+    // Array constructors — produce a multi-cardinality value from
+    // scalar inputs. Pair with the adapter-side `isMulti` write-path
+    // so multi-select target fields receive a real array.
+    'multi', 'split',
+    // Recency-window predicate for uniqueness constraints —
+    // `within(<dateProperty>, "<interval>")`. The uniqueness-constraint
+    // validator (`ALLOWED_FUNCTIONS`), the SQL `compileExpressionToWhere`
+    // path, and the Attio adapter's `resolveByConstraints` within branch
+    // all consume this shape; it was absent from this persisted-schema
+    // enum, so `setNodeUniquenessConstraints` built a valid `within`
+    // expression that then failed the TG-body Zod parse on save —
+    // rolling back the agent's whole batch (INV3, trial3-fix). Adding it
+    // here closes the gap between the runtime contract and the schema.
+    // within is a persistable function expr
+    'within',
   ]),
-);
-const expressionSchema = _expressionSchema as z.ZodType<Expression>;
+) as z.ZodType<Expression>;
+
+/** A listen plan's filter (`PlanHop.taken`, `checked`): an expression whose
+ *  calls are a built-in's or a pure plugin's, by whatever name the plan
+ *  writes. */
+const listenFilterSchema = expressionSchemaCalling(z.string().min(1)) as z.ZodType<Expression>;
 
 // ── Normalizers: convert old-format configs to expressions ──
 
@@ -237,4 +259,4 @@ function fieldMappingToExpression(
   return expr;
 }
 
-export { expressionSchema, selectionToExpression, fieldMappingToExpression };
+export { expressionSchema, listenFilterSchema, selectionToExpression, fieldMappingToExpression };

@@ -11,7 +11,6 @@ import { createServer, type Server } from 'node:http';
 
 import { adapterInProcess, noCredential, refusingFiles, refusingKv } from 'module-kit';
 import { makeMetaPosition } from 'movement-engine/public/catalog';
-import { arrivalTriggerOf } from 'movement-engine/public/inbound';
 
 import { slackModule, slackModuleWith, type SlackHosted } from '../index';
 
@@ -54,9 +53,13 @@ const FILES: Record<string, unknown> = {
   F0: { ok: true, file: { id: 'F0' } },
 };
 
+/** The profile addresses `users.info` answers with (mixed case, as a
+ *  workspace may hold them); U3 has a profile with none. */
+const PROFILE_EMAILS: Record<string, string> = { U1: 'Ada@Example.com ', U2: 'grace@example.com' };
+
 /** A Slack Web API over HTTP, as the module's client reaches it: the
  *  channels it names (`conversations.info`), the app's bot user
- *  (`auth.test`), the files it shares (`files.info`), and every method
+ *  (`auth.test`), the members' profiles (`users.info`), the files it shares (`files.info`), and every method
  *  called, in order. */
 async function slackApi(
   channels: Record<string, string>,
@@ -80,6 +83,7 @@ async function slackApi(
       const answer =
         method === 'auth.test' ? { ok: true, user_id: 'UBOT', bot_id: 'B1' }
         : method === 'files.info' ? (FILES[form.get('file') ?? ''] ?? { ok: false, error: 'file_not_found' })
+        : method === 'users.info' ? { ok: true, user: { id: form.get('user'), profile: { ...(PROFILE_EMAILS[form.get('user') ?? ''] !== undefined ? { email: PROFILE_EMAILS[form.get('user') ?? ''] } : {}) } } }
         : method !== 'conversations.info' ? { ok: true }
         : name === undefined ? { ok: false, error: 'channel_not_found' }
         : { ok: true, channel: { id, name } };
@@ -100,14 +104,13 @@ function unnamedChannel(id: string) {
   return { recordId: id, recordType: 'Channel', fields: { id, name: null, Id: id, Name: null }, unknown: ['Name'] };
 }
 
-function load(input: { credential: ModuleCredential; hosted?: SlackHosted; files?: ModuleFiles; fetch?: typeof fetch; constructionArgs?: Record<string, string>; log?: ModuleLog }) {
+function load(input: { credential: ModuleCredential; hosted?: SlackHosted; files?: ModuleFiles; fetch?: typeof fetch; log?: ModuleLog }) {
   const definition = input.hosted === undefined ? slackModule : slackModuleWith(input.hosted);
   return adapterInProcess(definition, {
     tenant: 'team-1',
     credential: input.credential,
     ...(input.fetch !== undefined ? { fetch: input.fetch } : {}),
     log: input.log ?? silent,
-    ...(input.constructionArgs !== undefined ? { constructionArgs: input.constructionArgs } : {}),
     files: input.files ?? refusingFiles('no files'),
     kv: refusingKv('no kv'),
     validateResults: true,
@@ -202,7 +205,6 @@ describe('@lf/slack', () => {
             edge: 'Messages',
             key: 'C1',
             identity: 'C1:1700000000.000100',
-            actor: { identifier: 'U1', scheme: 'opaque', adapterType: 'slack', label: 'U1', proven: true },
             landing: {
               recordId: 'C1:1700000000.000100',
               recordType: 'Message',
@@ -216,6 +218,8 @@ describe('@lf/slack', () => {
                 timestamp: '2023-11-14T22:13:20.000Z',
                 Topic: null,
                 'Mentions App': true,
+                'User Email': 'ada@example.com',
+                'Sent By This App': false,
               },
             },
             parents: [{ recordId: 'C1', recordType: 'Channel', fields: { id: 'C1', name: 'deals', Id: 'C1', Name: 'deals' } }],
@@ -304,66 +308,104 @@ describe('@lf/slack', () => {
     }
   });
 
-  describe('drop_own_messages', () => {
+  describe('what a message says of its sender', () => {
     const message = (fields: Record<string, unknown>) => ({ type: 'event_callback', event: { type: 'message', channel: 'C1', text: 'hi', ts: '1700000000.000100', ...fields } });
-    const arrived = async (setting: string | undefined, fields: Record<string, unknown>, options: { faults?: Map<string, 'down'>; log?: ModuleLog } = {}) => {
-      const api = await slackApi({ C1: 'deals' }, options.faults);
+    const landed = async (fields: Record<string, unknown>, faults?: Map<string, 'down'>) => {
+      const api = await slackApi({ C1: 'deals' }, faults);
       try {
-        const { adapter } = load({
-          credential: credential({ accessToken: 'xoxb-own', baseUrl: api.baseUrl }),
-          constructionArgs: setting === undefined ? {} : { drop_own_messages: setting },
-          ...(options.log !== undefined ? { log: options.log } : {}),
-        });
-        return (await adapter.preprocessInbound?.({ raw: message(fields) }))?.arrivals ?? [];
+        const { adapter } = load({ credential: credential({ accessToken: 'xoxb-sender', baseUrl: api.baseUrl }) });
+        const [arrival] = (await adapter.preprocessInbound?.({ raw: message(fields) }))?.arrivals ?? [];
+        if (arrival === undefined || !('landing' in arrival)) throw new Error('no message arrived');
+        return arrival.landing;
       } finally {
         await api.close();
       }
     };
 
-    it('is a setting the connection may give, and need not', () => {
+    it('the sender\'s claim is on the event, branded, normalised', async () => {
+      const { adapter } = load({ credential: credential({}) });
+      for (const type of ['Message', 'Reaction']) {
+        const field = (await adapter.describe(type))?.fields.find((f) => f.displayName === 'User Email');
+        expect(field).toMatchObject({ kind: 'string', brands: ['claim:email/address'], mayBeAbsent: true, required: false, writable: false });
+      }
+      const landing = await landed({ user: 'U1' });
+      expect(landing.fields['User Email']).toBe('ada@example.com');
+      expect(landing.unknown).toBeUndefined();
+      // A member whose profile holds no address has none, which Slack did say.
+      const bare = await landed({ user: 'U3' });
+      expect(bare.fields['User Email']).toBeNull();
+      expect(bare.unknown).toBeUndefined();
+      // A bot's post names no member, so no address.
+      expect((await landed({ bot_id: 'B2', subtype: 'bot_message' })).fields['User Email']).toBeNull();
+    });
+
+    it('a member Slack could not be asked about has an unknown address, never none', async () => {
+      const landing = await landed({ user: 'U1' }, new Map([['users.info', 'down']]));
+      expect(landing.fields['User Email']).toBeNull();
+      expect(landing.unknown).toEqual(['User Email']);
+    });
+
+    it('a message the app posted says Sent By This App, by its user id and by its bot id', async () => {
+      expect((await landed({ user: 'UBOT' })).fields['Sent By This App']).toBe(true);
+      expect((await landed({ bot_id: 'B1', subtype: 'bot_message' })).fields['Sent By This App']).toBe(true);
+    });
+
+    it('a message from a person does not, nor does another bot\'s', async () => {
+      expect((await landed({ user: 'U1' })).fields['Sent By This App']).toBe(false);
+      expect((await landed({ bot_id: 'B2', subtype: 'bot_message' })).fields['Sent By This App']).toBe(false);
+    });
+
+    it('a message where Slack names no app says false', async () => {
+      const faults = new Map<string, 'down'>([['auth.test', 'down']]);
+      expect((await landed({ user: 'UBOT' }, faults)).fields['Sent By This App']).toBe(false);
+      expect((await landed({ user: 'U1' }, faults)).fields['Sent By This App']).toBe(false);
+    });
+
+    it('a reaction says who reacted: their address, and whether the app did', async () => {
+      const api = await slackApi({ C1: 'deals' });
+      try {
+        const { adapter } = load({ credential: credential({ accessToken: 'xoxb-reactor', baseUrl: api.baseUrl }) });
+        const reaction = (user: string) => ({ type: 'event_callback', event: { type: 'reaction_added', user, reaction: 'eyes', item: { type: 'message', channel: 'C1', ts: '1700.1' }, event_ts: '1700000000.000200' } });
+        const fields = async (user: string) => {
+          const [arrival] = (await adapter.preprocessInbound?.({ raw: reaction(user) }))?.arrivals ?? [];
+          return arrival !== undefined && 'landing' in arrival ? [arrival.landing.fields['User Email'], arrival.landing.fields['Sent By This App']] : [];
+        };
+        expect(await fields('U2')).toEqual(['grace@example.com', false]);
+        expect(await fields('UBOT')).toEqual([null, true]);
+      } finally {
+        await api.close();
+      }
+    });
+
+    it('a message read from the channel\'s history says the same as one that arrived', async () => {
+      const api = await slackApi({ C1: 'deals' });
+      try {
+        const { adapter } = load({ credential: credential({ accessToken: 'xoxb-history', baseUrl: api.baseUrl }) });
+        const { makeStablePosition } = await import('movement-engine/public/catalog');
+        const read = (data: Record<string, unknown>, fieldId: string) =>
+          adapter.getFieldValue({ position: makeStablePosition({ adapterType: 'slack', recordType: 'Message', recordId: 'C1:1.1', data: { channel: 'C1', ts: '1.1', ...data } }), fieldId });
+        await expect(read({ user: 'U1' }, 'User Email')).resolves.toBe('ada@example.com');
+        await expect(read({ user: 'U1' }, 'Sent By This App')).resolves.toBe(false);
+        await expect(read({ user: 'UBOT' }, 'Sent By This App')).resolves.toBe(true);
+        await expect(read({ bot_id: 'B1' }, 'Sent By This App')).resolves.toBe(true);
+      } finally {
+        await api.close();
+      }
+    });
+
+    it('declares no drop_own_messages setting: Sent By This App replaces it', () => {
       const { manifest } = load({ credential: credential({ accessToken: 'xoxb-1' }) });
-      expect(manifest.settings).toEqual([expect.objectContaining({ name: 'drop_own_messages', optional: true })]);
+      expect(manifest).not.toHaveProperty('settings');
     });
 
-    it('on, drops a message the app posted, by its user id and by its bot id', async () => {
-      expect(await arrived('on', { user: 'UBOT' })).toEqual([]);
-      expect(await arrived('on', { bot_id: 'B1', subtype: 'bot_message' })).toEqual([]);
+    it('retires drop_own_messages, naming what replaces it', () => {
+      expect(slackModule.manifest.retiredSettings).toEqual([{ name: 'drop_own_messages', instead: 'NOT m.`Sent By This App` on each listen' }]);
     });
 
-    it('on, still delivers another bot, and a member', async () => {
-      expect(await arrived('on', { bot_id: 'B2', subtype: 'bot_message' })).toHaveLength(1);
-      expect(await arrived('on', { user: 'U1' })).toHaveLength(1);
-    });
-
-    it('on, drops the app\'s own reaction too, so a Reactions listen whose run reacts does not fire itself', async () => {
-      const reaction = (user: string) => ({ type: 'reaction_added', user, reaction: 'eyes', item: { type: 'message', channel: 'C1', ts: '1700.1' }, event_ts: '1700000000.000200' });
-      const reacted = async (setting: string | undefined, user: string) => {
-        const api = await slackApi({ C1: 'deals' });
-        try {
-          const { adapter } = load({
-            credential: credential({ accessToken: 'xoxb-own-reaction', baseUrl: api.baseUrl }),
-            constructionArgs: setting === undefined ? {} : { drop_own_messages: setting },
-          });
-          return (await adapter.preprocessInbound?.({ raw: { type: 'event_callback', event: reaction(user) } }))?.arrivals ?? [];
-        } finally {
-          await api.close();
-        }
-      };
-      expect(await reacted('on', 'UBOT')).toEqual([]);
-      expect(await reacted('on', 'U2')).toHaveLength(1);
-      expect(await reacted(undefined, 'UBOT')).toHaveLength(1);
-    });
-
-    it('unset, or anything but "on", delivers the app\'s own message as before', async () => {
-      expect(await arrived(undefined, { user: 'UBOT' })).toHaveLength(1);
-      expect(await arrived('off', { user: 'UBOT' })).toHaveLength(1);
-    });
-
-    it('on, with the app not identifiable, delivers the message and says why it could not tell', async () => {
-      const warn = jest.fn();
-      const arrivals = await arrived('on', { user: 'UBOT' }, { faults: new Map([['auth.test', 'down']]), log: { ...silent, warn } });
-      expect(arrivals).toHaveLength(1);
-      expect(warn).toHaveBeenCalledWith(expect.stringContaining('drop_own_messages'), expect.anything());
+    it('declares no actor identity methods and no registered sender gate', () => {
+      expect(slackModule.manifest.methods).not.toContain('getActorCandidates');
+      expect(slackModule.manifest.methods).not.toContain('extractActor');
+      expect(slackModule.manifest).not.toHaveProperty('inboundRequiresRegisteredActor');
     });
   });
 
@@ -386,10 +428,9 @@ describe('@lf/slack', () => {
             edge: 'Reactions',
             key: 'C1:1700.1',
             identity: 'C1:1700.1:U2:eyes:1700000000.000200',
-            landing: { recordId: 'reaction:C1:1700.1:eyes', recordType: 'Reaction', fields: { ...event, Emoji: 'eyes', Channel: 'C1', Reactor: 'U2' } },
+            landing: { recordId: 'reaction:C1:1700.1:eyes', recordType: 'Reaction', fields: { ...event, Emoji: 'eyes', Channel: 'C1', Reactor: 'U2', 'User Email': 'grace@example.com', 'Sent By This App': false } },
             parents: [{ recordId: 'C1', recordType: 'Channel', fields: { id: 'C1', name: 'deals', Id: 'C1', Name: 'deals' } }],
             about: { recordType: 'Message', externalId: 'C1:1700.1' },
-            actor: { identifier: 'U2', scheme: 'opaque', adapterType: 'slack', label: 'U2', proven: true },
             occurredAt: '2023-11-14T22:13:20.000Z',
           },
         ],
@@ -588,7 +629,7 @@ describe('@lf/slack', () => {
             edge: 'Interactions',
             key: 'C1:1700000000.000100',
             identity: '13345224609.738474920.8088930838d88f008e0',
-            landing: { recordType: 'Interaction', fields: { ...press, Id: press.id, At: '2023-11-14T22:14:20.000Z', pressed_at: '2023-11-14T22:14:20.000Z' } },
+            landing: { recordType: 'Interaction', fields: { ...press, Id: press.id, At: '2023-11-14T22:14:20.000Z', pressed_at: '2023-11-14T22:14:20.000Z', 'Pressed By Email': 'ada@example.com' } },
             parents: [
               { recordId: 'C1', recordType: 'Channel', fields: { id: 'C1', name: 'office', Id: 'C1', Name: 'office' } },
               {
@@ -605,11 +646,12 @@ describe('@lf/slack', () => {
                   timestamp: '2023-11-14T22:13:20.000Z',
                   Topic: 'lunch-poll',
                   'Mentions App': false,
+                  'User Email': null,
+                  'Sent By This App': true,
                 },
               },
             ],
             about: { recordType: 'Message', externalId: 'C1:1700000000.000100' },
-            actor: { identifier: 'U1', scheme: 'opaque', adapterType: 'slack', label: 'U1', proven: true },
             occurredAt: '2023-11-14T22:14:20.000Z',
           },
         ],
@@ -627,11 +669,67 @@ describe('@lf/slack', () => {
       // A press outside a message (a modal) names none, and arrives on nothing.
       const { container: _container, channel: _channel, message: _message, ...modal } = payload;
       await expect(adapter.preprocessInbound?.({ raw: { payload: JSON.stringify(modal) } })).resolves.toEqual({ events: [] });
-      // Nothing listed the channel's history to find the message.
-      expect(api.methods.filter((m) => m !== 'auth.test' && m !== 'conversations.info')).toEqual([]);
+      // Nothing listed the channel's history to find the message; the only
+      // member read is its sender's profile.
+      expect(api.methods.filter((m) => m !== 'auth.test' && m !== 'conversations.info' && m !== 'users.info')).toEqual([]);
     } finally {
       await api.close();
     }
+  });
+
+  describe('what a press says of whoever pressed', () => {
+    const pressBy = (user: string) => ({
+      payload: JSON.stringify({
+        type: 'block_actions',
+        trigger_id: 'trig-claim',
+        user: { id: user },
+        container: { type: 'message', message_ts: '1700000000.000100', channel_id: 'C1' },
+        channel: { id: 'C1' },
+        actions: [{ type: 'button', action_id: 'lf_button_0', value: 'in', action_ts: '1700000060.000900' }],
+      }),
+    });
+    const landed = async (user: string, faults?: Map<string, 'down'>) => {
+      const api = await slackApi({ C1: 'office' }, faults);
+      try {
+        const { adapter } = load({ credential: credential({ accessToken: 'xoxb-pressers', baseUrl: api.baseUrl }) });
+        const [arrival] = (await adapter.preprocessInbound?.({ raw: pressBy(user) }))?.arrivals ?? [];
+        if (arrival === undefined || !('landing' in arrival)) throw new Error('no press arrived');
+        return arrival.landing;
+      } finally {
+        await api.close();
+      }
+    };
+
+    it('the presser\'s claim is on the press, branded, normalised', async () => {
+      const { adapter } = load({ credential: credential({}) });
+      const field = (await adapter.describe('Interaction'))?.fields.find((f) => f.displayName === 'Pressed By Email');
+      expect(field).toMatchObject({ kind: 'string', brands: ['claim:email/address'], mayBeAbsent: true, required: false, writable: false });
+      const landing = await landed('U1');
+      expect(landing.fields['Pressed By Email']).toBe('ada@example.com');
+      expect(landing.unknown).toBeUndefined();
+      // A member whose profile holds no address has none, which Slack did say.
+      const bare = await landed('U3');
+      expect(bare.fields['Pressed By Email']).toBeNull();
+      expect(bare.unknown).toBeUndefined();
+    });
+
+    it('a presser Slack could not be asked about has an unknown address, never none', async () => {
+      const landing = await landed('U1', new Map([['users.info', 'down']]));
+      expect(landing.fields['Pressed By Email']).toBeNull();
+      expect(landing.unknown).toEqual(['Pressed By Email']);
+    });
+
+    it('a press read back says the presser\'s address', async () => {
+      const api = await slackApi({ C1: 'office' });
+      try {
+        const { adapter } = load({ credential: credential({ accessToken: 'xoxb-readback', baseUrl: api.baseUrl }) });
+        const { makeUnstablePosition } = await import('movement-engine/public/catalog');
+        const press = makeUnstablePosition({ adapterType: 'slack', recordType: 'Interaction', data: { id: 'trig-1', at: null, actions: [], user: { id: 'U1' } } });
+        await expect(adapter.getFieldValue({ position: press, fieldId: 'Pressed By Email' })).resolves.toBe('ada@example.com');
+      } finally {
+        await api.close();
+      }
+    });
   });
 
   it('a press walks to the message pressed, as it came with the press, with nothing fetched', async () => {
@@ -676,16 +774,12 @@ describe('@lf/slack', () => {
     expect((await adapter.preprocessInbound?.({ raw: { type: 'event_callback', event: root } }))?.arrivals?.map((a) => a.edge)).toEqual(['Messages']);
   });
 
-  describe('who acted, looked up at the door', () => {
-    const asked = (adapter: ReturnType<typeof load>['adapter']) => {
-      const arrival = {
-        edge: 'Messages',
-        key: 'C1',
-        identity: 'C1:1.1',
-        landing: { recordId: 'C1:1.1', recordType: 'Message', fields: {} },
-        actor: { identifier: 'U1', scheme: 'opaque' as const, adapterType: 'slack', label: 'U1' },
-      };
-      return adapter.getActorCandidates?.({ event: arrivalTriggerOf({ pipelineInputId: 'chat:answer', adapterType: 'slack', arrival, now: new Date() }) });
+  describe('the address lookup at the door', () => {
+    const user = { type: 'message', channel: 'C1', user: 'U1', text: 'hi', ts: '1700.1' };
+    const delivered = async (adapter: ReturnType<typeof load>['adapter']) => {
+      const [arrival] = (await adapter.preprocessInbound?.({ raw: { type: 'event_callback', event: user } }))?.arrivals ?? [];
+      if (arrival === undefined || !('landing' in arrival)) throw new Error('no message arrived');
+      return arrival.landing;
     };
 
     it('a rate limited users.info fails at once, never holding the delivery for Slack\'s retry-after', async () => {
@@ -693,79 +787,21 @@ describe('@lf/slack', () => {
       try {
         const { adapter } = load({ credential: credential({ accessToken: 'xoxb-limited', baseUrl: api.baseUrl }) });
         const started = Date.now();
-        await expect(asked(adapter)).rejects.toThrow();
+        const landing = await delivered(adapter);
         expect(Date.now() - started).toBeLessThan(1000);
-        expect(api.methods).toEqual(['users.info']);
+        expect(landing.unknown).toContain('User Email');
+        expect(api.methods.filter((m) => m === 'users.info')).toHaveLength(1);
       } finally {
         await api.close();
       }
     });
 
-    it('with no client to ask, it throws: nothing was looked up, so who acted is unknown rather than nobody', async () => {
+    it('with no client to ask, the address is unknown rather than none', async () => {
       const { adapter } = load({ credential: credential({}) });
-      await expect(asked(adapter)).rejects.toThrow();
+      const landing = await delivered(adapter);
+      expect(landing.fields['User Email']).toBeNull();
+      expect(landing.unknown).toContain('User Email');
     });
-
-    it('a member whose profile has no email is a genuine miss: no candidate', async () => {
-      const api = await slackApi({});
-      try {
-        const { adapter } = load({ credential: credential({ accessToken: 'xoxb-no-email', baseUrl: api.baseUrl }) });
-        await expect(asked(adapter)).resolves.toEqual([]);
-      } finally {
-        await api.close();
-      }
-    });
-  });
-
-  it('the run each arrival fires reads who sent, reacted or pressed as its actor', async () => {
-    const { adapter } = load({ credential: credential({}) });
-    const message = { type: 'message', channel: 'C1', user: 'U2', text: 'hi', ts: '1700.1' };
-    const reaction = { type: 'reaction_added', user: 'U3', reaction: 'eyes', item: { type: 'message', channel: 'C1', ts: '1700.1' }, item_user: 'U2', event_ts: '1700.2' };
-    const press = {
-      type: 'block_actions',
-      trigger_id: 'trig-1',
-      user: { id: 'U4', username: 'ada' },
-      container: { type: 'message', message_ts: '1700.1', channel_id: 'C1' },
-      actions: [{ type: 'button', action_id: 'lf_button_0', value: 'in', action_ts: '1700.3' }],
-    };
-    const deliveries = [{ type: 'event_callback', event: message }, { type: 'event_callback', event: reaction }, { payload: JSON.stringify(press) }];
-    const actors: unknown[] = [];
-    for (const raw of deliveries) {
-      const [arrival] = (await adapter.preprocessInbound?.({ raw }))?.arrivals ?? [];
-      if (arrival === undefined || 'gone' in arrival) throw new Error('nothing arrived');
-      // The run's trigger, as the host hands it to a run its listen fired.
-      const event = arrivalTriggerOf({ pipelineInputId: 'chat:answer', adapterType: 'slack', arrival, now: new Date() });
-      actors.push([arrival.edge, await adapter.extractActor?.({ event })]);
-    }
-    const actor = (id: string) => ({ identifier: id, scheme: 'opaque', adapterType: 'slack', label: id, proven: true });
-    expect(actors).toEqual([
-      ['Messages', actor('U2')],
-      ['Reactions', actor('U3')],
-      ['Interactions', actor('U4')],
-    ]);
-  });
-
-  it('a message that names no member (a bot post) arrives with no actor, and its run reads none', async () => {
-    const { adapter } = load({ credential: credential({}) });
-    const bot = { type: 'message', channel: 'C1', text: 'beep', ts: '1700.1' };
-    const [arrival] = (await adapter.preprocessInbound?.({ raw: { type: 'event_callback', event: bot } }))?.arrivals ?? [];
-    if (arrival === undefined || 'gone' in arrival) throw new Error('nothing arrived');
-    expect(arrival).not.toHaveProperty('actor');
-    const event = arrivalTriggerOf({ pipelineInputId: 'chat:answer', adapterType: 'slack', arrival, now: new Date() });
-    await expect(adapter.extractActor?.({ event })).resolves.toBeNull();
-  });
-
-  it('a run whose arrival names an actor reads it, whatever the landing holds', async () => {
-    const { adapter } = load({ credential: credential({}) });
-    const arrival = {
-      edge: 'Messages',
-      key: 'C1',
-      identity: 'C1:1.1',
-      landing: { recordId: 'C1:1.1', recordType: 'Message', fields: {} },
-      actor: { identifier: 'U9', scheme: 'opaque' as const, adapterType: 'slack', label: 'U9' },
-    };
-    const event = arrivalTriggerOf({ pipelineInputId: 'chat:answer', adapterType: 'slack', arrival, now: new Date() });
-    await expect(adapter.extractActor?.({ event })).resolves.toEqual(arrival.actor);
   });
 
   it('a message that mentions the app arrives as its message would, under the same identity', async () => {

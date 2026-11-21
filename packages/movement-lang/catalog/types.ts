@@ -129,6 +129,10 @@ export interface AdapterSpec {
   /** What a 0.12 settings listen on this module becomes as a traversal: the
    *  upgrade's rewrite of `listen to x { … }`. */
   listenSettingsBecome?: SettingsBecome;
+  /** The release before which a host may have let only registered senders set
+   *  a listen on this module off (Slack's `0.16.0`): an upgrade from an older
+   *  key tells each listen whose filter does not limit it. */
+  listensLimitedBefore?: string;
 }
 
 /**
@@ -324,7 +328,7 @@ export interface PluginSpec {
    * where it is written, and an argument declared to take structured data
    * (`json`) is handed a record's fields. Absent for an argument nobody typed.
    */
-  argTypes?: Record<string, SchemaFieldType>;
+  argTypes?: Record<string, PluginArgType>;
   /**
    * Arguments (⊆ `args`) a call MUST supply: a call missing one is
    * MOV_THROUGH_ARG_MISSING.
@@ -360,6 +364,13 @@ export interface PluginSpec {
    * what the stage would have handed it.
    */
   fedByExtraction?: boolean;
+  /**
+   * The same arguments give the same answer until the host says otherwise, so
+   * a call of it may stand where only a pure expression may. Absent ⇒ not pure.
+   */
+  pure?: boolean;
+  /** How long a host may keep a pure plugin's answer, in seconds. Only a pure plugin declares one. */
+  maxAgeSeconds?: number;
   /**
    * Arguments the EXTRACTION fills inside a `through [ … ]` stage — the engine
    * feeds them from the `from [ … ]` source, which is why a stage never writes
@@ -465,7 +476,8 @@ export function findPlugin(
  */
 export type PluginOutput =
   | { kind: 'value'; type: SchemaFieldType }
-  | { kind: 'record'; fields: Record<string, SchemaFieldType> }
+  // `maybeAbsent`: `{ … } | null`, a plugin that may answer no record at all.
+  | { kind: 'record'; fields: Record<string, SchemaFieldType>; maybeAbsent?: true }
   | { kind: 'records'; fields: Record<string, SchemaFieldType> };
 
 
@@ -1494,11 +1506,21 @@ export type SchemaFieldType =
    *  its values; `format`, a format the checker validates a literal by. */
   | { kind: 'owned'; name: string; owner: string; allowPattern?: string; format?: 'cron' | 'timeZone' }
   | { kind: 'maybeAbsent'; of: SchemaFieldType }
+  /** `text & Brand<"claim:email/address">`: `of`, narrowed by each brand, as
+   *  TypeScript's intersection narrows. A brand is a name compared whole,
+   *  never parsed. A branded value fits where `of` is asked for; a value
+   *  without the brand never fits where it is. */
+  | { kind: 'branded'; of: SchemaFieldType; brands: string[] }
   /** A record's fields held as the field's value (`c.Current`): typed as a
    *  plain object of that position's fields, never as the record. It has no
    *  edges and no identity, so a checker refuses a walk, a write or a record
    *  parameter on it, bound to a name or not. */
   | { kind: 'record'; position: SchemaPositionRef };
+
+/** What a plugin's argument takes: a field type, or one of several (`text &
+ *  Brand<"a"> | text & Brand<"b">`). A union is the checker's typing, which a
+ *  schema's field never is, so it lives here and not on `SchemaFieldType`. */
+export type PluginArgType = SchemaFieldType | { kind: 'union'; of: PluginArgType[] };
 
 /** Which record a `record` field holds: one record type of the instance, or
  *  one of several (`unions`). */

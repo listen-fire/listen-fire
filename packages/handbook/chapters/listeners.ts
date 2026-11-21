@@ -24,7 +24,7 @@ Saving the file registers its listeners; if one can't go live, the save says so.
 
 ### where-a-filter-is-judged
 
-A listen may filter any hop: \`chat-[ch:Channels WHERE ch.Name == "deals"]->-[m:Messages WHERE m.Message CONTAINS "intro"]->\`. A \`WHERE\` reads only its own hops and literals — never a name a run holds, \`ai(…)\`, or another walk. Each part of it is judged in one of three places:
+A listen may filter any hop: \`chat-[ch:Channels WHERE ch.Name == "deals"]->-[m:Messages WHERE m.Message CONTAINS "intro"]->\`. A \`WHERE\` reads only its own hops, literals and pure calls — never a name a run holds, \`ai(…)\`, or another walk. A call is pure when it reads no clock, model or source: a built-in such as \`Text.regexExtract\`, or a host's function that declares itself pure (*who-acted*). Each part of it is judged in one of three places:
 
 - **By the system**, which sends only what matches, as it does for a read.
 - **On arrival**, against the record that landed and the records it carries: a Slack message carries its channel, a press its channel and message. Each system's chapter says what its arrivals carry.
@@ -70,28 +70,80 @@ Once the system answers again, \`listen-fire listens replay <file>:<movement> --
 
 ### who-acted
 
-What lands can say who acted. \`listen-fire\` and the platform both give a landing an \`Actor\`, once its system reports who acted, and a filter and a run read it like any other field:
+A module publishes who acted as a **claim**: a field of what landed whose type carries a brand, \`text & Brand<"claim:email/address">\`. A module publishes a claim only when it vouches for it.
 
-- \`Id\` — the system's own id for them.
-- \`Email\` and \`Domain\` — their address in lower case, and the part after its last \`@\`.
-- \`Phone\` — digits only, country code first.
-- \`Name\` — as the system reports it.
-- \`Proven\` — true when the module checked that the system vouches for who it names.
+- Slack: \`User Email\` on a message and a reaction, \`Pressed By Email\` on a press.
+- Telegram: \`Sender Email\`. WhatsApp: \`Sender Phone\` (\`+447700900123\`). Granola: \`Note Owner Email\`. Attio: \`Changed By\`, a workspace member's id.
+- Email publishes none. Its \`From\` is plain text anyone can forge.
 
-\`Actor\` is missing when the system names nobody, and so are all of its fields but \`Id\` and \`Proven\`, so read it with \`?.\`. A \`Domain\` is exact: \`"acme.test"\` does not match \`acme.test.example.com\`.
+What a claim means to the team is a **host function**'s answer. A host offers functions as a plugin package, imported like any plugin, and a listen's filter may call one that is pure. This example uses one host's package, the platform's \`@lf-platform/team\`:
 
 \`\`\`
-listen to inbox-[e:Emails WHERE e.Key == "deals" AND e.Actor?.Domain == "acme.test"]-> fire \`Intake\`
+import { \`@lf-platform/team\` as team } from plugins
+slack = connect \`@lf/slack\` using team_workspace
+
+function intake(m: <slack-[:Message]->>) {
+  write m-[:Reactions]-> { Emoji: "eyes" }
+}
+
+listen to slack-[ch:Channels WHERE ch.Name == "dealflow"]->-[m:Messages WHERE m.\`User Email\` != null AND team.isMember(m.\`User Email\`)]-> fire intake
 \`\`\`
 
-\`Proven\` is false for email: nothing in a message vouches for its \`From\` line. Slack, Telegram, Attio, WhatsApp and Granola set it when they name someone.
+- Which functions exist is the host's choice. The platform's \`@lf-platform/team\` offers \`isMember(claim)\` and \`userFor(claim)\`; \`listen-fire\` alone offers none.
+- A function takes the claim it matches. Plain text where a claim is wanted is refused, so a \`From\` line cannot be passed to \`isMember\`.
+- A function may answer a record, or none. Read its field with \`?.\`: \`m.\`User Email\` != null AND team.userFor(m.\`User Email\`)?.Level == "admin"\`. Without the \`?\` it is refused, since the answer may be none.
+- Write the checks that need no host first. The host is called only for a sender the cheaper terms let through, and each answer is kept.
+- When the host cannot be reached, the arrival waits unjudged and nothing runs until it is judged.
+- To keep a listen off the app's own posts, add \`AND NOT m.\`Sent By This App\`\` (Slack).
+- To limit by domain, read it off a claim: \`Text.regexExtract(m.\`User Email\`, "@([^@]+)$", 1) == "acme.com"\`. The match is exact (\`acme.com.evil.com\` is not \`acme.com\`).
 
-If a system has a field of its own called \`Actor\`, that field is the one you read.
+A claim can be missing (a bot, a member with no address), so test it for null before passing it on, as above. \`team.isMember(m.\`User Email\`)\` alone is refused.
 
 ### inbound-mail
 
 \`\`connect \`@lf/email\` \`\` is inbound mail. Which carrier delivers it is a setting of the deployment, not a choice an automation makes.`,
   engineClaims: [
+    {
+      construct: "a host function in a listen's filter (a claim passed to team.isMember), the app's own posts left out",
+      status: 'runs',
+      probe: `
+import { \`@lf-platform/team\` as team } from plugins
+slack = connect \`@lf/slack\` using team_workspace
+
+function intake(m: <slack-[:Message]->>) {
+  write m-[:Reactions]-> { Emoji: "eyes" }
+}
+
+listen to slack-[ch:Channels WHERE ch.Name == "dealflow"]->-[m:Messages WHERE NOT m.\`Sent By This App\` AND m.\`User Email\` != null AND team.isMember(m.\`User Email\`)]-> fire intake
+`,
+    },
+    {
+      construct: "a field of a host function's record answer in a listen's filter (team.userFor(…)?.Level)",
+      status: 'runs',
+      probe: `
+import { \`@lf-platform/team\` as team } from plugins
+slack = connect \`@lf/slack\` using team_workspace
+
+function intake(m: <slack-[:Message]->>) {
+  write m-[:Reactions]-> { Emoji: "eyes" }
+}
+
+listen to slack-[ch:Channels WHERE ch.Name == "dealflow"]->-[m:Messages WHERE m.\`User Email\` != null AND team.userFor(m.\`User Email\`)?.Level == "admin"]-> fire intake
+`,
+    },
+    {
+      construct: "a domain test off a claim with Text.regexExtract in a listen's filter",
+      status: 'runs',
+      probe: `
+slack = connect \`@lf/slack\` using team_workspace
+
+function intake(m: <slack-[:Message]->>) {
+  write m-[:Reactions]-> { Emoji: "eyes" }
+}
+
+listen to slack-[ch:Channels WHERE ch.Name == "dealflow"]->-[m:Messages WHERE Text.regexExtract(m.\`User Email\`, "@([^@]+)$", 1) == "acme.com"]-> fire intake
+`,
+    },
     {
       construct: 'listen as "…" — two aliased lanes on one channel firing one movement',
       status: 'runs',

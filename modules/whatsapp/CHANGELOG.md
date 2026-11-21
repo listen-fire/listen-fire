@@ -1,5 +1,13 @@
 # @listen-fire/whatsapp
 
+## 0.14.0
+
+### Minor Changes
+
+- Claims: `Message`, `Reaction` and `Location` gain `Sender Phone`: the sender's number with its plus (`+447700900123`), a `claim:phone/e164` WhatsApp vouches for. `From` stays the digits it was. The module no longer declares `getActorCandidates` or `extractActor`, and its arrivals carry no `actor`.
+- `Sender Phone` is declared `text & Brand<"claim:phone/e164"> | null` (null for a malformed number), so a filter tests it for null before a host function takes it.
+- Peer floors on `movement-lang`, `engine` and `engine-contracts` are raised to `>=0.16.0 <1.0.0`: the branded, nullable claim fields above are types a core before 0.16 cannot read.
+
 ## 0.13.4
 
 ### Patch Changes

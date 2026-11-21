@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use std::rc::Rc;
 
-use movement_engine::listen_judge::{ArrivedRecord, PlanArrival, Verdict, judge_arrival, named_fields};
+use movement_engine::listen_judge::{ArrivedRecord, Judging, PlanArrival, PluginAnswers, UndecidedReason, Verdict, host_calls, judge_arrival, named_fields};
 use movement_engine::listen_landing::{DeclaredPayload, FileScope};
 use movement_parser::ast::{RValue, Statement};
 use movement_parser::catalog::types::CatalogSnapshot;
@@ -15,6 +15,23 @@ use serde_json::Value as Json;
 
 use crate::arrivals::ArrivalIn;
 use crate::json::{Js, Obj};
+use crate::plugin_answers::{AnswersHost, Refused};
+
+/// What a judgement asks with: the instant (epoch ms) `WITHIN` measures
+/// from, and the host its filter's host functions are asked of.
+pub struct Asking<'a, H> {
+    pub now_ms: f64,
+    pub host: &'a H,
+}
+
+// By hand: a derive would ask the host itself to be Copy.
+impl<H> Clone for Asking<'_, H> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<H> Copy for Asking<'_, H> {}
 
 /// One `listen` statement, with its instance's construction resolved (`FileListener`).
 #[derive(Debug, Clone)]
@@ -111,12 +128,62 @@ impl Listen {
             || (self.adapter == adapter && self.plan.member_plans().iter().any(|plan| plan.hops.iter().any(|hop| hop.judged == HopJudged::Resolved && hop.edge == edge)))
     }
 
-    /// Whether `arrival`, delivered for `credential`, fires this listen at
-    /// `now_ms`, as the judge finds its filters. None when the arrival is not
-    /// this listen's to judge: the arrival came for another connection, or it is marked for this listen's own sake
-    /// (`notFor` its pipeline); nothing is said of those. An arrival with no
-    /// landing skips at the last hop.
-    pub fn fires(&self, arrival: &ArrivalIn, credential: Option<&str>, now_ms: f64) -> Option<Verdict> {
+    /// Whether `arrival`, delivered for `credential`, fires this listen, as
+    /// the judge finds its filters: each host function it reaches asked of
+    /// `asking.host`, and the arrival judged again with the answer, until
+    /// the judge needs no more. None when the arrival is not this listen's
+    /// to judge: the arrival came for another connection, or it is marked
+    /// for this listen's own sake (`notFor` its pipeline); nothing is said
+    /// of those. An arrival with no landing skips at the last hop.
+    pub async fn fires(&self, arrival: &ArrivalIn, credential: Option<&str>, asking: Asking<'_, impl AnswersHost>) -> Option<Verdict> {
+        let planned = match self.planned(arrival, credential)? {
+            Ok(planned) => planned,
+            Err(skips) => return Some(skips),
+        };
+        let mut answers = PluginAnswers::default();
+        // The judge asks one host term per judgement.
+        for _ in 0..=host_calls(&self.plan) {
+            let questions = match judge_arrival(&self.plan, &planned, Judging { now_ms: asking.now_ms, answers: &answers }) {
+                Verdict::Asks(questions) => questions,
+                verdict => return Some(verdict),
+            };
+            match asking.host.answer(&questions).await {
+                Ok(answered) => {
+                    for question in &questions {
+                        if let Some(answer) = answered.get(question) {
+                            answers.insert(question, answer.clone());
+                        }
+                    }
+                }
+                Err(Refused { plugin, why }) => {
+                    let reason = format!("{plugin}, which this listen's filter calls, answered an error ({why})");
+                    return Some(Verdict::Undecided { reason: UndecidedReason::Unjudgeable(reason) });
+                }
+            }
+        }
+        let reason = format!("the judge asked the host more often than this listen's filter calls host functions ({})", host_calls(&self.plan));
+        Some(Verdict::Undecided { reason: UndecidedReason::Unjudgeable(reason) })
+    }
+
+    /// `fires`, judged once with no host function answered: what an
+    /// arrival is before anything is asked (a filter that calls one `Asks`).
+    pub fn verdict(&self, arrival: &ArrivalIn, credential: Option<&str>, now_ms: f64) -> Option<Verdict> {
+        Some(match self.planned(arrival, credential)? {
+            Ok(planned) => judge_arrival(&self.plan, &planned, Judging { now_ms, answers: &PluginAnswers::default() }),
+            Err(skips) => skips,
+        })
+    }
+
+    /// Whether the listen calls a host function in its filters: only then
+    /// can an arrival wait for its host.
+    pub fn asks_host(&self) -> bool {
+        host_calls(&self.plan) > 0
+    }
+
+    /// `arrival` as the judge reads it, or the verdict it has before any
+    /// filter is read (one with no landing skips at the last hop); None when
+    /// it is not this listen's to judge.
+    fn planned(&self, arrival: &ArrivalIn, credential: Option<&str>) -> Option<Result<PlanArrival, Verdict>> {
         let plan = &self.plan;
         if !self.hears(credential) || arrival.not_for.as_deref().is_some_and(|not_for| not_for == self.pipeline()) {
             return None;
@@ -127,16 +194,15 @@ impl Listen {
             Some(ArrivedRecord { record_type: record.get("recordType").and_then(Js::as_str).map(str::to_string), fields, unknown })
         };
         let Some(landing) = arrival.landing.as_ref().and_then(arrived) else {
-            return Some(Verdict::Skips { hop: plan.hop_count().saturating_sub(1), reason: None });
+            return Some(Err(Verdict::Skips { hop: plan.hop_count().saturating_sub(1), reason: None }));
         };
-        let planned = PlanArrival {
+        Some(Ok(PlanArrival {
             edge: arrival.edge.clone(),
             key: arrival.key.clone(),
             landing,
             parents: arrival.parents.iter().map(arrived).collect(),
             taken_applied: arrival.taken_applied,
-        };
-        Some(judge_arrival(plan, &planned, now_ms))
+        }))
     }
 
     /// What of an arrival's landing does not fit the node the listen states
@@ -270,7 +336,7 @@ fn plans_of(file: &crate::sources::Parsed, program: &movement_parser::ast::Progr
     };
     // The file's own parse is checked: lf parses with every slot marked for
     // the eager export (`ExprSlot::eager`), which the checker never reads.
-    let options = movement_checker::CheckOptions { upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
+    let options = movement_checker::CheckOptions { upgrading_from: None, limiting_function: None, zones: &movement_checker::host::native::NativeZones };
     let answer = movement_checker::answer::check_answer(program, catalog, options);
     let planned = answer.listens.into_iter().map(|plan| {
         let awaits = trigger_awaits_of(program, &answer.stamps, &plan);
@@ -402,9 +468,6 @@ pub fn arrival_trigger_of(pipeline_input_id: &str, adapter_type: &str, arrival: 
     if let Some(about) = &arrival.about {
         landed.insert("about".into(), about.clone());
     }
-    if let Some(actor) = &arrival.actor {
-        landed.insert("actor".into(), actor.clone());
-    }
     let occurred = arrival.occurred_at.as_deref().and_then(crate::units::ms_of).map(crate::units::iso_of);
     let mut out = Obj::new();
     out.insert("pipelineInputId".into(), Js::str(pipeline_input_id));
@@ -416,9 +479,10 @@ pub fn arrival_trigger_of(pipeline_input_id: &str, adapter_type: &str, arrival: 
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::sources::{MovementFile, Parsed};
+    use movement_engine::listen_judge::{PluginAnswer, PluginQuestion};
     use std::path::PathBuf;
 
     /// A module `inbox` whose `Notes` its connection pushes, made with a
@@ -539,20 +603,20 @@ mod tests {
     #[test]
     fn a_listen_on_a_traversal_fires_on_an_arrival_its_where_takes_and_skips_one_it_does_not() {
         let welcome = &crm_listens()[0];
-        assert_eq!(welcome.fires(&company(r#"{"id":"company-1","Name":"Osprey"}"#), Some("acme"), 0.0), Some(Verdict::Fires));
-        assert_eq!(welcome.fires(&company(r#"{"id":"company-1","Name":"Ignored"}"#), Some("acme"), 0.0), Some(Verdict::Skips { hop: 0, reason: None }));
-        assert_eq!(welcome.fires(&company(r#"{"id":"company-1","Name":"Osprey"}"#), Some("another"), 0.0), None, "another connection's");
+        assert_eq!(welcome.verdict(&company(r#"{"id":"company-1","Name":"Osprey"}"#), Some("acme"), 0.0), Some(Verdict::Fires));
+        assert_eq!(welcome.verdict(&company(r#"{"id":"company-1","Name":"Ignored"}"#), Some("acme"), 0.0), Some(Verdict::Skips { hop: 0, reason: None }));
+        assert_eq!(welcome.verdict(&company(r#"{"id":"company-1","Name":"Osprey"}"#), Some("another"), 0.0), None, "another connection's");
     }
 
     #[test]
     fn an_arrival_on_the_listened_edge_name_fires_only_when_it_landed_on_the_record_type_the_listen_lands_on() {
         let welcome = &crm_listens()[0];
         let osprey = r#"{"id":"company-1","Name":"Osprey"}"#;
-        assert_eq!(welcome.fires(&landed_as("Comment", osprey), Some("acme"), 0.0), Some(Verdict::Skips { hop: 0, reason: Some("it has record type Comment, not Company, which this listen's Company lands on".into()) }), "another record type's edge of the same name");
+        assert_eq!(welcome.verdict(&landed_as("Comment", osprey), Some("acme"), 0.0), Some(Verdict::Skips { hop: 0, reason: Some("it has record type Comment, not Company, which this listen's Company lands on".into()) }), "another record type's edge of the same name");
         let untyped = crate::arrivals::arrivals_of(&js(&format!(r#"{{"arrivals":[{{"edge":"Company","identity":"company-1","landing":{{"fields":{osprey}}}}}]}}"#))).unwrap().remove(0);
         assert_eq!(
-            welcome.fires(&untyped, Some("acme"), 0.0),
-            Some(Verdict::Undecided { reason: "the arrival acme_crm reported on Company does not say its record type, so it cannot be told from another record type's Company (this listen's lands on Company)".into() })
+            welcome.verdict(&untyped, Some("acme"), 0.0),
+            Some(Verdict::Undecided { reason: movement_engine::listen_judge::UndecidedReason::Unjudgeable("the arrival acme_crm reported on Company does not say its record type, so it cannot be told from another record type's Company (this listen's lands on Company)".into()) })
         );
     }
 
@@ -569,8 +633,8 @@ mod tests {
     #[test]
     fn an_arrival_keyed_by_its_modules_field_ids_is_judged_by_the_names_the_listen_reads() {
         let welcome = &crm_keyed_by_ids()[0];
-        assert_eq!(welcome.fires(&company(r#"{"id":"company-1","name":"Acme"}"#), Some("acme"), 0.0), Some(Verdict::Fires));
-        assert_eq!(welcome.fires(&company(r#"{"id":"company-1","name":"Osprey"}"#), Some("acme"), 0.0), Some(Verdict::Skips { hop: 0, reason: None }));
+        assert_eq!(welcome.verdict(&company(r#"{"id":"company-1","name":"Acme"}"#), Some("acme"), 0.0), Some(Verdict::Fires));
+        assert_eq!(welcome.verdict(&company(r#"{"id":"company-1","name":"Osprey"}"#), Some("acme"), 0.0), Some(Verdict::Skips { hop: 0, reason: None }));
     }
 
     #[test]
@@ -580,11 +644,11 @@ mod tests {
             crate::arrivals::arrivals_of(&js(&format!(r#"{{"arrivals":[{{"edge":"Company","identity":"company-1","landing":{{"recordType":"Company","fields":{{"id":"company-1","Name":null}},"unknown":["{unknown}"]}}}}]}}"#))).unwrap().remove(0)
         };
         assert_eq!(
-            listens[0].fires(&unread("Name"), Some("acme"), 0.0),
-            Some(Verdict::Undecided { reason: "acme_crm could not read Name of the arrival on Company, which this listen's filter reads".into() }),
+            listens[0].verdict(&unread("Name"), Some("acme"), 0.0),
+            Some(Verdict::Undecided { reason: movement_engine::listen_judge::UndecidedReason::Unjudgeable("acme_crm could not read Name of the arrival on Company, which this listen's filter reads".into()) }),
             "never read as absent, which would skip it"
         );
-        assert_eq!(listens[1].fires(&unread("Name"), Some("acme"), 0.0), Some(Verdict::Fires), "a listen reading no unknown field is judged as usual");
+        assert_eq!(listens[1].verdict(&unread("Name"), Some("acme"), 0.0), Some(Verdict::Fires), "a listen reading no unknown field is judged as usual");
     }
 
     #[test]
@@ -593,7 +657,7 @@ mod tests {
         let mut arrival = company(r#"{"id":"company-1","Name":"Osprey"}"#);
         arrival.not_for = Some(listens[1].pipeline());
         let on_edge: Vec<(&str, Option<Verdict>)> =
-            listens.iter().filter(|l| l.is_on("acme_crm", "Company")).map(|l| (l.movement_name.as_str(), l.fires(&arrival, Some("acme"), 0.0))).collect();
+            listens.iter().filter(|l| l.is_on("acme_crm", "Company")).map(|l| (l.movement_name.as_str(), l.verdict(&arrival, Some("acme"), 0.0))).collect();
         assert_eq!(on_edge, [("welcome", Some(Verdict::Fires)), ("note", None)], "the listen it is not for is not judged, so nothing is said of it");
     }
 
@@ -673,6 +737,93 @@ mod tests {
         assert!(a.hears(Some("inbox_main")) && !a.hears(Some("Inbox B")), "a listen hears only its own connection's deliveries");
         assert!(a.hears(None), "a delivery that names no credential reaches every listen");
         assert!(c.hears(Some("inbox_main")) && c.hears(None), "a listen whose construction names none hears every delivery");
+    }
+
+    /// A `talk` module whose messages carry their sender's email as a
+    /// claim, and the team's pure `isMember`.
+    const TEAM_CATALOG: &str = r#"{"adapters":{"talk":{"canFire":true,"constructionArgs":[],"schemas":{"":{"positions":{
+      "Message":{"properties":{"Id":"text","Name":"text","User Email":{"kind":"branded","of":"text","brands":["claim:email/address"]}},"edges":{}}},
+      "collections":{"Messages":{"target":"Message","listenable":true,"delivery":"connection"}},"writableRoots":{}}}}},"credentials":{},
+      "plugins":{"@lf-platform/team/isMember":{"args":["e"],"priced":false,"requiredArgs":["e"],"argTypes":{"e":{"kind":"branded","of":"text","brands":["claim:email/address"]}},
+        "effects":{},"output":{"kind":"value","type":"boolean"},"package":"@lf-platform/team","name":"isMember","pure":true}}}"#;
+
+    pub(crate) fn team_listen() -> Listen {
+        let source = "import { `@lf-platform/team` as team } from plugins\nimport { talk } from adapters\nt = connect talk\n\nfunction heard(m: <t-[:Message]->>) {\n  return m.Name\n}\n\nlisten to t-[m:Messages WHERE m.Name != \"bot\" AND team.isMember(m.`User Email`)]-> fire heard\n";
+        let files = vec![MovementFile { name: "team".into(), path: PathBuf::from("team.mvt"), source: source.into(), version: None }];
+        let read = listens_across(&Parsed::each(&files, &[]), &js(TEAM_CATALOG));
+        assert_eq!(read.unwatched, Vec::<String>::new());
+        read.listens.into_iter().next().unwrap()
+    }
+
+    pub(crate) fn said_by(name: &str, email: &str) -> ArrivalIn {
+        said_as(&format!("m-{name}"), name, email)
+    }
+
+    /// A message `id` from `name` at `email`.
+    pub(crate) fn said_as(id: &str, name: &str, email: &str) -> ArrivalIn {
+        let text = format!(r#"{{"arrivals":[{{"edge":"Messages","identity":"{id}","landing":{{"recordId":"{id}","recordType":"Message","fields":{{"Id":"{id}","Name":"{name}","User Email":"{email}"}}}}}}]}}"#);
+        crate::arrivals::arrivals_of(&js(&text)).unwrap().remove(0)
+    }
+
+    /// A team host: its members, whether it can be reached, whether it
+    /// answers an error, and every question it was asked.
+    #[derive(Default)]
+    pub(crate) struct Team {
+        pub members: Vec<&'static str>,
+        pub down: bool,
+        pub failing: bool,
+        pub asked: std::cell::RefCell<Vec<PluginQuestion>>,
+    }
+
+    impl AnswersHost for Team {
+        async fn answer(&self, questions: &[PluginQuestion]) -> Result<PluginAnswers, Refused> {
+            let mut answers = PluginAnswers::default();
+            for question in questions {
+                self.asked.borrow_mut().push(question.clone());
+                if self.failing {
+                    return Err(Refused { plugin: question.plugin.clone(), why: "bad_request — not an address".into() });
+                }
+                let answer = match self.down {
+                    true => PluginAnswer::Unreachable("connection refused".into()),
+                    false => PluginAnswer::Value(Json::Bool(question.args.first().and_then(Json::as_str).is_some_and(|email| self.members.contains(&email)))),
+                };
+                answers.insert(question, answer);
+            }
+            Ok(answers)
+        }
+    }
+
+    fn fired(listen: &Listen, arrival: &ArrivalIn, team: &Team) -> Option<Verdict> {
+        let runtime = tokio::runtime::Builder::new_current_thread().build().unwrap();
+        runtime.block_on(listen.fires(arrival, None, Asking { now_ms: 0.0, host: team }))
+    }
+
+    #[test]
+    fn a_listen_asks_its_host_function_and_is_judged_by_the_answer() {
+        let listen = team_listen();
+        assert!(listen.asks_host());
+        assert!(!crm_listens()[0].asks_host());
+        let team = Team { members: vec!["ann@acme.com"], ..Team::default() };
+        assert_eq!(fired(&listen, &said_by("ann", "ann@acme.com"), &team), Some(Verdict::Fires), "a member");
+        assert_eq!(fired(&listen, &said_by("eve", "eve@evil.com"), &team), Some(Verdict::Skips { hop: 0, reason: None }), "a stranger");
+        assert_eq!(team.asked.borrow().len(), 2, "one question each");
+        assert_eq!(fired(&listen, &said_by("bot", "ann@acme.com"), &team), Some(Verdict::Skips { hop: 0, reason: None }), "a local term that fails");
+        assert_eq!(team.asked.borrow().len(), 2, "asks nothing");
+        let question = &team.asked.borrow()[0];
+        assert_eq!((question.plugin.as_str(), question.args.as_slice()), ("@lf-platform/team/isMember", [Json::String("ann@acme.com".into())].as_slice()));
+    }
+
+    #[test]
+    fn a_host_that_cannot_be_reached_leaves_the_arrival_waiting_and_one_that_errs_leaves_it_unjudged() {
+        let listen = team_listen();
+        let down = Team { down: true, ..Team::default() };
+        let Some(Verdict::Undecided { reason: UndecidedReason::HostUnreachable { plugin, .. } }) = fired(&listen, &said_by("ann", "ann@acme.com"), &down) else { panic!("waiting for the host") };
+        assert_eq!(plugin, "@lf-platform/team/isMember");
+        let failing = Team { failing: true, ..Team::default() };
+        assert_eq!(
+            fired(&listen, &said_by("ann", "ann@acme.com"), &failing),
+            Some(Verdict::Undecided { reason: UndecidedReason::Unjudgeable("@lf-platform/team/isMember, which this listen's filter calls, answered an error (bad_request — not an address)".into()) })
+        );
     }
 
     #[test]

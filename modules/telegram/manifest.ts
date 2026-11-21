@@ -53,7 +53,7 @@ export const TELEGRAM_MANIFEST: AdapterManifest = {
   // anchor off the listen's parameter).
   methods: [
     'listEntryPoints', 'describe', 'getFieldValue', 'getRelated',
-    'preprocessInbound', 'getActorCandidates', 'extractActor', 'resolveFileRef',
+    'preprocessInbound', 'resolveFileRef',
     'createRecord',
   ],
   // A 0.12 `listen to tg {} fire f` took every message the bot received: it

@@ -30,81 +30,6 @@ export { fileDescriptorOf, fileHandle, fileValue, fileValueOf, filesAtType, isFi
 export type { EarlierFileSource, FileRef, FileSource, FileValue } from './file_ref';
 export type { ExternalRecordRef, Fact, FieldEvidence, Resource, ResourceProvenance } from './records';
 
-/**
- * Minimal user descriptor returned by Listen-Fire's `resolveActingUser`
- * (acting_user/resolve.ts) and consumed by the engine's meta resolver to
- * populate `@user_email`,
- * `@user_name`, and `@user_id`. Kept shape-loose (name optional) so
- * adapters that can only surface an email don't have to fabricate a
- * display name.
- *
- */
-export interface ActingUser {
-  id: string;
-  email: string;
-  name?: string | null;
-}
-
-/**
- * Raw event-side actor identity returned by `Adapter.extractActor`. Distinct
- * from `ActingUser`: an `ActorIdentity` is the external originator of the
- * event (the `From:` address on an email, the Slack user that posted, the
- * Attio actor that wrote a record) regardless of whether they are a
- * registered Listen-Fire team member. Powers `@actor_email` / `@actor_name` /
- * `@actor_id` so authors can compare "the team member responsible for this
- * dispatch" (`@user_*`) with "who actually originated the event" (`@actor_*`).
- *
- * Parsed from the event payload — no DB lookups — because actor identity
- * is a parse, not an auth decision. The method is async only so a remote
- * adapter can answer it over the wire; local impls are still pure parses.
- *
- */
-export interface ActorIdentity {
-  /** Primary key in the source system (email address, phone number,
-   *  Slack user id, Attio actor id, etc.). */
-  identifier: string;
-  /** How this identity resolves to a Listen-Fire team user — the only thing the
-   *  resolution logic cares about, independent of which adapter produced it:
-   *    • `'email'`  — resolvable to a team user by email (the address is on
-   *      `identifier` or `email`).
-   *    • `'phone'`  — resolvable to a team user by phone number.
-   *    • `'opaque'` — neither; a raw external id with no resolved email/phone,
-   *      so it maps to no Listen-Fire user (e.g. a bare Slack/Attio id from the
-   *      pure-parse `extractActor`). Resolvers skip it rather than guessing. */
-  scheme: 'email' | 'phone' | 'opaque';
-  /** Which adapter sourced this identity — provenance only; the resolution
-   *  logic never branches on it (it branches on `scheme`). */
-  adapterType?: string;
-  /** Email address when the source carries one (every email event; Slack
-   *  messages don't have this without an API call). */
-  email?: string;
-  /** Display name (the friendly part of `"Ada" <h@x>`; Slack display
-   *  name; etc.). */
-  name?: string;
-  /** Fallback display label when `name` isn't available. */
-  label?: string;
-  /** True when the module checked that the source system vouches for this
-   *  identity (a verified address, a signed request). Absent reads as not
-   *  proven: it is a claim only the module can make. */
-  proven?: boolean;
-}
-
-/**
- * An ordered actor candidate parsed from an inbound event by the adapter's
- * `getActorCandidates`. Distinct from `ActorIdentity` (the raw event
- * originator surfaced via `@actor_*`): a candidate is a *resolution input*
- * Listen-Fire's `resolveActingUser` maps to a team user. The `source` tag drives
- * the resolution order — `originator` candidates (who sent it) are matched
- * against non-service users first; `relay` candidates (the forwarding /
- * service inbox that delivered it) are matched against service users only.
- *
- */
-export interface ActorCandidate {
-  identity: ActorIdentity;
-  /** who-sent-it (`originator`) vs forwarding/service-inbox (`relay`). */
-  source: 'originator' | 'relay';
-}
-
 // ── Adapter manifest ────────────────────────────────────────────────────────
 
 /**
@@ -281,21 +206,21 @@ export interface AdapterManifest {
    */
   triggerExpectation?: string;
   /**
-   * Ownership gating for inbound events (message-write-unification §6.4b):
-   * when true, the dispatcher processes an inbound event ONLY if its actor
-   * resolves to a REGISTERED team user (the adapter's `getActorCandidates`
-   * chain matched by `resolveActingUser`, WITHOUT trigger context — creator
-   * override/fallback never pass the gate). The bot is never a registered
-   * user, so self-echo drops for free; an unregistered person is dropped by
-   * the same rule. Dropped events are recorded (receipt marked suppressed,
-   * replayable), never silent. Set by adapters whose inbound channel is
-   * globally addressable (Slack: anyone in the workspace can @-mention the
-   * bot); adapters whose inbound is already identity-gated upstream omit it
-   * (WhatsApp's sender→team resolution; Telegram's /start handshake binding
-   * ON THE BUILT-IN SHARED BOT — a team running its own bot has no such
-   * gate, so a BYO-bot team's inbound is not actually identity-gated here).
+   * The release before which a host may have let only registered senders set
+   * a listen on this module off (Slack: `'0.16.0'`, when the hosted
+   * platform's gate on registered team members retired). From it, only a
+   * listen's filter decides who sets it off. An upgrade from an older key
+   * tells each listen whose filter does not limit it (`MOV_LISTEN_NOW_OPEN`).
+   * Omitted: no host ever limited this module's listens.
    */
-  inboundRequiresRegisteredActor?: boolean;
+  listensLimitedBefore?: string;
+  /**
+   * Connection settings this module no longer reads. A host refuses a
+   * connection that still holds one, with `instead` in the message: a
+   * setting is kept with the connection, outside any movement, so no
+   * upgrade can rewrite it.
+   */
+  retiredSettings?: Array<{ name: string; instead: string }>;
   /** True when this adapter's schema comes from LIVE introspection of the
    *  connected workspace (attio, airtable, sheets, affinity) — a
    *  describeInstance costs upstream API calls, so callers should scope with
@@ -936,56 +861,6 @@ export interface Adapter {
    */
   getDedupRules?(input: { typeRef: string }): Promise<DedupRules | null>;
 
-  /**
-   * Parse ordered actor candidates from an inbound event — a pure parse of
-   * who-sent-it / who-relayed-it, with NO Listen-Fire DB access (external-system
-   * API enrichment IS allowed: Slack `users.info`, Attio
-   * `/v2/workspace_members/{id}`, etc., to surface the actor's email).
-   *
-   * This is the adapter half of the acting-user split (the extensible
-   * adapter protocol, 2026-05-29). The adapter no longer reaches into
-   * Listen-Fire's user tables — it only describes the candidates; Listen-Fire's
-   * `resolveActingUser` (acting_user/resolve.ts) runs the identical
-   * resolution chain (creator-override → originator/non-service →
-   * relay/service → creator-fallback → null) by mapping these candidates
-   * to a team user. Splitting parse from resolution lets the parse cross a
-   * remote-adapter boundary that the DB chain never could.
-   *
-   * Candidate ordering and `source` tags reproduce the prior per-adapter
-   * chains exactly:
-   *   - Email: sender (`From:` / `sender`) as `originator`; each parsed
-   *     forwarding-header recipient as `relay`.
-   *   - Slack / Attio: the runtime-resolved actor email as a single
-   *     `originator` candidate (empty array when no email resolves).
-   *
-   * The terminal recipient on the deployment's own inbound address is ROUTING ONLY and is never a
-   * candidate — auth comes from who SENT it or which inbox RELAYED it.
-   *
-   * Optional — adapters with no acting-user concept omit it; the resolver
-   * then yields null (no `@user_*`). `extractActor` (`@actor_*`) is
-   * independent of this method.
-   *
-   */
-  getActorCandidates?(input: {
-    event: TriggerEvent;
-  }): Promise<ActorCandidate[]>;
-
-  /**
-   * Extract the raw actor identity from an inbound event. A pure parse,
-   * no DB lookups — actor identity is "who originated this event
-   * in the source system" regardless of whether they map to a Listen-Fire
-   * user. Powers `@actor_email` / `@actor_name` / `@actor_id` so authors
-   * can attribute events to their raw originator independently of the
-   * authenticated team member.
-   *
-   * Returns `null` when the event has no actor-shaped originator (e.g.
-   * a snapshot replay with no per-record provenance). Adapters that
-   * don't implement get `@actor_*` = null at dispatch time, gracefully.
-   *
-   */
-  extractActor?(input: {
-    event: TriggerEvent;
-  }): Promise<ActorIdentity | null>;
 
   // (§8 correspondence — `getPriorMatch` / `recordLink` — retired with the TG
   // engine. Correspondence is now the engine-owned, symmetric `bind` store

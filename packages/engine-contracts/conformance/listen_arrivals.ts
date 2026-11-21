@@ -2,13 +2,14 @@
 // this file): listen-fire's Rust, the engine's TypeScript and the hosted
 // product each read them. Each plan is the checker's answer for its listen's
 // source against the file's catalog, and each case an arrival on one plan, the
-// instant WITHIN measures from, and the verdict.
+// answers the host holds to the judge's questions, the instant WITHIN measures
+// from, and the judgement: a verdict, or the questions still to ask.
 
 import { z } from 'zod';
 
 import type { CatalogSnapshot } from 'movement-lang';
 
-import { listenPlanSchema, planArrivalSchema, verdictSchema } from '../listen_plan';
+import { judgementSchema, listenPlanSchema, planArrivalSchema, pluginAnswersSchema } from '../listen_plan';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -26,9 +27,11 @@ export const listenArrivalCaseSchema = z
     /** The plan it arrives on, by its name in `plans`. */
     plan: z.string(),
     arrival: planArrivalSchema,
+    /** What the host answered the judge's questions; none when absent. */
+    answers: pluginAnswersSchema.optional(),
     /** An ISO instant: the judge's `nowMs`. */
     now: z.string(),
-    verdict: verdictSchema,
+    verdict: judgementSchema,
   })
   .strict();
 export type ListenArrivalCase = z.infer<typeof listenArrivalCaseSchema>;

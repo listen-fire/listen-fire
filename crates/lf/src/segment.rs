@@ -46,6 +46,7 @@ const SERVES: &[&str] = &[
     "llm.client.call",
     "llm.extractCall.call",
     "llm.transforms.invoke",
+    "llm.transforms.answer",
     "llm.arbitrateEntities",
     "park.sink.recordJoin",
     "park.sink.commitTimerPark",
@@ -69,7 +70,6 @@ const SERVES: &[&str] = &[
     "control.cancel.cancelledNow",
     "files.resolveFileText",
     "files.render",
-    "lookup.resolveActingUser",
     "locks.acquire",
     "locks.release",
     "trace.append",
@@ -161,8 +161,6 @@ pub struct SegmentHost<'s> {
     pub store: &'s dyn RunHostStore,
     pub adapters: SegmentAdapters<'s>,
     pub documents: &'s Documents,
-    /// The acting user every event acts as (`localIdentity`).
-    pub user: Js,
     wire: RefCell<Wire>,
     positions: RefCell<HashMap<i64, Hv>>,
     host_errors: RefCell<Vec<HostFailure>>,
@@ -174,6 +172,9 @@ pub struct SegmentHost<'s> {
     spent: RefCell<BTreeMap<String, f64>>,
     /// The address each wait this segment parked on is parked at.
     parked_waits: RefCell<HashMap<String, String>>,
+    /// A pure plugin's answer this segment asked could not be got: the
+    /// waits it parks on are woken to judge again once its host may answer.
+    host_unreachable: Cell<bool>,
     /// The leaf this segment resumed, when it resumed one: its notes are
     /// kept with the leaf's end (crate::waits::Noted::leaf).
     resumed_leaf: Option<String>,
@@ -236,7 +237,6 @@ impl<'s> SegmentHost<'s> {
             store: input.store,
             adapters: input.adapters,
             documents: input.documents,
-            user: input.user,
             wire: RefCell::new(Wire::default()),
             positions: RefCell::new(HashMap::new()),
             host_errors: RefCell::new(Vec::new()),
@@ -245,6 +245,7 @@ impl<'s> SegmentHost<'s> {
             next_lock: Cell::new(0),
             spent: RefCell::new(BTreeMap::new()),
             parked_waits: RefCell::new(HashMap::new()),
+            host_unreachable: Cell::new(false),
             resumed_leaf: input.resumed_leaf,
             resumed_state: input.resumed_state,
             settling_race: input.settling_race,
@@ -303,7 +304,6 @@ pub struct SegmentHostParts<'s> {
     pub store: &'s dyn RunHostStore,
     pub adapters: SegmentAdapters<'s>,
     pub documents: &'s Documents,
-    pub user: Js,
     /// The leaf the segment resumes, when it resumes one, and its state.
     pub resumed_leaf: Option<String>,
     pub resumed_state: Option<Js>,
@@ -559,6 +559,17 @@ fn write_commit(host: &SegmentHost<'_>, settle: Option<RunSettle<'_>>, owed_race
     }
     for _ in &wakes {
         crate::wake::queued("wake_await", None);
+    }
+    // A wait whose arrival the host could not judge is judged again a retry
+    // from now, as a listen's waiting arrivals are; until then it stays parked.
+    if host.host_unreachable.get() {
+        let due = crate::store::iso(i64::try_from(crate::listen_replay::retry_every().as_millis()).unwrap_or(i64::MAX));
+        for park in &held.parks {
+            let HeldKind::Wait { wait_id } = &park.kind else { continue };
+            let payload = Js::Obj(obj! { "waitId" => Js::str(wait_id), "runId" => Js::str(&host.run_id), "address" => Js::str(&park.address) });
+            store.enqueue("wake_await", &format!("wake_await:host:{wait_id}"), &payload, Some(&due), None).map_err(ended)?;
+            crate::wake::queued("wake_await", Some(&due));
+        }
     }
     if !commit.owed_races.is_empty() {
         crate::wake::queued(SETTLE_RACE_WORK_KIND, None);
@@ -1241,7 +1252,6 @@ async fn route(host: &SegmentHost<'_>, label: &str, args: &Json) -> Result<Answe
                 None => Err(failure(format!("write lock token '{token}' is not held: released twice, or never acquired"))),
             }
         }
-        "lookup.resolveActingUser" => Ok(Some(host.wire.borrow().write(&Hv::of_js(&host.user)))),
         "files.render" => {
             let content = text(args, "content", "files.render")?;
             let kind = text(args, "type", "files.render")?;
@@ -1283,6 +1293,7 @@ async fn route(host: &SegmentHost<'_>, label: &str, args: &Json) -> Result<Answe
             }
         }
         "llm.transforms.invoke" => invoke_plugin(host, args).await?,
+        "llm.transforms.answer" => kept_answer(host, args).await?,
         #[cfg(not(feature = "anthropic"))]
         "llm.client.call" | "llm.extractCall.call" | "llm.arbitrateEntities" => {
             Err(failure(format!("{label}: this listen-fire was built without the `anthropic` feature, so its models slot is empty and it cannot call a model (install the full listen-fire)")))
@@ -1303,6 +1314,33 @@ async fn route(host: &SegmentHost<'_>, label: &str, args: &Json) -> Result<Answe
             Err(failure(format!("{label}: listen-fire keeps no record bindings yet")))
         }
         _ => return Err(Fault(format!("the host has no route for {label}"))),
+    })
+}
+
+/// `llm.transforms.answer`: a pure plugin's answer, as a listen's filter
+/// is answered (crate::plugin_answers): kept, or asked of its module. One
+/// its module could not be reached for is `{ unreachable }`, and the waits
+/// the segment parks on are woken again later; an error its module answers
+/// fails the run, as any plugin call's does.
+async fn kept_answer(host: &SegmentHost<'_>, args: &Json) -> Result<Answer, Fault> {
+    use crate::plugin_answers::{AnswersHost, HostFunctions};
+    use movement_engine::listen_judge::{PluginAnswer, PluginQuestion};
+    const LABEL: &str = "llm.transforms.answer";
+    let plugin = text(args, "plugin", LABEL)?.to_string();
+    let Some(asked) = args.get("args").and_then(Json::as_array) else { return Err(Fault(format!("{LABEL} args must be a list"))) };
+    let question = PluginQuestion { plugin: plugin.clone(), args: asked.clone() };
+    let externals = host.adapters.externals();
+    let functions = HostFunctions { running: externals.running, credentials: externals.credentials, tenant: externals.tenant };
+    Ok(match functions.answer(std::slice::from_ref(&question)).await {
+        Ok(answers) => match answers.get(&question) {
+            Some(PluginAnswer::Value(value)) => Ok(Some(json!({ "value": value }))),
+            Some(PluginAnswer::Unreachable(why)) => {
+                host.host_unreachable.set(true);
+                Ok(Some(json!({ "unreachable": why })))
+            }
+            None => return Err(Fault(format!("{LABEL}: {plugin} was asked and not answered"))),
+        },
+        Err(refused) => Err(failure(format!("plugin \"{plugin}\": {}", refused.why))),
     })
 }
 

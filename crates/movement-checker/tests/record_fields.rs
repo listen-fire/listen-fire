@@ -67,7 +67,7 @@ fn catalog() -> CatalogSnapshot {
 /// Each error's code and message, the source after a line connecting `at`.
 fn errors_of(source: &str) -> Vec<(String, String)> {
     let source = format!("import {{ at as at_module }} from adapters\nat = connect at_module\n{source}");
-    let options = CheckOptions { upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
+    let options = CheckOptions { upgrading_from: None, limiting_function: None, zones: &movement_checker::host::native::NativeZones };
     check_source(&source, &catalog(), options)
         .unwrap_or_else(|e| panic!("{source}: {e:?}"))
         .into_iter()
@@ -192,7 +192,7 @@ fn the_live_record_is_walked_in_the_function() {
 /// one's fix applied (a safe `?` inserted before the `.`).
 fn absent_fixed(source: &str) -> (usize, String) {
     let source = format!("import {{ at as at_module }} from adapters\nat = connect at_module\n{source}");
-    let options = CheckOptions { upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
+    let options = CheckOptions { upgrading_from: None, limiting_function: None, zones: &movement_checker::host::native::NativeZones };
     let found: Vec<_> = check_source(&source, &catalog(), options).unwrap().into_iter().filter(|d| d.code == "MOV_ABSENT_REQUIRED").collect();
     let mut lines: Vec<String> = source.lines().map(String::from).collect();
     let mut edits: Vec<(usize, usize)> = found

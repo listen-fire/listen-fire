@@ -556,6 +556,11 @@ export type Expression =
   // (Cypher-compatible). Out-of-bounds returns null. If the source value is
   // not an array, returns it as-is when index === 0, else null.
   | { type: 'at'; expression: Expression; index: Expression }
+  // A field of the record a value is, where the value has no name to root a
+  // read at: a pure plugin's answer in a listen's filter or a wait's WHERE
+  // (`team.userFor(e)?.Level`). Absent when the record is; `optional` is
+  // `?.`, which only the checker tells apart.
+  | { type: 'field'; expression: Expression; field: string; optional?: boolean }
   // Aggregation
   // `orderBy` is `SORT`'s key — an expression over the ELEMENT, evaluated once
   // per member before the sort (absent = order the members by their own

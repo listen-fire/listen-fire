@@ -34,7 +34,6 @@ pub enum Family {
     Ids,
     Check,
     Log,
-    Lookup,
     #[cfg(test)]
     Echo,
 }
@@ -57,7 +56,6 @@ const FAMILIES: &[Family] = &[
     Family::Ids,
     Family::Check,
     Family::Log,
-    Family::Lookup,
     #[cfg(test)]
     Family::Echo,
 ];
@@ -82,7 +80,6 @@ impl Family {
             Family::Ids => "ids",
             Family::Check => "check",
             Family::Log => "log",
-            Family::Lookup => "lookup",
             #[cfg(test)]
             Family::Echo => "echo",
         }
@@ -106,7 +103,7 @@ impl Request {
     /// a park, the trace, a log line) is an effect.
     pub fn is_read(&self) -> bool {
         match self.family {
-            Family::Check | Family::Clock | Family::ControlCancel | Family::Lookup => true,
+            Family::Check | Family::Clock | Family::ControlCancel => true,
             Family::ParkWaits => matches!(self.method.as_str(), "mark" | "arrivals"),
             Family::ParkSources => self.method == "load",
             Family::ParkSink => self.method == "collectBranchExports",
@@ -126,8 +123,6 @@ impl Request {
                         | "readRecord"
                         | "translateFilter"
                         | "getDedupRules"
-                        | "getActorCandidates"
-                        | "extractActor"
                         | "describeOpaqueId"
                 )
             ),
@@ -184,27 +179,6 @@ fn in_segment(segment: &str, mut args: Json) -> Json {
         object.insert("segmentId".into(), json!(segment));
     }
     args
-}
-
-pub mod lookup {
-    use super::*;
-
-    /// `lookup.resolveActingUser` (`@user_*`): the trigger the event came
-    /// through (when it names one), the source instance the host asks for
-    /// the event's actor candidates, and the event, on the eval wire.
-    /// Answered `{principal, email?}` or null, on the eval wire; a host
-    /// that throws answers an error, which the TypeScript engine reads as
-    /// no user (`resolveMovementActingUserUncached`).
-    pub fn resolve_acting_user(segment: &str, trigger_id: Option<&str>, instance: &Instance, event: Json) -> Request {
-        let mut args = serde_json::Map::new();
-        if let Some(trigger_id) = trigger_id {
-            args.insert("triggerId".into(), json!(trigger_id));
-        }
-        args.insert("instance".into(), json!(instance.id));
-        args.insert("event".into(), event);
-        args.insert("wire".into(), json!(true));
-        Request { family: Family::Lookup, method: "resolveActingUser".into(), args: in_segment(segment, Json::Object(args)) }
-    }
 }
 
 pub mod adapters {
@@ -342,6 +316,14 @@ pub mod llm {
                 json!({ "plugin": plugin, "config": config, "extractedContext": extracted_context, "budget": budget, "wire": true }),
             ),
         }
+    }
+
+    /// A pure plugin's answer for `args` (`llm.transforms.answer`), which
+    /// the host may keep as it keeps the answers a listen's filter asks:
+    /// `{value}`, or `{unreachable}` naming why the host could not ask it.
+    /// The arguments are plain JSON, by position, as the listen judge asks.
+    pub fn transforms_answer(segment: &str, plugin: &str, args: Json) -> Request {
+        Request { family: Family::LlmTransforms, method: "answer".into(), args: in_segment(segment, json!({ "plugin": plugin, "args": args })) }
     }
 
     /// What the judge is asked.

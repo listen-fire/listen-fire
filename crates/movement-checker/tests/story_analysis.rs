@@ -27,7 +27,7 @@ const FIXTURES: &[(&str, &str)] = &[
 ];
 
 fn options() -> CheckOptions<'static> {
-    CheckOptions { upgrading_from: None, zones: &movement_checker::host::native::NativeZones }
+    CheckOptions { upgrading_from: None, limiting_function: None, zones: &movement_checker::host::native::NativeZones }
 }
 
 fn source(name: &str) -> &'static str {

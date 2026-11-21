@@ -6,7 +6,8 @@
 //! `read_value_type_member`, `read_null_suffix` in `crate::stmt`) has these
 //! forms, spelled here exactly so: a name (`text`), a list (`text[]`), `| null`
 //! on a name (`text | null`), a union of names (`A | B`), keys
-//! (`{ a: text, b?: number }`) and a closure (`(c: <A>) => <text>`).
+//! (`{ a: text, b?: number }`), a closure (`(c: <A>) => <text>`) and a brand
+//! on a member (`text & Brand<"a"> & Brand<"b">`, its brands sorted).
 //!
 //! Some types have no form in that grammar. They take the nearest spelling:
 //!
@@ -22,6 +23,8 @@
 //! - A record nobody can name: `record`.
 //! - A dict with no keys known: `dict(text)`, in the form enum has.
 //! - A tuple: `[text, number]`, a run in it `...text[]`, as TypeScript writes one.
+//! - A brand on a list's element or on a union: in parentheses, as
+//!   TypeScript writes one (`(text & Brand<"a">)[]`, `(A | B) & Brand<"a">`).
 
 use crate::catalog::helpers::splice_start;
 use crate::catalog::types::{Composite, FieldType, PositionRef, Scalar};
@@ -45,6 +48,8 @@ pub enum WrittenType {
     Tuple { slots: Vec<WrittenType>, rest: Option<WrittenRest> },
     Dict(Box<WrittenType>),
     Enum { options: Vec<String>, open: bool },
+    /// `of & Brand<"a">`, one `& Brand<…>` per brand. Build with `WrittenType::branded`.
+    Branded { of: Box<WrittenType>, brands: Vec<String> },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -87,6 +92,18 @@ impl WrittenType {
         }
     }
 
+    /// `of & Brand<"a"> & Brand<"b">`: each brand once, sorted, so one type
+    /// has one spelling whichever order its brands were declared in.
+    pub fn branded(of: WrittenType, brands: impl IntoIterator<Item = String>) -> WrittenType {
+        let mut brands: Vec<String> = brands.into_iter().collect();
+        brands.sort();
+        brands.dedup();
+        if brands.is_empty() {
+            return of;
+        }
+        WrittenType::Branded { of: Box::new(of), brands }
+    }
+
     /// `T | null`.
     pub fn or_null(of: WrittenType) -> WrittenType {
         WrittenType::union([of, WrittenType::Null])
@@ -123,7 +140,7 @@ impl WrittenType {
             WrittenType::Unknown => "?".to_string(),
             WrittenType::Null => "null".to_string(),
             WrittenType::List(of) => match &**of {
-                WrittenType::Union(_) => format!("({})[]", spell(of)),
+                WrittenType::Union(_) | WrittenType::Branded { .. } => format!("({})[]", spell(of)),
                 WrittenType::Enum { options, open } if enum_parts(options, *open, enum_options).len() > 1 => format!("({})[]", spell(of)),
                 WrittenType::Closure { .. } => format!("<{}>[]", spell(of)),
                 _ => format!("{}[]", spell(of)),
@@ -145,6 +162,15 @@ impl WrittenType {
                 format!("[{}]", slots.join(", "))
             }
             WrittenType::Dict(of) => format!("dict({})", spell(of)),
+            WrittenType::Branded { of, brands } => {
+                let base = match &**of {
+                    WrittenType::Union(_) | WrittenType::Closure { .. } => format!("({})", spell(of)),
+                    WrittenType::Enum { options, open } if enum_parts(options, *open, enum_options).len() > 1 => format!("({})", spell(of)),
+                    _ => spell(of),
+                };
+                let brands: Vec<String> = brands.iter().map(|brand| format!("Brand<{}>", string_literal(brand))).collect();
+                format!("{base} & {}", brands.join(" & "))
+            }
             WrittenType::Enum { options, open } => match enum_parts(options, *open, enum_options) {
                 parts if parts.is_empty() => "never".to_string(),
                 parts => parts.join(" | "),
@@ -203,6 +229,7 @@ impl From<&FieldType> for WrittenType {
             Composite::MaybeAbsent { of } => WrittenType::or_null(written(of)),
             Composite::Union { of } => WrittenType::union(of.iter().map(written)),
             Composite::Owned { name, .. } => WrittenType::name(name),
+            Composite::Branded { of, brands } => WrittenType::branded(written(of), brands.iter().cloned()),
             Composite::Record { position } => match position.as_ref().and_then(PositionRef::name) {
                 Some(name) => WrittenType::name(name),
                 None => WrittenType::name("record"),
@@ -244,6 +271,13 @@ mod tests {
             (json!({ "kind": "union", "of": ["text", "number"] }), "text | number"),
             (json!({ "kind": "union", "of": ["absent", "text"] }), "text | null"),
             (json!({ "kind": "maybeAbsent", "of": { "kind": "union", "of": ["text", "number"] } }), "text | number | null"),
+            (json!({ "kind": "branded", "of": "text", "brands": ["claim:email/address"] }), r#"text & Brand<"claim:email/address">"#),
+            (json!({ "kind": "branded", "of": "number", "brands": ["b", "a", "b"] }), r#"number & Brand<"a"> & Brand<"b">"#),
+            (json!({ "kind": "maybeAbsent", "of": { "kind": "branded", "of": "text", "brands": ["a"] } }), r#"text & Brand<"a"> | null"#),
+            (
+                json!({ "kind": "union", "of": [{ "kind": "branded", "of": "text", "brands": ["a"] }, { "kind": "branded", "of": "text", "brands": ["b"] }] }),
+                r#"text & Brand<"a"> | text & Brand<"b">"#,
+            ),
             (json!({ "kind": "dict", "of": "json", "shape": { "a": "text", "b": { "kind": "maybeAbsent", "of": "number" }, "c d": null } }), "{ a: text, b?: number, `c d`: ? }"),
         ] {
             assert_eq!(spelled(type_), written);
@@ -266,6 +300,8 @@ mod tests {
             (json!({ "kind": "dict", "of": "text" }), "dict(text)"),
             (json!({ "kind": "tuple", "of": ["text", null] }), "[text, ?]"),
             (json!({ "kind": "tuple", "of": ["text"], "rest": { "at": 1, "of": "number" } }), "[text, ...number[]]"),
+            (json!({ "kind": "list", "of": { "kind": "branded", "of": "text", "brands": ["a"] } }), r#"(text & Brand<"a">)[]"#),
+            (json!({ "kind": "branded", "of": { "kind": "union", "of": ["text", "number"] }, "brands": ["a"] }), r#"(text | number) & Brand<"a">"#),
         ] {
             assert_eq!(spelled(type_), written);
         }
@@ -303,14 +339,24 @@ mod tests {
     fn the_forms_said_to_be_a_programs_are_what_the_parser_reads() {
         let parses = |source: &str| crate::parse_program(source).is_ok();
         let takes = |marker: &str| format!("function f(x: {marker}) {{\n  return 1\n}}\n");
-        for written in ["text", "text[]", "text[][]", "{ a: text, b?: number }", "A | B", "(c: <text>) => <text>"] {
+        for written in [
+            "text",
+            "text[]",
+            "text[][]",
+            "{ a: text, b?: number }",
+            "A | B",
+            "(c: <text>) => <text>",
+            r#"text & Brand<"a">"#,
+            r#"text & Brand<"a"> & Brand<"b">"#,
+            r#"{ a: text & Brand<"a"> }"#,
+        ] {
             let source = takes(&format!("<{written}>"));
             assert!(parses(&source), "{source}");
         }
         assert!(parses(&takes("<(c: <text>) => <text>>[]")));
         assert!(parses("node N {\n  x: <text | null>\n}\n"));
         assert!(parses("type T = <\"a\" | \"b\">\n"));
-        for written in ["text[] | null", "(text | null)[]", "dict(text)", "[text, number]"] {
+        for written in ["text[] | null", "(text | null)[]", "dict(text)", "[text, number]", r#"(text & Brand<"a">)[]"#] {
             assert!(!parses(&takes(&format!("<{written}>"))), "the grammar reads {written} now: move it up in the module's head");
         }
     }

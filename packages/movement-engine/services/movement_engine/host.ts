@@ -15,7 +15,6 @@
 
 import type { FileArtifactType, LanguageVersion } from 'movement-lang';
 import type {
-  ActingPrincipal,
   AdapterCallError,
   AdapterMethod,
   AdapterResolution,
@@ -126,8 +125,6 @@ export interface AdapterCallMap {
   readRecord: OneInput<'readRecord'>;
   translateFilter: OneInput<'translateFilter'>;
   getDedupRules: OneInput<'getDedupRules'>;
-  getActorCandidates: OneInput<'getActorCandidates'>;
-  extractActor: OneInput<'extractActor'>;
   describeOpaqueId: OneInput<'describeOpaqueId'>;
   invokeFieldFunction: OneInput<'invokeFieldFunction'>;
 }
@@ -192,6 +189,10 @@ export interface HostExtractCallClient {
  *  catalog snapshot's (`plugins`); invoking it is the host's. */
 export interface HostTransformInvoker {
   invoke(input: Priced<Scoped<TransformInvokeInput>>): Promise<PricedAnswer<TransformInvocationResult>>;
+  /** A pure plugin's answer inside an expression, from the answers the host
+   *  keeps. Absent ⇒ the engine invokes the plugin for each arrival it
+   *  judges. */
+  answer?(input: Scoped<{ plugin: string; args: unknown[] }>): Promise<{ value: unknown } | { unreachable: string }>;
 }
 
 /** One write's identity question: which of its search's candidates the
@@ -232,16 +233,6 @@ export type ResolveFileText = (input: Priced<Scoped<{ file: FileRef }>>) => Prom
 export type RenderFile = (input: Scoped<{ content: string; type: FileArtifactType }>) => Promise<FileRef>;
 
 
-export interface ResolveActingUserInput {
-  /** The trigger the event dispatched through; absent when the event predates
-   *  trigger-aware dispatch. */
-  triggerId?: string;
-  /** The source instance (as `adapters.resolve` answered it) whose parse of
-   *  the event's actors the host asks for — only when the trigger does not
-   *  already decide the user. */
-  instance: string;
-  event: TriggerEvent;
-}
 
 /** The library texts a park pins (park state version 2's `libraries`), kept
  *  once by their content: a park names a text by the hash `save` answers, and
@@ -310,16 +301,6 @@ export interface EngineHost {
   files: {
     resolveFileText: ResolveFileText;
     render: RenderFile;
-  };
-  lookup: {
-    /**
-     * The principal an event acts as (`@user_*`): the source adapter parses
-     * the event's actor candidates, the host maps them to one of its
-     * principals through the trigger the event dispatched through (its
-     * creator override and creator fallback). Null when none matches. The
-     * engine sees only the reference, and an email when the host has one.
-     */
-    resolveActingUser(input: Scoped<ResolveActingUserInput>): Promise<ActingPrincipal | null>;
   };
   /** The cross-run write locks each segment's effects take beneath their
    *  own: `acquire({ segmentId, names })` answers a token, `release({ segmentId, token })`

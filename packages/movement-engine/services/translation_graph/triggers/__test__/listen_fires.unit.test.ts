@@ -6,11 +6,11 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { WireArrival, listenPlanSchema, triggerEventSchema, type Arrival, type ListenPlan } from 'engine-contracts';
+import { WireArrival, listenPlanSchema, triggerEventSchema, type Arrival, type Expression, type ListenPlan } from 'engine-contracts';
 import { z } from 'zod';
 
 import { parsePinned } from '../../../movement_engine/program_check';
-import { arrivalReceiptKey, arrivalTriggerOf, listenFires, listenPipeline, listenSchemaOf, plannedListensOf, type PlannedListen } from '../listen_plans';
+import { arrivalReceiptKey, arrivalTriggerOf, explainArrival, listenFires, listenPipeline, listenSchemaOf, plannedListensOf, type PlannedListen } from '../listen_plans';
 
 // Test data, not a published export: read where the repository keeps it.
 const pipelines = z
@@ -163,6 +163,41 @@ describe('which listens an arrival is judged against', () => {
     expect(listenFires(listen, { edge: 'Notes', key: 'note:n1', gone: true }, delivered, 0)).toBeNull();
     expect(listenFires(listen, note('keep', { notFor: listen.pipeline }), delivered, 0)).toBeNull();
     expect(listenFires(listen, note('keep', { notFor: 'listen:notes:copy:11111111' }), delivered, 0)).toEqual({ fires: true });
+  });
+
+  describe('a listen whose filter calls a host function', () => {
+    const member = '@lf-platform/team/isMember';
+    const title: Expression = { type: 'edge_property', propertyTypeId: 'Title', fieldOnly: true };
+    const [hop] = notesPlan.hops;
+    if (hop?.checked === undefined) throw new Error('the notes plan has one hop, which the host checks');
+    const checked: Expression = { type: 'logical', op: 'and', operands: [hop.checked, { type: 'function', fn: member, args: [title] }] };
+    const asking: PlannedListen = { ...listen, plan: { ...notesPlan, hops: [{ ...hop, checked, asksHost: true }] } };
+    const question = { plugin: member, args: ['keep'] };
+
+    it('asks the host once its local terms pass, and never when one fails', () => {
+      expect(listenFires(asking, note('keep'), delivered, 0)).toEqual({ asks: [question] });
+      expect(listenFires(asking, note('drop'), delivered, 0)).toEqual({ skips: 0 });
+    });
+
+    it("is judged again with the host's answers: true fires, false skips, unreachable leaves it undecided", () => {
+      expect(listenFires(asking, note('keep'), delivered, 0, [{ ...question, value: true }])).toEqual({ fires: true });
+      expect(listenFires(asking, note('keep'), delivered, 0, [{ ...question, value: false }])).toEqual({ skips: 0 });
+      expect(listenFires(asking, note('keep'), delivered, 0, [{ ...question, unreachable: 'down' }])).toEqual({
+        undecided: `the host could not answer ${member} (down), which this listen's filter on Notes calls`,
+        unreachable: member,
+      });
+    });
+
+    it('never asks for a listen that calls none, answers or not', () => {
+      expect(listenFires(listen, note('keep'), delivered, 0)).toEqual({ fires: true });
+      expect(listenFires(listen, note('keep'), delivered, 0, [{ ...question, value: false }])).toEqual({ fires: true });
+    });
+
+    it('names the term that skipped an arrival, a host function by its catalog key', () => {
+      const arrived = { edge: 'Notes', landing: { recordType: 'Note', fields: { Title: 'keep' } } };
+      expect(explainArrival(asking.plan, arrived, { nowMs: 0, answers: [{ ...question, value: false }] })).toEqual({ verdict: { skips: 0 }, firstFailed: `${member}(n.Title)` });
+      expect(explainArrival(asking.plan, { ...arrived, landing: { recordType: 'Note', fields: { Title: 'drop' } } }, { nowMs: 0 })).toEqual({ verdict: { skips: 0 }, firstFailed: 'n.Title == "keep"' });
+    });
   });
 
   it.each(triggers.cases)('hands the run the arrival as listen-fire does: $name', ({ pipelineInputId, adapterType, now, arrival, trigger }) => {

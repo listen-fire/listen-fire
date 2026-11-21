@@ -218,14 +218,14 @@ describe('a host families version is refused at segment.open unless this host se
   });
 
   it('refuses another version, or none, naming the contract, what it saw and what it serves', () => {
-    expect(() => refuseUnsupportedHostFamiliesVersion({ hostFamiliesVersion: 1 })).toThrow(
-      'segment.open carries host families version 1, which this host does not serve (supported: 2)',
+    expect(() => refuseUnsupportedHostFamiliesVersion({ hostFamiliesVersion: 2 })).toThrow(
+      'segment.open carries host families version 2, which this host does not serve (supported: 3)',
     );
     expect(() => refuseUnsupportedHostFamiliesVersion({ hostFamiliesVersion: 9 })).toThrow(
-      'segment.open carries host families version 9, which this host does not serve (supported: 2)',
+      'segment.open carries host families version 9, which this host does not serve (supported: 3)',
     );
     expect(() => refuseUnsupportedHostFamiliesVersion({})).toThrow(
-      'segment.open carries host families version none, which this host does not serve (supported: 2)',
+      'segment.open carries host families version none, which this host does not serve (supported: 3)',
     );
   });
 });

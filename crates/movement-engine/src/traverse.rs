@@ -1216,7 +1216,7 @@ impl Run<'_> {
             last = crate::filter::evaluate_predicate_with(
                 conjunct,
                 &read,
-                crate::filter::PredicateOptions { ask: Some(&ask), read_field: Some(&read_field) },
+                crate::filter::PredicateOptions { ask: Some(&ask), read_field: Some(&read_field), call: None },
             )
                 .await
                 .map_err(|e| Failure::of_eval(e, "the Rust engine does not reproduce it"))?;

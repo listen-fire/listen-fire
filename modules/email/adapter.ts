@@ -16,8 +16,6 @@
 import { convert as htmlToText } from 'html-to-text';
 
 import type {
-  ActorCandidate,
-  ActorIdentity,
   Adapter,
   EdgesFromResult,
   FileRef,
@@ -33,7 +31,6 @@ import type {
 import type { TriggerEvent } from 'movement-engine/public/inbound';
 
 import { fileHandle, ownedFileSource } from 'movement-engine/public/adapter';
-import { firedActor, firedRecordFields } from 'module-kit';
 import { uniformWalk } from 'module-kit/adapter/hop';
 import { META_RECORD_TYPE, makeUnstablePosition, positionData } from 'movement-engine/public/catalog';
 import { BaseAdapter } from 'module-kit/adapter/base';
@@ -338,53 +335,6 @@ export class EmailAdapter extends BaseAdapter implements Adapter {
     return [];
   }
 
-  // ── 3a. Actor candidate parsing (acting-user split) ─────────────────────
-  // Email's resolution chain — corrected 2026-05-30 — expressed as
-  // an ordered candidate list that Listen-Fire's `resolveActingUser` maps to a
-  // team user. This method is pure parse: NO Listen-Fire DB access.
-  //
-  //   • Sender (`From:` / `sender`) → an `originator` candidate.
-  //     `resolveActingUser` matches it against `user_email WHERE NOT
-  //     is_service_email`.
-  //   • Each forwarding-header recipient (`X-Forwarded-For`,
-  //     `Delivered-To`, `X-Original-To`, `X-Gm-Original-To`,
-  //     `X-Google-Original-To`, `X-BeenThere`) → a `relay` candidate.
-  //     `resolveActingUser` matches each against `user_email WHERE
-  //     is_service_email = true`. This is what makes Gmail-forwarded
-  //     dealflow streams (sender external, intermediate
-  //     `dealflow@portfolio.example`) work for the user who owns the
-  //     forwarding inbox.
-  //
-  // The terminal recipient on the deployment's own domain is ROUTING ONLY and
-  // is never a
-  // candidate. Anyone can email a plus-address; it's a routing key, not an
-  // identity proof. The creator-override (T6) and the null-on-no-match
-  // rejection both live in `resolveActingUser`, not here.
-  async getActorCandidates(input: { event: TriggerEvent }): Promise<ActorCandidate[]> {
-    const candidates: ActorCandidate[] = [];
-
-    const sender = firedActor(input.event);
-    if (sender) candidates.push({ identity: sender, source: 'originator' });
-
-    for (const recipient of parseIntermediateRecipients(firedRecordFields(input.event))) {
-      candidates.push({
-        identity: { identifier: recipient, scheme: 'email', adapterType: this.adapterType, email: recipient },
-        source: 'relay',
-      });
-    }
-
-    return candidates;
-  }
-
-  // ── 3b. Actor extraction (T5) ────────────────────────────────────────────
-  // The raw `From:` sender, as the door named them on the arrival
-  // (`emailActorOf`). Independent of auth — populates `@actor_email` /
-  // `@actor_name` so authors can see the raw sender even when auth went
-  // through a service-account fallback.
-  async extractActor(input: { event: TriggerEvent }): Promise<ActorIdentity | null> {
-    return firedActor(input.event);
-  }
-
   // ── 3c. Byte resolution (owner-side) ─────────────────────────────────────
   // Email OWNS the FILE resources it emits (P4): the host redeems their
   // handle here. The handle is the attachment `key` the provider that stored
@@ -557,49 +507,10 @@ function emailAttachmentFileRef(att: Partial<EmailAttachment>): FileRef | null {
  */
 
 /**
- * Extract the friendly display name from an RFC 5322 address field.
- * `"Ada Okafor" <ada@example.com>` → `Ada Okafor`. Returns null
- * when the input is a bare address (no angle-bracket form).
- */
-function parseDisplayName(raw: string | undefined | null): string | null {
-  if (!raw) return null;
-  const trimmed = raw.trim();
-  const angle = trimmed.indexOf('<');
-  if (angle <= 0) return null;
-  const leading = trimmed.slice(0, angle).trim();
-  if (!leading) return null;
-  return leading.replace(/^["']|["']$/g, '').trim() || null;
-}
-
-/**
  * Read a header from the raw mailgun payload by name (case-insensitive).
  * The webhook body carries some headers as top-level keys and others
  * inside the `message-headers` stringified tuple list — we check both.
  */
-/** Who sent an email, as the door names them on its arrival: the bare
- *  address of its sender (else its `From` header), with the display name when
- *  there is one. None when the message names no address. */
-export function emailActorOf(email: Record<string, unknown>): ActorIdentity | undefined {
-  const raw = senderOf(email);
-  const address = parseEmailAddress(raw);
-  if (!address) return undefined;
-  const displayName = parseDisplayName(raw);
-  return {
-    identifier: address,
-    scheme: 'email',
-    adapterType: EMAIL_ADAPTER_TYPE,
-    email: address,
-    ...(displayName !== null ? { name: displayName } : {}),
-    label: displayName ?? address,
-  };
-}
-
-/** Who sent an email: its envelope sender, else its `From` header. */
-function senderOf(email: Record<string, unknown>): string | undefined {
-  const sender = email['sender'];
-  return typeof sender === 'string' && sender.length > 0 ? sender : readHeader(email, 'From');
-}
-
 function readHeader(
   payload: Record<string, unknown>,
   name: string,
@@ -632,32 +543,8 @@ function parseHeaderTuples(value: unknown): Array<[string, string]> {
 }
 
 /**
- * Parse the inbound payload's forwarding-related headers into a deduped,
- * ordered list of bare addresses. Order matters: when multiple service
- * accounts could claim the same forwarding chain we honour the closer
- * hop first (mailgun's canonical sequence). Used to build the `relay`
- * (service-account) candidates in `getActorCandidates`.
- *
- * Mirrors the header set the legacy `mailgun.adapter.ts` uses for
- * `getSenderEmails` so the auth chain and the legacy sender-identifier
- * stay in lock-step.
- */
-function parseIntermediateRecipients(payload: Record<string, unknown>): string[] {
-  const { out, push } = collectingAddresses();
-  pushForwardingHeaders(payload, push);
-  // The TG-side `EmailPayload` reuses `recipient` for the terminal hop;
-  // including it in the intermediate-candidate list lets explicit
-  // forwarding-inbox setups (no `Delivered-To` header preserved) still
-  // resolve via the service-account path. The lookup still requires
-  // `is_service_email = true` so the routing-only `<local>+<key>@<domain>`
-  // terminal address never authenticates.
-  push((payload as Partial<EmailPayload>).recipient);
-  return out;
-}
-
-/**
  * The inboxes a message was forwarded through: what its forwarding headers
- * name, in `parseIntermediateRecipients`'s order, and never the address it
+ * name, the closer hop first, and never the address it
  * was finally sent to, which is every message's own inbox.
  */
 export function forwardedThrough(payload: Record<string, unknown>): string[] {

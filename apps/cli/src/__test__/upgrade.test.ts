@@ -8,6 +8,7 @@ import assert from 'node:assert/strict';
 import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { stringify } from 'yaml';
 import { fakeAffinity } from './affinity_fixture';
 import { RELEASE_RE } from './release';
 import { lf, project } from './example';
@@ -757,6 +758,7 @@ async function listensProject(fake: { url: string }, affinity: { url: string }):
   await ok(lfAsked(dir, ['connect', '@lf/system', '--yes']));
   await ok(lfAsked(dir, ['connect', '@lf/slack', '--yes', '--webhook-secret', 'slack-signing-secret']));
   await ok(lfAsked(dir, ['credential', 'add', '--module', '@lf/slack', 'team_slack'], { answers: ['xoxb-test', '', '', `${F}/slack/`] }));
+  await ok(lfAsked(dir, ['credential', 'add', '--module', '@lf/slack', 'team_workspace'], { answers: ['xoxb-test', '', '', `${F}/slack/`] }));
   await ok(lfAsked(dir, ['connect', '@lf/attio', '--yes']));
   await ok(lfAsked(dir, ['credential', 'add', '--module', '@lf/attio', 'crm_attio', '--credential', 'attio_token'], { answers: ['attio-test-token', `${F}/attio`] }));
   await ok(
@@ -769,6 +771,12 @@ async function listensProject(fake: { url: string }, affinity: { url: string }):
   await adding.line(/paste the URL your browser was sent back to/);
   adding.answer(location);
   await ok(adding);
+  // The host's team plugin the listeners chapter calls in a filter, as pure_filter.test.ts installs it.
+  const team = join(dir, 'externals/team');
+  mkdirSync(team, { recursive: true });
+  copyFileSync(join(__dirname, 'pure_filter_module/team.ts'), join(team, 'team.ts'));
+  writeFileSync(join(team, 'lf-external.yaml'), stringify({ name: 'team', kind: 'plugin', module: './team.ts', env: { LF_TEST_MODULE_KIT: join(REPO, 'packages/module-kit') } }));
+  writeFileSync(join(team, 'members.json'), JSON.stringify([]));
   // Affinity installed as its own tests install it: from the module's folder, keyed to its fake.
   mkdirSync(join(dir, 'externals/affinity'), { recursive: true });
   writeFileSync(join(dir, 'externals/affinity/lf-external.yaml'), `name: affinity\nkind: adapter\nprotocol: 2\nmodule: ${join(REPO, 'modules/affinity')}\n`);

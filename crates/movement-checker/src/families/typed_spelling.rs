@@ -241,7 +241,7 @@ impl Checker<'_> {
             let env = self.typing_env(scope);
             let mut kind_of = |e: &MExpr| -> Option<ValueKind> {
                 let lowered = movement_parser::lowering::lower_expression(e, &slot.raw).ok()?;
-                let ty = Typing::new(&env, slot.span).infer(&lowered)?;
+                let ty = crate::types::field::unbranded(&Typing::new(&env, slot.span).infer(&lowered)?);
                 match strip_absent(&ty) {
                     Ty::List { .. } | Ty::Tuple { .. } => Some(ValueKind::List),
                     Ty::Text | Ty::Owned(_) | Ty::Enum { .. } => Some(ValueKind::Text),

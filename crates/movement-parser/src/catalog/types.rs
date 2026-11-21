@@ -156,6 +156,14 @@ pub enum Composite {
     Union {
         of: Vec<FieldType>,
     },
+    /// `text & Brand<"claim:email/address">`: `of`, narrowed by each brand,
+    /// as TypeScript's intersection narrows. A brand is a name compared
+    /// whole, never parsed. Only a schema or a plugin's signature declares
+    /// one, so a value carries it only as read from where one was declared.
+    Branded {
+        of: Box<FieldType>,
+        brands: Vec<String>,
+    },
     /// A named scalar its owner (the module that declared it) parses: a
     /// cron schedule, a mailbox key. `allow_pattern` is the least an owner
     /// says of its values; `format`, a format the checker knows that its
@@ -231,12 +239,23 @@ pub struct OpenEnum {
 }
 
 impl FieldType {
+    /// Whether a value of this type may be absent.
+    pub fn admits_absent(&self) -> bool {
+        match self {
+            FieldType::Scalar(scalar) => matches!(scalar, Scalar::Absent),
+            FieldType::Composite(Composite::MaybeAbsent { .. }) => true,
+            FieldType::Composite(Composite::Union { of }) => of.iter().any(FieldType::admits_absent),
+            FieldType::Composite(Composite::Branded { of, .. }) => of.admits_absent(),
+            FieldType::Composite(_) => false,
+        }
+    }
+
     /// Whether an adapter surface could declare this (`SchemaFieldType`).
     pub fn is_schema(&self) -> bool {
         match self {
             FieldType::Scalar(_) => true,
             FieldType::Composite(c) => match c {
-                Composite::List { of, .. } | Composite::MaybeAbsent { of } => of.is_schema(),
+                Composite::List { of, .. } | Composite::MaybeAbsent { of } | Composite::Branded { of, .. } => of.is_schema(),
                 Composite::Dict { of, shape } => shape.is_none() && of.is_schema(),
                 Composite::Tuple { of, rest } => rest.is_none() && of.iter().flatten().all(FieldType::is_schema),
                 Composite::Enum { .. } | Composite::Owned { .. } => true,
@@ -791,6 +810,13 @@ pub struct AdapterSpec {
     /// `listen to x { … }`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub listen_settings_become: Option<SettingsBecome>,
+    /// The release before which a host may have let only registered senders
+    /// set a listen on this module off (`listensLimitedBefore`, Slack's
+    /// `0.16.0`): from it, only a listen's filter decides. An upgrade from an
+    /// older key tells each listen whose filter does not limit it
+    /// (MOV_LISTEN_NOW_OPEN).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub listens_limited_before: Option<String>,
 }
 
 /// A module's mapping from its 0.12 listen settings to the traversal a
@@ -978,6 +1004,10 @@ pub enum PluginOutput {
     },
     Record {
         fields: JsMap<SchemaFieldType>,
+        /// `{ … } | null`: the plugin may answer no record at all (a lookup
+        /// that found nobody), so its answer is `record | absent`.
+        #[serde(rename = "maybeAbsent", default, skip_serializing_if = "std::ops::Not::not")]
+        maybe_absent: bool,
     },
     Records {
         fields: JsMap<SchemaFieldType>,
@@ -985,7 +1015,7 @@ pub enum PluginOutput {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase", deny_unknown_fields, remote = "Self")]
 pub struct PluginSpec {
     pub args: Vec<String>,
     /// Whether invoking it may cost money (`priced()`). Absent reads as
@@ -994,7 +1024,8 @@ pub struct PluginSpec {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     priced: Option<bool>,
     /// What each argument takes, by name: the plugin's declared input types.
-    /// The checker reads them; nothing here does yet.
+    /// The checker reads them: a call whose argument does not fit is held to
+    /// it, a missing brand included (MOV_BRAND_REQUIRED).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub arg_types: Option<JsMap<SchemaFieldType>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1019,9 +1050,43 @@ pub struct PluginSpec {
     /// What the plugin does, in its author's words (its signature's `description`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    /// Same arguments, same answer, until the host says otherwise: what lets a
+    /// call stand where only a pure expression may (a listen's filter).
+    /// Absent reads as not pure.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pure: Option<bool>,
+    /// How long a host may keep a pure plugin's answer. Only a pure plugin
+    /// declares one (`Deserialize` refuses it otherwise).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_age_seconds: Option<u32>,
+}
+
+impl<'de> Deserialize<'de> for PluginSpec {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let spec = PluginSpec::deserialize(deserializer)?;
+        if spec.max_age_seconds.is_some() && !spec.pure() {
+            return Err(serde::de::Error::custom("a plugin's 'maxAgeSeconds' is the age of a pure plugin's answer: declare 'pure: true' with it"));
+        }
+        if spec.max_age_seconds == Some(0) {
+            return Err(serde::de::Error::custom("a plugin's 'maxAgeSeconds' is a whole number of seconds above zero"));
+        }
+        Ok(spec)
+    }
+}
+
+impl Serialize for PluginSpec {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        PluginSpec::serialize(self, serializer)
+    }
 }
 
 impl PluginSpec {
+    /// Whether the same arguments give the same answer until the host says
+    /// otherwise.
+    pub fn pure(&self) -> bool {
+        self.pure.unwrap_or(false)
+    }
+
     /// Whether invoking it may cost money: the engine refuses to start a
     /// priced plugin once the run has spent its cost cap.
     pub fn priced(&self) -> bool {

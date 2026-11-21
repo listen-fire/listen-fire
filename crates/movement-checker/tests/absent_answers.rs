@@ -11,7 +11,7 @@ const CATALOG: &str = r#"{"adapters":{"manual":{"constructionArgs":[],"canFire":
 
 fn check(body: &str) -> Vec<Diagnostic> {
     let source = format!("function go(i: <manual-[:Invocations]->>) {{\n{body}\n}}\nlisten to manual-[:Invocations]-> fire go\n");
-    let options = CheckOptions { upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
+    let options = CheckOptions { upgrading_from: None, limiting_function: None, zones: &movement_checker::host::native::NativeZones };
     check_source(&source, &CatalogSnapshot::load(CATALOG).unwrap(), options).unwrap()
 }
 

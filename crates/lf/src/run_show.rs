@@ -209,9 +209,6 @@ fn event_lines(event: &Js, arrival: &Js, typing: &Typing, out: &mut Vec<String>,
     if let Some(about) = arrival.get("about").filter(|a| !matches!(a, Js::Null)) {
         out.push(format!("  about: {} {}", get(about, "recordType").unwrap_or_default(), get(about, "externalId").unwrap_or_default()));
     }
-    if let Some(actor) = arrival.get("actor").filter(|a| !matches!(a, Js::Null)) {
-        out.push(format!("  actor: {}", value(actor, cut)));
-    }
     if let Err(why) = typing {
         out.push(format!("  (every field shown, raw and typed: the module could not say which its record types declare: {why})"));
     }

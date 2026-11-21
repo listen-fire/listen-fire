@@ -34,7 +34,7 @@ fn this_releases_own_version_says_nothing_and_the_program_is_walked() {
     assert!(language_version_diagnostic(LANGUAGE_VERSION).is_none());
     let catalog = CatalogSnapshot::load(CATALOG).unwrap();
     let program = movement_parser::stmt::parse_program(SOURCE, false).unwrap();
-    let options = CheckOptions { upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
+    let options = CheckOptions { upgrading_from: None, limiting_function: None, zones: &movement_checker::host::native::NativeZones };
     let codes: Vec<String> = check_program(&program, &catalog, options).into_iter().map(|d| d.code).collect();
     assert_eq!(codes, ["MOV_NAME_UNRESOLVED"]);
 }

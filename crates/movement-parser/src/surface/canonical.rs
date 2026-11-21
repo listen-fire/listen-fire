@@ -321,8 +321,9 @@ impl<'s> Canon<'s> {
         }
         // `Text.includes(t, v)` and `List.includes(xs, v)` read inside the
         // brackets as they read outside: the `t CONTAINS v` and `v IN xs`
-        // written there.
-        if let Some(row) = table::by_current(&written).filter(|row| matches!(row.shape, Shape::Contains | Shape::ListIncludes)) {
+        // written there. So does any other namespaced built-in whose call
+        // keeps its shape (`Text.regexExtract(m.From, "@(.+)$", 1)`).
+        if let Some(row) = table::by_current(&written).filter(|row| matches!(row.shape, Shape::Contains | Shape::ListIncludes | Shape::Same)) {
             self.rewrite(row, e);
         }
     }

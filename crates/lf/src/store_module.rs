@@ -502,13 +502,28 @@ impl RunHostStore for ProcessStore {
         if let Some(pipeline) = page.pipeline {
             params.insert("pipeline".into(), s(pipeline));
         }
+        if page.waiting {
+            params.insert("waiting".into(), Js::Bool(true));
+        }
         let answer = match self.client.call(METHOD, params) {
             Ok(answer) => answer,
             Err(error) if error.code == METHOD_NOT_IMPLEMENTED_CODE => return Ok(Vec::new()),
             Err(error) => return Err(self.refused(METHOD, error)),
         };
         let rows = answer.as_array().ok_or_else(|| self.malformed(METHOD, &answer))?;
-        rows.iter().map(|row| crate::records_door::UnjudgedArrival::from_js(row).ok_or_else(|| self.malformed(METHOD, row))).collect()
+        let facts = rows.iter().map(|row| crate::records_door::UnjudgedArrival::from_js(row).ok_or_else(|| self.malformed(METHOD, row))).collect::<Result<Vec<_>>>()?;
+        // A module written before arrivals waited reads no `waiting`, and
+        // answers every fact: none of them waits.
+        Ok(facts.into_iter().filter(|fact| !page.waiting || fact.waiting).collect())
+    }
+    fn judged_unjudged(&self, pipeline: &str, arrival: &str) -> Result<()> {
+        const METHOD: &str = "unjudged.judged";
+        match self.client.call(METHOD, obj! { "pipeline" => s(pipeline), "arrival" => s(arrival) }) {
+            Ok(_) => Ok(()),
+            // One written before arrivals waited keeps none waiting.
+            Err(error) if error.code == METHOD_NOT_IMPLEMENTED_CODE => Ok(()),
+            Err(error) => Err(self.refused(METHOD, error)),
+        }
     }
     fn keep_delivery(
         &self,

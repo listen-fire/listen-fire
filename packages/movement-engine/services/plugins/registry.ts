@@ -50,8 +50,7 @@ const VC_URL_RETRIEVAL_SIGNATURE: TransformSignature = {
       type: { kind: 'string' },
       description:
         'The email to type into an email-gated link (DocSend, a data room, …) if one of the ' +
-        'discovered URLs needs it to view. Usually @user_email — @actor_email if the link was ' +
-        'shared with the original sender rather than the team.',
+        'discovered URLs needs it to view. Use an address your team reads.',
     },
   ],
   dataDependency: 'none',
@@ -132,8 +131,7 @@ const FETCH_URL_SIGNATURE: TransformSignature = {
       type: { kind: 'string' },
       description:
         'The email to type into a link that is gated behind one (DocSend, a data room, …). ' +
-        'Usually @user_email — @actor_email if the link was shared with the original sender ' +
-        'rather than the team. Ignored by a link that has no gate.',
+        'Use an address your team reads. Ignored by a link that has no gate.',
     },
     {
       name: 'password',

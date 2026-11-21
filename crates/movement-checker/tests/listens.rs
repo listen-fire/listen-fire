@@ -14,7 +14,7 @@ const FEED: &str = r#""feed":{"constructionArgs":[],"canFire":true,"schemas":{""
 fn check_feed(listen: &str) -> Vec<Diagnostic> {
     let snapshot = format!(r#"{{"adapters":{{{FEED}}},"credentials":{{}},"plugins":{{}}}}"#);
     let catalog = CatalogSnapshot::load(&snapshot).unwrap();
-    let options = CheckOptions { upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
+    let options = CheckOptions { upgrading_from: None, limiting_function: None, zones: &movement_checker::host::native::NativeZones };
     let source = format!("import {{ feed }} from adapters\nf = connect feed\nfunction seen(n: <f-[:Note]->>) {{}}\n{listen}");
     // The settings form's retirement is listen_settings_retired.rs's to pin.
     check_source(&source, &catalog, options).unwrap().into_iter().filter(|d| d.code != "MOV_LISTEN_SETTINGS_RETIRED").collect()

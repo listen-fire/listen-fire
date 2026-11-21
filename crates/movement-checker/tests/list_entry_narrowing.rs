@@ -85,7 +85,7 @@ fn source(hop_where: &str, body: &str) -> String {
 
 fn errors_under(catalog: &Value, source: &str) -> Vec<String> {
     let catalog = CatalogSnapshot::load(&catalog.to_string()).unwrap();
-    let options = CheckOptions { upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
+    let options = CheckOptions { upgrading_from: None, limiting_function: None, zones: &movement_checker::host::native::NativeZones };
     check_source(source, &catalog, options)
         .unwrap_or_else(|e| panic!("{source}: {e:?}"))
         .into_iter()

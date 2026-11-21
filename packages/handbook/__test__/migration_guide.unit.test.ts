@@ -64,3 +64,20 @@ describe('the programs the 0.15 migration guide shows', () => {
     expect(errors).toEqual([]);
   });
 });
+
+// The 0.16 guide's whole program is held to the same rule.
+const guide16 = readFileSync(join(__dirname, '..', '..', '..', 'docs', 'language', 'migrating-to-0.16.md'), 'utf8');
+const programs16 = [...guide16.matchAll(/^```\n([\s\S]*?)^```$/gm)].map((m) => m[1]).filter((block) => /^\w+ *= connect /m.test(block));
+
+describe('the programs the 0.16 migration guide shows', () => {
+  it('show at least one whole program', () => {
+    expect(programs16.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it.each(programs16.map((source, i) => [i + 1, source]))('program %i checks clean under this release', (_i, source) => {
+    const errors = checkSourceInRust(source, HANDBOOK_CATALOG, { languageVersion: LANGUAGE_VERSION })
+      .filter((d) => (d.severity ?? 'error') === 'error')
+      .map((d) => `${d.code}: ${d.message}`);
+    expect(errors).toEqual([]);
+  });
+});

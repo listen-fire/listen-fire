@@ -2,7 +2,7 @@
 // `listenPlanSchema` reads: the wire, end to end through the wasm.
 import { callCheckAnswer } from 'movement-lang/wasm/loader';
 
-import { lastEdgeOf, listenPlanSchema, memberPlans, planArrivalSchema, verdictSchema } from '../listen_plan';
+import { explanationSchema, judgementSchema, lastEdgeOf, listenPlanSchema, memberPlans, planArrivalSchema, pluginAnswersSchema, verdictSchema } from '../listen_plan';
 
 const CATALOG = {
   adapters: {
@@ -155,6 +155,20 @@ describe('what the listen judge reads and answers', () => {
     expect(listenPlanSchema.parse(plan)).toEqual(plan);
   });
 
+  it('keeps whether a hop asks the host', () => {
+    const hop = {
+      edge: 'Messages',
+      from: '',
+      to: 'Message',
+      judged: 'arrival',
+      asksHost: true,
+      checked: { type: 'compare', op: 'eq', left: { type: 'edge_property', propertyTypeId: 'Channel', fieldOnly: true }, right: { type: 'static', value: 'C1' } },
+    };
+    const plan = { movement: 'f', connection: 'slack', adapter: 'slack', hops: [hop] };
+    expect(listenPlanSchema.parse(plan)).toEqual(plan);
+    expect(listenPlanSchema.safeParse({ ...plan, hops: [{ ...hop, asksHost: 'yes' }] }).success).toBe(false);
+  });
+
   it('reads an arrival, each record with the record type it states, its parents null where it carries none, and refuses a member it does not know', () => {
     const arrival = {
       edge: 'Interactions',
@@ -176,5 +190,31 @@ describe('what the listen judge reads and answers', () => {
     for (const verdict of [{ fires: false }, { skips: -1 }, { skips: 1.5 }, { fires: true, skips: 0 }, {}]) {
       expect(verdictSchema.safeParse(verdict).success).toBe(false);
     }
+  });
+
+  it('names the host function a host could not answer, and asks the questions the judge reached', () => {
+    const member = '@lf-platform/team/isMember';
+    const unreachable = { undecided: `the host could not answer ${member} (down), which this listen's filter on Messages calls`, unreachable: member };
+    expect(verdictSchema.parse(unreachable)).toEqual(unreachable);
+    const asks = { asks: [{ plugin: member, args: ['a@acme.com'] }] };
+    expect(judgementSchema.parse(asks)).toEqual(asks);
+    expect(verdictSchema.safeParse(asks).success).toBe(false);
+    expect(judgementSchema.safeParse({ asks: [] }).success).toBe(false);
+    expect(explanationSchema.parse({ verdict: { skips: 0 }, firstFailed: `${member}(m.\`User Email\`)` })).toEqual({ verdict: { skips: 0 }, firstFailed: `${member}(m.\`User Email\`)` });
+  });
+
+  it('reads answers that each hold a value, null too, or say why the plugin was unreachable, never both or neither', () => {
+    const question = { plugin: '@lf-platform/team/isMember', args: ['a@acme.com'] };
+    const answers = [{ ...question, value: true }, { ...question, value: null }, { ...question, unreachable: 'down' }];
+    expect(pluginAnswersSchema.parse(answers)).toEqual(answers);
+    expect(pluginAnswersSchema.safeParse([question]).success).toBe(false);
+    expect(pluginAnswersSchema.safeParse([{ ...question, value: true, unreachable: 'down' }]).success).toBe(false);
+  });
+
+  it('reads a plan whose filter calls a built-in by its canonical name and a host function by its catalog key', () => {
+    const call = (fn: string) => ({ type: 'function', fn, args: [{ type: 'edge_property', propertyTypeId: 'User Email', fieldOnly: true }] });
+    const checked = { type: 'logical', op: 'and', operands: [{ type: 'compare', op: 'eq', left: call('text.regex_extract'), right: { type: 'static', value: 'acme.com' } }, call('@lf-platform/team/isMember')] };
+    const plan = { movement: 'greet', connection: 'talk', adapter: 'talk', hops: [{ edge: 'Messages', from: '', to: 'Message', alias: 'm', checked, judged: 'arrival', asksHost: true }] };
+    expect(listenPlanSchema.parse(plan)).toEqual(plan);
   });
 });

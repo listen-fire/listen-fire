@@ -20,7 +20,7 @@ const CATALOG: &str = r#"{"adapters":{"desk":{"canFire":false,"constructionArgs"
 /// Each warning's code and message, the source after a line connecting `desk`.
 fn warnings_of(source: &str) -> Vec<(String, String)> {
     let source = format!("import {{ desk as desk_module }} from adapters\ndesk = connect desk_module\n{source}");
-    let options = CheckOptions { upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
+    let options = CheckOptions { upgrading_from: None, limiting_function: None, zones: &movement_checker::host::native::NativeZones };
     let found = check_source(&source, &CatalogSnapshot::load(CATALOG).unwrap(), options).unwrap_or_else(|e| panic!("{source}: {e:?}"));
     let errors: Vec<_> = found.iter().filter(|d| d.severity.is_none()).collect();
     assert!(errors.is_empty(), "{source}: {errors:#?}");

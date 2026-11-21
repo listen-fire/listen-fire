@@ -778,9 +778,12 @@ export function createEmbeddedHost(options: EmbeddedHostOptions): EmbeddedHost {
               continue;
             }
             if ('skips' in verdict) continue;
-            if ('undecided' in verdict) {
+            // This host asks no host function, so a listen whose filter
+            // calls one keeps the arrival unjudged, as an undecided one.
+            const undecided = 'undecided' in verdict ? verdict.undecided : 'asks' in verdict ? `this listen's filter calls ${verdict.asks.map((question) => question.plugin).join(', ')}, a host function, and this host answers none` : undefined;
+            if (undecided !== undefined) {
               taken = true;
-              say(`${named}: an arrival on ${arrival.edge} cannot be judged (${verdict.undecided}): it runs nothing`);
+              say(`${named}: an arrival on ${arrival.edge} cannot be judged (${undecided}): it runs nothing`);
               unjudged.push({
                 program: saved.name,
                 movement: listen.plan.movement,
@@ -791,7 +794,7 @@ export function createEmbeddedHost(options: EmbeddedHostOptions): EmbeddedHost {
                 identity: arrival.identity,
                 ...(arrival.landing.recordId !== undefined ? { recordId: arrival.landing.recordId } : {}),
                 landing: arrival.landing,
-                reason: verdict.undecided,
+                reason: undecided,
               });
               continue;
             }

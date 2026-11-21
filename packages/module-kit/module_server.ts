@@ -13,7 +13,7 @@ import type { BrowserSlot } from 'module-runtime/browser';
 import type { IncomingHttpHeaders, IncomingMessage, ServerResponse } from 'node:http';
 import { METHODS, type MethodName, type RpcResponseShape, type WireCostLineShape, type WireCredentialShape } from 'engine-contracts';
 
-import type { CredentialFields, ModuleCredential, ModuleDefinition, ModuleFiles, ModuleKv, ModuleLog, ModuleModels, ModuleOcr, ModuleRecords, ModuleSpend } from './define';
+import type { CredentialFields, ModuleCredential, ModuleDefinition, ModuleFiles, ModuleKv, ModuleLog, ModuleModels, ModuleOcr, ModulePluginAnswers, ModuleRecords, ModuleSpend } from './define';
 
 import { limitedFetch } from './host_limits';
 import { runScopes, type RunScopes } from './run_scopes';
@@ -53,6 +53,8 @@ export interface ModuleServerOptions {
   ocr?: ModuleOcr | ((spend: ModuleSpend) => ModuleOcr);
   /** The serving host's records door; default: refused by name. */
   records?: ModuleRecords;
+  /** The serving host's plugins door; default: a host that keeps no answers. */
+  pluginAnswers?: ModulePluginAnswers;
   baseUrlOverride?: string;
   /** Construction arguments for every request (an entry position); a
    *  request's own `settings` (its install's) are laid over them. */
@@ -178,6 +180,7 @@ async function answer(
         ...(options.browser !== undefined ? { browser: options.browser } : {}),
         ...(ocr !== undefined ? { ocr } : {}),
         ...(options.records !== undefined ? { records: options.records } : {}),
+        ...(options.pluginAnswers !== undefined ? { pluginAnswers: options.pluginAnswers } : {}),
         ...(options.baseUrlOverride !== undefined ? { baseUrlOverride: options.baseUrlOverride } : {}),
         constructionArgs,
         ...(request.inbound !== undefined ? { inboundUrl: request.inbound.url } : {}),

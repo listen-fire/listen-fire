@@ -321,8 +321,7 @@ kept, as for any failure.
 | `<at>: parking a record (<kind>) as the data of its binding object` | a park reaching a record in a value no walk of held records finds | nothing known: a backstop |
 
 **Mid-run: a host answer that is not its contract's shape.** A host answer
-this engine reads a member of (`lookup.resolveActingUser`:
-`{principal: {id, display?}, email?}`; `llm.transforms.invoke`: `{text?,
+this engine reads a member of (`llm.transforms.invoke`: `{text?,
 data?, records?, outcome?}` with every record an object;
 an adapter's `awaitKeys`: one `{key}` or
 `{gone: true}` per head; `park.waits.arrivals`: `{arrivals}`, each
@@ -445,8 +444,6 @@ TypeScript takes through its host is a host request here:
 | `llm.transforms.invoke` | a plugin's plain call ("Plugin calls" below); `{segmentId, plugin, config, extractedContext, budget}`, the plugin by its registered name | `host.llm.transforms.invoke`, on the eval wire both ways; its cost charged |
 | `files.resolveFileText` | each content file of the run's extraction calls, once per run | `host.files.resolveFileText`, on the eval wire both ways (the file tagged `["F", descriptor]`; the host is handed the plain descriptor); its cost charged |
 | `ids.mint` | an extraction's resources without ids, once per batch: the `from` text, each source file, the bundle pipeline's files, then every record's fetched files in the tree's order | `host.ids.mint`: `count` distinct texts, or the run fails |
-| `lookup.resolveActingUser` | the first `@user_*` a segment reads, when the source's `methods` list `getActorCandidates`; `{triggerId?, instance, event, segmentId}`, the event on the eval wire | `host.lookup.resolveActingUser`; its answer kept for the segment, a host error read as no user (`resolveMovementActingUser`) |
-| `adapters.call` `extractActor` | the first `@actor_*` a segment reads, when the source's `methods` list it | `host.adapters.call`; its answer kept for the segment, an error read as no actor (`resolveMovementActor`) |
 | `llm.client.call` (`AI()`) | each `AI(prompt[, tier])` an expression evaluates: `{system, userMessage, label: "movement-ai-expression", model, effort?, maxTokens?, budget}` at the tier's settings (ai_tiers.ts `aiExpressionSettings`, a fixed table: no deployment input) | `host.llm.client.call`; its cost charged; the reply read out of its envelope (`aiAnswer`), traced `{kind: "ai", prompt, hasValue}` |
 | `files.render` | each `FILE(content, type)`: `{segmentId, content, type}` | `host.files.render`, its descriptor back on the eval wire tagged as a file (`["F", descriptor]`) |
 | `check.compatible` | `x IS <Decl>` of the event, a handle or a landed record: `{source, declaration, schema, recordType}` (the instance schema the record's type is read in) | the checker's `surfaceMisfit` over `schemaSurface(schema, recordType)` and the file's declaration (run.ts `evaluateDeclaredNodeTest`): `{fits}`, or `{undescribed}`, which stops the run as "can't tell" |
@@ -731,9 +728,8 @@ expression.ts and run.ts run it:
 - **`ERROR(message)`**: the message evaluated and the run failed with
   MOVENG_ERROR, its text `String(value ?? '')`.
 - **`@current_date`, `@current_timestamp`**: the run's pinned instant
-  (`pinnedNow`), its ISO text or its date, a `{kind: 'meta', key}` origin;
-  `@user_*` and `@actor_*` are looked up through the host
-  (`lookup.resolveActingUser`, `extractActor`), once per segment.
+  (`pinnedNow`), its ISO text or its date, a `{kind: 'meta', key}` origin.
+  `@user_*` and `@actor_*` are retired in 0.16 (the checker refuses them).
 
 ### Extraction
 

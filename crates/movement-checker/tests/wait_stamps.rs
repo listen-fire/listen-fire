@@ -63,7 +63,7 @@ fn stamps(source: &str, library: Option<&str>) -> (Json, Option<Json>, Vec<Json>
     let catalog = CatalogSnapshot::load(&CATALOG.replace("FILES", &files)).unwrap();
     let source = format!("{HEAD}{source}");
     let program = movement_parser::stmt::parse_program(&form_of_text(&source), false).unwrap_or_else(|e| panic!("{source}: {}", e.message));
-    let options = CheckOptions { upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
+    let options = CheckOptions { upgrading_from: None, limiting_function: None, zones: &movement_checker::host::native::NativeZones };
     let answer = check_answer(&program, &catalog, options);
     // A function no listen fires is told so, as information.
     let diagnostics: Vec<String> =
